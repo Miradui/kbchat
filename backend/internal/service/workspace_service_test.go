@@ -1,0 +1,1441 @@
+package service
+
+import (
+	"bytes"
+	"context"
+	"mime/multipart"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+
+	"rag/backend/internal/config"
+	"rag/backend/internal/dto"
+	"rag/backend/internal/model"
+	"rag/backend/internal/repository"
+	"rag/backend/internal/storage"
+)
+
+type workspaceTestServices struct {
+	db         *gorm.DB
+	users      *UserService
+	kbs        *KnowledgeBaseService
+	chats      *ChatService
+	categories *KnowledgeBaseCategoryService
+	tags       *KnowledgeBaseTagService
+	documents  *DocumentService
+	search     *GlobalSearchService
+}
+
+func newWorkspaceTestServices(t *testing.T) workspaceTestServices {
+	t.Helper()
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	if err := db.AutoMigrate(
+		&model.User{},
+		&model.KnowledgeBase{},
+		&model.KnowledgeBaseMember{},
+		&model.KnowledgeBaseCategory{},
+		&model.KnowledgeBaseWorkspacePreference{},
+		&model.KnowledgeBaseTag{},
+		&model.KnowledgeBaseTagBinding{},
+		&model.KnowledgeBaseFavorite{},
+		&model.KnowledgeBaseViewEvent{},
+		&model.Document{},
+		&model.DocumentJob{},
+		&model.ChatSession{},
+		&model.ChatMessage{},
+		&model.DocumentChunk{},
+	); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+
+	kbRepo := repository.NewKnowledgeBaseRepository(db)
+	categoryRepo := repository.NewKnowledgeBaseCategoryRepository(db)
+	tagRepo := repository.NewKnowledgeBaseTagRepository(db)
+	tagBindingRepo := repository.NewKnowledgeBaseTagBindingRepository(db)
+	memberRepo := repository.NewKnowledgeBaseMemberRepository(db)
+	favoriteRepo := repository.NewKnowledgeBaseFavoriteRepository(db)
+	viewRepo := repository.NewKnowledgeBaseViewRepository(db)
+	preferenceRepo := repository.NewKnowledgeBaseWorkspacePreferenceRepository(db)
+	documentRepo := repository.NewDocumentRepository(db)
+	chunkRepo := repository.NewChunkRepository(db)
+	searchRepo := repository.NewGlobalSearchRepository(db)
+	chatRepo := repository.NewChatRepository(db)
+	userRepo := repository.NewUserRepository(db)
+
+	kbService := NewKnowledgeBaseService(kbRepo, categoryRepo, favoriteRepo, viewRepo, preferenceRepo, tagRepo, tagBindingRepo, memberRepo, userRepo)
+	return workspaceTestServices{
+		db:         db,
+		users:      NewUserService(userRepo),
+		kbs:        kbService,
+		chats:      NewChatService(config.Config{ChatHistoryLimit: 10}, chatRepo, kbRepo, nil, nil, nil),
+		categories: NewKnowledgeBaseCategoryService(categoryRepo, kbRepo),
+		tags:       NewKnowledgeBaseTagService(tagRepo, tagBindingRepo),
+		documents:  NewDocumentService(config.Config{MaxUploadSizeMB: 50}, documentRepo, chunkRepo, kbRepo, storage.NewLocalStorage(t.TempDir())),
+		search:     NewGlobalSearchService(searchRepo),
+	}
+}
+
+func TestKnowledgeBaseWorkspacePreferenceDefaultsAndPersistedUpdate(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	categoryA := createWorkspaceCategory(t, services.db, owner.ID, "product")
+	categoryB := createWorkspaceCategory(t, services.db, owner.ID, "manual")
+
+	defaults, err := services.kbs.GetWorkspacePreference(ctx, owner.ID)
+	if err != nil {
+		t.Fatalf("get default workspace preference: %v", err)
+	}
+	if defaults.ViewMode != "table" || defaults.Scope != "all" || defaults.Sort != "updatedAt_desc" || defaults.Visibility != "all" {
+		t.Fatalf("unexpected default workspace preference: %#v", defaults)
+	}
+	if len(defaults.ExpandedCategoryIDs) != 0 {
+		t.Fatalf("expected empty expanded categories by default, got %#v", defaults.ExpandedCategoryIDs)
+	}
+
+	updated, err := services.kbs.UpdateWorkspacePreference(ctx, owner.ID, dto.KnowledgeBaseWorkspacePreferenceRequest{
+		ViewMode:            "card",
+		Scope:               "favorite",
+		Sort:                "name_asc",
+		Visibility:          "public",
+		ExpandedCategoryIDs: []uuid.UUID{categoryB.ID, categoryA.ID, categoryB.ID},
+	})
+	if err != nil {
+		t.Fatalf("update workspace preference: %v", err)
+	}
+	if updated.ViewMode != "card" || updated.Scope != "favorite" || updated.Sort != "name_asc" || updated.Visibility != "public" {
+		t.Fatalf("unexpected updated workspace preference: %#v", updated)
+	}
+	if len(updated.ExpandedCategoryIDs) != 2 || updated.ExpandedCategoryIDs[0] != categoryB.ID.String() || updated.ExpandedCategoryIDs[1] != categoryA.ID.String() {
+		t.Fatalf("expected deduped expanded categories, got %#v", updated.ExpandedCategoryIDs)
+	}
+
+	reloaded, err := services.kbs.GetWorkspacePreference(ctx, owner.ID)
+	if err != nil {
+		t.Fatalf("reload workspace preference: %v", err)
+	}
+	if reloaded.ViewMode != "card" || reloaded.Scope != "favorite" || reloaded.Sort != "name_asc" || reloaded.Visibility != "public" {
+		t.Fatalf("expected persisted workspace preference, got %#v", reloaded)
+	}
+}
+
+func TestKnowledgeBaseWorkspacePreferenceRejectsInvalidOptionsAndForeignCategory(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	other := createWorkspaceUser(t, services.db, "other")
+	foreignCategory := createWorkspaceCategory(t, services.db, other.ID, "foreign")
+
+	if _, err := services.kbs.UpdateWorkspacePreference(ctx, owner.ID, dto.KnowledgeBaseWorkspacePreferenceRequest{
+		ViewMode: "board",
+	}); err == nil {
+		t.Fatalf("expected invalid view mode to be rejected")
+	}
+
+	if _, err := services.kbs.UpdateWorkspacePreference(ctx, owner.ID, dto.KnowledgeBaseWorkspacePreferenceRequest{
+		ViewMode:            "table",
+		ExpandedCategoryIDs: []uuid.UUID{foreignCategory.ID},
+	}); err == nil {
+		t.Fatalf("expected foreign expanded category to be rejected")
+	}
+
+	reloaded, err := services.kbs.GetWorkspacePreference(ctx, owner.ID)
+	if err != nil {
+		t.Fatalf("reload workspace preference after rejected update: %v", err)
+	}
+	if reloaded.ViewMode != "table" || reloaded.Scope != "all" || reloaded.Sort != "updatedAt_desc" || reloaded.Visibility != "all" || len(reloaded.ExpandedCategoryIDs) != 0 {
+		t.Fatalf("expected rejected updates to leave defaults untouched, got %#v", reloaded)
+	}
+}
+
+func TestKnowledgeBaseCategoriesRejectCrossOwnerParentAndNonEmptyDelete(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	other := createWorkspaceUser(t, services.db, "other")
+
+	parent, err := services.categories.Create(ctx, owner.ID, dto.KnowledgeBaseCategoryRequest{
+		Name:      "product-docs",
+		SortOrder: 10,
+	})
+	if err != nil {
+		t.Fatalf("create owner category: %v", err)
+	}
+	foreignParent, err := services.categories.Create(ctx, other.ID, dto.KnowledgeBaseCategoryRequest{
+		Name: "other-category",
+	})
+	if err != nil {
+		t.Fatalf("create foreign category: %v", err)
+	}
+
+	if _, err := services.categories.Create(ctx, owner.ID, dto.KnowledgeBaseCategoryRequest{
+		Name:     "invalid-child",
+		ParentID: &foreignParent.ID,
+	}); err == nil {
+		t.Fatalf("expected cross-owner parent category to be rejected")
+	}
+
+	child, err := services.categories.Create(ctx, owner.ID, dto.KnowledgeBaseCategoryRequest{
+		Name:     "guides",
+		ParentID: &parent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create child category: %v", err)
+	}
+
+	tree, err := services.categories.ListTree(ctx, owner.ID)
+	if err != nil {
+		t.Fatalf("list category tree: %v", err)
+	}
+	if len(tree.Items) != 1 || len(tree.Items[0].Children) != 1 || tree.Items[0].Children[0].ID != child.ID {
+		t.Fatalf("expected owned category tree with child, got %#v", tree.Items)
+	}
+
+	if err := services.categories.Delete(ctx, owner.ID, parent.ID); err == nil {
+		t.Fatalf("expected non-empty category deletion to be rejected")
+	}
+}
+
+func TestKnowledgeBaseCategoriesReorderTree(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	rootA := createWorkspaceCategory(t, services.db, owner.ID, "root-a")
+	rootB := createWorkspaceCategory(t, services.db, owner.ID, "root-b")
+	childA := createWorkspaceCategory(t, services.db, owner.ID, "child-a")
+	if err := services.db.Model(&childA).Update("parent_id", rootA.ID).Error; err != nil {
+		t.Fatalf("attach child to root A: %v", err)
+	}
+
+	res, err := services.categories.Reorder(ctx, owner.ID, dto.KnowledgeBaseCategoryReorderRequest{
+		Items: []dto.KnowledgeBaseCategoryReorderItem{
+			{ID: rootB.ID, ParentID: nil, SortOrder: 10},
+			{ID: rootA.ID, ParentID: &rootB.ID, SortOrder: 20},
+			{ID: childA.ID, ParentID: &rootA.ID, SortOrder: 30},
+		},
+	})
+	if err != nil {
+		t.Fatalf("reorder category tree: %v", err)
+	}
+	if res.ProcessedCount != 3 {
+		t.Fatalf("expected 3 processed categories, got %#v", res)
+	}
+
+	tree, err := services.categories.ListTree(ctx, owner.ID)
+	if err != nil {
+		t.Fatalf("list tree after reorder: %v", err)
+	}
+	if len(tree.Items) != 1 || tree.Items[0].ID != rootB.ID {
+		t.Fatalf("expected root-b as only root after reorder, got %#v", tree.Items)
+	}
+	if len(tree.Items[0].Children) != 1 || tree.Items[0].Children[0].ID != rootA.ID {
+		t.Fatalf("expected root-a moved under root-b, got %#v", tree.Items[0].Children)
+	}
+	if len(tree.Items[0].Children[0].Children) != 1 || tree.Items[0].Children[0].Children[0].ID != childA.ID {
+		t.Fatalf("expected child-a retained under root-a, got %#v", tree.Items[0].Children[0].Children)
+	}
+}
+
+func TestKnowledgeBaseCategoriesReorderRejectsForeignParentAndMissingOwnerCoverage(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	other := createWorkspaceUser(t, services.db, "other")
+	rootA := createWorkspaceCategory(t, services.db, owner.ID, "root-a")
+	rootB := createWorkspaceCategory(t, services.db, owner.ID, "root-b")
+	foreignRoot := createWorkspaceCategory(t, services.db, other.ID, "foreign-root")
+
+	if _, err := services.categories.Reorder(ctx, owner.ID, dto.KnowledgeBaseCategoryReorderRequest{
+		Items: []dto.KnowledgeBaseCategoryReorderItem{
+			{ID: rootA.ID, ParentID: &foreignRoot.ID, SortOrder: 10},
+			{ID: rootB.ID, ParentID: nil, SortOrder: 20},
+		},
+	}); err == nil {
+		t.Fatalf("expected foreign parent to be rejected")
+	}
+
+	afterForeignReject, err := services.categories.ListTree(ctx, owner.ID)
+	if err != nil {
+		t.Fatalf("list tree after foreign reject: %v", err)
+	}
+	if len(afterForeignReject.Items) != 2 {
+		t.Fatalf("expected no partial mutation after foreign reject, got %#v", afterForeignReject.Items)
+	}
+
+	if _, err := services.categories.Reorder(ctx, owner.ID, dto.KnowledgeBaseCategoryReorderRequest{
+		Items: []dto.KnowledgeBaseCategoryReorderItem{
+			{ID: rootA.ID, ParentID: &rootB.ID, SortOrder: 10},
+		},
+	}); err == nil {
+		t.Fatalf("expected reorder to require complete owner tree coverage")
+	}
+
+	afterCoverageReject, err := services.categories.ListTree(ctx, owner.ID)
+	if err != nil {
+		t.Fatalf("list tree after coverage reject: %v", err)
+	}
+	if len(afterCoverageReject.Items) != 2 {
+		t.Fatalf("expected no partial mutation after coverage reject, got %#v", afterCoverageReject.Items)
+	}
+}
+
+func TestKnowledgeBaseWorkspaceListFiltersFavoritesAndRecent(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	other := createWorkspaceUser(t, services.db, "other")
+	category := createWorkspaceCategory(t, services.db, owner.ID, "product-docs")
+	favoriteKB := createWorkspaceKB(t, services.db, owner.ID, category.ID, "product-kb", "public", time.Now().Add(-2*time.Hour))
+	recentKB := createWorkspaceKB(t, services.db, owner.ID, category.ID, "tech-kb", "private", time.Now().Add(-1*time.Hour))
+	foreignKB := createWorkspaceKB(t, services.db, other.ID, uuid.Nil, "foreign-kb", "public", time.Now())
+	createWorkspaceDocument(t, services.db, favoriteKB.ID, owner.ID, "manual.pdf", "completed")
+	createWorkspaceQuestion(t, services.db, favoriteKB.ID, owner.ID, "how to use product?")
+	createWorkspaceQuestion(t, services.db, foreignKB.ID, other.ID, "should not count")
+
+	if err := services.kbs.SetFavorite(ctx, owner.ID, favoriteKB.ID, true); err != nil {
+		t.Fatalf("favorite knowledge base: %v", err)
+	}
+	if err := services.kbs.RecordView(ctx, owner.ID, recentKB.ID); err != nil {
+		t.Fatalf("record recent view: %v", err)
+	}
+	if err := services.kbs.RecordView(ctx, owner.ID, recentKB.ID); err != nil {
+		t.Fatalf("record second recent view: %v", err)
+	}
+	if err := services.kbs.RecordView(ctx, owner.ID, favoriteKB.ID); err != nil {
+		t.Fatalf("record favorite view: %v", err)
+	}
+
+	favoriteList, err := services.kbs.ListWorkspace(ctx, owner.ID, dto.KnowledgeBaseListQuery{
+		Scope:    "favorite",
+		Page:     1,
+		PageSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("list favorites: %v", err)
+	}
+	if favoriteList.Total != 1 || favoriteList.Items[0].ID != favoriteKB.ID.String() {
+		t.Fatalf("expected only favorite knowledge base, got %#v", favoriteList)
+	}
+	if !favoriteList.Items[0].IsFavorite || favoriteList.Items[0].DocumentCount != 1 || favoriteList.Items[0].QuestionCount != 1 {
+		t.Fatalf("expected aggregate fields on favorite item, got %#v", favoriteList.Items[0])
+	}
+
+	recentList, err := services.kbs.ListWorkspace(ctx, owner.ID, dto.KnowledgeBaseListQuery{
+		Scope:    "recent",
+		Page:     1,
+		PageSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("list recent: %v", err)
+	}
+	if recentList.Total != 2 {
+		t.Fatalf("expected two recently viewed owned knowledge bases, got %#v", recentList)
+	}
+	for _, item := range recentList.Items {
+		if item.ID == foreignKB.ID.String() {
+			t.Fatalf("recent list leaked foreign knowledge base: %#v", recentList.Items)
+		}
+		if item.LastViewedAt == nil {
+			t.Fatalf("recent item should expose lastViewedAt: %#v", item)
+		}
+	}
+}
+
+func TestKnowledgeBaseWorkspaceUsesStoredUpdatedBy(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	editor := createWorkspaceUser(t, services.db, "editor")
+	category := createWorkspaceCategory(t, services.db, owner.ID, "product-docs")
+	kb := createWorkspaceKB(t, services.db, owner.ID, category.ID, "product-kb", "private", time.Now().Add(-3*time.Hour))
+
+	updatedAt := time.Now().Add(-2 * time.Hour)
+	if err := services.db.Exec(
+		"UPDATE knowledge_bases SET updated_by_id = ?, updated_at = ? WHERE id = ?",
+		editor.ID,
+		updatedAt,
+		kb.ID,
+	).Error; err != nil {
+		t.Fatalf("seed updated_by_id: %v", err)
+	}
+
+	list, err := services.kbs.ListWorkspace(ctx, owner.ID, dto.KnowledgeBaseListQuery{
+		Page:     1,
+		PageSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("list workspace: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("expected one workspace item, got %#v", list.Items)
+	}
+	if list.Items[0].UpdatedBy == nil || list.Items[0].UpdatedBy.ID != editor.ID.String() {
+		t.Fatalf("expected workspace list to use stored updatedBy, got %#v", list.Items[0].UpdatedBy)
+	}
+
+	detail, err := services.kbs.Get(ctx, owner.ID, kb.ID)
+	if err != nil {
+		t.Fatalf("get knowledge base: %v", err)
+	}
+	if detail.UpdatedBy == nil || detail.UpdatedBy.ID != editor.ID.String() {
+		t.Fatalf("expected detail to use stored updatedBy, got %#v", detail.UpdatedBy)
+	}
+}
+
+func TestKnowledgeBaseWorkspaceUploadTouchesUpdatedBy(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	editor := createWorkspaceUser(t, services.db, "editor")
+	category := createWorkspaceCategory(t, services.db, owner.ID, "product-docs")
+
+	created, err := services.kbs.Create(ctx, owner.ID, dto.KnowledgeBaseRequest{
+		Name:        "product-kb",
+		Description: "documents entry",
+		CategoryID:  &category.ID,
+		Visibility:  "private",
+	})
+	if err != nil {
+		t.Fatalf("create knowledge base: %v", err)
+	}
+
+	oldUpdatedAt := time.Now().Add(-4 * time.Hour)
+	kbID := mustParseUUID(t, created.ID)
+	if err := services.db.Exec(
+		"UPDATE knowledge_bases SET updated_by_id = ?, updated_at = ? WHERE id = ?",
+		editor.ID,
+		oldUpdatedAt,
+		kbID,
+	).Error; err != nil {
+		t.Fatalf("seed old updater: %v", err)
+	}
+
+	file := createUploadFile(t, "manual.txt", "hello workspace")
+	if _, err := services.documents.Upload(ctx, owner.ID, kbID, file); err != nil {
+		t.Fatalf("upload document: %v", err)
+	}
+
+	detail, err := services.kbs.Get(ctx, owner.ID, kbID)
+	if err != nil {
+		t.Fatalf("get knowledge base after upload: %v", err)
+	}
+	if detail.UpdatedBy == nil || detail.UpdatedBy.ID != owner.ID.String() {
+		t.Fatalf("expected upload to retouch updatedBy as owner, got %#v", detail.UpdatedBy)
+	}
+	if !detail.UpdatedAt.After(oldUpdatedAt) {
+		t.Fatalf("expected upload to advance updatedAt beyond %s, got %s", oldUpdatedAt, detail.UpdatedAt)
+	}
+}
+
+func TestKnowledgeBaseMembersManageRolesAndPermissionsView(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	manager := createWorkspaceUser(t, services.db, "manager")
+	member := createWorkspaceUser(t, services.db, "member")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+
+	createdManager, err := services.kbs.AddMember(ctx, owner.ID, kb.ID, dto.KnowledgeBaseMemberRequest{
+		UserID: manager.ID,
+		Role:   "manager",
+	})
+	if err != nil {
+		t.Fatalf("add manager: %v", err)
+	}
+	if createdManager.ID != manager.ID.String() || createdManager.Role != "manager" {
+		t.Fatalf("unexpected manager response: %#v", createdManager)
+	}
+	if _, err := services.kbs.AddMember(ctx, owner.ID, kb.ID, dto.KnowledgeBaseMemberRequest{
+		UserID: member.ID,
+		Role:   "member",
+	}); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+
+	permissions, err := services.kbs.GetPermissions(ctx, owner.ID, kb.ID)
+	if err != nil {
+		t.Fatalf("get permissions: %v", err)
+	}
+	if permissions.KnowledgeBaseID != kb.ID.String() || permissions.Visibility != "private" {
+		t.Fatalf("unexpected permission response: %#v", permissions)
+	}
+	if permissions.Owner.ID != owner.ID.String() {
+		t.Fatalf("expected owner in permission response, got %#v", permissions.Owner)
+	}
+	if len(permissions.Managers) != 2 || permissions.Managers[0].Role != "owner" || permissions.Managers[1].ID != manager.ID.String() {
+		t.Fatalf("expected owner and manager in managers, got %#v", permissions.Managers)
+	}
+	if len(permissions.Members) != 1 || permissions.Members[0].ID != member.ID.String() || permissions.Members[0].Role != "member" {
+		t.Fatalf("expected real member in permission response, got %#v", permissions.Members)
+	}
+
+	updated, err := services.kbs.UpdatePermissions(ctx, manager.ID, kb.ID, dto.KnowledgeBasePermissionUpdateRequest{
+		Visibility: "public",
+	})
+	if err != nil {
+		t.Fatalf("manager update permissions: %v", err)
+	}
+	if updated.Visibility != "public" {
+		t.Fatalf("expected visibility update to persist, got %#v", updated)
+	}
+
+	if _, err := services.kbs.UpdateMember(ctx, member.ID, kb.ID, manager.ID, dto.KnowledgeBaseMemberRoleRequest{Role: "member"}); err == nil {
+		t.Fatalf("expected regular member to be rejected from member management")
+	}
+	if _, err := services.kbs.UpdateMember(ctx, manager.ID, kb.ID, owner.ID, dto.KnowledgeBaseMemberRoleRequest{Role: "member"}); err == nil {
+		t.Fatalf("expected owner role update to be rejected")
+	}
+	if err := services.kbs.RemoveMember(ctx, owner.ID, kb.ID, owner.ID); err == nil {
+		t.Fatalf("expected owner deletion to be rejected")
+	}
+	if err := services.kbs.RemoveMember(ctx, manager.ID, kb.ID, member.ID); err != nil {
+		t.Fatalf("manager remove member: %v", err)
+	}
+	afterRemove, err := services.kbs.GetPermissions(ctx, owner.ID, kb.ID)
+	if err != nil {
+		t.Fatalf("get permissions after remove: %v", err)
+	}
+	if len(afterRemove.Members) != 0 {
+		t.Fatalf("expected removed member to disappear, got %#v", afterRemove.Members)
+	}
+}
+
+func TestKnowledgeBaseBatchFavoriteAndMoveCategory(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	categoryA := createWorkspaceCategory(t, services.db, owner.ID, "source")
+	categoryB := createWorkspaceCategory(t, services.db, owner.ID, "target")
+	kbA := createWorkspaceKB(t, services.db, owner.ID, categoryA.ID, "product-a", "private", time.Now())
+	kbB := createWorkspaceKB(t, services.db, owner.ID, categoryA.ID, "product-b", "private", time.Now())
+
+	favoriteRes, err := services.kbs.BatchSetFavorite(ctx, owner.ID, dto.KnowledgeBaseBatchFavoriteRequest{
+		KnowledgeBaseIDs: []uuid.UUID{kbA.ID, kbB.ID},
+		Favorite:         true,
+	})
+	if err != nil {
+		t.Fatalf("batch favorite: %v", err)
+	}
+	if favoriteRes.ProcessedCount != 2 {
+		t.Fatalf("expected 2 processed favorites, got %#v", favoriteRes)
+	}
+
+	favorites, err := services.kbs.ListWorkspace(ctx, owner.ID, dto.KnowledgeBaseListQuery{
+		Scope:    "favorite",
+		Page:     1,
+		PageSize: 20,
+	})
+	if err != nil {
+		t.Fatalf("list favorites after batch favorite: %v", err)
+	}
+	if favorites.Total != 2 {
+		t.Fatalf("expected 2 favorites, got %#v", favorites.Items)
+	}
+
+	moveRes, err := services.kbs.BatchMoveCategory(ctx, owner.ID, dto.KnowledgeBaseBatchMoveCategoryRequest{
+		KnowledgeBaseIDs: []uuid.UUID{kbA.ID, kbB.ID},
+		CategoryID:       &categoryB.ID,
+	})
+	if err != nil {
+		t.Fatalf("batch move category: %v", err)
+	}
+	if moveRes.ProcessedCount != 2 {
+		t.Fatalf("expected 2 processed moves, got %#v", moveRes)
+	}
+
+	moved, err := services.kbs.ListWorkspace(ctx, owner.ID, dto.KnowledgeBaseListQuery{
+		CategoryID: &categoryB.ID,
+		Page:       1,
+		PageSize:   20,
+	})
+	if err != nil {
+		t.Fatalf("list moved knowledge bases: %v", err)
+	}
+	if moved.Total != 2 {
+		t.Fatalf("expected both knowledge bases moved to target category, got %#v", moved.Items)
+	}
+}
+
+func TestKnowledgeBaseBatchDeleteAndRestore(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	kbA := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-a", "private", time.Now())
+	kbB := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-b", "private", time.Now())
+
+	deleteRes, err := services.kbs.BatchDelete(ctx, owner.ID, dto.KnowledgeBaseBatchRequest{
+		KnowledgeBaseIDs: []uuid.UUID{kbA.ID, kbB.ID},
+	})
+	if err != nil {
+		t.Fatalf("batch delete: %v", err)
+	}
+	if deleteRes.ProcessedCount != 2 {
+		t.Fatalf("expected 2 processed deletes, got %#v", deleteRes)
+	}
+
+	active, err := services.kbs.ListWorkspace(ctx, owner.ID, dto.KnowledgeBaseListQuery{
+		Page:     1,
+		PageSize: 20,
+	})
+	if err != nil {
+		t.Fatalf("list workspace after batch delete: %v", err)
+	}
+	if active.Total != 0 {
+		t.Fatalf("expected all knowledge bases hidden after batch delete, got %#v", active.Items)
+	}
+
+	recycle, err := services.kbs.ListRecycleBin(ctx, owner.ID, 1, 20)
+	if err != nil {
+		t.Fatalf("list recycle after batch delete: %v", err)
+	}
+	if recycle.Total != 2 {
+		t.Fatalf("expected 2 deleted knowledge bases in recycle bin, got %#v", recycle.Items)
+	}
+
+	restoreRes, err := services.kbs.BatchRestore(ctx, owner.ID, dto.KnowledgeBaseBatchRequest{
+		KnowledgeBaseIDs: []uuid.UUID{kbA.ID, kbB.ID},
+	})
+	if err != nil {
+		t.Fatalf("batch restore: %v", err)
+	}
+	if restoreRes.ProcessedCount != 2 {
+		t.Fatalf("expected 2 processed restores, got %#v", restoreRes)
+	}
+
+	restored, err := services.kbs.ListWorkspace(ctx, owner.ID, dto.KnowledgeBaseListQuery{
+		Page:     1,
+		PageSize: 20,
+	})
+	if err != nil {
+		t.Fatalf("list workspace after batch restore: %v", err)
+	}
+	if restored.Total != 2 {
+		t.Fatalf("expected all knowledge bases restored, got %#v", restored.Items)
+	}
+}
+
+func TestKnowledgeBaseBatchOperationsRejectForeignIDsWithoutPartialMutation(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	other := createWorkspaceUser(t, services.db, "other")
+	sourceCategory := createWorkspaceCategory(t, services.db, owner.ID, "source")
+	targetCategory := createWorkspaceCategory(t, services.db, owner.ID, "target")
+	ownKB := createWorkspaceKB(t, services.db, owner.ID, sourceCategory.ID, "product-a", "private", time.Now())
+	foreignKB := createWorkspaceKB(t, services.db, other.ID, uuid.Nil, "foreign-kb", "private", time.Now())
+
+	if _, err := services.kbs.BatchSetFavorite(ctx, owner.ID, dto.KnowledgeBaseBatchFavoriteRequest{
+		KnowledgeBaseIDs: []uuid.UUID{ownKB.ID, foreignKB.ID},
+		Favorite:         true,
+	}); err == nil {
+		t.Fatalf("expected batch favorite with foreign knowledge base to fail")
+	}
+
+	favorites, err := services.kbs.ListWorkspace(ctx, owner.ID, dto.KnowledgeBaseListQuery{
+		Scope:    "favorite",
+		Page:     1,
+		PageSize: 20,
+	})
+	if err != nil {
+		t.Fatalf("list favorites after rejected batch favorite: %v", err)
+	}
+	if favorites.Total != 0 {
+		t.Fatalf("expected no partial favorite side effect, got %#v", favorites.Items)
+	}
+
+	if _, err := services.kbs.BatchMoveCategory(ctx, owner.ID, dto.KnowledgeBaseBatchMoveCategoryRequest{
+		KnowledgeBaseIDs: []uuid.UUID{ownKB.ID, foreignKB.ID},
+		CategoryID:       &targetCategory.ID,
+	}); err == nil {
+		t.Fatalf("expected batch move with foreign knowledge base to fail")
+	}
+
+	detail, err := services.kbs.Get(ctx, owner.ID, ownKB.ID)
+	if err != nil {
+		t.Fatalf("get knowledge base after rejected move: %v", err)
+	}
+	if detail.CategoryID == nil || *detail.CategoryID != sourceCategory.ID.String() {
+		t.Fatalf("expected no partial category move, got %#v", detail)
+	}
+
+	if _, err := services.kbs.BatchDelete(ctx, owner.ID, dto.KnowledgeBaseBatchRequest{
+		KnowledgeBaseIDs: []uuid.UUID{ownKB.ID, foreignKB.ID},
+	}); err == nil {
+		t.Fatalf("expected batch delete with foreign knowledge base to fail")
+	}
+
+	active, err := services.kbs.ListWorkspace(ctx, owner.ID, dto.KnowledgeBaseListQuery{
+		Page:     1,
+		PageSize: 20,
+	})
+	if err != nil {
+		t.Fatalf("list workspace after rejected delete: %v", err)
+	}
+	if active.Total != 1 || active.Items[0].ID != ownKB.ID.String() {
+		t.Fatalf("expected no partial delete side effect, got %#v", active.Items)
+	}
+
+	if err := services.kbs.Delete(ctx, owner.ID, ownKB.ID); err != nil {
+		t.Fatalf("delete own knowledge base for restore test: %v", err)
+	}
+	if err := services.kbs.Delete(ctx, other.ID, foreignKB.ID); err != nil {
+		t.Fatalf("delete foreign knowledge base for restore test: %v", err)
+	}
+
+	if _, err := services.kbs.BatchRestore(ctx, owner.ID, dto.KnowledgeBaseBatchRequest{
+		KnowledgeBaseIDs: []uuid.UUID{ownKB.ID, foreignKB.ID},
+	}); err == nil {
+		t.Fatalf("expected batch restore with foreign knowledge base to fail")
+	}
+
+	recycle, err := services.kbs.ListRecycleBin(ctx, owner.ID, 1, 20)
+	if err != nil {
+		t.Fatalf("list recycle after rejected restore: %v", err)
+	}
+	if recycle.Total != 1 || recycle.Items[0].ID != ownKB.ID.String() {
+		t.Fatalf("expected own knowledge base to remain deleted after rejected restore, got %#v", recycle.Items)
+	}
+}
+
+func TestKnowledgeBaseStatsUseOwnerDataOnly(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	other := createWorkspaceUser(t, services.db, "other")
+	ownKB := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "company-policy", "private", time.Now())
+	foreignKB := createWorkspaceKB(t, services.db, other.ID, uuid.Nil, "foreign-kb", "private", time.Now())
+	createWorkspaceDocument(t, services.db, ownKB.ID, owner.ID, "policy.md", "completed")
+	createWorkspaceDocument(t, services.db, foreignKB.ID, other.ID, "foreign.md", "completed")
+	createWorkspaceQuestion(t, services.db, ownKB.ID, owner.ID, "what is the policy?")
+	createWorkspaceQuestion(t, services.db, foreignKB.ID, other.ID, "should not count")
+	if err := services.kbs.RecordView(ctx, owner.ID, ownKB.ID); err != nil {
+		t.Fatalf("record owner view: %v", err)
+	}
+
+	stats, err := services.kbs.Stats(ctx, owner.ID, "month")
+	if err != nil {
+		t.Fatalf("load workspace stats: %v", err)
+	}
+
+	if stats.KnowledgeBases.Value != 1 || stats.Documents.Value != 1 || stats.Views.Value != 1 || stats.Questions.Value != 1 {
+		t.Fatalf("expected stats to include only owner data, got %#v", stats)
+	}
+}
+
+func TestGlobalDocumentListAndKeywordSearchUseOwnerScope(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	other := createWorkspaceUser(t, services.db, "other")
+	ownKB := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	foreignKB := createWorkspaceKB(t, services.db, other.ID, uuid.Nil, "foreign-kb", "private", time.Now())
+	createWorkspaceDocument(t, services.db, ownKB.ID, owner.ID, "product-manual.pdf", "completed")
+	createWorkspaceDocument(t, services.db, foreignKB.ID, other.ID, "foreign-manual.pdf", "completed")
+	createWorkspaceChunk(t, services.db, ownKB.ID, "product install steps include upload and parsing")
+	createWorkspaceChunk(t, services.db, foreignKB.ID, "foreign user content should never appear")
+
+	documents, err := services.documents.ListGlobal(ctx, owner.ID, dto.GlobalDocumentListQuery{
+		Q:        "product",
+		Page:     1,
+		PageSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("list global documents: %v", err)
+	}
+	if documents.Total != 1 || documents.Items[0].Filename != "product-manual.pdf" || documents.Items[0].KnowledgeBaseName != "product-kb" {
+		t.Fatalf("expected only owned matching document, got %#v", documents)
+	}
+
+	search, err := services.search.Search(ctx, owner.ID, "product")
+	if err != nil {
+		t.Fatalf("global keyword search: %v", err)
+	}
+	if len(search.Items) == 0 {
+		t.Fatalf("expected search results for owned content")
+	}
+	for _, item := range search.Items {
+		if strings.Contains(item.Snippet, "foreign user") {
+			t.Fatalf("global search leaked foreign content: %#v", search.Items)
+		}
+	}
+}
+
+func TestRecycleBinHidesDeletedKnowledgeBaseAndAllowsRestore(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	other := createWorkspaceUser(t, services.db, "other")
+
+	ownKB := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	createWorkspaceKB(t, services.db, other.ID, uuid.Nil, "foreign-kb", "private", time.Now())
+
+	if err := services.kbs.Delete(ctx, owner.ID, ownKB.ID); err != nil {
+		t.Fatalf("soft delete knowledge base: %v", err)
+	}
+
+	list, err := services.kbs.ListWorkspace(ctx, owner.ID, dto.KnowledgeBaseListQuery{
+		Page:     1,
+		PageSize: 20,
+	})
+	if err != nil {
+		t.Fatalf("list workspace after delete: %v", err)
+	}
+	if list.Total != 0 {
+		t.Fatalf("expected deleted knowledge base hidden from workspace list, got %#v", list.Items)
+	}
+
+	recycle, err := services.kbs.ListRecycleBin(ctx, owner.ID, 1, 20)
+	if err != nil {
+		t.Fatalf("list recycle bin: %v", err)
+	}
+	if recycle.Total != 1 || recycle.Items[0].ResourceType != "knowledgeBase" || recycle.Items[0].ID != ownKB.ID.String() {
+		t.Fatalf("expected deleted knowledge base in recycle bin, got %#v", recycle.Items)
+	}
+	for _, item := range recycle.Items {
+		if item.Name == "foreign-kb" {
+			t.Fatalf("recycle bin leaked foreign resource: %#v", recycle.Items)
+		}
+	}
+
+	if err := services.kbs.Restore(ctx, owner.ID, ownKB.ID); err != nil {
+		t.Fatalf("restore knowledge base: %v", err)
+	}
+
+	restoredList, err := services.kbs.ListWorkspace(ctx, owner.ID, dto.KnowledgeBaseListQuery{
+		Page:     1,
+		PageSize: 20,
+	})
+	if err != nil {
+		t.Fatalf("list workspace after restore: %v", err)
+	}
+	if restoredList.Total != 1 || restoredList.Items[0].ID != ownKB.ID.String() {
+		t.Fatalf("expected restored knowledge base back in workspace, got %#v", restoredList.Items)
+	}
+}
+
+func TestRecycleBinHidesDeletedDocumentAndAllowsRestore(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	other := createWorkspaceUser(t, services.db, "other")
+
+	ownKB := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	foreignKB := createWorkspaceKB(t, services.db, other.ID, uuid.Nil, "foreign-kb", "private", time.Now())
+	ownDoc := createWorkspaceDocument(t, services.db, ownKB.ID, owner.ID, "manual.pdf", "completed")
+	createWorkspaceDocument(t, services.db, foreignKB.ID, other.ID, "foreign.pdf", "completed")
+	createWorkspaceChunk(t, services.db, ownKB.ID, "manual content for search")
+
+	if err := services.documents.Delete(ctx, owner.ID, ownDoc.ID); err != nil {
+		t.Fatalf("soft delete document: %v", err)
+	}
+
+	documentList, err := services.documents.List(ctx, owner.ID, ownKB.ID)
+	if err != nil {
+		t.Fatalf("list documents after delete: %v", err)
+	}
+	if len(documentList.Items) != 0 {
+		t.Fatalf("expected deleted document hidden from document list, got %#v", documentList.Items)
+	}
+
+	globalList, err := services.documents.ListGlobal(ctx, owner.ID, dto.GlobalDocumentListQuery{
+		Page:     1,
+		PageSize: 20,
+	})
+	if err != nil {
+		t.Fatalf("list global documents after delete: %v", err)
+	}
+	if globalList.Total != 0 {
+		t.Fatalf("expected deleted document hidden from global list, got %#v", globalList.Items)
+	}
+
+	search, err := services.search.Search(ctx, owner.ID, "manual")
+	if err != nil {
+		t.Fatalf("global search after delete: %v", err)
+	}
+	for _, item := range search.Items {
+		if item.Filename == "manual.pdf" {
+			t.Fatalf("expected deleted document hidden from global search, got %#v", search.Items)
+		}
+	}
+
+	recycle, err := services.documents.ListRecycleBin(ctx, owner.ID, 1, 20)
+	if err != nil {
+		t.Fatalf("list document recycle bin: %v", err)
+	}
+	if recycle.Total != 1 || recycle.Items[0].ResourceType != "document" || recycle.Items[0].ID != ownDoc.ID.String() {
+		t.Fatalf("expected deleted document in recycle bin, got %#v", recycle.Items)
+	}
+
+	if err := services.documents.Restore(ctx, owner.ID, ownDoc.ID); err != nil {
+		t.Fatalf("restore document: %v", err)
+	}
+
+	restoredList, err := services.documents.List(ctx, owner.ID, ownKB.ID)
+	if err != nil {
+		t.Fatalf("list documents after restore: %v", err)
+	}
+	if len(restoredList.Items) != 1 || restoredList.Items[0].ID != ownDoc.ID.String() {
+		t.Fatalf("expected restored document back in document list, got %#v", restoredList.Items)
+	}
+}
+
+func TestDocumentBatchDeleteRestoreAndReprocess(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	docA := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual-a.pdf", "completed")
+	docB := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual-b.pdf", "failed")
+	createWorkspaceChunk(t, services.db, kb.ID, "manual content before reprocess")
+
+	reprocessRes, err := services.documents.BatchReprocess(ctx, owner.ID, dto.DocumentBatchRequest{
+		DocumentIDs: []uuid.UUID{docA.ID, docB.ID},
+	})
+	if err != nil {
+		t.Fatalf("batch reprocess: %v", err)
+	}
+	if reprocessRes.ProcessedCount != 2 {
+		t.Fatalf("expected 2 processed reprocess operations, got %#v", reprocessRes)
+	}
+
+	reprocessedA, err := services.documents.Get(ctx, owner.ID, docA.ID)
+	if err != nil {
+		t.Fatalf("get document A after reprocess: %v", err)
+	}
+	reprocessedB, err := services.documents.Get(ctx, owner.ID, docB.ID)
+	if err != nil {
+		t.Fatalf("get document B after reprocess: %v", err)
+	}
+	if reprocessedA.Status != "uploaded" || reprocessedB.Status != "uploaded" {
+		t.Fatalf("expected reprocessed documents reset to uploaded, got %#v %#v", reprocessedA, reprocessedB)
+	}
+
+	deleteRes, err := services.documents.BatchDelete(ctx, owner.ID, dto.DocumentBatchRequest{
+		DocumentIDs: []uuid.UUID{docA.ID, docB.ID},
+	})
+	if err != nil {
+		t.Fatalf("batch delete documents: %v", err)
+	}
+	if deleteRes.ProcessedCount != 2 {
+		t.Fatalf("expected 2 processed deletes, got %#v", deleteRes)
+	}
+
+	activeList, err := services.documents.List(ctx, owner.ID, kb.ID)
+	if err != nil {
+		t.Fatalf("list documents after batch delete: %v", err)
+	}
+	if len(activeList.Items) != 0 {
+		t.Fatalf("expected documents hidden after batch delete, got %#v", activeList.Items)
+	}
+
+	recycle, err := services.documents.ListRecycleBin(ctx, owner.ID, 1, 20)
+	if err != nil {
+		t.Fatalf("list recycle bin after batch delete: %v", err)
+	}
+	if recycle.Total != 2 {
+		t.Fatalf("expected 2 deleted documents in recycle bin, got %#v", recycle.Items)
+	}
+
+	restoreRes, err := services.documents.BatchRestore(ctx, owner.ID, dto.DocumentBatchRequest{
+		DocumentIDs: []uuid.UUID{docA.ID, docB.ID},
+	})
+	if err != nil {
+		t.Fatalf("batch restore documents: %v", err)
+	}
+	if restoreRes.ProcessedCount != 2 {
+		t.Fatalf("expected 2 processed restores, got %#v", restoreRes)
+	}
+
+	restoredList, err := services.documents.List(ctx, owner.ID, kb.ID)
+	if err != nil {
+		t.Fatalf("list documents after batch restore: %v", err)
+	}
+	if len(restoredList.Items) != 2 {
+		t.Fatalf("expected 2 restored documents, got %#v", restoredList.Items)
+	}
+}
+
+func TestDocumentBatchOperationsRejectForeignIDsWithoutPartialMutation(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	other := createWorkspaceUser(t, services.db, "other")
+	ownKB := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	foreignKB := createWorkspaceKB(t, services.db, other.ID, uuid.Nil, "foreign-kb", "private", time.Now())
+	ownDoc := createWorkspaceDocument(t, services.db, ownKB.ID, owner.ID, "manual.pdf", "completed")
+	foreignDoc := createWorkspaceDocument(t, services.db, foreignKB.ID, other.ID, "foreign.pdf", "completed")
+
+	if _, err := services.documents.BatchReprocess(ctx, owner.ID, dto.DocumentBatchRequest{
+		DocumentIDs: []uuid.UUID{ownDoc.ID, foreignDoc.ID},
+	}); err == nil {
+		t.Fatalf("expected batch reprocess with foreign document to fail")
+	}
+	afterReprocess, err := services.documents.Get(ctx, owner.ID, ownDoc.ID)
+	if err != nil {
+		t.Fatalf("get own document after rejected batch reprocess: %v", err)
+	}
+	if afterReprocess.Status != "completed" {
+		t.Fatalf("expected no partial reprocess side effect, got %#v", afterReprocess)
+	}
+
+	if _, err := services.documents.BatchDelete(ctx, owner.ID, dto.DocumentBatchRequest{
+		DocumentIDs: []uuid.UUID{ownDoc.ID, foreignDoc.ID},
+	}); err == nil {
+		t.Fatalf("expected batch delete with foreign document to fail")
+	}
+	activeList, err := services.documents.List(ctx, owner.ID, ownKB.ID)
+	if err != nil {
+		t.Fatalf("list own documents after rejected batch delete: %v", err)
+	}
+	if len(activeList.Items) != 1 || activeList.Items[0].ID != ownDoc.ID.String() {
+		t.Fatalf("expected no partial delete side effect, got %#v", activeList.Items)
+	}
+
+	if err := services.documents.Delete(ctx, owner.ID, ownDoc.ID); err != nil {
+		t.Fatalf("delete own document for restore test: %v", err)
+	}
+	if err := services.documents.Delete(ctx, other.ID, foreignDoc.ID); err != nil {
+		t.Fatalf("delete foreign document for restore test: %v", err)
+	}
+
+	if _, err := services.documents.BatchRestore(ctx, owner.ID, dto.DocumentBatchRequest{
+		DocumentIDs: []uuid.UUID{ownDoc.ID, foreignDoc.ID},
+	}); err == nil {
+		t.Fatalf("expected batch restore with foreign document to fail")
+	}
+	recycle, err := services.documents.ListRecycleBin(ctx, owner.ID, 1, 20)
+	if err != nil {
+		t.Fatalf("list recycle after rejected batch restore: %v", err)
+	}
+	if recycle.Total != 1 || recycle.Items[0].ID != ownDoc.ID.String() {
+		t.Fatalf("expected own document to remain deleted after rejected restore, got %#v", recycle.Items)
+	}
+}
+
+func TestUserSearchFindsUsersByUsernameAndDisplayName(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	createWorkspaceUser(t, services.db, "alice")
+	bob := createWorkspaceUser(t, services.db, "bob")
+	if err := services.db.Model(&bob).Update("display_name", "Product Manager").Error; err != nil {
+		t.Fatalf("update display name: %v", err)
+	}
+
+	users, err := services.users.Search(ctx, "product", 20)
+	if err != nil {
+		t.Fatalf("search users: %v", err)
+	}
+	if len(users.Items) != 1 || users.Items[0].ID != bob.ID.String() {
+		t.Fatalf("expected search to find bob by display name, got %#v", users.Items)
+	}
+}
+
+func TestChatSessionManagementRequiresOwnedSessionAndKnowledgeBase(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	other := createWorkspaceUser(t, services.db, "other")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	session := createWorkspaceChatSession(t, services.db, owner.ID, kb.ID, "old title")
+
+	got, err := services.chats.GetSession(ctx, owner.ID, session.ID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if got.ID != session.ID.String() || got.Title != "old title" {
+		t.Fatalf("unexpected session response: %#v", got)
+	}
+
+	updated, err := services.chats.UpdateSession(ctx, owner.ID, session.ID, dto.UpdateChatSessionRequest{Title: "new title"})
+	if err != nil {
+		t.Fatalf("update session: %v", err)
+	}
+	if updated.Title != "new title" {
+		t.Fatalf("expected updated title, got %#v", updated)
+	}
+
+	if _, err := services.chats.GetSession(ctx, other.ID, session.ID); err == nil {
+		t.Fatalf("expected other user to be rejected from session")
+	}
+	if err := services.db.Delete(&kb).Error; err != nil {
+		t.Fatalf("soft delete knowledge base: %v", err)
+	}
+	if _, err := services.chats.GetSession(ctx, owner.ID, session.ID); err == nil {
+		t.Fatalf("expected session with deleted knowledge base to be rejected")
+	}
+}
+
+func TestChatSessionDeleteHidesSessionAndMessages(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	session := createWorkspaceChatSession(t, services.db, owner.ID, kb.ID, "old title")
+	message := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "hello"}
+	if err := services.db.Create(&message).Error; err != nil {
+		t.Fatalf("create chat message: %v", err)
+	}
+
+	if err := services.chats.DeleteSession(ctx, owner.ID, session.ID); err != nil {
+		t.Fatalf("delete session: %v", err)
+	}
+	if _, err := services.chats.GetSession(ctx, owner.ID, session.ID); err == nil {
+		t.Fatalf("expected deleted session to be hidden")
+	}
+	var messageCount int64
+	if err := services.db.Model(&model.ChatMessage{}).Where("session_id = ?", session.ID).Count(&messageCount).Error; err != nil {
+		t.Fatalf("count messages: %v", err)
+	}
+	if messageCount != 0 {
+		t.Fatalf("expected hard deleted session to cascade messages, got %d", messageCount)
+	}
+}
+
+func TestChatSessionArchiveHidesFromListButKeepsDetail(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	other := createWorkspaceUser(t, services.db, "other")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	session := createWorkspaceChatSession(t, services.db, owner.ID, kb.ID, "archive me")
+
+	if err := services.chats.ArchiveSession(ctx, other.ID, session.ID); err == nil {
+		t.Fatalf("expected foreign user archive to be rejected")
+	}
+	if err := services.chats.ArchiveSession(ctx, owner.ID, session.ID); err != nil {
+		t.Fatalf("archive session: %v", err)
+	}
+	list, err := services.chats.ListSessions(ctx, owner.ID)
+	if err != nil {
+		t.Fatalf("list sessions after archive: %v", err)
+	}
+	if len(list.Items) != 0 {
+		t.Fatalf("expected archived session hidden from default list, got %#v", list.Items)
+	}
+	detail, err := services.chats.GetSession(ctx, owner.ID, session.ID)
+	if err != nil {
+		t.Fatalf("get archived session detail: %v", err)
+	}
+	if detail.ArchivedAt == nil {
+		t.Fatalf("expected archivedAt on archived session, got %#v", detail)
+	}
+}
+
+func TestDocumentDownloadAndMissingFileError(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	other := createWorkspaceUser(t, services.db, "other")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	doc := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual.txt", "completed")
+
+	file, err := services.documents.Download(ctx, owner.ID, doc.ID)
+	if err == nil {
+		t.Fatalf("expected missing local file to return an error, got %#v", file)
+	}
+	if _, err := services.documents.Download(ctx, other.ID, doc.ID); err == nil {
+		t.Fatalf("expected foreign user download to be rejected")
+	}
+
+	storedPath := filepath.Join(t.TempDir(), "manual.txt")
+	if err := os.WriteFile(storedPath, []byte("hello"), 0644); err != nil {
+		t.Fatalf("write stored file: %v", err)
+	}
+	if err := services.db.Model(&model.Document{}).Where("id = ?", doc.ID).Update("storage_path", storedPath).Error; err != nil {
+		t.Fatalf("update storage path: %v", err)
+	}
+	file, err = services.documents.Download(ctx, owner.ID, doc.ID)
+	if err != nil {
+		t.Fatalf("download existing file: %v", err)
+	}
+	if file.Path != storedPath || file.Filename != "manual.txt" || file.ContentType != "text/plain; charset=utf-8" {
+		t.Fatalf("unexpected download response: %#v", file)
+	}
+}
+
+func TestDocumentPreviewReturnsTextForOwnedTextFiles(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	other := createWorkspaceUser(t, services.db, "other")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	doc := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual.md", "completed")
+	storedPath := filepath.Join(t.TempDir(), "manual.md")
+	if err := os.WriteFile(storedPath, []byte("# Manual\nhello"), 0644); err != nil {
+		t.Fatalf("write preview file: %v", err)
+	}
+	if err := services.db.Model(&model.Document{}).Where("id = ?", doc.ID).Update("storage_path", storedPath).Error; err != nil {
+		t.Fatalf("update storage path: %v", err)
+	}
+
+	preview, err := services.documents.Preview(ctx, owner.ID, doc.ID)
+	if err != nil {
+		t.Fatalf("preview document: %v", err)
+	}
+	if preview.Kind != "text" || preview.Content != "# Manual\nhello" || preview.DownloadURL == "" {
+		t.Fatalf("unexpected preview response: %#v", preview)
+	}
+	if _, err := services.documents.Preview(ctx, other.ID, doc.ID); err == nil {
+		t.Fatalf("expected foreign user preview to be rejected")
+	}
+}
+
+func TestDocumentPreviewReturnsPDFMetadataWithoutReadingContent(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	doc := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual.pdf", "completed")
+	storedPath := filepath.Join(t.TempDir(), "manual.pdf")
+	if err := os.WriteFile(storedPath, []byte("%PDF-1.4"), 0644); err != nil {
+		t.Fatalf("write preview pdf: %v", err)
+	}
+	if err := services.db.Model(&model.Document{}).Where("id = ?", doc.ID).Update("storage_path", storedPath).Error; err != nil {
+		t.Fatalf("update storage path: %v", err)
+	}
+
+	preview, err := services.documents.Preview(ctx, owner.ID, doc.ID)
+	if err != nil {
+		t.Fatalf("preview pdf: %v", err)
+	}
+	if preview.Kind != "file" || preview.Content != "" || preview.ContentType != "application/pdf" || preview.DownloadURL == "" {
+		t.Fatalf("unexpected pdf preview response: %#v", preview)
+	}
+}
+
+func TestDocumentChunksSupportPaginationAndSearch(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	doc := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual.pdf", "completed")
+	createWorkspaceDocumentChunk(t, services.db, kb.ID, doc.ID, 0, "alpha content")
+	createWorkspaceDocumentChunk(t, services.db, kb.ID, doc.ID, 1, "beta content")
+	createWorkspaceDocumentChunk(t, services.db, kb.ID, doc.ID, 2, "alpha second")
+
+	page, err := services.documents.Chunks(ctx, owner.ID, doc.ID, dto.ChunkListQuery{Page: 1, PageSize: 1, Q: "alpha"})
+	if err != nil {
+		t.Fatalf("list chunks: %v", err)
+	}
+	if page.Total != 2 || page.Page != 1 || page.PageSize != 1 || len(page.Items) != 1 || page.Items[0].ChunkIndex != 0 {
+		t.Fatalf("unexpected chunk page: %#v", page)
+	}
+}
+
+func TestRecycleBinPermanentDeleteAndEmptyUseOwnerScope(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	other := createWorkspaceUser(t, services.db, "other")
+	ownerKB := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "owner-kb", "private", time.Now())
+	otherKB := createWorkspaceKB(t, services.db, other.ID, uuid.Nil, "other-kb", "private", time.Now())
+	ownerDoc := createWorkspaceDocument(t, services.db, ownerKB.ID, owner.ID, "owner.pdf", "completed")
+	otherDoc := createWorkspaceDocument(t, services.db, otherKB.ID, other.ID, "other.pdf", "completed")
+	createWorkspaceDocumentChunk(t, services.db, ownerKB.ID, ownerDoc.ID, 0, "owner chunk")
+	createWorkspaceDocumentChunk(t, services.db, otherKB.ID, otherDoc.ID, 0, "other chunk")
+	createWorkspaceChatSession(t, services.db, owner.ID, ownerKB.ID, "owner session")
+
+	if err := services.documents.Delete(ctx, owner.ID, ownerDoc.ID); err != nil {
+		t.Fatalf("soft delete owner document: %v", err)
+	}
+	if err := services.documents.PermanentDelete(ctx, other.ID, ownerDoc.ID); err == nil {
+		t.Fatalf("expected foreign permanent document delete to be rejected")
+	}
+	if err := services.documents.PermanentDelete(ctx, owner.ID, ownerDoc.ID); err != nil {
+		t.Fatalf("permanent delete owner document: %v", err)
+	}
+	var ownerDocCount int64
+	if err := services.db.Unscoped().Model(&model.Document{}).Where("id = ?", ownerDoc.ID).Count(&ownerDocCount).Error; err != nil {
+		t.Fatalf("count owner document: %v", err)
+	}
+	if ownerDocCount != 0 {
+		t.Fatalf("expected permanent deleted document removed, got %d", ownerDocCount)
+	}
+
+	if err := services.kbs.Delete(ctx, owner.ID, ownerKB.ID); err != nil {
+		t.Fatalf("soft delete owner kb: %v", err)
+	}
+	if err := services.kbs.Delete(ctx, other.ID, otherKB.ID); err != nil {
+		t.Fatalf("soft delete other kb: %v", err)
+	}
+	if err := services.kbs.EmptyRecycleBin(ctx, owner.ID); err != nil {
+		t.Fatalf("empty owner kb recycle bin: %v", err)
+	}
+	var ownerKBCount, otherKBCount int64
+	if err := services.db.Unscoped().Model(&model.KnowledgeBase{}).Where("id = ?", ownerKB.ID).Count(&ownerKBCount).Error; err != nil {
+		t.Fatalf("count owner kb: %v", err)
+	}
+	if err := services.db.Unscoped().Model(&model.KnowledgeBase{}).Where("id = ?", otherKB.ID).Count(&otherKBCount).Error; err != nil {
+		t.Fatalf("count other kb: %v", err)
+	}
+	if ownerKBCount != 0 || otherKBCount != 1 {
+		t.Fatalf("expected only owner recycle bin emptied, got owner=%d other=%d", ownerKBCount, otherKBCount)
+	}
+}
+
+func createWorkspaceUser(t *testing.T, db *gorm.DB, username string) model.User {
+	t.Helper()
+	user := model.User{
+		Username:     username,
+		PasswordHash: "hash",
+		DisplayName:  username,
+	}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("create user %s: %v", username, err)
+	}
+	return user
+}
+
+func createWorkspaceCategory(t *testing.T, db *gorm.DB, ownerID uuid.UUID, name string) model.KnowledgeBaseCategory {
+	t.Helper()
+	category := model.KnowledgeBaseCategory{
+		OwnerID: ownerID,
+		Name:    name,
+	}
+	if err := db.Create(&category).Error; err != nil {
+		t.Fatalf("create category %s: %v", name, err)
+	}
+	return category
+}
+
+func createWorkspaceKB(t *testing.T, db *gorm.DB, ownerID, categoryID uuid.UUID, name, visibility string, updatedAt time.Time) model.KnowledgeBase {
+	t.Helper()
+	kb := model.KnowledgeBase{
+		Name:        name,
+		Description: name + " description",
+		OwnerID:     ownerID,
+		Visibility:  visibility,
+		UpdatedAt:   updatedAt,
+	}
+	if categoryID != uuid.Nil {
+		kb.CategoryID = &categoryID
+	}
+	if err := db.Create(&kb).Error; err != nil {
+		t.Fatalf("create kb %s: %v", name, err)
+	}
+	return kb
+}
+
+func createWorkspaceDocument(t *testing.T, db *gorm.DB, kbID, uploaderID uuid.UUID, filename, status string) model.Document {
+	t.Helper()
+	document := model.Document{
+		KnowledgeBaseID: kbID,
+		UploaderID:      uploaderID,
+		Filename:        filename,
+		FileType:        "pdf",
+		FileSize:        1024,
+		StoragePath:     "/tmp/" + filename,
+		Status:          status,
+	}
+	if err := db.Create(&document).Error; err != nil {
+		t.Fatalf("create document %s: %v", filename, err)
+	}
+	return document
+}
+
+func createWorkspaceQuestion(t *testing.T, db *gorm.DB, kbID, userID uuid.UUID, content string) {
+	t.Helper()
+	session := createWorkspaceChatSession(t, db, userID, kbID, "test-session")
+	message := model.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   content,
+	}
+	if err := db.Create(&message).Error; err != nil {
+		t.Fatalf("create chat message: %v", err)
+	}
+}
+
+func createWorkspaceChatSession(t *testing.T, db *gorm.DB, userID, kbID uuid.UUID, title string) model.ChatSession {
+	t.Helper()
+	session := model.ChatSession{
+		UserID:          userID,
+		KnowledgeBaseID: kbID,
+		Title:           title,
+	}
+	if err := db.Create(&session).Error; err != nil {
+		t.Fatalf("create chat session: %v", err)
+	}
+	return session
+}
+
+func createWorkspaceChunk(t *testing.T, db *gorm.DB, kbID uuid.UUID, content string) {
+	t.Helper()
+	var document model.Document
+	if err := db.Where("knowledge_base_id = ?", kbID).First(&document).Error; err != nil {
+		t.Fatalf("find document for chunk: %v", err)
+	}
+	chunk := model.DocumentChunk{
+		DocumentID:      document.ID,
+		KnowledgeBaseID: kbID,
+		ChunkIndex:      0,
+		Content:         content,
+	}
+	if err := db.Create(&chunk).Error; err != nil {
+		t.Fatalf("create chunk: %v", err)
+	}
+}
+
+func createWorkspaceDocumentChunk(t *testing.T, db *gorm.DB, kbID, documentID uuid.UUID, index int, content string) model.DocumentChunk {
+	t.Helper()
+	chunk := model.DocumentChunk{
+		DocumentID:      documentID,
+		KnowledgeBaseID: kbID,
+		ChunkIndex:      index,
+		Content:         content,
+	}
+	if err := db.Create(&chunk).Error; err != nil {
+		t.Fatalf("create document chunk: %v", err)
+	}
+	return chunk
+}
+
+func createUploadFile(t *testing.T, filename string, content string) *multipart.FileHeader {
+	t.Helper()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := part.Write([]byte(content)); err != nil {
+		t.Fatalf("write form file: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/upload", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if err := req.ParseMultipartForm(int64(body.Len()) + 1024); err != nil {
+		t.Fatalf("parse multipart form: %v", err)
+	}
+
+	files := req.MultipartForm.File["file"]
+	if len(files) != 1 {
+		t.Fatalf("expected one uploaded file, got %d", len(files))
+	}
+	return files[0]
+}
+
+func mustParseUUID(t *testing.T, value string) uuid.UUID {
+	t.Helper()
+
+	id, err := uuid.Parse(value)
+	if err != nil {
+		t.Fatalf("parse uuid %q: %v", value, err)
+	}
+	return id
+}

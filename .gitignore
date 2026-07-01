@@ -1,0 +1,13 @@
+.env
+.idea/
+.superpowers/
+
+# Go
+backend/bin/
+backend/tmp/
+backend/logs/
+backend/uploads/
+
+# Frontend
+frontend/dist/
+frontend/node_modules/

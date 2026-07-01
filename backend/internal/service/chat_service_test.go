@@ -1,0 +1,215 @@
+package service
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	chatcore "rag/backend/internal/chat"
+	"rag/backend/internal/dto"
+	"rag/backend/internal/model"
+	titlecore "rag/backend/internal/title"
+)
+
+type fakeChatProvider struct {
+	response string
+	messages []chatcore.Message
+}
+
+func (p *fakeChatProvider) Chat(_ context.Context, messages []chatcore.Message) (string, error) {
+	p.messages = messages
+	return p.response, nil
+}
+
+type fakeTitleProvider struct {
+	response string
+	messages []titlecore.Message
+}
+
+func (p *fakeTitleProvider) SummarizeTitle(_ context.Context, messages []titlecore.Message) (string, error) {
+	p.messages = messages
+	return p.response, nil
+}
+
+func TestBuildIntentClassificationMessagesUsesRecentHistory(t *testing.T) {
+	history := []model.ChatMessage{
+		{Role: "user", Content: "请介绍企业知识库系统。"},
+		{Role: "assistant", Content: "它支持文档上传、检索和问答。"},
+		{Role: "user", Content: "上传能力怎么样？"},
+		{Role: "assistant", Content: "MVP 支持 txt、md、pdf。"},
+	}
+
+	messages := buildIntentClassificationMessages("那它的引用怎么展示？", history, 2)
+
+	if len(messages) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(messages))
+	}
+	if messages[0].Role != "system" {
+		t.Fatalf("expected first message role system, got %q", messages[0].Role)
+	}
+	if messages[1].Content != "上传能力怎么样？" {
+		t.Fatalf("expected trimmed history to keep recent user message, got %q", messages[1].Content)
+	}
+	if messages[2].Content != "MVP 支持 txt、md、pdf。" {
+		t.Fatalf("expected trimmed history to keep recent assistant message, got %q", messages[2].Content)
+	}
+	if messages[3].Role != "user" || !strings.Contains(messages[3].Content, "那它的引用怎么展示？") {
+		t.Fatalf("expected final message to ask for intent classification, got %#v", messages[3])
+	}
+}
+
+func TestBuildAnswerMessagesIncludesHistoryBeforeRAGPrompt(t *testing.T) {
+	history := []model.ChatMessage{
+		{Role: "user", Content: "系统支持哪些文档？"},
+		{Role: "assistant", Content: "MVP 支持 txt、md、pdf。"},
+	}
+	items := []dto.SearchResultResponse{
+		{
+			DocumentID:  "doc-1",
+			ChunkID:     "chunk-1",
+			Filename:    "prd.md",
+			Content:     "引用来源必须包含文档名、页码、片段内容和分数。",
+			VectorScore: 0.82,
+		},
+	}
+
+	messages := buildAnswerMessages("它的引用怎么展示？", items, history, 10)
+
+	if len(messages) != 4 {
+		t.Fatalf("expected system, 2 history messages, and current RAG prompt, got %d", len(messages))
+	}
+	if messages[1].Role != "user" || messages[1].Content != "系统支持哪些文档？" {
+		t.Fatalf("expected user history after system prompt, got %#v", messages[1])
+	}
+	if messages[2].Role != "assistant" || messages[2].Content != "MVP 支持 txt、md、pdf。" {
+		t.Fatalf("expected assistant history before current RAG prompt, got %#v", messages[2])
+	}
+	if messages[3].Role != "user" {
+		t.Fatalf("expected final message role user, got %q", messages[3].Role)
+	}
+	if !strings.Contains(messages[3].Content, "它的引用怎么展示？") {
+		t.Fatalf("expected final RAG prompt to contain current question, got %q", messages[3].Content)
+	}
+	if !strings.Contains(messages[3].Content, "引用来源必须包含文档名") {
+		t.Fatalf("expected final RAG prompt to contain retrieved chunk, got %q", messages[3].Content)
+	}
+}
+
+func TestRecentChatHistoryFiltersInvalidAndEmptyMessages(t *testing.T) {
+	history := []model.ChatMessage{
+		{Role: "system", Content: "internal"},
+		{Role: "user", Content: "  "},
+		{Role: "user", Content: "第一问"},
+		{Role: "assistant", Content: "第一答"},
+		{Role: "user", Content: "第二问"},
+	}
+
+	recent := recentChatHistory(history, 2)
+
+	if len(recent) != 2 {
+		t.Fatalf("expected 2 valid recent messages, got %d", len(recent))
+	}
+	if recent[0].Content != "第一答" || recent[1].Content != "第二问" {
+		t.Fatalf("expected most recent valid user/assistant messages, got %#v", recent)
+	}
+}
+
+func TestClassifyChatIntentUsesProviderResponse(t *testing.T) {
+	provider := &fakeChatProvider{
+		response: `{"intent":"conversation","standaloneQuery":"","reason":"用户询问对话历史"}`,
+	}
+	history := []model.ChatMessage{
+		{Role: "user", Content: "你好"},
+	}
+
+	intent, err := classifyChatIntent(context.Background(), provider, "随便一个程序不认识的表达", history, 10)
+	if err != nil {
+		t.Fatalf("classify chat intent returned error: %v", err)
+	}
+	if intent.Intent != chatIntentConversation {
+		t.Fatalf("expected provider-selected conversation intent, got %#v", intent)
+	}
+	if len(provider.messages) < 3 {
+		t.Fatalf("expected classifier prompt to include system, history, and current question, got %#v", provider.messages)
+	}
+	if provider.messages[1].Content != "你好" {
+		t.Fatalf("expected classifier to receive recent history, got %#v", provider.messages)
+	}
+}
+
+func TestBuildConversationAnswerMessagesUsesHistoryWithoutRAGChunks(t *testing.T) {
+	history := []model.ChatMessage{
+		{Role: "user", Content: "你好"},
+		{Role: "assistant", Content: "你好！请问有什么可以帮你解答的吗？"},
+	}
+
+	messages := buildConversationAnswerMessages("我上一句话是什么/", history, 10)
+
+	if len(messages) != 4 {
+		t.Fatalf("expected system, 2 history messages, and current question, got %d", len(messages))
+	}
+	if messages[1].Role != "user" || messages[1].Content != "你好" {
+		t.Fatalf("expected user history to be included, got %#v", messages[1])
+	}
+	if messages[3].Role != "user" || messages[3].Content != "我上一句话是什么/" {
+		t.Fatalf("expected current question as final message, got %#v", messages[3])
+	}
+	for _, message := range messages {
+		if strings.Contains(message.Content, "知识片段") || strings.Contains(message.Content, "source:") {
+			t.Fatalf("conversation answer should not include RAG chunks, got %q", message.Content)
+		}
+	}
+}
+
+func TestParseChatIntentOutputAcceptsFencedJSON(t *testing.T) {
+	intent := parseChatIntentOutput("```json\n{\"intent\":\"knowledge_base\",\"standaloneQuery\":\"RAG 引用来源展示规则\",\"reason\":\"需要查询知识库\"}\n```", "它的引用呢？")
+
+	if intent.Intent != chatIntentKnowledgeBase {
+		t.Fatalf("expected knowledge_base intent, got %#v", intent)
+	}
+	if intent.StandaloneQuery != "RAG 引用来源展示规则" {
+		t.Fatalf("expected standalone query from model output, got %#v", intent)
+	}
+}
+
+func TestParseChatIntentOutputFallsBackToKnowledgeBase(t *testing.T) {
+	intent := parseChatIntentOutput("not json", "什么是 RAG？")
+
+	if intent.Intent != chatIntentKnowledgeBase {
+		t.Fatalf("expected fallback knowledge_base intent, got %#v", intent)
+	}
+	if intent.StandaloneQuery != "什么是 RAG？" {
+		t.Fatalf("expected fallback standalone query to be original question, got %#v", intent)
+	}
+}
+
+func TestGenerateSessionTitleUsesDedicatedTitleProvider(t *testing.T) {
+	provider := &fakeTitleProvider{response: "报销制度咨询"}
+
+	title, err := generateSessionTitle(context.Background(), provider, "报销发票怎么提交？", "需要在系统中上传发票影像。")
+	if err != nil {
+		t.Fatalf("generate session title returned error: %v", err)
+	}
+
+	if title != "报销制度咨询" {
+		t.Fatalf("expected summarized title, got %q", title)
+	}
+	if len(provider.messages) != 2 {
+		t.Fatalf("expected title provider messages, got %#v", provider.messages)
+	}
+	if provider.messages[0].Role != "system" || !strings.Contains(provider.messages[0].Content, "会话标题") {
+		t.Fatalf("expected system title prompt, got %#v", provider.messages[0])
+	}
+	if !strings.Contains(provider.messages[1].Content, "报销发票怎么提交？") {
+		t.Fatalf("expected user question in title prompt, got %#v", provider.messages[1])
+	}
+}
+
+func TestCleanSessionTitleRemovesQuotesAndFallsBack(t *testing.T) {
+	if got := cleanSessionTitle("《报销制度咨询》"); got != "报销制度咨询" {
+		t.Fatalf("expected cleaned title, got %q", got)
+	}
+	if got := cleanSessionTitle("   "); got != defaultChatSessionTitle {
+		t.Fatalf("expected default title fallback, got %q", got)
+	}
+}
