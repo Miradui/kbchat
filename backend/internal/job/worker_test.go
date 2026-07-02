@@ -1,0 +1,215 @@
+package job
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+
+	"rag/backend/internal/model"
+)
+
+func TestWorkerRetriesFailedJobBeforeMarkingDocumentFailed(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeDocumentStore()
+	job := &model.DocumentJob{
+		ID:         uuid.New(),
+		DocumentID: uuid.New(),
+		Status:     "running",
+		RetryCount: 0,
+	}
+	processor := &fakeProcessor{err: errors.New("temporary embedding failure")}
+	worker := NewWorkerWithOptions(store, processor, zap.NewNop(), Options{
+		Concurrency: 1,
+		MaxRetries:  2,
+		RetryDelay:  time.Minute,
+	})
+
+	worker.process(ctx, job)
+
+	if store.retryCalls != 1 {
+		t.Fatalf("expected one retry call, got %d", store.retryCalls)
+	}
+	if store.failedJobs != 0 {
+		t.Fatalf("expected job to remain retryable, got %d failed calls", store.failedJobs)
+	}
+	if store.updatedStatuses != 0 {
+		t.Fatalf("expected document status to stay non-failed before retry budget is exhausted")
+	}
+	if store.lastRetryCount != 1 {
+		t.Fatalf("expected retry count 1, got %d", store.lastRetryCount)
+	}
+	if store.lastRetryAt.Before(time.Now().Add(30 * time.Second)) {
+		t.Fatalf("expected retry to be scheduled in the future, got %s", store.lastRetryAt)
+	}
+}
+
+func TestWorkerFailsJobAfterRetryBudgetIsExhausted(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeDocumentStore()
+	job := &model.DocumentJob{
+		ID:         uuid.New(),
+		DocumentID: uuid.New(),
+		Status:     "running",
+		RetryCount: 2,
+	}
+	processor := &fakeProcessor{err: errors.New("pdf parser failed")}
+	worker := NewWorkerWithOptions(store, processor, zap.NewNop(), Options{
+		Concurrency: 1,
+		MaxRetries:  2,
+		RetryDelay:  time.Minute,
+	})
+
+	worker.process(ctx, job)
+
+	if store.retryCalls != 0 {
+		t.Fatalf("expected no retry after budget exhausted, got %d", store.retryCalls)
+	}
+	if store.failedJobs != 1 {
+		t.Fatalf("expected one failed job call, got %d", store.failedJobs)
+	}
+	if store.updatedStatuses != 1 || store.lastStatus != "failed" {
+		t.Fatalf("expected document to be marked failed, got status=%q updates=%d", store.lastStatus, store.updatedStatuses)
+	}
+	if store.lastError != "pdf parser failed" {
+		t.Fatalf("expected error message to be stored, got %q", store.lastError)
+	}
+}
+
+func TestWorkerProcessesJobsConcurrently(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeDocumentStore()
+	for i := 0; i < 4; i++ {
+		store.jobs = append(store.jobs, &model.DocumentJob{
+			ID:         uuid.New(),
+			DocumentID: uuid.New(),
+			Status:     "pending",
+		})
+	}
+	processor := newConcurrentProcessor()
+	worker := NewWorkerWithOptions(store, processor, zap.NewNop(), Options{
+		Concurrency: 2,
+		MaxRetries:  1,
+		RetryDelay:  time.Minute,
+	})
+
+	worker.runOnce(ctx)
+
+	if processor.maxActive != 2 {
+		t.Fatalf("expected max active processors 2, got %d", processor.maxActive)
+	}
+	if store.completedJobs != 4 {
+		t.Fatalf("expected 4 completed jobs, got %d", store.completedJobs)
+	}
+}
+
+type fakeDocumentStore struct {
+	mu sync.Mutex
+
+	jobs []*model.DocumentJob
+
+	completedJobs   int
+	failedJobs      int
+	retryCalls      int
+	updatedStatuses int
+	lastRetryCount  int
+	lastRetryAt     time.Time
+	lastStatus      string
+	lastError       string
+}
+
+func newFakeDocumentStore() *fakeDocumentStore {
+	return &fakeDocumentStore{}
+}
+
+func (s *fakeDocumentStore) ClaimPendingJob(ctx context.Context) (*model.DocumentJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(s.jobs) == 0 {
+		return nil, nil
+	}
+	job := s.jobs[0]
+	s.jobs = s.jobs[1:]
+	job.Status = "running"
+	return job, nil
+}
+
+func (s *fakeDocumentStore) UpdateStatus(_ context.Context, _ uuid.UUID, status string, errorMessage string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.updatedStatuses++
+	s.lastStatus = status
+	s.lastError = errorMessage
+	return nil
+}
+
+func (s *fakeDocumentStore) CompleteJob(_ context.Context, _ uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.completedJobs++
+	return nil
+}
+
+func (s *fakeDocumentStore) FailJob(_ context.Context, _ uuid.UUID, message string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.failedJobs++
+	s.lastError = message
+	return nil
+}
+
+func (s *fakeDocumentStore) RetryJob(_ context.Context, _ uuid.UUID, retryCount int, retryAt time.Time, message string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.retryCalls++
+	s.lastRetryCount = retryCount
+	s.lastRetryAt = retryAt
+	s.lastError = message
+	return nil
+}
+
+type fakeProcessor struct {
+	err error
+}
+
+func (p *fakeProcessor) Process(context.Context, *model.DocumentJob) error {
+	return p.err
+}
+
+type concurrentProcessor struct {
+	mu        sync.Mutex
+	active    int
+	maxActive int
+}
+
+func newConcurrentProcessor() *concurrentProcessor {
+	return &concurrentProcessor{}
+}
+
+func (p *concurrentProcessor) Process(context.Context, *model.DocumentJob) error {
+	p.mu.Lock()
+	p.active++
+	if p.active > p.maxActive {
+		p.maxActive = p.active
+	}
+	p.mu.Unlock()
+
+	time.Sleep(20 * time.Millisecond)
+
+	p.mu.Lock()
+	p.active--
+	p.mu.Unlock()
+	return nil
+}

@@ -54,7 +54,11 @@ func main() {
 	)
 	workerCtx, stopWorker := context.WithCancel(context.Background())
 	defer stopWorker()
-	go job.NewWorker(documentRepo, documentProcessor, log).Start(workerCtx)
+	go job.NewWorkerWithOptions(documentRepo, documentProcessor, log, job.Options{
+		Concurrency: cfg.WorkerConcurrency,
+		MaxRetries:  cfg.WorkerMaxRetries,
+		RetryDelay:  cfg.WorkerRetryDelay,
+	}).Start(workerCtx)
 
 	r := router.New(cfg, db, log)
 

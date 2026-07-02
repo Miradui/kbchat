@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -31,6 +32,9 @@ const (
 	defaultScoreThreshold     = 0.3
 	defaultRerankEnabled      = true
 	defaultChatHistoryLimit   = 10
+	defaultWorkerConcurrency  = 2
+	defaultWorkerMaxRetries   = 3
+	defaultWorkerRetryDelay   = 10 * time.Second
 )
 
 type Config struct {
@@ -63,6 +67,9 @@ type Config struct {
 	RerankTopK         int
 	ScoreThreshold     float64
 	ChatHistoryLimit   int
+	WorkerConcurrency  int
+	WorkerMaxRetries   int
+	WorkerRetryDelay   time.Duration
 }
 
 func Load() Config {
@@ -98,6 +105,9 @@ func Load() Config {
 		RerankTopK:         getEnvInt("RERANK_TOP_K", defaultRerankTopK),
 		ScoreThreshold:     getEnvFloat("SCORE_THRESHOLD", defaultScoreThreshold),
 		ChatHistoryLimit:   getEnvInt("CHAT_HISTORY_LIMIT", defaultChatHistoryLimit),
+		WorkerConcurrency:  getEnvInt("WORKER_CONCURRENCY", defaultWorkerConcurrency),
+		WorkerMaxRetries:   getEnvInt("WORKER_MAX_RETRIES", defaultWorkerMaxRetries),
+		WorkerRetryDelay:   getEnvDuration("WORKER_RETRY_DELAY", defaultWorkerRetryDelay),
 	}
 }
 
@@ -155,6 +165,19 @@ func getEnvBool(key string, fallback bool) bool {
 	}
 
 	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func getEnvDuration(key string, fallback time.Duration) time.Duration {
+	value, ok := os.LookupEnv(key)
+	if !ok || value == "" {
+		return fallback
+	}
+
+	parsed, err := time.ParseDuration(value)
 	if err != nil {
 		return fallback
 	}

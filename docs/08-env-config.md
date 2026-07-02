@@ -21,7 +21,6 @@ MODEL_PROVIDER=openai_compatible
 CHAT_BASE_URL=https://api.openai.com/v1
 CHAT_API_KEY=replace-with-chat-api-key
 CHAT_MODEL=gpt-4.1-mini
-CHAT_HISTORY_LIMIT=10
 
 TITLE_BASE_URL=https://api.openai.com/v1
 TITLE_API_KEY=replace-with-title-api-key
@@ -32,7 +31,7 @@ EMBEDDING_API_KEY=replace-with-embedding-api-key
 EMBEDDING_MODEL=text-embedding-3-small
 EMBEDDING_DIMENSION=1536
 
-RERANK_ENABLED=true
+RERANK_ENABLED=false
 RERANK_BASE_URL=https://api.openai.com/v1
 RERANK_API_KEY=replace-with-rerank-api-key
 RERANK_MODEL=rerank-model-name
@@ -43,7 +42,13 @@ MAX_UPLOAD_SIZE_MB=50
 VECTOR_TOP_N=30
 RERANK_TOP_K=5
 SCORE_THRESHOLD=0.3
-ENABLE_RERANK=true
+CHAT_HISTORY_LIMIT=10
+
+WORKER_CONCURRENCY=2
+WORKER_MAX_RETRIES=3
+WORKER_RETRY_DELAY=10s
+
+VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1
 ```
 
 ## 配置说明
@@ -76,6 +81,10 @@ ENABLE_RERANK=true
 | `RERANK_TOP_K` | `5` | Rerank 后数量 |
 | `SCORE_THRESHOLD` | `0.3` | 最低相关分阈值 |
 | `ENABLE_RERANK` | `true` | 旧兼容开关；优先使用 `RERANK_ENABLED` |
+| `WORKER_CONCURRENCY` | `2` | 文档处理 worker 并发任务数 |
+| `WORKER_MAX_RETRIES` | `3` | 文档处理任务失败后的最大重试次数 |
+| `WORKER_RETRY_DELAY` | `10s` | 文档处理任务重试退避时间，使用 Go duration 格式 |
+| `VITE_API_BASE_URL` | `/api/v1` | 前端 API 地址；跨域/分离部署时设置为完整后端地址 |
 
 ## Embedding 维度约束
 

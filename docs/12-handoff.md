@@ -237,3 +237,13 @@ Authorization: Bearer <token>
 - 新增 `DELETE /api/v1/documents/recycle-bin/:id`、`POST /api/v1/documents/recycle-bin/empty`。
 - 回收站清空保持 all-or-nothing 语义；永久删除仅允许当前用户 owner 的已删除资源。
 - 已补服务层测试覆盖用户搜索、成员管理、manager/非 manager 权限、owner 不可删除、会话详情/改名/删除/归档、下载成功和缺文件、预览文本/PDF、chunks 分页搜索、回收站永久删除/清空 owner 范围。
+
+## P3 Documentation and Worker Reliability Update
+
+- 新增根目录 `README.md`，覆盖项目范围、目录结构、环境准备、后端/前端启动、验证命令和 worker 配置。
+- 新增根目录 `.env.example`，仅包含示例值和占位密钥，不包含真实环境配置。
+- `.gitignore` 已忽略 `.env`、IDE/本地工具目录、上传文件、日志、前端依赖和构建产物。
+- 文档处理 worker 支持可配置并发：`WORKER_CONCURRENCY`，默认 `2`。
+- 文档处理 worker 支持失败重试：`WORKER_MAX_RETRIES`，默认 `3`；`WORKER_RETRY_DELAY`，默认 `10s`。
+- 失败任务在重试预算耗尽前会重新进入 pending，并使用 `document_jobs.locked_at` 作为下一次可领取时间；耗尽后才将文档状态置为 `failed`。
+- 已补 `backend/internal/job` 单元测试覆盖重试、耗尽失败和并发处理。

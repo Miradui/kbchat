@@ -160,6 +160,7 @@ func (r *DocumentRepository) ClaimPendingJob(ctx context.Context) (*model.Docume
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.
 			Where("status = ?", "pending").
+			Where("locked_at IS NULL OR locked_at <= ?", time.Now()).
 			Order("created_at asc").
 			Clauses(clauseLockingUpdateSkipLocked()).
 			First(&job).Error; err != nil {
@@ -290,6 +291,7 @@ func (r *DocumentRepository) CompleteJob(ctx context.Context, jobID uuid.UUID) e
 		Updates(map[string]any{
 			"status":        "completed",
 			"error_message": "",
+			"locked_at":     nil,
 			"updated_at":    time.Now(),
 		}).Error
 }
@@ -300,6 +302,19 @@ func (r *DocumentRepository) FailJob(ctx context.Context, jobID uuid.UUID, messa
 		Updates(map[string]any{
 			"status":        "failed",
 			"error_message": message,
+			"locked_at":     nil,
+			"updated_at":    time.Now(),
+		}).Error
+}
+
+func (r *DocumentRepository) RetryJob(ctx context.Context, jobID uuid.UUID, retryCount int, retryAt time.Time, message string) error {
+	return r.db.WithContext(ctx).Model(&model.DocumentJob{}).
+		Where("id = ?", jobID).
+		Updates(map[string]any{
+			"status":        "pending",
+			"retry_count":   retryCount,
+			"error_message": message,
+			"locked_at":     retryAt,
 			"updated_at":    time.Now(),
 		}).Error
 }

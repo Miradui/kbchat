@@ -2,32 +2,85 @@ package job
 
 import (
 	"context"
+	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"rag/backend/internal/document/processor"
 	"rag/backend/internal/model"
-	"rag/backend/internal/repository"
 )
 
+const (
+	defaultInterval    = 3 * time.Second
+	defaultConcurrency = 1
+	defaultMaxRetries  = 3
+	defaultRetryDelay  = 10 * time.Second
+)
+
+type DocumentStore interface {
+	ClaimPendingJob(ctx context.Context) (*model.DocumentJob, error)
+	UpdateStatus(ctx context.Context, documentID uuid.UUID, status string, errorMessage string) error
+	CompleteJob(ctx context.Context, jobID uuid.UUID) error
+	FailJob(ctx context.Context, jobID uuid.UUID, message string) error
+	RetryJob(ctx context.Context, jobID uuid.UUID, retryCount int, retryAt time.Time, message string) error
+}
+
+type DocumentProcessor interface {
+	Process(ctx context.Context, job *model.DocumentJob) error
+}
+
+type Options struct {
+	Interval    time.Duration
+	Concurrency int
+	MaxRetries  int
+	RetryDelay  time.Duration
+}
+
 type Worker struct {
-	documents *repository.DocumentRepository
-	processor *processor.Processor
-	logger    *zap.Logger
-	interval  time.Duration
+	documents   DocumentStore
+	processor   DocumentProcessor
+	logger      *zap.Logger
+	interval    time.Duration
+	concurrency int
+	maxRetries  int
+	retryDelay  time.Duration
 }
 
 func NewWorker(
-	documents *repository.DocumentRepository,
-	processor *processor.Processor,
+	documents DocumentStore,
+	processor DocumentProcessor,
 	logger *zap.Logger,
 ) *Worker {
+	return NewWorkerWithOptions(documents, processor, logger, Options{})
+}
+
+func NewWorkerWithOptions(
+	documents DocumentStore,
+	processor DocumentProcessor,
+	logger *zap.Logger,
+	options Options,
+) *Worker {
+	if options.Interval <= 0 {
+		options.Interval = defaultInterval
+	}
+	if options.Concurrency <= 0 {
+		options.Concurrency = defaultConcurrency
+	}
+	if options.MaxRetries <= 0 {
+		options.MaxRetries = defaultMaxRetries
+	}
+	if options.RetryDelay <= 0 {
+		options.RetryDelay = defaultRetryDelay
+	}
 	return &Worker{
-		documents: documents,
-		processor: processor,
-		logger:    logger,
-		interval:  3 * time.Second,
+		documents:   documents,
+		processor:   processor,
+		logger:      logger,
+		interval:    options.Interval,
+		concurrency: options.Concurrency,
+		maxRetries:  options.MaxRetries,
+		retryDelay:  options.RetryDelay,
 	}
 }
 
@@ -56,10 +109,28 @@ func (w *Worker) Start(ctx context.Context) {
 }
 
 func (w *Worker) runOnce(ctx context.Context) {
+	var wg sync.WaitGroup
+	for i := 0; i < w.concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w.runClaimLoop(ctx)
+		}()
+	}
+	wg.Wait()
+}
+
+func (w *Worker) runClaimLoop(ctx context.Context) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+
 		job, err := w.documents.ClaimPendingJob(ctx)
 		if err != nil {
-			w.logger.Error("claim document job failed", zap.Error(err))
+			if ctx.Err() == nil {
+				w.logger.Error("claim document job failed", zap.Error(err))
+			}
 			return
 		}
 		if job == nil {
@@ -78,9 +149,31 @@ func (w *Worker) process(ctx context.Context, job *model.DocumentJob) {
 
 	if err := w.processor.Process(ctx, job); err != nil {
 		message := err.Error()
+		if job.RetryCount < w.maxRetries {
+			nextRetryCount := job.RetryCount + 1
+			retryAt := time.Now().Add(w.retryDelay)
+			w.logger.Warn("document job scheduled for retry",
+				zap.String("job_id", job.ID.String()),
+				zap.String("document_id", job.DocumentID.String()),
+				zap.Int("retry_count", nextRetryCount),
+				zap.Int("max_retries", w.maxRetries),
+				zap.Time("retry_at", retryAt),
+				zap.Error(err),
+			)
+			if retryErr := w.documents.RetryJob(ctx, job.ID, nextRetryCount, retryAt, message); retryErr != nil {
+				w.logger.Error("schedule document job retry failed",
+					zap.String("job_id", job.ID.String()),
+					zap.Error(retryErr),
+				)
+			}
+			return
+		}
+
 		w.logger.Error("document job failed",
 			zap.String("job_id", job.ID.String()),
 			zap.String("document_id", job.DocumentID.String()),
+			zap.Int("retry_count", job.RetryCount),
+			zap.Int("max_retries", w.maxRetries),
 			zap.Error(err),
 		)
 		_ = w.documents.UpdateStatus(ctx, job.DocumentID, "failed", message)
