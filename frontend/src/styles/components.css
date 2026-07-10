@@ -1,0 +1,48 @@
+button.ui-button, button.ui-icon-button {
+  align-items: center;
+  border: 1px solid transparent;
+  display: inline-flex;
+  justify-content: center;
+  transition: background var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
+}
+button.ui-button {
+  border-radius: var(--radius-sm);
+  font-weight: 650;
+  gap: var(--space-2);
+  min-height: 40px;
+  padding: 0 var(--space-4);
+}
+button.ui-button--primary { background: var(--color-primary); color: var(--color-text-inverse); }
+button.ui-button--primary:not(:disabled):hover { background: var(--color-primary-hover); color: var(--color-text-inverse); }
+button.ui-button--primary:not(:disabled):active { background: var(--color-primary-active); color: var(--color-text-inverse); }
+button.ui-button--primary:disabled { background: var(--color-primary); border-color: transparent; color: var(--color-text-inverse); }
+button.ui-button--secondary { background: var(--color-surface); border-color: var(--color-border); color: var(--color-text-secondary); }
+button.ui-button--secondary:not(:disabled):hover { background: var(--color-surface-hover); border-color: var(--color-border-strong); color: var(--color-text); }
+button.ui-button--secondary:disabled { background: var(--color-surface); border-color: var(--color-border); color: var(--color-text-secondary); }
+button.ui-button--ghost, button.ui-button--link { background: transparent; color: var(--color-primary); }
+button.ui-button--ghost:not(:disabled):hover, button.ui-button--link:not(:disabled):hover { background: var(--color-primary-soft); }
+button.ui-button--ghost:disabled, button.ui-button--link:disabled { background: transparent; border-color: transparent; color: var(--color-primary); }
+button.ui-button--danger { background: var(--color-danger); color: var(--color-text-inverse); }
+button.ui-button--danger:not(:disabled):hover { background: var(--color-danger-hover); color: var(--color-text-inverse); }
+button.ui-button--danger:not(:disabled):active { background: var(--color-danger-active); color: var(--color-text-inverse); }
+button.ui-button--danger:disabled { background: var(--color-danger); border-color: transparent; color: var(--color-text-inverse); }
+button.ui-button:disabled, button.ui-icon-button:disabled { cursor: not-allowed; opacity: .56; transform: none; }
+button.ui-button .ui-button__spinner { animation: ui-spin .8s linear infinite; height: 16px; width: 16px; }
+button.ui-icon-button {
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  min-height: 40px;
+  min-width: 40px;
+  padding: 8px;
+}
+button.ui-icon-button:not(:disabled):hover { background: var(--color-surface-hover); color: var(--color-text); }
+button.ui-icon-button:disabled { background: transparent; border-color: transparent; color: var(--color-text-secondary); }
+button.ui-icon-button--danger { color: var(--color-danger); }
+button.ui-icon-button--danger:not(:disabled):hover { background: var(--color-danger-soft); color: var(--color-danger-hover); }
+button.ui-icon-button--danger:disabled { background: transparent; border-color: transparent; color: var(--color-danger); }
+@keyframes ui-spin { to { transform: rotate(360deg); } }
+@media (max-width: 680px) {
+  button.ui-button, button.ui-icon-button { min-height: 44px; }
+  button.ui-icon-button { min-width: 44px; }
+}
