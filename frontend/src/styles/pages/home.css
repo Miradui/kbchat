@@ -1,0 +1,34 @@
+.home-dashboard-page { display: grid; gap: 24px; max-width: 1320px; width: 100%; }
+.home-quick-actions { display: grid; gap: 16px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.home-quick-action,
+.home-stat-card,
+.home-panel { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
+.home-quick-action { color: var(--color-text); display: grid; gap: 6px; min-height: 112px; padding: 20px; text-decoration: none; }
+.home-quick-action:hover { border-color: var(--color-primary); box-shadow: var(--shadow-raised); }
+.home-quick-action span { color: var(--color-text-secondary); }
+.home-stat-grid { display: grid; gap: 16px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.home-stat-card { display: grid; gap: 6px; padding: 18px 20px; }
+.home-stat-card span { color: var(--color-text-muted); font-size: 14px; }
+.home-stat-card strong { font-size: 28px; }
+.home-overview-grid { display: grid; gap: 20px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.home-panel { min-width: 0; padding: 20px; }
+.home-panel > header { align-items: center; display: flex; justify-content: space-between; margin-bottom: 12px; }
+.home-panel h2 { font-size: 17px; margin: 0; }
+.home-list-row { border-top: 1px solid var(--color-border); color: var(--color-text); display: grid; gap: 3px; padding: 12px 0; text-decoration: none; }
+.home-list-row:first-of-type { border-top: 0; }
+.home-list-row small { color: var(--color-text-muted); overflow-wrap: anywhere; }
+.home-failure-panel { align-self: start; }
+.home-dependent-error { color: var(--color-text-secondary); margin: 0; padding: 20px 0; }
+.home-stats-region { padding: 0; }
+.home-stats-region > header { padding: 20px 20px 0; }
+.home-stats-region > .ui-error-state,
+.home-stats-region > .skeleton-stack { margin: 20px; }
+@media (max-width: 980px) {
+  .home-quick-actions { grid-template-columns: 1fr; }
+  .home-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .home-overview-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 520px) {
+  .home-stat-grid { grid-template-columns: 1fr; }
+  .home-panel { padding: 16px; }
+}
