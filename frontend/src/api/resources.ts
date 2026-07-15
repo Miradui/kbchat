@@ -390,8 +390,8 @@ export function emptyDocumentRecycleBin(): Promise<void> {
   });
 }
 
-export function globalSearch(query: string): Promise<GlobalSearchResponse> {
-  return apiRequest<GlobalSearchResponse>(withQuery('/search', { q: query }));
+export function globalSearch(query: string, signal?: AbortSignal): Promise<GlobalSearchResponse> {
+  return apiRequest<GlobalSearchResponse>(withQuery('/search', { q: query }), { signal });
 }
 
 export function searchKnowledgeBase(

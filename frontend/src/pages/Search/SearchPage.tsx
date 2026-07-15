@@ -1,230 +1,210 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { Search } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import type { FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 
-import { ApiError } from '../../api/client';
-import {
-  getWorkspacePreference,
-  globalSearch,
-  listKnowledgeBaseCategories,
-} from '../../api/resources';
+import { globalSearch } from '../../api/resources';
+import { EmptyState } from '../../components/feedback/EmptyState';
+import { ErrorState } from '../../components/feedback/ErrorState';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { WorkspaceShell } from '../../components/WorkspaceShell';
-import type {
-  GlobalSearchResult,
-  GlobalSearchResultType,
-  KnowledgeBaseCategory,
-  KnowledgeBaseWorkspacePreference,
-} from '../../types/api';
+import { Button } from '../../components/ui/Button';
+import type { GlobalSearchResult, GlobalSearchResultType } from '../../types/api';
+import { getErrorMessage } from '../../utils/errors';
 
-const fallbackPreference: KnowledgeBaseWorkspacePreference = {
-  viewMode: 'table',
-  scope: 'all',
-  sort: 'updatedAt_desc',
-  visibility: 'all',
-  expandedCategoryIds: [],
-};
+type SearchType = 'all' | GlobalSearchResultType;
 
-const resultTypeLabels: Record<GlobalSearchResultType, string> = {
-  knowledgeBase: '知识库',
-  document: '文档',
-  chunk: '内容片段',
-};
+const SEARCH_DEBOUNCE_MS = 300;
+const typeOptions: Array<{ value: SearchType; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'knowledgeBase', label: '知识库' },
+  { value: 'document', label: '文档' },
+  { value: 'chunk', label: '内容片段' },
+];
+
+function readType(value: string | null): SearchType {
+  return typeOptions.some((option) => option.value === value) ? value as SearchType : 'all';
+}
 
 export function SearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const submittedQuery = searchParams.get('q')?.trim() ?? '';
+  const rawQuery = searchParams.get('q') ?? '';
+  const submittedQuery = rawQuery.trim();
+  const selectedType = readType(searchParams.get('type'));
   const [draft, setDraft] = useState(submittedQuery);
-  const [categories, setCategories] = useState<KnowledgeBaseCategory[]>([]);
-  const [expandedIds, setExpandedIds] = useState<string[]>([]);
   const [items, setItems] = useState<GlobalSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
-  const [bootstrapping, setBootstrapping] = useState(true);
   const [error, setError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => setDraft(submittedQuery), [submittedQuery]);
 
   useEffect(() => {
-    setDraft(submittedQuery);
-  }, [submittedQuery]);
+    if (!searchParams.has('q') || rawQuery === submittedQuery) {
+      return;
+    }
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      if (submittedQuery) {
+        next.set('q', submittedQuery);
+      } else {
+        next.delete('q');
+      }
+      return next;
+    }, { replace: true });
+  }, [rawQuery, searchParams, setSearchParams, submittedQuery]);
 
   useEffect(() => {
-    let mounted = true;
+    const query = draft.trim();
+    if (query === submittedQuery) {
+      return;
+    }
 
-    Promise.all([
-      listKnowledgeBaseCategories().catch(() => ({ items: [] })),
-      getWorkspacePreference().catch(() => fallbackPreference),
-    ])
-      .then(([categoryResponse, preference]) => {
-        if (!mounted) {
-          return;
-        }
-        setCategories(categoryResponse.items);
-        setExpandedIds(preference.expandedCategoryIds);
-      })
-      .finally(() => {
-        if (mounted) {
-          setBootstrapping(false);
-        }
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
+    const timer = window.setTimeout(() => {
+      setSearchParams((current) => updateParams(current, query, selectedType), { replace: true });
+    }, SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [draft, selectedType, setSearchParams, submittedQuery]);
 
   useEffect(() => {
-    let mounted = true;
-    const keyword = submittedQuery.trim();
-
-    if (!keyword) {
+    if (!submittedQuery) {
       setItems([]);
       setError('');
       setLoading(false);
-      return () => {
-        mounted = false;
-      };
+      return;
     }
 
+    const controller = new AbortController();
     setLoading(true);
     setError('');
-
-    globalSearch(keyword)
+    void globalSearch(submittedQuery, controller.signal)
       .then((response) => {
-        if (mounted) {
+        if (!controller.signal.aborted) {
           setItems(response.items);
         }
       })
-      .catch((err) => {
-        if (mounted) {
-          setError(errorMessage(err, '全局搜索失败'));
-          setItems([]);
+      .catch((caught: unknown) => {
+        const aborted = controller.signal.aborted
+          || (caught instanceof DOMException && caught.name === 'AbortError');
+        if (!aborted) {
+          setError(getErrorMessage(caught, '全局搜索失败'));
         }
       })
       .finally(() => {
-        if (mounted) {
+        if (!controller.signal.aborted) {
           setLoading(false);
         }
       });
 
-    return () => {
-      mounted = false;
-    };
-  }, [submittedQuery]);
+    return () => controller.abort();
+  }, [reloadKey, submittedQuery]);
 
-  const groupedCount = useMemo(() => {
-    return items.reduce<Record<GlobalSearchResultType, number>>(
-      (acc, item) => {
-        acc[item.type] += 1;
-        return acc;
-      },
-      { knowledgeBase: 0, document: 0, chunk: 0 },
-    );
-  }, [items]);
+  const counts = useMemo(() => items.reduce<Record<SearchType, number>>((result, item) => {
+    result.all += 1;
+    result[item.type] += 1;
+    return result;
+  }, { all: 0, knowledgeBase: 0, document: 0, chunk: 0 }), [items]);
+  const visibleItems = selectedType === 'all'
+    ? items
+    : items.filter((item) => item.type === selectedType);
+
+  function writeParams(query: string, type: SearchType) {
+    setSearchParams((current) => updateParams(current, query, type));
+  }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const keyword = draft.trim();
-    if (keyword) {
-      setSearchParams({ q: keyword });
-    } else {
-      setSearchParams({});
-    }
+    writeParams(draft.trim(), selectedType);
   }
 
   return (
-    <WorkspaceShell active="search" categories={categories} expandedIds={expandedIds}>
-      <header className="page-header workspace-heading">
-        <div>
-          <h1>全局搜索</h1>
-          <p className="page-description">关键词检索当前用户拥有的知识库、文档和内容片段。</p>
-        </div>
-      </header>
-
-      <form className="form-panel search-form-panel" onSubmit={handleSubmit}>
-        <label>
-          搜索关键词
-          <input
-            autoFocus
-            value={draft}
-            placeholder="输入知识库、文件名或内容关键词"
-            onChange={(event) => setDraft(event.target.value)}
-          />
-        </label>
-        <button type="submit">搜索</button>
-      </form>
-
-      <div className="summary-grid detail-summary search-summary">
-        <MetricCard label="全部结果" value={items.length} />
-        <MetricCard label="知识库" value={groupedCount.knowledgeBase} />
-        <MetricCard label="文档" value={groupedCount.document} />
-        <MetricCard label="内容片段" value={groupedCount.chunk} />
-      </div>
-
-      {error && <p className="error-text">{error}</p>}
-
-      <section className="workspace-list-panel search-results-panel">
-        <header className="panel-header">
+    <WorkspaceShell active="search">
+      <div className="search-page">
+        <header className="page-header workspace-heading">
           <div>
-            <h2>搜索结果</h2>
-            <span className="muted-text">
-              {submittedQuery ? `关键词：${submittedQuery}` : '请输入关键词开始搜索'}
-            </span>
+            <h1>全局搜索</h1>
+            <p className="page-description">搜索当前用户可访问的知识库、文档和内容片段。</p>
           </div>
         </header>
 
-        {loading || bootstrapping ? (
-          <LoadingSkeleton rows={5} columns={3} />
-        ) : !submittedQuery ? (
-          <div className="empty-state">输入关键词后会调用后端全局搜索接口。</div>
-        ) : items.length === 0 ? (
-          <div className="empty-state">没有找到匹配结果。可以尝试更换关键词。</div>
-        ) : (
-          <div className="search-result-list">
-            {items.map((item) => (
-              <SearchResultRow item={item} key={`${item.type}-${item.id}`} />
-            ))}
-          </div>
-        )}
-      </section>
+        <form className="search-command" onSubmit={handleSubmit}>
+          <Search aria-hidden="true" />
+          <label className="sr-only" htmlFor="global-search-query">搜索关键词</label>
+          <input
+            id="global-search-query"
+            placeholder="输入知识库、文件名或内容关键词"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+          <Button type="submit">搜索</Button>
+        </form>
+
+        <div className="search-type-tabs" aria-label="结果类型" role="group">
+          {typeOptions.map((option) => (
+            <button
+              aria-pressed={selectedType === option.value}
+              className={selectedType === option.value ? 'is-active' : ''}
+              key={option.value}
+              onClick={() => writeParams(submittedQuery, option.value)}
+              type="button"
+            >
+              {option.label} {counts[option.value]}
+            </button>
+          ))}
+        </div>
+
+        <section className="search-results" aria-labelledby="search-results-title">
+          <header>
+            <h2 id="search-results-title">搜索结果</h2>
+            <span>{submittedQuery ? `关键词：${submittedQuery}` : '等待输入关键词'}</span>
+          </header>
+          {loading ? (
+            <LoadingSkeleton announce rows={5} columns={3} />
+          ) : error ? (
+            <ErrorState title="搜索失败" description={error} onRetry={() => setReloadKey((value) => value + 1)} />
+          ) : !submittedQuery ? (
+            <EmptyState title="输入关键词开始搜索" description="可搜索知识库名称、文件名与内容片段。" />
+          ) : visibleItems.length === 0 ? (
+            <EmptyState title="没有匹配结果" description="尝试更短的关键词或切换结果类型。" />
+          ) : (
+            <div className="search-result-list">
+              {visibleItems.map((item) => <SearchResult item={item} key={`${item.type}-${item.id}`} />)}
+            </div>
+          )}
+        </section>
+      </div>
     </WorkspaceShell>
   );
 }
 
-function SearchResultRow({ item }: { item: GlobalSearchResult }) {
-  return (
-    <article className="search-result-row">
-      <span className={`search-type-pill ${item.type}`}>{resultTypeLabels[item.type]}</span>
-      <div>
-        <Link to={resultLink(item)}>
-          <strong>{item.title || item.knowledgeBaseName}</strong>
-        </Link>
-        <p>{item.snippet || '暂无摘要'}</p>
-        <small>
-          {item.knowledgeBaseName}
-          {item.filename ? ` / ${item.filename}` : ''}
-        </small>
-      </div>
-    </article>
-  );
-}
-
-function resultLink(item: GlobalSearchResult): string {
-  if (item.type === 'knowledgeBase') {
-    return `/knowledge-bases/${item.knowledgeBaseId}`;
+function updateParams(current: URLSearchParams, query: string, type: SearchType) {
+  const next = new URLSearchParams(current);
+  if (query) {
+    next.set('q', query);
+  } else {
+    next.delete('q');
   }
-  return `/knowledge-bases/${item.knowledgeBaseId}/documents`;
-}
-
-function MetricCard({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="stat-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function errorMessage(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    return err.message;
+  if (type === 'all') {
+    next.delete('type');
+  } else {
+    next.set('type', type);
   }
-  return fallback;
+  return next;
+}
+
+function SearchResult({ item }: { item: GlobalSearchResult }) {
+  const href = item.type === 'knowledgeBase'
+    ? `/knowledge-bases/${item.knowledgeBaseId}`
+    : `/knowledge-bases/${item.knowledgeBaseId}/documents`;
+  const label = item.type === 'knowledgeBase' ? '知识库' : item.type === 'document' ? '文档' : '内容片段';
+  return (
+    <Link className="search-result-row" to={href}>
+      <span className="search-result-type">{label}</span>
+      <span>
+        <strong>{item.title}</strong>
+        <small>{item.knowledgeBaseName}{item.filename ? ` · ${item.filename}` : ''}</small>
+      </span>
+      <p>{item.snippet || '暂无摘要'}</p>
+    </Link>
+  );
 }
