@@ -94,3 +94,44 @@ button.ui-icon-button--danger:disabled { background: transparent; border-color: 
 @media (max-width: 680px) {
   .ui-toast-region { left: 16px; max-width: none; right: 16px; }
 }
+
+.ui-dialog-backdrop {
+  align-items: center;
+  background: var(--color-scrim);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 16px;
+  position: fixed;
+  z-index: 70;
+}
+.ui-dialog {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-overlay);
+  max-height: calc(100vh - 32px);
+  max-width: 480px;
+  overflow: auto;
+  padding: var(--space-5);
+  width: 100%;
+}
+.ui-dialog > h2 { font-size: 20px; margin: 0; }
+.ui-dialog > p { color: var(--color-text-secondary); margin: var(--space-2) 0 0; }
+.ui-dialog > .ui-dialog__error {
+  background: var(--color-danger-soft);
+  border-radius: var(--radius-sm);
+  color: var(--color-danger);
+  padding: 10px 12px;
+}
+.ui-dialog__actions {
+  display: flex;
+  gap: var(--space-3);
+  justify-content: flex-end;
+  margin-top: var(--space-5);
+}
+@media (max-width: 680px) {
+  .ui-dialog { max-height: calc(100dvh - 32px); padding: var(--space-4); }
+  .ui-dialog__actions { flex-direction: column-reverse; }
+  .ui-dialog__actions button.ui-button { min-height: 44px; width: 100%; }
+}
