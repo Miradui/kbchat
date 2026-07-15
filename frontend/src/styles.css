@@ -947,40 +947,6 @@ textarea {
   margin-bottom: 16px;
 }
 
-.tags-summary {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.tag-form-panel .form-grid {
-  grid-template-columns: minmax(240px, 420px);
-}
-
-.tags-panel-header {
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.tags-panel-header input {
-  max-width: 280px;
-  min-width: 220px;
-}
-
-.tags-table {
-  min-width: 780px;
-}
-
-.tag-management-name {
-  align-items: center;
-  background: #eef4ff;
-  border: 1px solid #c7d7fe;
-  border-radius: 999px;
-  color: #1d4ed8;
-  display: inline-flex;
-  font-size: 13px;
-  min-height: 28px;
-  padding: 4px 10px;
-}
-
 .workspace-list-panel {
   background: #fff;
   border: 1px solid #dbe3ef;
