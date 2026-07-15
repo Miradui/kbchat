@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && npm run verify:route-chunks",
     "test": "vitest run",
     "test:watch": "vitest",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "verify:route-chunks": "node scripts/verify-route-chunks.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.1",
