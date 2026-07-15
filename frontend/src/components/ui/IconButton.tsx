@@ -1,3 +1,4 @@
+import { forwardRef } from 'react';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 
 import { classNames } from '../../utils/classNames';
@@ -8,23 +9,24 @@ type IconButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'aria-label
   tone?: 'default' | 'danger';
 };
 
-export function IconButton({
+export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton({
   label,
   children,
   tone = 'default',
   className,
   type = 'button',
   ...props
-}: IconButtonProps) {
+}, ref) {
   return (
     <button
       {...props}
       aria-label={label}
       className={classNames('ui-icon-button', tone === 'danger' && 'ui-icon-button--danger', className)}
+      ref={ref}
       title={label}
       type={type}
     >
       {children}
     </button>
   );
-}
+});

@@ -358,7 +358,7 @@ export function ChatPage() {
           </div>
         </aside>
 
-        <main className="chat-main-panel">
+        <section className="chat-main-panel" aria-label="问答会话">
           <header className="chat-thread-head">
             <div>
               <h2>{currentSession?.title ?? '问答会话'}</h2>
@@ -448,7 +448,7 @@ export function ChatPage() {
               {sending ? '发送中...' : '发送'}
             </button>
           </form>
-        </main>
+        </section>
 
         <aside className="citation-panel chat-citation-panel">
           <div>
