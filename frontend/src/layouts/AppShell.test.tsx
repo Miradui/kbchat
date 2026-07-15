@@ -140,6 +140,6 @@ describe('AppShell', () => {
 
     await user.click(screen.getByRole('button', { name: '退出登录' }));
     await waitFor(() => expect(tokenStore.getToken()).toBeNull());
-    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/login');
+    await waitFor(() => expect(screen.getByLabelText('当前位置')).toHaveTextContent('/login'));
   });
 });

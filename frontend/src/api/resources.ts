@@ -40,6 +40,7 @@ export function login(username: string, password: string): Promise<LoginResponse
   return apiRequest<LoginResponse>('/auth/login', {
     method: 'POST',
     body: { username, password },
+    redirectOnUnauthorized: false,
   });
 }
 
