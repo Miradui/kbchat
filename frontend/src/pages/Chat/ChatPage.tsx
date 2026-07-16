@@ -12,18 +12,21 @@ import {
   listChatSessions,
   listKnowledgeBaseCategories,
   listKnowledgeBases,
+  regenerateChatMessage,
   sendChatMessage,
   updateChatSessionTitle,
 } from '../../api/resources';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { WorkspaceShell } from '../../components/WorkspaceShell';
+import { RerankFallbackNotice } from '../../components/feedback/RerankFallbackNotice';
 import type {
   ChatMessage,
   ChatSession,
   Citation,
   KnowledgeBase,
   KnowledgeBaseCategory,
+  KnowledgeBaseRerankFallback,
   KnowledgeBaseWorkspacePreference,
 } from '../../types/api';
 
@@ -39,6 +42,10 @@ export function ChatPage() {
   const { sessionId } = useParams();
   const navigate = useNavigate();
   const messagesRef = useRef<HTMLDivElement | null>(null);
+  const activeSessionIdRef = useRef(sessionId);
+  const messageOperationIdRef = useRef(0);
+  const messageOperationInFlightRef = useRef(false);
+  activeSessionIdRef.current = sessionId;
   const [categories, setCategories] = useState<KnowledgeBaseCategory[]>([]);
   const [expandedIds, setExpandedIds] = useState<string[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -51,6 +58,8 @@ export function ChatPage() {
   const [loading, setLoading] = useState(true);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  const [regeneratingMessageId, setRegeneratingMessageId] = useState<string | null>(null);
+  const [rerankFallback, setRerankFallback] = useState<KnowledgeBaseRerankFallback | null>(null);
   const [creatingSession, setCreatingSession] = useState(false);
   const [updatingSession, setUpdatingSession] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
@@ -93,6 +102,12 @@ export function ChatPage() {
   }, []);
 
   useEffect(() => {
+    messageOperationIdRef.current += 1;
+    messageOperationInFlightRef.current = false;
+    setSending(false);
+    setPendingQuestion('');
+    setRegeneratingMessageId(null);
+
     if (!sessionId) {
       return;
     }
@@ -100,6 +115,7 @@ export function ChatPage() {
     let mounted = true;
     setError('');
     setMessagesLoading(true);
+    setRerankFallback(null);
 
     Promise.all([getChatSession(sessionId), listChatMessages(sessionId)])
       .then(([sessionResponse, messageResponse]) => {
@@ -152,6 +168,10 @@ export function ChatPage() {
       .find((message) => message.role === 'assistant');
     return lastAssistant?.citations ?? [];
   }, [messages]);
+  const latestAssistantMessageId = useMemo(
+    () => [...messages].reverse().find((message) => message.role === 'assistant')?.id ?? null,
+    [messages],
+  );
 
   const questionCount = messages.filter((message) => message.role === 'user').length;
   const citationCount = messages.reduce((sum, message) => sum + message.citations.length, 0);
@@ -258,26 +278,86 @@ export function ChatPage() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!sessionId || !draft.trim() || archived) {
+    if (!sessionId || !draft.trim() || archived || messageOperationInFlightRef.current) {
       return;
     }
 
+    const targetSessionId = sessionId;
+    const operationId = messageOperationIdRef.current + 1;
+    messageOperationIdRef.current = operationId;
+    messageOperationInFlightRef.current = true;
     setSending(true);
     setError('');
+    setRerankFallback(null);
     const question = draft.trim();
     setDraft('');
     setPendingQuestion(question);
 
     try {
-      await sendChatMessage(sessionId, question);
-      const [messageResponse] = await Promise.all([listChatMessages(sessionId), reloadSessions()]);
+      const response = await sendChatMessage(targetSessionId, question);
+      if (!isCurrentMessageOperation(operationId, targetSessionId)) {
+        return;
+      }
+      setRerankFallback(response.rerankFallback?.used ? response.rerankFallback : null);
+      const [messageResponse, sessionResponse] = await Promise.all([
+        listChatMessages(targetSessionId),
+        listChatSessions(),
+      ]);
+      if (!isCurrentMessageOperation(operationId, targetSessionId)) {
+        return;
+      }
+      setMessages(messageResponse.items);
+      setSessions(sessionResponse.items);
+    } catch (err) {
+      if (isCurrentMessageOperation(operationId, targetSessionId)) {
+        setError(errorMessage(err, '消息发送失败'));
+      }
+    } finally {
+      if (isCurrentMessageOperation(operationId, targetSessionId)) {
+        messageOperationInFlightRef.current = false;
+        setSending(false);
+        setPendingQuestion('');
+      }
+    }
+  }
+
+  async function handleRegenerateMessage(messageId: string) {
+    if (!sessionId || messageOperationInFlightRef.current) {
+      return;
+    }
+
+    const targetSessionId = sessionId;
+    const operationId = messageOperationIdRef.current + 1;
+    messageOperationIdRef.current = operationId;
+    messageOperationInFlightRef.current = true;
+    setRegeneratingMessageId(messageId);
+    setError('');
+    setRerankFallback(null);
+    try {
+      const response = await regenerateChatMessage(targetSessionId, messageId);
+      if (!isCurrentMessageOperation(operationId, targetSessionId)) {
+        return;
+      }
+      setRerankFallback(response.rerankFallback?.used ? response.rerankFallback : null);
+      const messageResponse = await listChatMessages(targetSessionId);
+      if (!isCurrentMessageOperation(operationId, targetSessionId)) {
+        return;
+      }
       setMessages(messageResponse.items);
     } catch (err) {
-      setError(errorMessage(err, '消息发送失败'));
+      if (isCurrentMessageOperation(operationId, targetSessionId)) {
+        setError(errorMessage(err, '重新生成回答失败'));
+      }
     } finally {
-      setSending(false);
-      setPendingQuestion('');
+      if (isCurrentMessageOperation(operationId, targetSessionId)) {
+        messageOperationInFlightRef.current = false;
+        setRegeneratingMessageId(null);
+      }
     }
+  }
+
+  function isCurrentMessageOperation(operationId: number, targetSessionId: string): boolean {
+    return messageOperationIdRef.current === operationId && activeSessionIdRef.current === targetSessionId;
   }
 
   return (
@@ -405,6 +485,8 @@ export function ChatPage() {
             </div>
           </header>
 
+          <RerankFallbackNotice fallback={rerankFallback} />
+
           <div ref={messagesRef} className={messagesLoading ? 'messages chat-thread is-switching' : 'messages chat-thread'}>
             {messagesLoading ? (
               <div className="message-loading-state">
@@ -417,7 +499,13 @@ export function ChatPage() {
               </div>
             ) : (
               messages.map((message) => (
-                <MessageBubble message={message} key={message.id} />
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  onRegenerate={message.id === latestAssistantMessageId && !archived ? handleRegenerateMessage : undefined}
+                  regenerating={regeneratingMessageId === message.id}
+                  regenerationDisabled={sending || regeneratingMessageId !== null}
+                />
               ))
             )}
             {pendingQuestion && (
@@ -441,10 +529,10 @@ export function ChatPage() {
               placeholder="继续追问当前知识库..."
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              disabled={sending || !sessionId || archived}
+              disabled={sending || regeneratingMessageId !== null || !sessionId || archived}
               rows={2}
             />
-            <button type="submit" disabled={sending || !draft.trim() || !sessionId || archived}>
+            <button type="submit" disabled={sending || regeneratingMessageId !== null || !draft.trim() || !sessionId || archived}>
               {sending ? '发送中...' : '发送'}
             </button>
           </form>
@@ -500,7 +588,17 @@ function mergeSession(sessions: ChatSession[], nextSession: ChatSession): ChatSe
   return sessions.map((session) => (session.id === nextSession.id ? nextSession : session));
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({
+  message,
+  onRegenerate,
+  regenerating = false,
+  regenerationDisabled = false,
+}: {
+  message: ChatMessage;
+  onRegenerate?: (messageId: string) => void;
+  regenerating?: boolean;
+  regenerationDisabled?: boolean;
+}) {
   const citationSummary =
     message.citations.length > 0
       ? `引用 ${message.citations.length} 条 · 最高 rerankScore ${formatNullableScore(highestRerankScore(message.citations))}`
@@ -511,6 +609,18 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       <span className="message-role">{message.role === 'assistant' ? 'Assistant' : 'User'}</span>
       <p>{message.content}</p>
       {message.role === 'assistant' && <div className="citation-summary">{citationSummary}</div>}
+      {message.role === 'assistant' && onRegenerate && (
+        <div className="message-actions">
+          <button
+            className="secondary-button"
+            disabled={regenerationDisabled}
+            onClick={() => onRegenerate(message.id)}
+            type="button"
+          >
+            {regenerating ? '重新生成中...' : '重新生成回答'}
+          </button>
+        </div>
+      )}
     </article>
   );
 }
