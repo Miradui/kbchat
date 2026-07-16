@@ -63,6 +63,37 @@ func TestClaimPendingJobIgnoresUnsupportedJobTypes(t *testing.T) {
 	}
 }
 
+func TestRecoverRunningJobsIgnoresUnsupportedJobTypes(t *testing.T) {
+	db := newDocumentRepositoryTestDB(t)
+	repository := NewDocumentRepository(db)
+	document := createDocumentRepositoryTestDocument(t, db)
+	processJob := model.DocumentJob{DocumentID: document.ID, JobType: "process_document", Status: "running"}
+	unsupportedJob := model.DocumentJob{DocumentID: document.ID, JobType: "unknown_job", Status: "running"}
+	if err := db.Create(&processJob).Error; err != nil {
+		t.Fatalf("create process job: %v", err)
+	}
+	if err := db.Create(&unsupportedJob).Error; err != nil {
+		t.Fatalf("create unsupported job: %v", err)
+	}
+
+	if err := repository.RecoverRunningJobs(context.Background()); err != nil {
+		t.Fatalf("recover running jobs: %v", err)
+	}
+
+	if err := db.First(&processJob, "id = ?", processJob.ID).Error; err != nil {
+		t.Fatalf("reload process job: %v", err)
+	}
+	if err := db.First(&unsupportedJob, "id = ?", unsupportedJob.ID).Error; err != nil {
+		t.Fatalf("reload unsupported job: %v", err)
+	}
+	if processJob.Status != "pending" {
+		t.Fatalf("expected process job to be recovered, got %q", processJob.Status)
+	}
+	if unsupportedJob.Status != "running" {
+		t.Fatalf("expected unsupported job to remain running, got %q", unsupportedJob.Status)
+	}
+}
+
 func TestCompleteJobFinalizesDocumentAndJob(t *testing.T) {
 	db := newDocumentRepositoryTestDB(t)
 	repository := NewDocumentRepository(db)

@@ -381,7 +381,7 @@ func (r *DocumentRepository) RecoverRunningJobs(ctx context.Context) error {
 	now := time.Now()
 	return r.db.WithContext(ctx).
 		Model(&model.DocumentJob{}).
-		Where("status = ?", "running").
+		Where("status = ? AND job_type = ?", "running", "process_document").
 		Updates(map[string]any{
 			"status":     "pending",
 			"locked_at":  nil,
