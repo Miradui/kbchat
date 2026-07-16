@@ -56,6 +56,9 @@ export function DocumentsPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const activeKnowledgeBaseIdRef = useRef(id);
+  const documentRequestIdRef = useRef(0);
+  activeKnowledgeBaseIdRef.current = id;
   const [categories, setCategories] = useState<KnowledgeBaseCategory[]>([]);
   const [expandedIds, setExpandedIds] = useState<string[]>([]);
   const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeBase | null>(null);
@@ -79,12 +82,26 @@ export function DocumentsPage() {
       return;
     }
 
+    const targetKnowledgeBaseId = id;
+    const requestId = documentRequestIdRef.current + 1;
+    documentRequestIdRef.current = requestId;
+    const isCurrentRequest = () =>
+      documentRequestIdRef.current === requestId && activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId;
     setError('');
-    const [kb, docs, kbList] = await Promise.all([
-      getKnowledgeBase(id),
-      listDocuments(id),
+    const responses = await Promise.all([
+      getKnowledgeBase(targetKnowledgeBaseId),
+      listDocuments(targetKnowledgeBaseId),
       listKnowledgeBases({ pageSize: 100 }),
-    ]);
+    ]).catch((err) => {
+      if (isCurrentRequest()) {
+        throw err;
+      }
+      return null;
+    });
+    if (!responses || !isCurrentRequest()) {
+      return;
+    }
+    const [kb, docs, kbList] = responses;
     setKnowledgeBase(kb);
     setDocuments(docs.items);
     setKnowledgeBases(kbList.items);
@@ -142,9 +159,22 @@ export function DocumentsPage() {
     }
 
     const timer = window.setInterval(() => {
-      listDocuments(id)
-        .then((response) => setDocuments(response.items))
-        .catch((err) => setError(errorMessage(err, '文档状态刷新失败')));
+      const targetKnowledgeBaseId = id;
+      const requestId = documentRequestIdRef.current + 1;
+      documentRequestIdRef.current = requestId;
+      const isCurrentRequest = () =>
+        documentRequestIdRef.current === requestId && activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId;
+      listDocuments(targetKnowledgeBaseId)
+        .then((response) => {
+          if (isCurrentRequest()) {
+            setDocuments(response.items);
+          }
+        })
+        .catch((err) => {
+          if (isCurrentRequest()) {
+            setError(errorMessage(err, '文档状态刷新失败'));
+          }
+        });
     }, 3000);
 
     return () => window.clearInterval(timer);
