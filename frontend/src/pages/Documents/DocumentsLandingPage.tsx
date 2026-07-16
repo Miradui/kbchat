@@ -525,10 +525,19 @@ export function DocumentsLandingPage() {
                     <td data-label="更新时间">{formatDateTime(document.updatedAt || document.createdAt)}</td>
                     <td data-label="操作">
                       <div className="table-actions">
-                        <button className="link-button" type="button" onClick={() => setDetailDocumentId(document.id)}>
+                        <button
+                          aria-label={`查看 ${document.filename}`}
+                          className="link-button"
+                          type="button"
+                          onClick={() => setDetailDocumentId(document.id)}
+                        >
                           查看
                         </button>
-                        <Link className="link-button" to={`/knowledge-bases/${document.knowledgeBaseId}/documents`}>
+                        <Link
+                          aria-label={`进入 ${document.filename} 的处理页`}
+                          className="link-button"
+                          to={`/knowledge-bases/${document.knowledgeBaseId}/documents`}
+                        >
                           进入处理
                         </Link>
                       </div>

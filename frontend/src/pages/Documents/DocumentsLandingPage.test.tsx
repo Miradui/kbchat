@@ -225,6 +225,22 @@ describe('DocumentsLandingPage loading', () => {
 	expect(await screen.findByRole('combobox', { name: '上传目标' })).toBeInTheDocument();
   });
 
+  it('identifies the document targeted by each row action', async () => {
+    api.listGlobalDocuments.mockResolvedValue({
+      items: [documentItem('manual.pdf', 'completed'), documentItem('policy.md', 'completed')],
+      total: 2,
+      page: 1,
+      pageSize: 20,
+    });
+
+    renderWithRouter(<DocumentsLandingPage />, ['/documents']);
+
+    expect(await screen.findByRole('button', { name: '查看 manual.pdf' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看 policy.md' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '进入 manual.pdf 的处理页' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '进入 policy.md 的处理页' })).toBeInTheDocument();
+  });
+
   it('distinguishes a successful upload from a following refresh failure', async () => {
 	api.listGlobalDocuments
 	  .mockResolvedValueOnce(documentResponse(documentItem('manual.pdf', 'completed')))
