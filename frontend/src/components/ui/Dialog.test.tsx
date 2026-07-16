@@ -108,6 +108,31 @@ describe('Dialog', () => {
     expect(opener).toHaveFocus();
     expect(document.body.style.overflow).toBe('');
   });
+
+  it('only lets the top modal handle Escape and scroll locking', async () => {
+    const user = userEvent.setup();
+    render(<NestedDialogHarness />);
+    const opener = screen.getByRole('button', { name: '打开回收站' });
+
+    await user.click(opener);
+    const confirmOpener = screen.getByRole('button', { name: '永久删除' });
+    await user.click(confirmOpener);
+    expect(screen.getByRole('dialog', { name: '确认永久删除' })).toBeInTheDocument();
+    expect(document.body.style.overflow).toBe('hidden');
+
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('dialog', { name: '确认永久删除' })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: '知识库回收站' })).toBeInTheDocument();
+    expect(document.body.style.overflow).toBe('hidden');
+    expect(confirmOpener).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('dialog', { name: '知识库回收站' })).not.toBeInTheDocument();
+    expect(document.body.style.overflow).toBe('');
+    expect(opener).toHaveFocus();
+  });
 });
 
 function DrawerHarness() {
@@ -121,6 +146,28 @@ function DrawerHarness() {
           <section aria-label="测试抽屉" aria-modal="true" ref={panelRef} role="dialog" tabIndex={-1}>
             <button type="button" onClick={() => setOpen(false)}>关闭抽屉</button>
             <label>抽屉字段<input /></label>
+          </section>
+        </aside>
+      )}
+    </>
+  );
+}
+
+function NestedDialogHarness() {
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const panelRef = useDialogModal(drawerOpen, () => setDrawerOpen(false));
+  return (
+    <>
+      <button type="button" onClick={() => setDrawerOpen(true)}>打开回收站</button>
+      {drawerOpen && (
+        <aside>
+          <section aria-label="知识库回收站" aria-modal="true" ref={panelRef} role="dialog" tabIndex={-1}>
+            <button type="button" onClick={() => setConfirmOpen(true)}>永久删除</button>
+            <button type="button" onClick={() => setDrawerOpen(false)}>关闭回收站</button>
+            <Dialog open={confirmOpen} title="确认永久删除" onClose={() => setConfirmOpen(false)}>
+              <button type="button" onClick={() => setConfirmOpen(false)}>取消</button>
+            </Dialog>
           </section>
         </aside>
       )}
