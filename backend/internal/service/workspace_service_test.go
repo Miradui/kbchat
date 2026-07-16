@@ -1221,6 +1221,36 @@ func TestDocumentReprocessReusesActiveProcessingJob(t *testing.T) {
 	}
 }
 
+func TestDocumentReprocessQueuesSuccessorWhileWorkerFinishes(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	document := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual.pdf", "completed")
+	finishingJob := model.DocumentJob{DocumentID: document.ID, JobType: "process_document", Status: "running"}
+	if err := services.db.Create(&finishingJob).Error; err != nil {
+		t.Fatalf("create finishing document job: %v", err)
+	}
+
+	response, err := services.documents.Reprocess(ctx, owner.ID, document.ID)
+	if err != nil {
+		t.Fatalf("reprocess finishing document: %v", err)
+	}
+
+	var pendingCount int64
+	if err := services.db.Model(&model.DocumentJob{}).
+		Where("document_id = ? AND job_type = ? AND status = ?", document.ID, "process_document", "pending").
+		Count(&pendingCount).Error; err != nil {
+		t.Fatalf("count successor jobs: %v", err)
+	}
+	if pendingCount != 1 {
+		t.Fatalf("expected one pending successor, got %d", pendingCount)
+	}
+	if response.Status != "uploaded" || response.JobStatus != "pending" {
+		t.Fatalf("expected successor processing response, got %#v", response)
+	}
+}
+
 func TestDocumentBatchOperationsRejectForeignIDsWithoutPartialMutation(t *testing.T) {
 	ctx := context.Background()
 	services := newWorkspaceTestServices(t)

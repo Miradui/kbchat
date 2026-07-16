@@ -181,15 +181,22 @@ func (r *DocumentRepository) QueueReprocess(ctx context.Context, documentID uuid
 			return err
 		}
 
-		err := tx.
-			Where("document_id = ? AND status IN ?", documentID, []string{"pending", "running"}).
+		var activeJobs []model.DocumentJob
+		if err := tx.
+			Where("document_id = ? AND job_type = ? AND status IN ?", documentID, "process_document", []string{"pending", "running"}).
 			Order("created_at desc").
-			First(&job).Error
-		if err == nil {
+			Find(&activeJobs).Error; err != nil {
+			return err
+		}
+		if len(activeJobs) > 0 && !isTerminalDocumentStatus(document.Status) {
+			job = activeJobs[0]
 			return nil
 		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
+		for i := range activeJobs {
+			if activeJobs[i].Status == "pending" {
+				job = activeJobs[i]
+				return nil
+			}
 		}
 
 		now := time.Now()
@@ -238,16 +245,25 @@ func (r *DocumentRepository) QueueBatchReprocess(ctx context.Context, documentID
 		}
 
 		for i := range documents {
-			var activeJob model.DocumentJob
-			err := tx.
-				Where("document_id = ? AND status IN ?", documents[i].ID, []string{"pending", "running"}).
+			var activeJobs []model.DocumentJob
+			if err := tx.
+				Where("document_id = ? AND job_type = ? AND status IN ?", documents[i].ID, "process_document", []string{"pending", "running"}).
 				Order("created_at desc").
-				First(&activeJob).Error
-			if err == nil {
+				Find(&activeJobs).Error; err != nil {
+				return err
+			}
+			if len(activeJobs) > 0 && !isTerminalDocumentStatus(documents[i].Status) {
 				continue
 			}
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				return err
+			hasPendingSuccessor := false
+			for j := range activeJobs {
+				if activeJobs[j].Status == "pending" {
+					hasPendingSuccessor = true
+					break
+				}
+			}
+			if hasPendingSuccessor {
+				continue
 			}
 
 			now := time.Now()
@@ -301,6 +317,12 @@ func (r *DocumentRepository) ClaimPendingJob(ctx context.Context) (*model.Docume
 		if err := tx.
 			Where("status = ?", "pending").
 			Where("locked_at IS NULL OR locked_at <= ?", time.Now()).
+			Where(`NOT EXISTS (
+				SELECT 1
+				FROM document_jobs AS running_jobs
+				WHERE running_jobs.document_id = document_jobs.document_id
+					AND running_jobs.status = ?
+			)`, "running").
 			Order("created_at asc").
 			Clauses(clauseLockingUpdateSkipLocked()).
 			First(&job).Error; err != nil {
@@ -490,4 +512,8 @@ func (r *DocumentRepository) RetryJob(ctx context.Context, jobID uuid.UUID, retr
 
 func clauseLockingUpdateSkipLocked() clause.Expression {
 	return clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}
+}
+
+func isTerminalDocumentStatus(status string) bool {
+	return status == "completed" || status == "failed"
 }
