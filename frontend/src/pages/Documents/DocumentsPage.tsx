@@ -18,6 +18,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { WorkspaceShell } from '../../components/WorkspaceShell';
 import { DocumentDetailDrawer } from './DocumentDetailDrawer';
+import { DocumentProgress } from './DocumentProgress';
 import { DocumentRecycleBinDrawer } from './DocumentRecycleBinDrawer';
 import type {
   DocumentItem,
@@ -453,6 +454,7 @@ export function DocumentsPage() {
                       <span className={`status-pill status-${statusClass(document.status)}`}>
                         {statusLabel(document.status)}
                       </span>
+                      <DocumentProgress compact document={document} />
                     </td>
                     <td data-label="错误信息">{document.errorMessage || '-'}</td>
                     <td data-label="更新时间">{formatDateTime(document.updatedAt || document.createdAt)}</td>

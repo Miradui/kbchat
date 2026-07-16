@@ -192,6 +192,8 @@ export type DocumentStatus =
   | 'completed'
   | 'failed';
 
+export type DocumentJobStatus = 'pending' | 'running' | 'completed' | 'failed';
+
 export type DocumentItem = {
   id: string;
   knowledgeBaseId: string;
@@ -200,6 +202,12 @@ export type DocumentItem = {
   fileSize: number;
   status: DocumentStatus;
   errorMessage: string | null;
+  jobStatus?: DocumentJobStatus;
+  progress?: number;
+  stage?: DocumentStatus;
+  retryCount?: number;
+  maxRetries?: number;
+  nextRetryAt?: string | null;
   createdAt: string;
   updatedAt?: string;
 };

@@ -13,6 +13,7 @@ import {
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import type { DocumentChunk, DocumentItem, DocumentPreviewResponse, DocumentStatus } from '../../types/api';
+import { DocumentProgress } from './DocumentProgress';
 
 type DocumentDetailDrawerProps = {
   documentId: string;
@@ -249,6 +250,8 @@ export function DocumentDetailDrawer({
                       {statusLabel(document.status)}
                     </span>
                   </section>
+
+                  <DocumentProgress document={document} />
 
                   <dl className="document-meta-grid">
                     <div>
