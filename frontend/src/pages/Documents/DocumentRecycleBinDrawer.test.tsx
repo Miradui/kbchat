@@ -56,7 +56,7 @@ describe('DocumentRecycleBinDrawer', () => {
     expect(await screen.findByText('manual.pdf')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '刷新' }));
 
-    expect(await screen.findByText('刷新服务暂不可用')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('刷新服务暂不可用');
   });
 
   it('ignores an older page response after returning to the first page', async () => {

@@ -274,7 +274,7 @@ export function DocumentRecycleBinDrawer({
           </button>
         </div>
 
-        {error && <p className="drawer-error-text">{error}</p>}
+        {error && <p className="drawer-error-text" role="alert">{error}</p>}
 
         <div className="recycle-list document-recycle-list" aria-busy={loading || refreshing}>
           {loading ? (
