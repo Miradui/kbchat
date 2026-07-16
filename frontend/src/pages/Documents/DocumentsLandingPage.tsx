@@ -47,6 +47,7 @@ const fallbackPreference: KnowledgeBaseWorkspacePreference = {
 export function DocumentsLandingPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const documentRequestIdRef = useRef(0);
+  const mountedRef = useRef(true);
   const [categories, setCategories] = useState<KnowledgeBaseCategory[]>([]);
   const [expandedIds, setExpandedIds] = useState<string[]>([]);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
@@ -86,12 +87,12 @@ export function DocumentsLandingPage() {
         }),
         listKnowledgeBases({ pageSize: 100 }),
       ]).catch((err) => {
-      if (documentRequestIdRef.current === requestId) {
+      if (mountedRef.current && documentRequestIdRef.current === requestId) {
         throw err;
       }
       return null;
     });
-    if (!responses || documentRequestIdRef.current !== requestId) {
+    if (!responses || !mountedRef.current || documentRequestIdRef.current !== requestId) {
       return;
     }
     const [documentResponse, kbResponse] = responses;
@@ -103,21 +104,44 @@ export function DocumentsLandingPage() {
     setSelectedIds((current) => current.filter((id) => documentResponse.items.some((document) => document.id === id)));
   }, [debouncedQuery, fileType, knowledgeBaseFilter, page, pageSize, sort, status]);
 
+  const refreshPage = useCallback(async (fallback: string) => {
+    try {
+      await loadPage();
+    } catch (err) {
+      if (mountedRef.current) {
+        setLoadError(errorMessage(err, fallback));
+      }
+    }
+  }, [loadPage]);
+
+  const refreshAfterAction = useCallback(async (successLabel: string) => {
+    try {
+      await loadPage();
+    } catch (err) {
+      if (mountedRef.current) {
+        setLoadError(`${successLabel}，但列表刷新失败：${errorMessage(err, '请求失败')}`);
+      }
+    }
+  }, [loadPage]);
+
   const hasProcessingDocuments = useMemo(
     () => documents.some((document) => document.status !== 'completed' && document.status !== 'failed'),
     [documents],
   );
 
   useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      documentRequestIdRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
     let mounted = true;
     setLoading(true);
 
-    loadPage()
-      .catch((err) => {
-        if (mounted) {
-          setLoadError(errorMessage(err, '全局文档加载失败'));
-        }
-      })
+    refreshPage('全局文档加载失败')
       .finally(() => {
         if (mounted) {
           setLoading(false);
@@ -127,7 +151,7 @@ export function DocumentsLandingPage() {
     return () => {
       mounted = false;
     };
-  }, [loadPage]);
+  }, [refreshPage]);
 
   useEffect(() => {
     if (!hasProcessingDocuments) {
@@ -136,18 +160,16 @@ export function DocumentsLandingPage() {
 
     let active = true;
     const timer = window.setInterval(() => {
-      loadPage().catch((err) => {
-        if (active) {
-          setLoadError(errorMessage(err, '文档状态刷新失败'));
-        }
-      });
+	  if (active) {
+		void refreshPage('文档状态刷新失败');
+	  }
     }, 3000);
 
     return () => {
       active = false;
       window.clearInterval(timer);
     };
-  }, [hasProcessingDocuments, loadPage]);
+  }, [hasProcessingDocuments, refreshPage]);
 
   useEffect(() => {
     let mounted = true;
@@ -192,12 +214,15 @@ export function DocumentsLandingPage() {
     setUploading(true);
     setActionError('');
 
-    try {
-      await uploadGlobalDocument(uploadKnowledgeBaseId, file);
-      await loadPage();
-    } catch (err) {
-      setActionError(errorMessage(err, '全局上传失败'));
-    } finally {
+	try {
+	  try {
+		await uploadGlobalDocument(uploadKnowledgeBaseId, file);
+	  } catch (err) {
+		setActionError(errorMessage(err, '全局上传失败'));
+		return;
+	  }
+	  await refreshAfterAction('文档已上传');
+	} finally {
       setUploading(false);
       event.target.value = '';
     }
@@ -229,13 +254,16 @@ export function DocumentsLandingPage() {
     setSubmitting(true);
     setActionError('');
 
-    try {
-      await batchReprocessDocuments(selectedIds);
-      setSelectedIds([]);
-      await loadPage();
-    } catch (err) {
-      setActionError(errorMessage(err, '批量重处理失败'));
-    } finally {
+	try {
+	  try {
+		await batchReprocessDocuments(selectedIds);
+	  } catch (err) {
+		setActionError(errorMessage(err, '批量重处理失败'));
+		return;
+	  }
+	  setSelectedIds([]);
+	  await refreshAfterAction('批量重处理已提交');
+	} finally {
       setSubmitting(false);
     }
   }
@@ -248,14 +276,17 @@ export function DocumentsLandingPage() {
     setSubmitting(true);
     setActionError('');
 
-    try {
-      await batchDeleteDocuments(deleteTargetIds);
-      setDeleteTargetIds(null);
-      setSelectedIds([]);
-      await loadPage();
-    } catch (err) {
-      setActionError(errorMessage(err, '批量删除失败'));
-    } finally {
+	try {
+	  try {
+		await batchDeleteDocuments(deleteTargetIds);
+	  } catch (err) {
+		setActionError(errorMessage(err, '批量删除失败'));
+		return;
+	  }
+	  setDeleteTargetIds(null);
+	  setSelectedIds([]);
+	  await refreshAfterAction('批量删除已完成');
+	} finally {
       setSubmitting(false);
     }
   }
@@ -330,7 +361,7 @@ export function DocumentsLandingPage() {
               <button className="secondary-button" type="button" onClick={() => setShowRecycleBin(true)}>
                 文档回收站
               </button>
-              <button className="secondary-button" type="button" onClick={() => void loadPage()}>
+			  <button className="secondary-button" type="button" onClick={() => void refreshPage('文档列表刷新失败')}>
                 刷新
               </button>
             </div>
@@ -517,14 +548,14 @@ export function DocumentsLandingPage() {
           <DocumentDetailDrawer
             documentId={detailDocumentId}
             knowledgeBaseName={documents.find((document) => document.id === detailDocumentId)?.knowledgeBaseName}
-            onChanged={() => void loadPage()}
+			onChanged={() => void refreshPage('文档列表刷新失败')}
             onClose={() => setDetailDocumentId(null)}
           />
         )}
 
         {showRecycleBin && (
           <DocumentRecycleBinDrawer
-            onChanged={() => void loadPage()}
+			onChanged={() => void refreshPage('文档列表刷新失败')}
             onClose={() => setShowRecycleBin(false)}
           />
         )}

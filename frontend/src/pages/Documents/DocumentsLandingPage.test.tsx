@@ -128,6 +128,61 @@ describe('DocumentsLandingPage loading', () => {
 	expect(screen.getByText('上传内容无效')).toBeInTheDocument();
   });
 
+  it('reports a manual refresh failure without an unhandled rejection', async () => {
+	api.listGlobalDocuments
+	  .mockResolvedValueOnce(documentResponse(documentItem('manual.pdf', 'completed')))
+	  .mockRejectedValueOnce(new ApiError(503, {
+		code: 'SERVICE_UNAVAILABLE',
+		message: '刷新服务暂不可用',
+		details: {},
+	  }));
+	const user = userEvent.setup();
+
+	renderWithRouter(<DocumentsLandingPage />, ['/documents']);
+	expect(await screen.findByText('manual.pdf')).toBeInTheDocument();
+	await user.click(screen.getByRole('button', { name: '刷新' }));
+
+	expect(await screen.findByRole('alert')).toHaveTextContent('刷新服务暂不可用');
+  });
+
+  it('distinguishes a successful upload from a following refresh failure', async () => {
+	api.listGlobalDocuments
+	  .mockResolvedValueOnce(documentResponse(documentItem('manual.pdf', 'completed')))
+	  .mockRejectedValueOnce(new Error('network unavailable'));
+	api.uploadGlobalDocument.mockResolvedValue(undefined);
+	const user = userEvent.setup();
+	const { container } = renderWithRouter(<DocumentsLandingPage />, ['/documents']);
+
+	expect(await screen.findByText('manual.pdf')).toBeInTheDocument();
+	const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+	if (!fileInput) throw new Error('file input was not rendered');
+	await user.upload(fileInput, new File(['content'], 'new.pdf', { type: 'application/pdf' }));
+
+	expect(await screen.findByRole('alert')).toHaveTextContent('文档已上传，但列表刷新失败');
+	expect(screen.queryByText('全局上传失败')).not.toBeInTheDocument();
+  });
+
+  it('does not consume a document response after unmount', async () => {
+	const response = deferred<ReturnType<typeof documentResponse>>();
+	api.listGlobalDocuments.mockReturnValueOnce(response.promise);
+	let itemReads = 0;
+	const staleResponse = {
+	  get items() {
+		itemReads += 1;
+		return [documentItem('stale.pdf', 'completed')];
+	  },
+	  total: 1,
+	  page: 1,
+	  pageSize: 20,
+	};
+	const { unmount } = renderWithRouter(<DocumentsLandingPage />, ['/documents']);
+
+	unmount();
+	await act(async () => response.resolve(staleResponse));
+
+	expect(itemReads).toBe(0);
+  });
+
   it('ignores an older document response after filters change', async () => {
     const first = deferred<ReturnType<typeof documentResponse>>();
     const second = deferred<ReturnType<typeof documentResponse>>();
