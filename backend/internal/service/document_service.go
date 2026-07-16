@@ -22,7 +22,10 @@ import (
 	"rag/backend/internal/storage"
 )
 
-const maxPreviewTextBytes = 1024 * 1024
+const (
+	maxPreviewTextBytes        = 1024 * 1024
+	documentIDsRequiredMessage = "文档 ID 不能为空"
+)
 
 type DocumentService struct {
 	cfg            config.Config
@@ -166,7 +169,7 @@ func (s *DocumentService) Delete(ctx context.Context, ownerID, documentID uuid.U
 func (s *DocumentService) BatchDelete(ctx context.Context, ownerID uuid.UUID, req dto.DocumentBatchRequest) (*dto.DocumentBatchResultResponse, error) {
 	ids := normalizeUUIDs(req.DocumentIDs)
 	if len(ids) == 0 {
-		return nil, apperror.Validation(map[string]any{"documentIds": "鏂囨。 ID 涓嶈兘涓虹┖"})
+		return nil, apperror.Validation(map[string]any{"documentIds": documentIDsRequiredMessage})
 	}
 	if err := s.ensureDocumentsOwner(ctx, ownerID, ids, false); err != nil {
 		return nil, err
@@ -228,7 +231,7 @@ func (s *DocumentService) Restore(ctx context.Context, ownerID, documentID uuid.
 func (s *DocumentService) BatchRestore(ctx context.Context, ownerID uuid.UUID, req dto.DocumentBatchRequest) (*dto.DocumentBatchResultResponse, error) {
 	ids := normalizeUUIDs(req.DocumentIDs)
 	if len(ids) == 0 {
-		return nil, apperror.Validation(map[string]any{"documentIds": "鏂囨。 ID 涓嶈兘涓虹┖"})
+		return nil, apperror.Validation(map[string]any{"documentIds": documentIDsRequiredMessage})
 	}
 	if err := s.ensureDocumentsOwner(ctx, ownerID, ids, true); err != nil {
 		return nil, err
@@ -274,7 +277,7 @@ func (s *DocumentService) Reprocess(ctx context.Context, ownerID, documentID uui
 func (s *DocumentService) BatchReprocess(ctx context.Context, ownerID uuid.UUID, req dto.DocumentBatchRequest) (*dto.DocumentBatchResultResponse, error) {
 	ids := normalizeUUIDs(req.DocumentIDs)
 	if len(ids) == 0 {
-		return nil, apperror.Validation(map[string]any{"documentIds": "鏂囨。 ID 涓嶈兘涓虹┖"})
+		return nil, apperror.Validation(map[string]any{"documentIds": documentIDsRequiredMessage})
 	}
 	if err := s.ensureDocumentsOwner(ctx, ownerID, ids, false); err != nil {
 		return nil, err
