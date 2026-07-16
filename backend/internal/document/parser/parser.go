@@ -108,6 +108,9 @@ func collectPDFSegments(pageCount int, readPage func(pageNumber int) (string, er
 		if err != nil {
 			return nil, fmt.Errorf("parse pdf page %d: %w", pageNumber, err)
 		}
+		if !utf8.ValidString(content) {
+			return nil, fmt.Errorf("parse pdf page %d: content is not valid UTF-8", pageNumber)
+		}
 		content = strings.TrimSpace(strings.TrimPrefix(content, "\ufeff"))
 		if content == "" {
 			continue

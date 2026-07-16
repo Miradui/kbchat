@@ -97,3 +97,15 @@ func TestCollectPDFSegmentsReportsTheFailingPage(t *testing.T) {
 		t.Fatalf("expected page-specific error, got %v", err)
 	}
 }
+
+func TestCollectPDFSegmentsRejectsInvalidUTF8(t *testing.T) {
+	_, err := collectPDFSegments(2, func(pageNumber int) (string, error) {
+		if pageNumber == 2 {
+			return string([]byte{0xff}), nil
+		}
+		return "content", nil
+	})
+	if err == nil || err.Error() != "parse pdf page 2: content is not valid UTF-8" {
+		t.Fatalf("expected page-specific UTF-8 error, got %v", err)
+	}
+}
