@@ -287,6 +287,8 @@ Authorization: Bearer <token>
 - 文档 parser 现在输出带来源格式和可选物理页码的结构化 segments；旧的扁平文本方法仅保留为兼容包装，标准 processor 链路不再使用它。
 - TXT 不解释 Markdown 标题、列表、表格或代码围栏；Markdown 继续保留标题路径、列表、表格和代码块结构。
 - PDF 按非空物理页切片，空白页跳过但页码不重排；chunk、overlap 都不跨页，`document_chunks.page_number` 和 metadata 同步保存物理页码。
-- `startOffset` / `endOffset` 定义为规范化 segment 内的 UTF-8 byte offset，PDF 为页内 offset，不代表原文件精确字节坐标。
-- Processor 级 SQLite + repository 测试覆盖 PDF 页码入库、TXT/Markdown 策略选择，以及 Embedding Provider 少返回或多返回向量时不写入错误批次。
+- `startOffset` / `endOffset` 定义为主来源内容在规范化 segment 内的 UTF-8 byte offset，PDF 为页内 offset；额外 overlap 和复制的 Markdown 结构前缀不计入范围，也不代表原文件精确字节坐标。
+- 超长 Markdown 列表按完整 item 行切分，表格分片重复 header/separator，代码分片保持成对 fence；这些结构块不注入普通文本 overlap。
+- Processor 级 SQLite + repository 测试覆盖 PDF 页码入库、TXT/Markdown 策略选择、Embedding Provider 单批少/多返回零写入，以及后续批次失败时保留旧的完整 chunks。
+- Processor 在所有 Embedding 批次成功后才通过数据库事务替换旧 chunks，避免重处理失败留下部分新索引。
 - 当前范围不包含 OCR、PDF 版面树/表格重建、跨页 chunk、通用文档 AST 或 docx 解析。

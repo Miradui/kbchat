@@ -172,7 +172,7 @@ CREATE TABLE document_chunks (
 
 `page_number` 对 PDF chunk 保存原文件的 1-based 物理页码；空白页被跳过时后续页码仍保持原值。TXT、Markdown 等没有物理页概念的格式保存 `NULL`。当前 PDF chunk 不跨页，因此单值 `page_number` 能明确定位来源页。
 
-`metadata` 中的 `startOffset`、`endOffset` 表示规范化 segment 内的 UTF-8 byte offset；PDF 使用页内 offset。该范围不是原文件二进制的精确字节坐标。`metadata.fileType` 记录切片策略使用的规范化文件类型。
+`metadata` 中的 `startOffset`、`endOffset` 表示 chunk 主来源内容在规范化 segment 内的 UTF-8 byte offset；PDF 使用页内 offset。额外 overlap、Markdown 标题前缀、代码 fence 或重复的表格 header 不计入该范围。该范围不是原文件二进制的精确字节坐标。`metadata.fileType` 记录切片策略使用的规范化文件类型。
 
 ## document_jobs
 

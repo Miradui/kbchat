@@ -71,7 +71,7 @@ chunkOverlap=120 tokens
 3. PDF：物理页是硬边界，只在页内按段落、句子、空白词元和 rune 切分；chunk 合并和 overlap 均不得跨页。
 4. 同一来源边界和标题路径下的小结构块可合并到 chunkSize 以内。
 5. 超过 chunkSize 的结构块按优先级递归拆分：段落 -> 句子 -> 空白词元 -> rune 硬切。
-6. chunkOverlap 用于同一来源边界内相邻切片的尾部上下文补充，不能破坏 chunkIndex 稳定递增。
+6. chunkOverlap 用于同一来源边界内相邻段落切片的尾部上下文补充；列表、表格和代码块不注入普通文本 overlap，避免破坏结构。overlap 不能破坏 chunkIndex 稳定递增。
 ```
 
 每个 chunk 必须保存：
@@ -101,9 +101,11 @@ pageNumber（仅有物理页概念时）
 
 `pageNumber` 对 PDF 表示原文件的 1-based 物理页码；TXT、Markdown 等没有物理页概念的格式保持 `null`。PDF 即使跳过空白页也不得压缩页码。
 
-`startOffset` 和 `endOffset` 是规范化 segment 内的 UTF-8 byte offset：换行会统一为 `\n`，首尾空白和 BOM 可能被去除。PDF 的 offset 是页内 offset。它们不是原文件的精确字节坐标，不可用于在原始二进制文件中直接 seek。
+`startOffset` 和 `endOffset` 是 chunk 主来源内容在规范化 segment 内的 UTF-8 byte offset：换行会统一为 `\n`，首尾空白和 BOM 可能被去除。PDF 的 offset 是页内 offset。额外复制的 overlap、Markdown 标题前缀、代码 fence 或表格 header 不扩张该范围。它们不是原文件的精确字节坐标，不可用于在原始二进制文件中直接 seek。
 
 chunk 顺序必须稳定，`chunkIndex` 跨所有 segment 从 0 开始递增。当前 MVP 不做 OCR、通用文档 AST、PDF 版面树、PDF 表格重建、跨页 chunk 或 docx 解析。
+
+Processor 必须先完成全部 Embedding 批次并验证每批返回向量数量，再在单个数据库事务中替换该文档的旧 chunks。任一 Provider 调用或数量校验失败时，不得留下部分新索引，也不得删除原有完整索引。
 
 ## 检索流程
 
