@@ -966,22 +966,34 @@ func estimateTokens(text string) int {
 
 	count := 0
 	for _, field := range fields {
-		if containsWideRune(field) {
-			count += utf8.RuneCountInString(field)
-			continue
-		}
-		count++
+		count += estimateFieldTokens(field)
 	}
 	return count
 }
 
-func containsWideRune(text string) bool {
-	for _, r := range text {
-		if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) || unicode.Is(unicode.Katakana, r) || unicode.Is(unicode.Hangul, r) {
-			return true
+func estimateFieldTokens(text string) int {
+	const asciiRunesPerToken = 4
+
+	tokens := 0
+	asciiRunes := 0
+	flushASCII := func() {
+		if asciiRunes == 0 {
+			return
 		}
+		tokens += (asciiRunes + asciiRunesPerToken - 1) / asciiRunesPerToken
+		asciiRunes = 0
 	}
-	return false
+
+	for _, r := range text {
+		if r <= unicode.MaxASCII {
+			asciiRunes++
+			continue
+		}
+		flushASCII()
+		tokens++
+	}
+	flushASCII()
+	return tokens
 }
 
 func normalizeFileType(fileType string) string {

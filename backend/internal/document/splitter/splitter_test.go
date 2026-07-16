@@ -61,7 +61,7 @@ func TestSplitPrefersParagraphBoundariesBeforeHardSplitting(t *testing.T) {
 		"Eta theta iota kappa lambda mu.",
 	}, "\n")
 
-	chunks := New(10, 0).Split(text)
+	chunks := New(15, 0).Split(text)
 
 	if len(chunks) != 2 {
 		t.Fatalf("expected 2 paragraph chunks, got %d: %#v", len(chunks), chunks)
@@ -70,8 +70,8 @@ func TestSplitPrefersParagraphBoundariesBeforeHardSplitting(t *testing.T) {
 		if strings.Contains(chunk.Content, "zeta.\n\nEta") {
 			t.Fatalf("expected paragraph boundary split, got combined chunk %q", chunk.Content)
 		}
-		if chunk.TokenCount > 10 {
-			t.Fatalf("expected chunk token count <= 10, got %d for %q", chunk.TokenCount, chunk.Content)
+		if chunk.TokenCount > 15 {
+			t.Fatalf("expected chunk token count <= 15, got %d for %q", chunk.TokenCount, chunk.Content)
 		}
 	}
 }
@@ -113,7 +113,7 @@ func TestSplitDropsOverlapBeforeTrimmingNewBlockContent(t *testing.T) {
 		"seven eight nine ten eleven twelve.",
 	}, "\n")
 
-	chunks := New(8, 4).Split(text)
+	chunks := New(14, 4).Split(text)
 
 	if len(chunks) != 2 {
 		t.Fatalf("expected 2 chunks, got %d: %#v", len(chunks), chunks)
@@ -363,7 +363,7 @@ func TestSplitKeepsOversizeMarkdownListItemsOnWholeLines(t *testing.T) {
 func TestSplitDoesNotCarryStructuredOverlapIntoParagraphs(t *testing.T) {
 	text := "- alpha beta gamma\n\nplain paragraph content"
 
-	chunks := New(5, 2).Split(text)
+	chunks := New(7, 2).Split(text)
 
 	if len(chunks) != 2 {
 		t.Fatalf("expected separate list and paragraph chunks, got %#v", chunks)
@@ -488,5 +488,37 @@ func TestSplitKeepsEdgeCellsForOversizeMarkdownTableWithoutOuterPipes(t *testing
 	}
 	if strings.Join(values, " ") != rowValues {
 		t.Fatalf("expected edge cells to remain %q, got %q", rowValues, strings.Join(values, " "))
+	}
+}
+
+func TestSplitBoundsUnspacedASCIIAndEmojiByTokenBudget(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+	}{
+		{name: "ascii", text: strings.Repeat("a", 200)},
+		{name: "emoji", text: strings.Repeat("😀", 40)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chunks := New(4, 0).SplitDocument(parser.ParsedDocument{
+				FileType: "txt",
+				Segments: []parser.Segment{{Content: tt.text}},
+			})
+			if len(chunks) < 2 {
+				t.Fatalf("expected unspaced content to split, got %#v", chunks)
+			}
+			parts := make([]string, 0, len(chunks))
+			for index, chunk := range chunks {
+				if chunk.TokenCount > 4 {
+					t.Fatalf("expected token budget at %d, got %#v", index, chunk)
+				}
+				parts = append(parts, chunk.Content)
+			}
+			if strings.Join(parts, "") != tt.text {
+				t.Fatalf("expected unspaced content to remain lossless, got %#v", chunks)
+			}
+		})
 	}
 }
