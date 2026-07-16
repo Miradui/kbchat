@@ -2,13 +2,27 @@ type LoadingSkeletonProps = {
   rows?: number;
   columns?: number;
   compact?: boolean;
+  announce?: boolean;
 };
 
-export function LoadingSkeleton({ rows = 3, columns = 3, compact = false }: LoadingSkeletonProps) {
+export function LoadingSkeleton({
+  rows = 3,
+  columns = 3,
+  compact = false,
+  announce = false,
+}: LoadingSkeletonProps) {
   return (
-    <div className={compact ? 'skeleton-stack compact' : 'skeleton-stack'} aria-label="正在加载">
+    <div
+      aria-atomic={announce || undefined}
+      aria-hidden={announce ? undefined : true}
+      aria-label={announce ? '正在加载' : undefined}
+      aria-live={announce ? 'polite' : undefined}
+      className={compact ? 'skeleton-stack compact' : 'skeleton-stack'}
+      role={announce ? 'status' : undefined}
+    >
       {Array.from({ length: rows }).map((_, rowIndex) => (
         <div
+          aria-hidden="true"
           className="skeleton-row"
           key={rowIndex}
           style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}

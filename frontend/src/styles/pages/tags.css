@@ -1,0 +1,31 @@
+.tags-page { display: grid; gap: 20px; max-width: 1320px; width: 100%; }
+.tags-header { align-items: center; display: flex; justify-content: space-between; }
+.tags-toolbar { align-items: center; display: flex; gap: 12px; justify-content: space-between; }
+.tags-toolbar input { max-width: 360px; min-height: 44px; width: 100%; }
+.tags-toolbar span { color: var(--color-text-muted); white-space: nowrap; }
+.field-error { color: var(--color-danger); margin: 0; }
+.tags-table-wrap { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow-x: auto; }
+.tags-table { border-collapse: collapse; min-width: 620px; width: 100%; }
+.tags-table th,
+.tags-table td { border-bottom: 1px solid var(--color-border); padding: 14px 16px; text-align: left; }
+.tags-table th { color: var(--color-text-muted); font-size: 13px; font-weight: 650; }
+.tags-table tbody tr:last-child td { border-bottom: 0; }
+.tags-row-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.tag-dialog-form { display: grid; gap: 10px; margin-top: 20px; }
+.tag-dialog-form > label { color: var(--color-text-secondary); font-size: 14px; font-weight: 650; }
+.tag-dialog-form > input { min-height: 44px; }
+@media (max-width: 680px) {
+  .tags-header { align-items: stretch; flex-direction: column; gap: 16px; }
+  .tags-toolbar { align-items: stretch; flex-direction: column; }
+  .tags-toolbar input { max-width: none; }
+  .tags-table-wrap { background: transparent; border: 0; overflow: visible; }
+  .tags-table,
+  .tags-table tbody,
+  .tags-table tr,
+  .tags-table td { display: block; min-width: 0; width: 100%; }
+  .tags-table thead { display: none; }
+  .tags-table tr { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); margin-bottom: 12px; padding: 8px 12px; }
+  .tags-table td { align-items: center; border: 0; display: flex; justify-content: space-between; padding: 8px 0; }
+  .tags-table td::before { color: var(--color-text-muted); content: attr(data-label); font-size: 13px; }
+  .tags-row-actions { min-height: 44px; }
+}

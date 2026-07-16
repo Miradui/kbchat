@@ -40,6 +40,7 @@ export function login(username: string, password: string): Promise<LoginResponse
   return apiRequest<LoginResponse>('/auth/login', {
     method: 'POST',
     body: { username, password },
+    redirectOnUnauthorized: false,
   });
 }
 
@@ -389,8 +390,8 @@ export function emptyDocumentRecycleBin(): Promise<void> {
   });
 }
 
-export function globalSearch(query: string): Promise<GlobalSearchResponse> {
-  return apiRequest<GlobalSearchResponse>(withQuery('/search', { q: query }));
+export function globalSearch(query: string, signal?: AbortSignal): Promise<GlobalSearchResponse> {
+  return apiRequest<GlobalSearchResponse>(withQuery('/search', { q: query }), { signal });
 }
 
 export function searchKnowledgeBase(

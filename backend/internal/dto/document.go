@@ -75,9 +75,9 @@ type ChunkResponse struct {
 
 type ChunkListResponse struct {
 	Items    []ChunkResponse `json:"items"`
-	Total    int64           `json:"total,omitempty"`
-	Page     int             `json:"page,omitempty"`
-	PageSize int             `json:"pageSize,omitempty"`
+	Total    int64           `json:"total"`
+	Page     int             `json:"page"`
+	PageSize int             `json:"pageSize"`
 }
 
 type ChunkListQuery struct {

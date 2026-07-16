@@ -772,7 +772,7 @@ q=关键词
 
 ### GET /chat/sessions
 
-只返回当前用户会话。
+只返回当前用户会话，并要求关联知识库仍存在且归当前用户所有。
 
 ### GET /chat/sessions/:id
 
@@ -806,6 +806,19 @@ q=关键词
 ### POST /chat/sessions/:id/archive
 
 归档当前用户会话。必须校验 session 属于当前用户，且知识库属于当前用户。归档后默认 `GET /chat/sessions` 不再返回该会话，但 `GET /chat/sessions/:id` 仍可查看详情并返回 `archivedAt`。该接口幂等。
+
+成功响应为 `200 OK`，返回归档后的会话；重复归档返回同一个 `archivedAt`：
+
+```json
+{
+  "id": "session_uuid",
+  "knowledgeBaseId": "kb_uuid",
+  "title": "报销制度咨询",
+  "createdAt": "2026-06-08T00:00:00Z",
+  "updatedAt": "2026-06-08T01:00:00Z",
+  "archivedAt": "2026-06-08T01:00:00Z"
+}
+```
 
 ### GET /chat/sessions/:id/messages
 

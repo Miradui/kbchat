@@ -17,7 +17,7 @@ type ChatSessionResponse struct {
 	Title           string     `json:"title"`
 	CreatedAt       time.Time  `json:"createdAt"`
 	UpdatedAt       time.Time  `json:"updatedAt"`
-	ArchivedAt      *time.Time `json:"archivedAt,omitempty"`
+	ArchivedAt      *time.Time `json:"archivedAt"`
 }
 
 type ChatSessionListResponse struct {

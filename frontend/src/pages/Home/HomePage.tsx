@@ -1,217 +1,232 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 import { ApiError } from '../../api/client';
-import {
-  getKnowledgeBaseStats,
-  getWorkspacePreference,
-  listChatSessions,
-  listGlobalDocuments,
-  listKnowledgeBaseCategories,
-  listKnowledgeBases,
-} from '../../api/resources';
+import { EmptyState } from '../../components/feedback/EmptyState';
+import { ErrorState } from '../../components/feedback/ErrorState';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { WorkspaceShell } from '../../components/WorkspaceShell';
 import type {
   ChatSession,
   GlobalDocumentItem,
   KnowledgeBase,
-  KnowledgeBaseCategory,
   KnowledgeBaseStatsResponse,
-  KnowledgeBaseWorkspacePreference,
 } from '../../types/api';
+import { createHomeLoaders } from './homeData';
+import type { HomeSources } from './homeData';
 
-const fallbackPreference: KnowledgeBaseWorkspacePreference = {
-  viewMode: 'table',
-  scope: 'all',
-  sort: 'updatedAt_desc',
-  visibility: 'all',
-  expandedCategoryIds: [],
+type RegionState<T> = {
+  data: T;
+  loading: boolean;
+  error: string;
 };
 
-export function HomePage() {
-  const [categories, setCategories] = useState<KnowledgeBaseCategory[]>([]);
-  const [expandedIds, setExpandedIds] = useState<string[]>([]);
-  const [stats, setStats] = useState<KnowledgeBaseStatsResponse | null>(null);
-  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
-  const [documents, setDocuments] = useState<GlobalDocumentItem[]>([]);
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+type HomePageProps = {
+  sources?: HomeSources;
+};
 
-  useEffect(() => {
-    let mounted = true;
-
-    Promise.all([
-      listKnowledgeBaseCategories().catch(() => ({ items: [] })),
-      getWorkspacePreference().catch(() => fallbackPreference),
-      getKnowledgeBaseStats('month'),
-      listKnowledgeBases({ sort: 'updatedAt_desc', pageSize: 5 }),
-      listGlobalDocuments({ sort: 'updatedAt_desc', pageSize: 5 }),
-      listChatSessions(),
-    ])
-      .then(([
-        categoryResponse,
-        preference,
-        statsResponse,
-        kbResponse,
-        documentResponse,
-        sessionResponse,
-      ]) => {
-        if (!mounted) {
-          return;
-        }
-        setCategories(categoryResponse.items);
-        setExpandedIds(preference.expandedCategoryIds);
-        setStats(statsResponse);
-        setKnowledgeBases(kbResponse.items);
-        setDocuments(documentResponse.items);
-        setSessions(sessionResponse.items);
-      })
-      .catch((err) => {
-        if (mounted) {
-          setError(errorMessage(err, '首页数据加载失败'));
-        }
-      })
-      .finally(() => {
-        if (mounted) {
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
+export function HomePage({ sources }: HomePageProps) {
+  const loaders = useMemo(() => createHomeLoaders(sources), [sources]);
+  const stats = useRegion(loaders.stats, null as KnowledgeBaseStatsResponse | null, '统计加载失败');
+  const knowledgeBases = useRegion(loaders.knowledgeBases, [] as KnowledgeBase[], '知识库动态加载失败');
+  const documents = useRegion(loaders.documents, [] as GlobalDocumentItem[], '文档动态加载失败');
+  const sessions = useRegion(loaders.sessions, [] as ChatSession[], '会话动态加载失败');
 
   const recentSessions = useMemo(
-    () => [...sessions].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, 5),
-    [sessions],
+    () => [...sessions.data]
+      .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())
+      .slice(0, 5),
+    [sessions.data],
+  );
+  const failedDocuments = documents.data.filter((document) => document.status === 'failed');
+  const processingDocuments = documents.data.filter(
+    (document) => !['completed', 'failed'].includes(document.status),
   );
 
   return (
-    <WorkspaceShell active="home" categories={categories} expandedIds={expandedIds}>
+    <WorkspaceShell active="home">
       <div className="home-dashboard-page">
         <header className="page-header workspace-heading">
           <div>
+            <p className="eyebrow">工作概览</p>
             <h1>工作台首页</h1>
-            <p className="page-description">查看知识资产概览，并进入知识库、文档处理和问答管理。</p>
-          </div>
-          <div className="toolbar">
-            <Link className="secondary-link" to="/search">全局搜索</Link>
-            <Link className="button-link" to="/knowledge-bases">管理知识库</Link>
+            <p className="page-description">查看知识资产、处理任务和最近问答，不让单个接口故障阻塞整个页面。</p>
           </div>
         </header>
 
-        {error && <p className="error-text">{error}</p>}
+        <section className="home-quick-actions" aria-label="快捷入口">
+          <QuickAction title="新建知识库" description="进入知识库工作台创建并配置检索。" to="/knowledge-bases" />
+          <QuickAction title="导入文档" description="选择目标知识库并上传资料。" to="/documents" />
+          <QuickAction title="开始问答" description="选择知识库继续或创建会话。" to="/chat" />
+        </section>
 
-        {loading ? (
-          <div className="panel">
-            <LoadingSkeleton rows={5} columns={4} />
-          </div>
-        ) : (
-          <>
-            <div className="summary-grid detail-summary">
-              <MetricCard label="知识库" value={stats?.knowledgeBases.value ?? knowledgeBases.length} />
-              <MetricCard label="文档" value={stats?.documents.value ?? documents.length} />
-              <MetricCard label="浏览量" value={stats?.views.value ?? 0} />
-              <MetricCard label="问答" value={stats?.questions.value ?? sessions.length} />
-            </div>
+        <DashboardRegion
+          className="home-stats-region"
+          error={stats.error}
+          loading={stats.loading}
+          onRetry={stats.reload}
+          title="关键统计"
+        >
+          <section className="home-stat-grid" aria-label="关键统计">
+            <StatCard label="知识库总数" value={stats.data?.knowledgeBases.value ?? knowledgeBases.data.length} />
+            <StatCard label="文档总数" value={stats.data?.documents.value ?? documents.data.length} />
+            <StatCard label="近期处理中 / 失败" value={`${processingDocuments.length} / ${failedDocuments.length}`} />
+            <StatCard label="活跃会话" value={sessions.data.length} />
+          </section>
+        </DashboardRegion>
 
-            <section className="home-action-grid" aria-label="快捷入口">
-              <HomeActionCard title="知识库管理" description="创建、筛选、收藏和维护知识库。" to="/knowledge-bases" />
-              <HomeActionCard title="文档管理" description="跨知识库查看处理状态并上传文档。" to="/documents" />
-              <HomeActionCard title="问答管理" description="进入知识库会话并查看引用来源。" to="/chat" />
-              <HomeActionCard title="标签管理" description="维护知识库可绑定的标签。" to="/tags" />
-            </section>
+        <div className="home-overview-grid">
+          <DashboardRegion
+            error={knowledgeBases.error}
+            href="/knowledge-bases"
+            loading={knowledgeBases.loading}
+            onRetry={knowledgeBases.reload}
+            title="最近知识库"
+          >
+            {knowledgeBases.data.length === 0 ? (
+              <EmptyState title="还没有知识库" description="创建知识库后即可导入文档。" />
+            ) : knowledgeBases.data.map((item) => (
+              <Link className="home-list-row" key={item.id} to={`/knowledge-bases/${item.id}`}>
+                <strong>{item.name}</strong>
+                <small>{item.description || '未填写描述'} · {formatDateTime(item.updatedAt || item.createdAt)}</small>
+              </Link>
+            ))}
+          </DashboardRegion>
 
-            <div className="home-overview-grid">
-              <section className="panel">
-                <div className="panel-header">
-                  <h2>最近知识库</h2>
-                  <Link className="link-button" to="/knowledge-bases">查看全部</Link>
-                </div>
-                <div className="home-list">
-                  {knowledgeBases.length === 0 ? (
-                    <div className="empty-state">还没有知识库。</div>
-                  ) : (
-                    knowledgeBases.map((item) => (
-                      <Link className="home-list-row" key={item.id} to={`/knowledge-bases/${item.id}`}>
-                        <span className={`kb-icon ${item.visibility === 'public' ? 'public' : 'private'}`} aria-hidden="true" />
-                        <span>
-                          <strong>{item.name}</strong>
-                          <small>{item.description || '未填写描述'} · {formatDateTime(item.updatedAt || item.createdAt)}</small>
-                        </span>
-                      </Link>
-                    ))
-                  )}
-                </div>
-              </section>
+          <DashboardRegion
+            error={sessions.error}
+            href="/chat"
+            loading={sessions.loading}
+            onRetry={sessions.reload}
+            title="最近会话"
+          >
+            {recentSessions.length === 0 ? (
+              <EmptyState title="还没有问答会话" description="选择知识库开始第一次问答。" />
+            ) : recentSessions.map((session) => (
+              <Link className="home-list-row" key={session.id} to={`/chat/${session.id}`}>
+                <strong>{session.title || '未命名会话'}</strong>
+                <small>{formatDateTime(session.updatedAt || session.createdAt)}</small>
+              </Link>
+            ))}
+          </DashboardRegion>
 
-              <section className="panel">
-                <div className="panel-header">
-                  <h2>最近文档</h2>
-                  <Link className="link-button" to="/documents">查看全部</Link>
-                </div>
-                <div className="home-list">
-                  {documents.length === 0 ? (
-                    <div className="empty-state">还没有文档。</div>
-                  ) : (
-                    documents.map((document) => (
-                      <Link className="home-list-row" key={document.id} to={`/knowledge-bases/${document.knowledgeBaseId}/documents`}>
-                        <span className="document-file-icon" aria-hidden="true" />
-                        <span>
-                          <strong>{document.filename}</strong>
-                          <small>{document.knowledgeBaseName} · {document.status}</small>
-                        </span>
-                      </Link>
-                    ))
-                  )}
-                </div>
-              </section>
+          <DashboardRegion
+            error={documents.error}
+            href="/documents"
+            loading={documents.loading}
+            onRetry={documents.reload}
+            title="文档处理动态"
+          >
+            {documents.data.length === 0 ? (
+              <EmptyState title="还没有文档" description="导入文档后可在这里查看处理状态。" />
+            ) : documents.data.map((document) => <DocumentActivity document={document} key={document.id} />)}
+          </DashboardRegion>
 
-              <section className="panel">
-                <div className="panel-header">
-                  <h2>最近会话</h2>
-                  <Link className="link-button" to="/chat">查看全部</Link>
-                </div>
-                <div className="home-list">
-                  {recentSessions.length === 0 ? (
-                    <div className="empty-state">还没有问答会话。</div>
-                  ) : (
-                    recentSessions.map((session) => (
-                      <Link className="home-list-row simple" key={session.id} to={`/chat/${session.id}`}>
-                        <strong>{session.title || '未命名会话'}</strong>
-                        <small>{formatDateTime(session.updatedAt || session.createdAt)}</small>
-                      </Link>
-                    ))
-                  )}
-                </div>
-              </section>
-
-            </div>
-          </>
-        )}
+          <section className="home-panel home-failure-panel" aria-labelledby="failed-documents-title">
+            <header><h2 id="failed-documents-title">失败任务</h2></header>
+            {documents.loading && documents.data.length === 0 ? (
+              <LoadingSkeleton announce compact rows={3} columns={1} />
+            ) : documents.error ? (
+              <p className="home-dependent-error">无法判断失败任务，请先重试文档动态。</p>
+            ) : failedDocuments.length === 0 ? (
+              <EmptyState title="暂无失败任务" description="最近文档处理状态正常。" />
+            ) : failedDocuments.map((document) => (
+              <Link className="home-list-row" key={document.id} to={`/knowledge-bases/${document.knowledgeBaseId}/documents`}>
+                <strong>{document.filename}</strong>
+                <small>{document.errorMessage || '处理失败，请进入文档管理查看详情'}</small>
+              </Link>
+            ))}
+          </section>
+        </div>
       </div>
     </WorkspaceShell>
   );
 }
 
-function HomeActionCard({ title, description, to }: { title: string; description: string; to: string }) {
+function useRegion<T>(loader: () => Promise<T>, initialData: T, failure: string) {
+  const [state, setState] = useState<RegionState<T>>({ data: initialData, loading: true, error: '' });
+  const activeRef = useRef(true);
+  const requestRef = useRef(0);
+
+  useEffect(() => {
+    activeRef.current = true;
+    return () => {
+      activeRef.current = false;
+      requestRef.current += 1;
+    };
+  }, []);
+
+  const reload = useCallback(() => {
+    const request = ++requestRef.current;
+    setState((current) => ({ ...current, loading: true, error: '' }));
+
+    void loader()
+      .then((data) => {
+        if (activeRef.current && request === requestRef.current) {
+          setState({ data, loading: false, error: '' });
+        }
+      })
+      .catch((error: unknown) => {
+        if (activeRef.current && request === requestRef.current) {
+          setState((current) => ({ ...current, loading: false, error: errorMessage(error, failure) }));
+        }
+      });
+  }, [failure, loader]);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  return { ...state, reload };
+}
+
+function QuickAction({ title, description, to }: { title: string; description: string; to: string }) {
+  return <Link className="home-quick-action" to={to}><strong>{title}</strong><span>{description}</span></Link>;
+}
+
+function StatCard({ label, value }: { label: string; value: number | string }) {
+  return <article className="home-stat-card"><span>{label}</span><strong>{value}</strong></article>;
+}
+
+function DashboardRegion({
+  title,
+  href,
+  error,
+  loading,
+  onRetry,
+  className = '',
+  children,
+}: {
+  title: string;
+  href?: string;
+  error: string;
+  loading: boolean;
+  onRetry: () => void;
+  className?: string;
+  children: ReactNode;
+}) {
   return (
-    <Link className="home-action-card" to={to}>
-      <strong>{title}</strong>
-      <span>{description}</span>
-    </Link>
+    <section className={`home-panel ${className}`.trim()}>
+      <header>
+        <h2>{title}</h2>
+        {href && <Link to={href}>查看全部</Link>}
+      </header>
+      {loading && !error ? (
+        <LoadingSkeleton announce compact rows={3} columns={1} />
+      ) : error ? (
+        <ErrorState title={error} description="请重试该区域，其他区域不受影响。" onRetry={onRetry} />
+      ) : children}
+    </section>
   );
 }
 
-function MetricCard({ label, value }: { label: string; value: number }) {
+function DocumentActivity({ document }: { document: GlobalDocumentItem }) {
   return (
-    <div className="stat-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
+    <Link className="home-list-row" to={`/knowledge-bases/${document.knowledgeBaseId}/documents`}>
+      <strong>{document.filename}</strong>
+      <small>{document.knowledgeBaseName} · {document.status} · {formatDateTime(document.updatedAt ?? document.createdAt)}</small>
+    </Link>
   );
 }
 
@@ -224,9 +239,6 @@ function formatDateTime(value: string): string {
   }).format(new Date(value));
 }
 
-function errorMessage(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    return err.message;
-  }
-  return fallback;
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof ApiError ? error.message : fallback;
 }

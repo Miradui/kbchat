@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1048,6 +1049,16 @@ func TestChatSessionManagementRequiresOwnedSessionAndKnowledgeBase(t *testing.T)
 	other := createWorkspaceUser(t, services.db, "other")
 	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
 	session := createWorkspaceChatSession(t, services.db, owner.ID, kb.ID, "old title")
+	foreignKB := createWorkspaceKB(t, services.db, other.ID, uuid.Nil, "foreign-kb", "private", time.Now())
+	createWorkspaceChatSession(t, services.db, owner.ID, foreignKB.ID, "foreign knowledge base")
+
+	list, err := services.chats.ListSessions(ctx, owner.ID)
+	if err != nil {
+		t.Fatalf("list owned sessions: %v", err)
+	}
+	if len(list.Items) != 1 || list.Items[0].ID != session.ID.String() {
+		t.Fatalf("expected only session from an owned knowledge base, got %#v", list.Items)
+	}
 
 	got, err := services.chats.GetSession(ctx, owner.ID, session.ID)
 	if err != nil {
@@ -1073,6 +1084,13 @@ func TestChatSessionManagementRequiresOwnedSessionAndKnowledgeBase(t *testing.T)
 	}
 	if _, err := services.chats.GetSession(ctx, owner.ID, session.ID); err == nil {
 		t.Fatalf("expected session with deleted knowledge base to be rejected")
+	}
+	list, err = services.chats.ListSessions(ctx, owner.ID)
+	if err != nil {
+		t.Fatalf("list sessions after knowledge base deletion: %v", err)
+	}
+	if len(list.Items) != 0 {
+		t.Fatalf("expected sessions from deleted knowledge bases to be hidden, got %#v", list.Items)
 	}
 }
 
@@ -1110,11 +1128,22 @@ func TestChatSessionArchiveHidesFromListButKeepsDetail(t *testing.T) {
 	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
 	session := createWorkspaceChatSession(t, services.db, owner.ID, kb.ID, "archive me")
 
-	if err := services.chats.ArchiveSession(ctx, other.ID, session.ID); err == nil {
+	if _, err := services.chats.ArchiveSession(ctx, other.ID, session.ID); err == nil {
 		t.Fatalf("expected foreign user archive to be rejected")
 	}
-	if err := services.chats.ArchiveSession(ctx, owner.ID, session.ID); err != nil {
+	archived, err := services.chats.ArchiveSession(ctx, owner.ID, session.ID)
+	if err != nil {
 		t.Fatalf("archive session: %v", err)
+	}
+	if archived.ArchivedAt == nil || archived.ID != session.ID.String() {
+		t.Fatalf("expected archive response with archivedAt, got %#v", archived)
+	}
+	idempotent, err := services.chats.ArchiveSession(ctx, owner.ID, session.ID)
+	if err != nil {
+		t.Fatalf("archive session idempotently: %v", err)
+	}
+	if idempotent.ArchivedAt == nil || !idempotent.ArchivedAt.Equal(*archived.ArchivedAt) {
+		t.Fatalf("expected stable idempotent archive response, first=%#v second=%#v", archived, idempotent)
 	}
 	list, err := services.chats.ListSessions(ctx, owner.ID)
 	if err != nil {
@@ -1129,6 +1158,88 @@ func TestChatSessionArchiveHidesFromListButKeepsDetail(t *testing.T) {
 	}
 	if detail.ArchivedAt == nil {
 		t.Fatalf("expected archivedAt on archived session, got %#v", detail)
+	}
+}
+
+func TestChatSessionConcurrentArchiveReturnsStableTimestamp(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	services.db.Config.SkipDefaultTransaction = true
+	sqlDB, err := services.db.DB()
+	if err != nil {
+		t.Fatalf("get sql database: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+
+	owner := createWorkspaceUser(t, services.db, "concurrent-archive-owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "concurrent-archive-kb", "private", time.Now())
+	session := createWorkspaceChatSession(t, services.db, owner.ID, kb.ID, "archive concurrently")
+
+	var archiveUpdates atomic.Int32
+	firstUpdateBlocked := make(chan struct{})
+	releaseFirstUpdate := make(chan struct{})
+	callbackName := "test:block_first_chat_archive_update"
+	if err := services.db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		values, ok := tx.Statement.Dest.(map[string]any)
+		if !ok {
+			return
+		}
+		if _, ok := values["archived_at"]; !ok {
+			return
+		}
+		if archiveUpdates.Add(1) == 1 {
+			close(firstUpdateBlocked)
+			<-releaseFirstUpdate
+		}
+	}); err != nil {
+		t.Fatalf("register archive update callback: %v", err)
+	}
+	defer services.db.Callback().Update().Remove(callbackName)
+
+	type archiveResult struct {
+		session *dto.ChatSessionResponse
+		err     error
+	}
+	archive := func(results chan<- archiveResult) {
+		archived, archiveErr := services.chats.ArchiveSession(ctx, owner.ID, session.ID)
+		results <- archiveResult{session: archived, err: archiveErr}
+	}
+
+	firstResult := make(chan archiveResult, 1)
+	go archive(firstResult)
+	select {
+	case <-firstUpdateBlocked:
+	case <-time.After(2 * time.Second):
+		close(releaseFirstUpdate)
+		t.Fatal("timed out waiting for first archive update")
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	secondResult := make(chan archiveResult, 1)
+	go archive(secondResult)
+	var second archiveResult
+	select {
+	case second = <-secondResult:
+	case <-time.After(2 * time.Second):
+		close(releaseFirstUpdate)
+		t.Fatal("timed out waiting for second archive result")
+	}
+	close(releaseFirstUpdate)
+
+	var first archiveResult
+	select {
+	case first = <-firstResult:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first archive result")
+	}
+	if first.err != nil || second.err != nil {
+		t.Fatalf("archive concurrently: first=%v second=%v", first.err, second.err)
+	}
+	if first.session.ArchivedAt == nil || second.session.ArchivedAt == nil {
+		t.Fatalf("expected archivedAt in both responses, first=%#v second=%#v", first.session, second.session)
+	}
+	if !first.session.ArchivedAt.Equal(*second.session.ArchivedAt) {
+		t.Fatalf("expected concurrent archive responses to share one timestamp, first=%s second=%s", first.session.ArchivedAt, second.session.ArchivedAt)
 	}
 }
 

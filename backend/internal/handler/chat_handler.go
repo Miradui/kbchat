@@ -103,11 +103,12 @@ func (h *ChatHandler) ArchiveSession(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := h.chats.ArchiveSession(c.Request.Context(), userID, sessionID); err != nil {
+	res, err := h.chats.ArchiveSession(c.Request.Context(), userID, sessionID)
+	if err != nil {
 		RespondError(c, err)
 		return
 	}
-	c.Status(http.StatusNoContent)
+	c.JSON(http.StatusOK, res)
 }
 
 func (h *ChatHandler) ListMessages(c *gin.Context) {

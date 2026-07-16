@@ -19,6 +19,8 @@ export class ApiError extends Error {
 
 type RequestOptions = Omit<RequestInit, 'body'> & {
   body?: unknown;
+  redirectOnUnauthorized?: boolean;
+  onUnauthorized?: () => void;
 };
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -37,7 +39,13 @@ export async function apiBlobRequest(path: string, options: RequestOptions = {})
 }
 
 async function request(path: string, options: RequestOptions = {}): Promise<Response> {
-  const headers = new Headers(options.headers);
+  const {
+    body: requestBody,
+    redirectOnUnauthorized = true,
+    onUnauthorized = () => window.location.assign('/login'),
+    ...fetchOptions
+  } = options;
+  const headers = new Headers(fetchOptions.headers);
   const token = tokenStore.getToken();
 
   if (token) {
@@ -45,22 +53,22 @@ async function request(path: string, options: RequestOptions = {}): Promise<Resp
   }
 
   let body: BodyInit | undefined;
-  if (options.body instanceof FormData) {
-    body = options.body;
-  } else if (options.body !== undefined) {
+  if (requestBody instanceof FormData) {
+    body = requestBody;
+  } else if (requestBody !== undefined) {
     headers.set('Content-Type', 'application/json');
-    body = JSON.stringify(options.body);
+    body = JSON.stringify(requestBody);
   }
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...options,
+    ...fetchOptions,
     headers,
     body,
   });
 
-  if (response.status === 401) {
+  if (response.status === 401 && redirectOnUnauthorized) {
     tokenStore.clearToken();
-    window.location.assign('/login');
+    onUnauthorized();
   }
 
   if (!response.ok) {

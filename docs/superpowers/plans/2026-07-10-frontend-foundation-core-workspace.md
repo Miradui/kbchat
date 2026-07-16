@@ -600,6 +600,8 @@ git commit -m "feat(frontend): add design tokens and button primitives"
 
 ### Task 4: Add reusable feedback states and toast notifications
 
+> **Review amendment (2026-07-15):** The corrections in the amendment blocks for Tasks 4-12 supersede conflicting snippets below. Keep TDD and the original task boundaries, but do not implement a known-broken snippet literally.
+
 **Files:**
 - Create: `frontend/src/components/feedback/FeedbackStates.test.tsx`
 - Create: `frontend/src/components/feedback/EmptyState.tsx`
@@ -609,6 +611,12 @@ git commit -m "feat(frontend): add design tokens and button primitives"
 - Modify: `frontend/src/components/LoadingSkeleton.tsx`
 - Modify: `frontend/src/styles/components.css`
 - Modify: `frontend/src/main.tsx`
+
+**Mandatory amendment before implementation:**
+
+- Give `LoadingSkeleton` an explicit announcement policy instead of making every instance a live region. Add an `announce` option; only region-level loaders announce, while decorative/internal skeleton rows remain hidden from assistive technology.
+- Test multiple queued toasts, timer cleanup on unmount, and the error tone's announcement semantics. The MVP may remain timeout-only; do not add a close button unless the public behavior spec is expanded.
+- Preserve the layered stylesheet order and run a compatibility build after mounting `ToastProvider`.
 
 - [ ] **Step 1: Write failing feedback tests**
 
@@ -917,6 +925,13 @@ git commit -m "feat(frontend): unify feedback states"
 - Modify: `frontend/src/components/ConfirmDialog.tsx`
 - Modify: `frontend/src/styles/components.css`
 
+**Mandatory amendment before implementation:**
+
+- Extend the RED tests to cover reverse `Shift+Tab`, no-focusable-content fallback, backdrop versus panel clicks, restoration of the prior body overflow value, and opener removal.
+- Exclude disabled, hidden, `aria-hidden`, and inert descendants from the focusable set.
+- Route every ConfirmDialog close path through one busy-aware handler; while busy, Escape, backdrop, cancel, and repeated confirm must not close or resubmit.
+- At `<= 680px`, all dialog actions must retain the 44px touch target established by Task 3.
+
 - [ ] **Step 1: Write failing keyboard and focus tests**
 
 Create `frontend/src/components/ui/Dialog.test.tsx`:
@@ -1175,10 +1190,19 @@ git commit -m "feat(frontend): make confirmation dialogs accessible"
 - Create: `frontend/src/components/navigation/PrimaryNav.tsx`
 - Create: `frontend/src/layouts/AppShell.test.tsx`
 - Create: `frontend/src/layouts/AppShell.tsx`
+- Modify: `frontend/src/App.tsx`
 - Modify: `frontend/src/components/ui/IconButton.tsx`
 - Modify: `frontend/src/components/WorkspaceShell.tsx`
 - Create: `frontend/src/styles/layouts.css`
 - Modify: `frontend/src/styles/index.css`
+
+**Mandatory amendment before implementation:**
+
+- Move the obsolete `<main>` removal from Task 7 into this task. Task 6 must never leave nested main landmarks between commits.
+- Expand tests for all six navigation destinations, desktop rendering, mobile-to-desktop media changes, forward and reverse focus wrapping, route-change drawer close, encoded/empty global search, and logout failure still clearing the local token.
+- Keep background content inert while the drawer is open and prove it is absent from keyboard navigation.
+- The compact 28px category action rule may remain on desktop only. At mobile breakpoints category actions and tree toggles must be at least 44x44px; verify computed styles against legacy contextual selectors.
+- Verify existing WorkspaceShell callers compile and that legacy `topbar` content cannot create duplicate global search/account controls.
 
 - [ ] **Step 1: Add a router- and toast-aware render helper**
 
@@ -1934,7 +1958,12 @@ git commit -m "feat(frontend): add responsive application shell"
 **Files:**
 - Create: `frontend/src/router/index.test.tsx`
 - Modify: `frontend/src/router/index.tsx`
-- Modify: `frontend/src/App.tsx`
+
+**Mandatory amendment before implementation:**
+
+- `App.tsx` is already converted to an Outlet-only component by Task 6; do not defer that landmark fix to this task.
+- Isolate `ProtectedRoute` from the browser-router singleton (separate module or router factory) so MemoryRouter tests do not initialize global browser history listeners.
+- Add authenticated and anonymous route cases and make route-level chunk verification machine-checkable from the build output rather than visual log inspection.
 
 - [ ] **Step 1: Write a failing ProtectedRoute test**
 
@@ -1972,9 +2001,9 @@ Run `npm test -- src/router/index.test.tsx`.
 
 Expected: FAIL because `ProtectedRoute` is not exported.
 
-- [ ] **Step 3: Remove the obsolete nested main landmark**
+- [ ] **Step 3: Verify the shell owns the sole main landmark**
 
-Replace `frontend/src/App.tsx` with:
+Task 6 already replaced `frontend/src/App.tsx` with:
 
 ~~~tsx
 import { Outlet } from 'react-router-dom';
@@ -1984,7 +2013,7 @@ export function App() {
 }
 ~~~
 
-The page-level `AppShell` now owns the sole `<main>` landmark for authenticated pages.
+The page-level `AppShell` owns the sole `<main>` landmark for authenticated pages. Verify this invariant; do not stage `App.tsx` again unless a failing regression test requires a correction.
 
 - [ ] **Step 4: Export ProtectedRoute and lazy-load every route page**
 
@@ -2075,10 +2104,18 @@ git commit -m "perf(frontend): lazy load route pages"
 ### Task 8: Optimize the login experience test-first
 
 **Files:**
+- Create: `frontend/src/api/client.test.ts`
+- Modify: `frontend/src/api/client.ts`
 - Create: `frontend/src/pages/Login/LoginPage.test.tsx`
 - Modify: `frontend/src/pages/Login/LoginPage.tsx`
 - Create: `frontend/src/styles/pages/auth.css`
 - Modify: `frontend/src/styles/index.css`
+
+**Mandatory amendment before implementation:**
+
+- Fix the current global-401 behavior first: an invalid `/auth/login` response must throw `ApiError` without calling `window.location.assign('/login')`. Protected API requests must still clear the token and redirect on 401.
+- Drive this API-client change with RED tests; use an explicit request option that is removed before forwarding options to `fetch`.
+- The page test must assert `login` is called exactly once during a pending submission and that repeated failures move focus back to the alert.
 
 - [ ] **Step 1: Write failing login behavior tests**
 
@@ -2348,6 +2385,14 @@ git commit -m "feat(frontend): improve accessible login flow"
 - Modify: `frontend/src/pages/Home/HomePage.tsx`
 - Create: `frontend/src/styles/pages/home.css`
 - Modify: `frontend/src/styles/index.css`
+
+**Mandatory amendment before implementation:**
+
+- Do not implement the single `loading` plus single `reloadKey` page snippet below. It does not provide local retry and temporarily hides successful regions.
+- Model stats, knowledge bases, documents, and sessions with independent `{ data, loading, error }` state and independent retry functions. Initial loading may start all four requests concurrently.
+- Retrying one failed region must call only that region's source, keep other successful regions visible, and never overwrite their data.
+- Add RED tests that assert per-source call counts and visible successful content during a failed region retry.
+- Removing the category tree from Home is intentional: category context belongs only to the knowledge-base workspace.
 
 - [ ] **Step 1: Write a failing partial-failure loader test**
 
@@ -2736,6 +2781,12 @@ git commit -m "feat(frontend): make dashboard loads resilient"
 - Create: `frontend/src/styles/pages/search.css`
 - Modify: `frontend/src/styles/index.css`
 
+**Mandatory amendment before implementation:**
+
+- Capture the first request's signal and assert it becomes aborted when the query changes.
+- Test that AbortError does not show an error or clear the latest result, type-only changes do not refetch, invalid `type` falls back to `all`, and an empty query removes `q` deterministically.
+- Preserve unrelated supported URL state when changing only `q` or `type`; use replace mode only for debounced typing.
+
 - [ ] **Step 1: Write failing URL-state, debounce, and race tests**
 
 Create `frontend/src/pages/Search/SearchPage.test.tsx`:
@@ -3085,6 +3136,12 @@ git commit -m "feat(frontend): make global search URL driven"
 - Modify: `frontend/src/pages/Tags/TagsPage.tsx`
 - Create: `frontend/src/styles/pages/tags.css`
 - Modify: `frontend/src/styles/index.css`
+
+**Mandatory amendment before implementation:**
+
+- This task depends on the Task 5 ConfirmDialog `error` API and accessible alert region; do not begin it before Task 5 is green.
+- Add tests proving create/update/delete success mutate only local rows and do not call `listKnowledgeBaseTags` again.
+- Add edit-success coverage and submitting-state coverage for cancel, Escape, duplicate submit, and input preservation after failure.
 
 - [ ] **Step 1: Write the failing dialog preservation test**
 
@@ -3498,6 +3555,13 @@ git commit -m "feat(frontend): streamline tag management"
 - Modify: `docs/10-frontend-spec.md`
 - Create: `docs/superpowers/handoffs/2026-07-10-frontend-foundation-core-workspace.md`
 - Read only: `docs/12-handoff.md`
+
+**Mandatory amendment before execution:**
+
+- Run this task only after Tasks 4-11 are committed and clean.
+- Execute it as five gates: frontend static regression, backend regression, real-service startup, four-viewport browser matrix, then documentation/staging audit.
+- A timeout or environment dependency is not a pass. Diagnose it without reading, copying, or logging root `.env` values.
+- Verify route-level chunks programmatically and keep the original workspace's unrelated backend/frontend changes out of every commit.
 
 - [ ] **Step 1: Run the complete frontend suite**
 

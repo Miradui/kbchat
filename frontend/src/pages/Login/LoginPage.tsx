@@ -1,98 +1,70 @@
-import { FormEvent, useState } from 'react';
+import { Eye, EyeOff } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { ApiError } from '../../api/client';
 import { login } from '../../api/resources';
+import { Button } from '../../components/ui/Button';
+import { IconButton } from '../../components/ui/IconButton';
 import { tokenStore } from '../../store/tokenStore';
+import { getErrorMessage } from '../../utils/errors';
 
-export function LoginPage() {
+type LoginPageProps = {
+  loginRequest?: typeof login;
+};
+
+export function LoginPage({ loginRequest = login }: LoginPageProps) {
   const navigate = useNavigate();
+  const errorRef = useRef<HTMLParagraphElement>(null);
+  const submittingRef = useRef(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  useEffect(() => {
+    if (error) errorRef.current?.focus();
+  }, [error]);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setError('');
     setSubmitting(true);
-
     try {
-      const response = await login(username, password);
+      const response = await loginRequest(username, password);
       tokenStore.setToken(response.token);
       navigate('/home', { replace: true });
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.message);
-      } else {
-        setError('登录失败');
-      }
+    } catch (caught) {
+      setError(getErrorMessage(caught, '登录失败，请稍后重试'));
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   }
 
   return (
     <section className="auth-page">
-      <form className="auth-panel" onSubmit={handleSubmit}>
-        <div>
-          <p className="eyebrow">RAG Console</p>
-          <h1>登录企业知识库</h1>
-          <p className="page-description">进入知识库、文档处理与引用可追踪问答工作台。</p>
-        </div>
-
-        <label>
-          用户名
-          <input
-            autoComplete="username"
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
-            required
-          />
-        </label>
-
-        <label>
-          密码
-          <input
-            autoComplete="current-password"
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            required
-          />
-        </label>
-
-        {error && <p className="error-text">{error}</p>}
-
-        <button type="submit" disabled={submitting}>
-          {submitting ? '登录中...' : '登录'}
-        </button>
-      </form>
-
       <aside className="auth-context" aria-label="产品说明">
-        <div>
-          <p className="eyebrow">工作台</p>
-          <h2>连接资料、检索与问答</h2>
-        </div>
-        <p>
-          上传 txt、md、pdf 文档后，系统会完成解析、切片和 embedding。问答结果会展示引用来源，
-          方便追踪 filename、pageNumber、vectorScore 与 rerankScore。
-        </p>
-        <div className="auth-context-list">
-          <div className="auth-context-item">
-            <strong>知识库管理</strong>
-            <span>创建、编辑并进入每个知识库的检索配置。</span>
-          </div>
-          <div className="auth-context-item">
-            <strong>文档处理</strong>
-            <span>查看上传、解析、切片、embedding 和失败原因。</span>
-          </div>
-          <div className="auth-context-item">
-            <strong>引用可追踪问答</strong>
-            <span>只展示后端返回的 citations，不隐藏来源。</span>
-          </div>
-        </div>
+        <div><p className="eyebrow">RAG Console</p><h2>让企业知识可检索、可问答、可追溯</h2><p>统一管理知识库与文档处理流程，并通过真实 citations 追踪答案依据。</p></div>
+        <ul><li>知识库与文档集中管理</li><li>检索、Rerank 与问答链路清晰可见</li><li>答案引用只来自实际进入 Prompt 的内容</li></ul>
       </aside>
+
+      <form className="auth-panel" onSubmit={handleSubmit}>
+        <header><p className="eyebrow">欢迎回来</p><h1>登录企业知识库</h1><p className="page-description">使用已配置的账户继续进入工作台。</p></header>
+        <div className="auth-field"><label htmlFor="login-username">用户名</label><input autoComplete="username" disabled={submitting} id="login-username" required value={username} onChange={(event) => setUsername(event.target.value)} /></div>
+        <div className="auth-field">
+          <label htmlFor="login-password">密码</label>
+          <div className="password-field">
+            <input autoComplete="current-password" disabled={submitting} id="login-password" required type={showPassword ? 'text' : 'password'} value={password} onChange={(event) => setPassword(event.target.value)} />
+            <IconButton disabled={submitting} label={showPassword ? '隐藏密码' : '显示密码'} onClick={() => setShowPassword((visible) => !visible)}>{showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}</IconButton>
+          </div>
+        </div>
+        {error && <p className="auth-error" ref={errorRef} role="alert" tabIndex={-1}>{error}</p>}
+        <Button className="auth-submit" loading={submitting} loadingLabel="登录中" type="submit">登录</Button>
+      </form>
     </section>
   );
 }
