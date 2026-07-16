@@ -4,6 +4,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"rag/backend/internal/document/parser"
 )
 
 const (
@@ -15,6 +17,7 @@ type Chunk struct {
 	Index      int
 	Content    string
 	TokenCount int
+	PageNumber *int
 	Metadata   map[string]any
 }
 
@@ -25,6 +28,8 @@ type Splitter struct {
 
 type block struct {
 	content       string
+	fileType      string
+	pageNumber    *int
 	headingPath   []string
 	structureType string
 	startOffset   int
@@ -32,6 +37,8 @@ type block struct {
 }
 
 type chunkBuilder struct {
+	fileType       string
+	pageNumber     *int
 	headingPath    []string
 	parts          []string
 	structureTypes map[string]struct{}
@@ -50,16 +57,30 @@ func New(chunkSize int, chunkOverlap int) *Splitter {
 }
 
 func (s *Splitter) Split(text string) []Chunk {
-	text = normalize(text)
-	if text == "" {
-		return []Chunk{}
-	}
+	return s.SplitDocument(parser.ParsedDocument{
+		FileType: "md",
+		Segments: []parser.Segment{{Content: text}},
+	})
+}
 
-	blocks := parseBlocks(text)
-	if len(blocks) == 0 {
-		return []Chunk{}
+func (s *Splitter) SplitDocument(document parser.ParsedDocument) []Chunk {
+	fileType := normalizeFileType(document.FileType)
+	chunks := make([]Chunk, 0, len(document.Segments))
+	for _, segment := range document.Segments {
+		text := normalize(segment.Content)
+		if text == "" {
+			continue
+		}
+		blocks := parseBlocks(text, fileType == "md", fileType, segment.PageNumber)
+		for _, chunk := range s.splitBlocks(blocks) {
+			chunk.Index = len(chunks)
+			chunks = append(chunks, chunk)
+		}
 	}
+	return chunks
+}
 
+func (s *Splitter) splitBlocks(blocks []block) []Chunk {
 	chunks := make([]Chunk, 0, len(blocks))
 	current := chunkBuilder{}
 	overlap := ""
@@ -72,7 +93,7 @@ func (s *Splitter) Split(text string) []Chunk {
 				continue
 			}
 
-			if sameHeadingPath(current.headingPath, item.headingPath) && s.fits(current.withBlock(item)) {
+			if sameSource(current, item) && sameHeadingPath(current.headingPath, item.headingPath) && s.fits(current.withBlock(item)) {
 				current.addBlock(item)
 				continue
 			}
@@ -112,6 +133,8 @@ func (s *Splitter) splitOversizeBlock(item block) []block {
 		}
 		result = append(result, block{
 			content:       part,
+			fileType:      item.fileType,
+			pageNumber:    copyIntPointer(item.pageNumber),
 			headingPath:   copyStrings(item.headingPath),
 			structureType: item.structureType,
 			startOffset:   offset,
@@ -152,6 +175,8 @@ func (s *Splitter) overlapText(content string) string {
 
 func newChunkBuilder(item block, overlap string) chunkBuilder {
 	builder := chunkBuilder{
+		fileType:       item.fileType,
+		pageNumber:     copyIntPointer(item.pageNumber),
 		headingPath:    copyStrings(item.headingPath),
 		structureTypes: map[string]struct{}{},
 		startOffset:    item.startOffset,
@@ -214,16 +239,22 @@ func (b chunkBuilder) chunk(index int, maxTokens int) Chunk {
 	if estimateTokens(content) > maxTokens {
 		content = trimContentToBudget(content, maxTokens)
 	}
+	metadata := map[string]any{
+		"fileType":      b.fileType,
+		"headingPath":   copyStrings(b.headingPath),
+		"structureType": b.structureType(),
+		"startOffset":   b.startOffset,
+		"endOffset":     b.endOffset,
+	}
+	if b.pageNumber != nil {
+		metadata["pageNumber"] = *b.pageNumber
+	}
 	return Chunk{
 		Index:      index,
 		Content:    content,
 		TokenCount: estimateTokens(content),
-		Metadata: map[string]any{
-			"headingPath":   copyStrings(b.headingPath),
-			"structureType": b.structureType(),
-			"startOffset":   b.startOffset,
-			"endOffset":     b.endOffset,
-		},
+		PageNumber: copyIntPointer(b.pageNumber),
+		Metadata:   metadata,
 	}
 }
 
@@ -236,7 +267,7 @@ func (b chunkBuilder) structureType() string {
 	return "mixed"
 }
 
-func parseBlocks(text string) []block {
+func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) []block {
 	lines := strings.SplitAfter(text, "\n")
 	blocks := make([]block, 0, len(lines))
 	headingPath := []string{}
@@ -255,6 +286,8 @@ func parseBlocks(text string) []block {
 		if content != "" {
 			blocks = append(blocks, block{
 				content:       content,
+				fileType:      fileType,
+				pageNumber:    copyIntPointer(pageNumber),
 				headingPath:   copyStrings(headingPath),
 				structureType: pendingType,
 				startOffset:   pendingStart,
@@ -279,41 +312,50 @@ func parseBlocks(text string) []block {
 			continue
 		}
 
-		if level, title, ok := parseHeading(trimmed); ok {
-			flush()
-			headingPath = updateHeadingPath(headingPath, level, title)
-			continue
+		if markdown {
+			if level, title, ok := parseHeading(trimmed); ok {
+				flush()
+				headingPath = updateHeadingPath(headingPath, level, title)
+				continue
+			}
 		}
 
-		if fence, ok := parseFence(trimmed); ok {
-			flush()
-			codeLines := []string{raw}
-			codeStart := lineStart
-			codeEnd := lineEnd
-			for i+1 < len(lines) {
-				i++
-				raw = strings.TrimSuffix(lines[i], "\n")
-				codeEnd = offset + len(raw)
-				offset += len(lines[i])
-				codeLines = append(codeLines, raw)
-				if strings.HasPrefix(strings.TrimSpace(raw), fence) {
-					break
+		if markdown {
+			if fence, ok := parseFence(trimmed); ok {
+				flush()
+				codeLines := []string{raw}
+				codeStart := lineStart
+				codeEnd := lineEnd
+				for i+1 < len(lines) {
+					i++
+					raw = strings.TrimSuffix(lines[i], "\n")
+					codeEnd = offset + len(raw)
+					offset += len(lines[i])
+					codeLines = append(codeLines, raw)
+					if strings.HasPrefix(strings.TrimSpace(raw), fence) {
+						break
+					}
 				}
+				content := strings.TrimSpace(strings.Join(codeLines, "\n"))
+				if content != "" {
+					blocks = append(blocks, block{
+						content:       content,
+						fileType:      fileType,
+						pageNumber:    copyIntPointer(pageNumber),
+						headingPath:   copyStrings(headingPath),
+						structureType: "code",
+						startOffset:   codeStart,
+						endOffset:     codeEnd,
+					})
+				}
+				continue
 			}
-			content := strings.TrimSpace(strings.Join(codeLines, "\n"))
-			if content != "" {
-				blocks = append(blocks, block{
-					content:       content,
-					headingPath:   copyStrings(headingPath),
-					structureType: "code",
-					startOffset:   codeStart,
-					endOffset:     codeEnd,
-				})
-			}
-			continue
 		}
 
-		lineType := structureTypeForLine(trimmed)
+		lineType := "paragraph"
+		if markdown {
+			lineType = structureTypeForLine(trimmed)
+		}
 		if pendingType != "" && pendingType != lineType {
 			flush()
 		}
@@ -600,6 +642,20 @@ func containsWideRune(text string) bool {
 	return false
 }
 
+func normalizeFileType(fileType string) string {
+	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(fileType)), ".")
+}
+
+func sameSource(builder chunkBuilder, item block) bool {
+	if normalizeFileType(builder.fileType) != normalizeFileType(item.fileType) {
+		return false
+	}
+	if builder.pageNumber == nil || item.pageNumber == nil {
+		return builder.pageNumber == nil && item.pageNumber == nil
+	}
+	return *builder.pageNumber == *item.pageNumber
+}
+
 func sameHeadingPath(left []string, right []string) bool {
 	if len(left) != len(right) {
 		return false
@@ -610,6 +666,14 @@ func sameHeadingPath(left []string, right []string) bool {
 		}
 	}
 	return true
+}
+
+func copyIntPointer(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }
 
 func copyStrings(values []string) []string {

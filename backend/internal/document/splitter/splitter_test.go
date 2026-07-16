@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"rag/backend/internal/document/parser"
 )
 
 func TestSplitPreservesHeadingPathMetadataAndContentPrefix(t *testing.T) {
@@ -121,5 +123,116 @@ func TestSplitDropsOverlapBeforeTrimmingNewBlockContent(t *testing.T) {
 	}
 	if strings.Contains(chunks[1].Content, "five six") {
 		t.Fatalf("expected overlap to be dropped when it would trim new content, got %q", chunks[1].Content)
+	}
+}
+
+func TestSplitDocumentTreatsPlainTextSyntaxAsLiteralContent(t *testing.T) {
+	document := parser.ParsedDocument{
+		FileType: "txt",
+		Segments: []parser.Segment{{
+			Content: "# literal heading\n- literal list\nvalue | is | literal",
+		}},
+	}
+
+	chunks := New(100, 10).SplitDocument(document)
+
+	if len(chunks) != 1 {
+		t.Fatalf("expected one plain-text chunk, got %#v", chunks)
+	}
+	for _, literal := range []string{"# literal heading", "- literal list", "value | is | literal"} {
+		if !strings.Contains(chunks[0].Content, literal) {
+			t.Fatalf("expected literal syntax %q to remain in %q", literal, chunks[0].Content)
+		}
+	}
+	if chunks[0].Metadata["structureType"] != "paragraph" {
+		t.Fatalf("expected TXT paragraph structure, got %#v", chunks[0].Metadata)
+	}
+	if path, ok := chunks[0].Metadata["headingPath"].([]string); !ok || len(path) != 0 {
+		t.Fatalf("expected TXT heading path to stay empty, got %#v", chunks[0].Metadata["headingPath"])
+	}
+	if chunks[0].Metadata["fileType"] != "txt" {
+		t.Fatalf("expected TXT file type metadata, got %#v", chunks[0].Metadata)
+	}
+}
+
+func TestSplitDocumentPreservesPDFPageBoundariesAndIndexes(t *testing.T) {
+	pageOne := 1
+	pageThree := 3
+	document := parser.ParsedDocument{
+		FileType: "pdf",
+		Segments: []parser.Segment{
+			{Content: "# literal PDF line\nalpha page content", PageNumber: &pageOne},
+			{Content: "beta page content", PageNumber: &pageThree},
+		},
+	}
+
+	chunks := New(100, 20).SplitDocument(document)
+
+	if len(chunks) != 2 {
+		t.Fatalf("expected one chunk per PDF page, got %#v", chunks)
+	}
+	for index, chunk := range chunks {
+		if chunk.Index != index {
+			t.Fatalf("expected stable global index %d, got %d", index, chunk.Index)
+		}
+		if chunk.PageNumber == nil {
+			t.Fatalf("expected PDF page number on chunk %#v", chunk)
+		}
+		if chunk.Metadata["fileType"] != "pdf" || chunk.Metadata["structureType"] != "paragraph" {
+			t.Fatalf("expected plain PDF metadata, got %#v", chunk.Metadata)
+		}
+		if chunk.Metadata["pageNumber"] != *chunk.PageNumber {
+			t.Fatalf("expected metadata page number to match chunk at %d, got %#v", index, chunk)
+		}
+	}
+	if *chunks[0].PageNumber != 1 || *chunks[1].PageNumber != 3 {
+		t.Fatalf("expected physical page numbers 1 and 3, got %#v", chunks)
+	}
+	if !strings.Contains(chunks[0].Content, "# literal PDF line") {
+		t.Fatalf("expected PDF syntax to stay literal, got %q", chunks[0].Content)
+	}
+	if strings.Contains(chunks[1].Content, "alpha page content") {
+		t.Fatalf("expected overlap not to cross PDF pages, got %q", chunks[1].Content)
+	}
+}
+
+func TestSplitDocumentKeepsOversizePDFChunksWithinTheirPage(t *testing.T) {
+	pageOne := 1
+	pageTwo := 2
+	words := make([]string, 0, 45)
+	for i := 0; i < 45; i++ {
+		words = append(words, fmt.Sprintf("word%02d", i))
+	}
+	document := parser.ParsedDocument{
+		FileType: "pdf",
+		Segments: []parser.Segment{
+			{Content: strings.Join(words, " "), PageNumber: &pageOne},
+			{Content: "second page", PageNumber: &pageTwo},
+		},
+	}
+
+	chunks := New(10, 2).SplitDocument(document)
+
+	if len(chunks) < 3 {
+		t.Fatalf("expected the first page to split, got %#v", chunks)
+	}
+	lastIndex := len(chunks) - 1
+	for index, chunk := range chunks {
+		if chunk.Index != index || chunk.TokenCount > 10 {
+			t.Fatalf("unexpected chunk budget/index at %d: %#v", index, chunk)
+		}
+		if chunk.PageNumber == nil {
+			t.Fatalf("expected page number at %d", index)
+		}
+		expectedPage := 1
+		if index == lastIndex {
+			expectedPage = 2
+		}
+		if *chunk.PageNumber != expectedPage || chunk.Metadata["pageNumber"] != expectedPage {
+			t.Fatalf("expected chunk %d to remain on page %d, got %#v", index, expectedPage, chunk)
+		}
+	}
+	if *chunks[len(chunks)-1].PageNumber != 2 || chunks[len(chunks)-1].Content != "second page" {
+		t.Fatalf("expected final chunk to belong only to page 2, got %#v", chunks[len(chunks)-1])
 	}
 }
