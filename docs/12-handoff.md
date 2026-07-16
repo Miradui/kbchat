@@ -299,7 +299,7 @@ Authorization: Bearer <token>
 - 文档批量删除、恢复和重处理在 repository transaction 内执行；中途写入或知识库 touch 失败时整批回滚。
 - 单文档与批量重处理不会提前删除旧 chunks；同一文档处理中复用活动 job，worker 收尾窗口则创建 pending 后继 job。
 - worker 不会在同一文档仍有 running job 时领取后继 pending job，避免并发替换同一索引。
-- processor 成功替换 chunks 后由 worker 在单个 transaction 内同时终结 document/job；失败终态也复用同一原子路径。
+- processor 成功替换 chunks 后由 worker 在单个 transaction 内同时终结 document/job；失败终态也复用同一原子路径，并拒绝迟到旧 job 覆盖后继处理状态。
 - 知识库列表与统计排除软删除文档和软删除会话。
 - Markdown overlap 不跨 headingPath；超长嵌套列表重复缩进 marker；表格识别忽略转义管道和 inline code span 管道，并保持极小预算下的转义原子性。
 - 无正文的 Markdown heading 保留为 heading chunk，不会在同级切换或文档结尾静默丢失。

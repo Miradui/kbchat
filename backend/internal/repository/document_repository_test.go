@@ -161,6 +161,30 @@ func TestCompleteJobRollsBackWhenDocumentFinalizationFails(t *testing.T) {
 	assertDocumentJobTerminalState(t, db, document.ID, job.ID, "embedding", "running", "")
 }
 
+func TestFinalizeJobRejectsStaleCompletedJob(t *testing.T) {
+	db := newDocumentRepositoryTestDB(t)
+	repository := NewDocumentRepository(db)
+	document := createDocumentRepositoryTestDocument(t, db)
+	if err := db.Model(&document).Update("status", "embedding").Error; err != nil {
+		t.Fatalf("prepare successor document state: %v", err)
+	}
+	staleJob := model.DocumentJob{
+		DocumentID: document.ID,
+		JobType:    "process_document",
+		Status:     "completed",
+	}
+	if err := db.Create(&staleJob).Error; err != nil {
+		t.Fatalf("create stale job: %v", err)
+	}
+
+	err := repository.FailJob(context.Background(), staleJob.ID, "late failure")
+	if err == nil {
+		t.Fatalf("expected stale job error, got %v", err)
+	}
+
+	assertDocumentJobTerminalState(t, db, document.ID, staleJob.ID, "embedding", "completed", "")
+}
+
 func assertDocumentJobTerminalState(
 	t *testing.T,
 	db *gorm.DB,

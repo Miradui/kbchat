@@ -31,7 +31,10 @@ type DocumentRepository struct {
 	db *gorm.DB
 }
 
-var errDocumentJobBlocked = errors.New("document job blocked by running predecessor")
+var (
+	errDocumentJobBlocked    = errors.New("document job blocked by running predecessor")
+	errDocumentJobNotRunning = errors.New("document job is not running")
+)
 
 func NewDocumentRepository(db *gorm.DB) *DocumentRepository {
 	return &DocumentRepository{db: db}
@@ -524,11 +527,26 @@ func (r *DocumentRepository) finalizeJob(
 ) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var job model.DocumentJob
-		if err := tx.Select("id", "document_id").Where("id = ?", jobID).First(&job).Error; err != nil {
+		if err := tx.
+			Select("id", "document_id").
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND status = ? AND job_type = ?", jobID, "running", "process_document").
+			First(&job).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errDocumentJobNotRunning
+			}
 			return err
 		}
 
 		now := time.Now()
+		var document model.Document
+		if err := tx.Unscoped().
+			Select("id").
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", job.DocumentID).
+			First(&document).Error; err != nil {
+			return err
+		}
 		documentResult := tx.Unscoped().Model(&model.Document{}).
 			Where("id = ?", job.DocumentID).
 			Updates(map[string]any{
@@ -544,7 +562,7 @@ func (r *DocumentRepository) finalizeJob(
 		}
 
 		jobResult := tx.Model(&model.DocumentJob{}).
-			Where("id = ?", jobID).
+			Where("id = ? AND status = ? AND job_type = ?", jobID, "running", "process_document").
 			Updates(map[string]any{
 				"status":        status,
 				"error_message": errorMessage,
@@ -555,7 +573,7 @@ func (r *DocumentRepository) finalizeJob(
 			return jobResult.Error
 		}
 		if jobResult.RowsAffected != 1 {
-			return gorm.ErrRecordNotFound
+			return errDocumentJobNotRunning
 		}
 		return nil
 	})
