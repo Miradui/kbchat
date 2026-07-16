@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError } from '../../api/client';
 import {
@@ -21,11 +21,15 @@ export function DocumentRecycleBinDrawer({
   onChanged,
   onClose,
 }: DocumentRecycleBinDrawerProps) {
+  const requestIdRef = useRef(0);
+  const mountedRef = useRef(true);
+  const explicitRefreshInFlightRef = useRef(false);
   const [items, setItems] = useState<RecycleBinItem[]>([]);
   const [page, setPage] = useState(1);
   const [pageSize] = useState(20);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [workingId, setWorkingId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<RecycleBinItem | null>(null);
@@ -33,11 +37,44 @@ export function DocumentRecycleBinDrawer({
   const [error, setError] = useState('');
 
   const loadPage = useCallback(async () => {
-    setError('');
-    const response = await listDocumentRecycleBin(page, pageSize);
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    let response: Awaited<ReturnType<typeof listDocumentRecycleBin>>;
+    try {
+      response = await listDocumentRecycleBin(page, pageSize);
+    } catch (err) {
+      if (!mountedRef.current || requestIdRef.current !== requestId) {
+        return;
+      }
+      throw err;
+    }
+    if (!mountedRef.current || requestIdRef.current !== requestId) {
+      return;
+    }
     setItems(response.items);
     setTotal(response.total);
   }, [page, pageSize]);
+
+  const refreshPage = useCallback(async (fallback: string) => {
+    if (explicitRefreshInFlightRef.current) {
+      return;
+    }
+    explicitRefreshInFlightRef.current = true;
+    setRefreshing(true);
+    setError('');
+    try {
+      await loadPage();
+    } catch (err) {
+      if (mountedRef.current) {
+        setError(errorMessage(err, fallback));
+      }
+    } finally {
+      explicitRefreshInFlightRef.current = false;
+      if (mountedRef.current) {
+        setRefreshing(false);
+      }
+    }
+  }, [loadPage]);
 
   const refreshAfterMutation = useCallback(async (successLabel: string) => {
     onChanged();
@@ -49,25 +86,33 @@ export function DocumentRecycleBinDrawer({
   }, [loadPage, onChanged]);
 
   useEffect(() => {
-    let mounted = true;
+    let active = true;
     setLoading(true);
+    setError('');
 
     loadPage()
       .catch((err) => {
-        if (mounted) {
+        if (active && mountedRef.current) {
           setError(errorMessage(err, '文档回收站加载失败'));
         }
       })
       .finally(() => {
-        if (mounted) {
+        if (active && mountedRef.current) {
           setLoading(false);
         }
       });
 
     return () => {
-      mounted = false;
+      active = false;
     };
   }, [loadPage]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   async function handleRestore(item: RecycleBinItem) {
     setWorkingId(item.id);
@@ -164,8 +209,13 @@ export function DocumentRecycleBinDrawer({
         </header>
 
         <div className="drawer-actions">
-          <button className="secondary-button" type="button" onClick={() => void loadPage()} disabled={loading}>
-            刷新
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => void refreshPage('文档回收站刷新失败')}
+            disabled={loading || refreshing}
+          >
+            {refreshing ? '刷新中...' : '刷新'}
           </button>
           <button className="secondary-button" type="button" onClick={() => void handleRestorePage()} disabled={submitting || items.length === 0}>
             {submitting ? '恢复中...' : '恢复本页'}
@@ -177,7 +227,7 @@ export function DocumentRecycleBinDrawer({
 
         {error && <p className="drawer-error-text">{error}</p>}
 
-        <div className="recycle-list document-recycle-list">
+        <div className="recycle-list document-recycle-list" aria-busy={loading || refreshing}>
           {loading ? (
             <LoadingSkeleton rows={5} columns={2} compact />
           ) : items.length === 0 ? (
