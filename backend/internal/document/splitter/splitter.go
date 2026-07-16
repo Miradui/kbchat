@@ -128,12 +128,29 @@ func (s *Splitter) splitOversizeBlock(item block) []block {
 		budget = 1
 	}
 
+	switch item.structureType {
+	case "code":
+		return splitOversizeCodeBlock(item, budget)
+	case "table":
+		return splitOversizeTableBlock(item, budget)
+	}
+
 	spans := splitTextToBudgetSpans(item.content, budget)
+	if item.structureType == "list" {
+		spans = splitLineAwareTextToBudgetSpans(item.content, budget)
+	}
+	return blocksFromSpans(item, spans, nil)
+}
+
+func blocksFromSpans(item block, spans []textSpan, decorate func(string) string) []block {
 	result := make([]block, 0, len(spans))
 	for _, span := range spans {
 		part := item.content[span.start:span.end]
 		if part == "" {
 			continue
+		}
+		if decorate != nil {
+			part = decorate(part)
 		}
 		result = append(result, block{
 			content:       part,
@@ -149,6 +166,9 @@ func (s *Splitter) splitOversizeBlock(item block) []block {
 }
 
 func (s *Splitter) newChunkBuilder(item block, overlap string) chunkBuilder {
+	if item.structureType != "paragraph" {
+		overlap = ""
+	}
 	builder := newChunkBuilder(item, overlap)
 	if overlap != "" && !s.fits(builder) {
 		return newChunkBuilder(item, "")
@@ -440,6 +460,102 @@ func isListLine(line string) bool {
 		}
 	}
 	return true
+}
+
+func splitOversizeCodeBlock(item block, budget int) []block {
+	lines := lineTextSpans(item.content)
+	if len(lines) < 3 {
+		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
+	}
+
+	opening := item.content[lines[0].start:lines[0].end]
+	fence, ok := parseFence(strings.TrimSpace(opening))
+	closing := item.content[lines[len(lines)-1].start:lines[len(lines)-1].end]
+	if !ok || !strings.HasPrefix(strings.TrimSpace(closing), fence) {
+		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
+	}
+
+	bodyContent, body := trimTextSpan(item.content, lines[0].end, lines[len(lines)-1].start)
+	bodyBudget := budget - estimateTokens(opening+"\n"+closing)
+	if bodyContent == "" || bodyBudget < 1 {
+		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
+	}
+
+	relativeSpans := splitLineAwareTextToBudgetSpans(bodyContent, bodyBudget)
+	spans := make([]textSpan, 0, len(relativeSpans))
+	for _, span := range relativeSpans {
+		spans = append(spans, textSpan{
+			start: body.start + span.start,
+			end:   body.start + span.end,
+		})
+	}
+	return blocksFromSpans(item, spans, func(content string) string {
+		return opening + "\n" + content + "\n" + closing
+	})
+}
+
+func splitOversizeTableBlock(item block, budget int) []block {
+	lines := lineTextSpans(item.content)
+	if len(lines) < 3 {
+		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
+	}
+
+	header := item.content[lines[0].start:lines[1].end]
+	separator := item.content[lines[1].start:lines[1].end]
+	bodyBudget := budget - estimateTokens(header)
+	if !isMarkdownTableSeparator(separator) || bodyBudget < 1 {
+		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
+	}
+
+	bodySpans := packTextSpans(item.content, lines[2:], bodyBudget)
+	result := blocksFromSpans(item, bodySpans, func(content string) string {
+		return header + "\n" + content
+	})
+	if len(result) > 0 {
+		result[0].startOffset = item.startOffset + lines[0].start
+	}
+	return result
+}
+
+func isMarkdownTableSeparator(line string) bool {
+	line = strings.Trim(strings.TrimSpace(line), "|")
+	cells := strings.Split(line, "|")
+	if len(cells) == 0 {
+		return false
+	}
+	for _, cell := range cells {
+		cell = strings.Trim(strings.TrimSpace(cell), ":")
+		if len(cell) < 3 || strings.Trim(cell, "-") != "" {
+			return false
+		}
+	}
+	return true
+}
+
+func splitLineAwareTextToBudgetSpans(text string, budget int) []textSpan {
+	lines := lineTextSpans(text)
+	if len(lines) > 1 {
+		return packTextSpans(text, lines, budget)
+	}
+	return splitTextToBudgetSpans(text, budget)
+}
+
+func lineTextSpans(text string) []textSpan {
+	spans := make([]textSpan, 0)
+	for start := 0; start < len(text); {
+		end := len(text)
+		if newline := strings.IndexByte(text[start:], '\n'); newline >= 0 {
+			end = start + newline
+		}
+		if content, span := trimTextSpan(text, start, end); content != "" {
+			spans = append(spans, span)
+		}
+		if end == len(text) {
+			break
+		}
+		start = end + 1
+	}
+	return spans
 }
 
 func splitTextToBudgetSpans(text string, budget int) []textSpan {

@@ -289,3 +289,73 @@ func TestSplitDocumentMapsOversizePrimaryContentToNormalizedSegment(t *testing.T
 		})
 	}
 }
+
+func TestSplitPreservesFencesOnOversizeMarkdownCodeBlocks(t *testing.T) {
+	lines := []string{"```go"}
+	for index := 0; index < 12; index++ {
+		lines = append(lines, fmt.Sprintf("call%02d()", index))
+	}
+	lines = append(lines, "```")
+
+	chunks := New(6, 2).Split(strings.Join(lines, "\n"))
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected oversized code block to split, got %#v", chunks)
+	}
+	for index, chunk := range chunks {
+		if chunk.Metadata["structureType"] != "code" || chunk.TokenCount > 6 {
+			t.Fatalf("unexpected code metadata or budget at %d: %#v", index, chunk)
+		}
+		if !strings.HasPrefix(chunk.Content, "```go\n") || !strings.HasSuffix(chunk.Content, "\n```") {
+			t.Fatalf("expected balanced code fences at %d, got %q", index, chunk.Content)
+		}
+	}
+}
+
+func TestSplitRepeatsHeaderOnOversizeMarkdownTables(t *testing.T) {
+	lines := []string{
+		"| Name | Value |",
+		"| --- | --- |",
+	}
+	for index := 0; index < 5; index++ {
+		lines = append(lines, fmt.Sprintf("| item%02d | value%02d |", index, index))
+	}
+	header := strings.Join(lines[:2], "\n")
+
+	chunks := New(16, 2).Split(strings.Join(lines, "\n"))
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected oversized table to split, got %#v", chunks)
+	}
+	for index, chunk := range chunks {
+		if chunk.Metadata["structureType"] != "table" || chunk.TokenCount > 16 {
+			t.Fatalf("unexpected table metadata or budget at %d: %#v", index, chunk)
+		}
+		if !strings.HasPrefix(chunk.Content, header+"\n") {
+			t.Fatalf("expected table header on chunk %d, got %q", index, chunk.Content)
+		}
+	}
+}
+
+func TestSplitKeepsOversizeMarkdownListItemsOnWholeLines(t *testing.T) {
+	lines := make([]string, 0, 6)
+	for index := 0; index < 6; index++ {
+		lines = append(lines, fmt.Sprintf("- item%02d alpha beta", index))
+	}
+
+	chunks := New(6, 2).Split(strings.Join(lines, "\n"))
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected oversized list to split, got %#v", chunks)
+	}
+	for index, chunk := range chunks {
+		if chunk.Metadata["structureType"] != "list" || chunk.TokenCount > 6 {
+			t.Fatalf("unexpected list metadata or budget at %d: %#v", index, chunk)
+		}
+		for _, line := range strings.Split(chunk.Content, "\n") {
+			if !strings.HasPrefix(line, "- ") {
+				t.Fatalf("expected complete list item line in chunk %d, got %q", index, chunk.Content)
+			}
+		}
+	}
+}
