@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { ApiError } from '../../api/client';
@@ -19,6 +19,7 @@ import {
 } from '../../api/resources';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { WorkspaceShell } from '../../components/WorkspaceShell';
+import { RerankFallbackNotice } from '../../components/feedback/RerankFallbackNotice';
 import type {
   DocumentItem,
   DocumentStatus,
@@ -26,6 +27,7 @@ import type {
   KnowledgeBaseCategory,
   KnowledgeBasePermissionResponse,
   KnowledgeBaseRerankFallback,
+  KnowledgeBaseSearchDebug,
   KnowledgeBaseSearchResult,
   KnowledgeBaseWorkspacePreference,
   MemberRole,
@@ -47,6 +49,9 @@ const fallbackPreference: KnowledgeBaseWorkspacePreference = {
 export function KnowledgeBaseDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const activeKnowledgeBaseIdRef = useRef(id);
+  const searchRequestIdRef = useRef(0);
+  activeKnowledgeBaseIdRef.current = id;
   const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeBase | null>(null);
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [categories, setCategories] = useState<KnowledgeBaseCategory[]>([]);
@@ -54,6 +59,8 @@ export function KnowledgeBaseDetailPage() {
   const [permissions, setPermissions] = useState<KnowledgeBasePermissionResponse | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<KnowledgeBaseSearchResult[]>([]);
+  const [searchDebugEnabled, setSearchDebugEnabled] = useState(false);
+  const [searchDebug, setSearchDebug] = useState<KnowledgeBaseSearchDebug | null>(null);
   const [loading, setLoading] = useState(true);
   const [startingChat, setStartingChat] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -87,6 +94,12 @@ export function KnowledgeBaseDetailPage() {
   }, [id]);
 
   useEffect(() => {
+    searchRequestIdRef.current += 1;
+    setSearching(false);
+    setSearchResults([]);
+    setSearchFallback(null);
+    setSearchDebug(null);
+
     if (!id) {
       return;
     }
@@ -247,25 +260,42 @@ export function KnowledgeBaseDetailPage() {
       return;
     }
 
+    const targetKnowledgeBaseId = knowledgeBase.id;
+    const requestId = searchRequestIdRef.current + 1;
+    searchRequestIdRef.current = requestId;
+    const isCurrentRequest = () =>
+      searchRequestIdRef.current === requestId && activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId;
+
     setSearching(true);
     setError('');
     setSearchFallback(null);
+    setSearchDebug(null);
 
     try {
-      const response = await searchKnowledgeBase(knowledgeBase.id, {
+      const response = await searchKnowledgeBase(targetKnowledgeBaseId, {
         query: searchQuery.trim(),
         vectorTopN: knowledgeBase.retrievalConfig.vectorTopN,
         rerankTopK: knowledgeBase.retrievalConfig.rerankTopK,
         enableRerank: knowledgeBase.retrievalConfig.enableRerank,
+        debug: searchDebugEnabled,
       });
+      if (!isCurrentRequest()) {
+        return;
+      }
       setSearchResults(response.items);
       setSearchFallback(response.rerankFallback?.used ? response.rerankFallback : null);
+      setSearchDebug(response.debug ?? null);
     } catch (err) {
-      setError(errorMessage(err, '知识库内检索失败'));
-      setSearchResults([]);
-      setSearchFallback(null);
+      if (isCurrentRequest()) {
+        setError(errorMessage(err, '知识库内检索失败'));
+        setSearchResults([]);
+        setSearchFallback(null);
+        setSearchDebug(null);
+      }
     } finally {
-      setSearching(false);
+      if (isCurrentRequest()) {
+        setSearching(false);
+      }
     }
   }
 
@@ -469,17 +499,19 @@ export function KnowledgeBaseDetailPage() {
                 <button type="submit" disabled={searching || !searchQuery.trim()}>
                   {searching ? '检索中...' : '检索'}
                 </button>
+                <label className="semantic-debug-toggle">
+                  <input
+                    checked={searchDebugEnabled}
+                    onChange={(event) => setSearchDebugEnabled(event.target.checked)}
+                    type="checkbox"
+                  />
+                  显示检索调试信息
+                </label>
               </form>
 
-              {searchFallback?.used && (
-                <div className="semantic-fallback-notice" role="status">
-                  <strong>Rerank 已降级</strong>
-                  <span>
-                    本次检索未完成精排，结果按向量召回顺序展示。
-                    {searchFallback.reason ? `原因：${searchFallback.reason}` : ''}
-                  </span>
-                </div>
-              )}
+              <RerankFallbackNotice fallback={searchFallback} />
+
+              {searchDebugEnabled && searchDebug && <SearchDebugPanel debug={searchDebug} />}
 
               {searchResults.length === 0 ? (
                 <div className="empty-state">暂无检索结果。完成文档处理后可在这里测试召回片段。</div>
@@ -574,6 +606,69 @@ function RetrievalConfigGrid({ config }: { config: RetrievalConfig }) {
         <small>{config.enableRerank ? '开启' : '关闭'}</small>
       </div>
     </div>
+  );
+}
+
+function SearchDebugPanel({ debug }: { debug: KnowledgeBaseSearchDebug }) {
+  return (
+    <section aria-label="检索调试信息" className="semantic-debug-panel">
+      <header>
+        <div>
+          <strong>检索调试</strong>
+          <span>查询：{debug.rewrittenQuery || debug.query}</span>
+        </div>
+        <span className={`debug-stage-status is-${debug.rerankStage.status}`}>{debug.rerankStage.status}</span>
+      </header>
+      <div className="semantic-debug-grid">
+        <section>
+          <h3>向量召回</h3>
+          {debug.vectorStage.items.length === 0 ? (
+            <p className="muted-text">无候选片段</p>
+          ) : (
+            <ol>
+              {debug.vectorStage.items.map((item) => (
+                <li key={item.chunkId}>
+                  <strong>#{item.rank} {item.filename}</strong>
+                  <span>vector {formatScore(item.vectorScore)}</span>
+                  <p>{item.content}</p>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+        <section>
+          <h3>Rerank 阶段</h3>
+          <p className="muted-text">状态：{debug.rerankStage.status} · 输入 {debug.rerankStage.input.length} 条</p>
+          {debug.rerankStage.output.length > 0 && (
+            <ol>
+              {debug.rerankStage.output.map((item) => (
+                <li key={item.chunkId}>
+                  <strong>#{item.rank} {item.chunkId}</strong>
+                  <span>rerank {item.rerankScore === null ? '未精排' : formatScore(item.rerankScore)}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+        <section>
+          <h3>最终结果</h3>
+          {debug.finalStage.items.length === 0 ? (
+            <p className="muted-text">阈值过滤后没有可用片段</p>
+          ) : (
+            <ol>
+              {debug.finalStage.items.map((item) => (
+                <li key={item.chunkId}>
+                  <strong>#{item.rank} {item.chunkId}</strong>
+                  <span>
+                    vector {formatScore(item.vectorScore)} · rerank {item.rerankScore === null ? '未精排' : formatScore(item.rerankScore)}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+      </div>
+    </section>
   );
 }
 
