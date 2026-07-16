@@ -348,6 +348,10 @@ func (b chunkBuilder) structureType() string {
 
 func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) []block {
 	lines := strings.SplitAfter(text, "\n")
+	tableLines := map[int]struct{}{}
+	if markdown {
+		tableLines = markdownTableLineIndexes(lines)
+	}
 	blocks := make([]block, 0, len(lines))
 	headingPath := []string{}
 	pendingLines := []string{}
@@ -461,7 +465,11 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 
 		lineType := "paragraph"
 		if markdown {
-			lineType = structureTypeForLine(trimmed)
+			if _, ok := tableLines[i]; ok {
+				lineType = "table"
+			} else {
+				lineType = structureTypeForLine(trimmed)
+			}
 		}
 		if pendingType != "" && pendingType != lineType {
 			flush()
@@ -554,17 +562,51 @@ func markdownFenceLine(line string) (string, bool) {
 }
 
 func structureTypeForLine(line string) string {
-	if isTableLine(line) {
-		return "table"
-	}
 	if isListLine(line) {
 		return "list"
 	}
 	return "paragraph"
 }
 
-func isTableLine(line string) bool {
-	return len(markdownTableDelimiterIndexes(line, 0, len(line))) >= 2
+func markdownTableLineIndexes(lines []string) map[int]struct{} {
+	result := make(map[int]struct{})
+	for index := 0; index+1 < len(lines); index++ {
+		header := strings.TrimSpace(strings.TrimSuffix(lines[index], "\n"))
+		separator := strings.TrimSpace(strings.TrimSuffix(lines[index+1], "\n"))
+		headerColumns := markdownTableColumnCount(header)
+		if headerColumns < 2 || headerColumns != markdownTableColumnCount(separator) || !isMarkdownTableSeparator(separator) {
+			continue
+		}
+
+		result[index] = struct{}{}
+		result[index+1] = struct{}{}
+		next := index + 2
+		for ; next < len(lines); next++ {
+			row := strings.TrimSpace(strings.TrimSuffix(lines[next], "\n"))
+			if row == "" || len(markdownTableDelimiterIndexes(row, 0, len(row))) == 0 {
+				break
+			}
+			result[next] = struct{}{}
+		}
+		index = next - 1
+	}
+	return result
+}
+
+func markdownTableColumnCount(line string) int {
+	line = strings.TrimSpace(line)
+	pipes := markdownTableDelimiterIndexes(line, 0, len(line))
+	if len(pipes) == 0 {
+		return 1
+	}
+	columns := len(pipes) + 1
+	if pipes[0] == 0 {
+		columns--
+	}
+	if pipes[len(pipes)-1] == len(line)-1 {
+		columns--
+	}
+	return columns
 }
 
 func isListLine(line string) bool {

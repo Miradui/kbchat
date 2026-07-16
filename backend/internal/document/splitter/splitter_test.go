@@ -480,6 +480,44 @@ func TestSplitRepeatsIndentedMarkerForOversizeNestedMarkdownListItem(t *testing.
 	}
 }
 
+func TestSplitDoesNotClassifyPipeRichProseAsTable(t *testing.T) {
+	chunks := New(30, 0).Split("This | is | prose\nAnother | prose | line")
+
+	if len(chunks) != 1 || chunks[0].Metadata["structureType"] != "paragraph" {
+		t.Fatalf("expected pipe-rich prose to remain paragraph, got %#v", chunks)
+	}
+}
+
+func TestSplitRecognizesTwoColumnTableWithoutOuterPipes(t *testing.T) {
+	text := "A | B\n--- | ---\n1 | 2"
+	chunks := New(30, 0).Split(text)
+
+	if len(chunks) != 1 || chunks[0].Metadata["structureType"] != "table" {
+		t.Fatalf("expected two-column GFM table, got %#v", chunks)
+	}
+}
+
+func TestSplitRepeatsTwoColumnHeaderWithoutOuterPipes(t *testing.T) {
+	text := strings.Join([]string{
+		"Name | Value",
+		"--- | ---",
+		"alpha | " + strings.Repeat("x", 40),
+		"beta | " + strings.Repeat("y", 40),
+	}, "\n")
+	header := "Name | Value\n--- | ---"
+
+	chunks := New(12, 0).Split(text)
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected oversized two-column table to split, got %#v", chunks)
+	}
+	for index, chunk := range chunks {
+		if chunk.Metadata["structureType"] != "table" || !strings.HasPrefix(chunk.Content, header+"\n") {
+			t.Fatalf("expected repeated two-column header at %d, got %#v", index, chunk)
+		}
+	}
+}
+
 func TestSplitDoesNotCarryStructuredOverlapIntoParagraphs(t *testing.T) {
 	text := "- alpha beta gamma\n\nplain paragraph content"
 
