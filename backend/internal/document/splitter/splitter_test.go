@@ -616,6 +616,49 @@ func TestSplitKeepsInlineCodePipesInsideOversizeMarkdownTableCell(t *testing.T) 
 	}
 }
 
+func TestSplitKeepsInlineCodePipeProtectedAtMinimumTableCellBudget(t *testing.T) {
+	tests := []struct {
+		name     string
+		codeSpan string
+	}{
+		{name: "single backtick", codeSpan: "`a|b`"},
+		{name: "double backtick", codeSpan: "``a|b``"},
+	}
+	header := "| A | B |\n| --- | --- |"
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chunks := New(14, 0).Split(header + "\n| " + tt.codeSpan + " | x |")
+			if len(chunks) < 2 {
+				t.Fatalf("expected oversized inline code cell to split, got %#v", chunks)
+			}
+			foundProtectedPipe := false
+			protectedBody := strings.Builder{}
+			for index, chunk := range chunks {
+				if chunk.TokenCount > 14 {
+					t.Fatalf("expected token budget at %d, got %#v", index, chunk)
+				}
+				lines := strings.Split(chunk.Content, "\n")
+				if len(lines) != 3 || countMarkdownTableDelimiters(lines[2]) != 3 {
+					t.Fatalf("expected a two-column table row at %d, got %q", index, chunk.Content)
+				}
+				if containsPipeInsideMatchedCodeSpan(lines[2]) {
+					foundProtectedPipe = true
+				}
+				for _, body := range matchedCodeSpanBodies(lines[2]) {
+					protectedBody.WriteString(body)
+				}
+			}
+			if !foundProtectedPipe {
+				t.Fatalf("expected code pipe to remain protected by a matching fence, got %#v", chunks)
+			}
+			if protectedBody.String() != "a|b" {
+				t.Fatalf("expected inline code body to remain lossless, got %q from %#v", protectedBody.String(), chunks)
+			}
+		})
+	}
+}
+
 func countMarkdownTableDelimiters(line string) int {
 	count := 0
 	inCode := false
@@ -636,6 +679,37 @@ func countMarkdownTableDelimiters(line string) int {
 		}
 	}
 	return count
+}
+
+func containsPipeInsideMatchedCodeSpan(line string) bool {
+	for _, body := range matchedCodeSpanBodies(line) {
+		if strings.Contains(body, "|") {
+			return true
+		}
+	}
+	return false
+}
+
+func matchedCodeSpanBodies(line string) []string {
+	bodies := make([]string, 0)
+	for start := 0; start < len(line); start++ {
+		if line[start] != '`' {
+			continue
+		}
+		openingEnd := start
+		for openingEnd < len(line) && line[openingEnd] == '`' {
+			openingEnd++
+		}
+		fence := line[start:openingEnd]
+		if closing := strings.Index(line[openingEnd:], fence); closing >= 0 {
+			bodyEnd := openingEnd + closing
+			bodies = append(bodies, line[openingEnd:bodyEnd])
+			start = bodyEnd + len(fence) - 1
+			continue
+		}
+		start = openingEnd - 1
+	}
+	return bodies
 }
 
 func TestSplitKeepsEdgeCellsForOversizeMarkdownTableWithoutOuterPipes(t *testing.T) {

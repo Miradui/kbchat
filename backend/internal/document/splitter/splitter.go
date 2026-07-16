@@ -41,6 +41,16 @@ type textSpan struct {
 	end   int
 }
 
+type tableCellPart struct {
+	span    textSpan
+	content string
+}
+
+type inlineCodeSpan struct {
+	full textSpan
+	body textSpan
+}
+
 type chunkBuilder struct {
 	fileType       string
 	pageNumber     *int
@@ -630,10 +640,10 @@ func splitOversizeTableBlock(item block, budget int) []block {
 			if cellContent == "" {
 				continue
 			}
-			for _, relative := range splitMarkdownTableCellToBudgetSpans(cellContent, cellBudget) {
-				span := textSpan{start: cell.start + relative.start, end: cell.start + relative.end}
+			for _, part := range splitMarkdownTableCellToBudgetParts(cellContent, cellBudget) {
+				span := textSpan{start: cell.start + part.span.start, end: cell.start + part.span.end}
 				values := make([]string, len(cells))
-				values[cellIndex] = item.content[span.start:span.end]
+				values[cellIndex] = part.content
 				rowPart := formatMarkdownTableRow(values)
 				result = append(result, blocksFromSpans(item, []textSpan{span}, func(string) string {
 					return header + "\n" + rowPart
@@ -930,6 +940,125 @@ func splitMarkdownTableCellToBudgetSpans(text string, budget int) []textSpan {
 		if span.start < len(text) && text[span.start] == '|' && isEscapedMarkdownDelimiter(text, span.start) {
 			return packTextSpans(text, markdownTableCellTextUnits(text), budget)
 		}
+	}
+	return spans
+}
+
+func splitMarkdownTableCellToBudgetParts(text string, budget int) []tableCellPart {
+	codeSpans := markdownInlineCodeSpans(text)
+	if len(codeSpans) == 0 {
+		return plainTableCellParts(text, 0, len(text), budget)
+	}
+
+	parts := make([]tableCellPart, 0)
+	cursor := 0
+	for _, code := range codeSpans {
+		parts = append(parts, plainTableCellParts(text, cursor, code.full.start, budget)...)
+		rawCode := text[code.full.start:code.full.end]
+		if estimateTokens(rawCode) <= budget {
+			parts = append(parts, tableCellPart{span: code.full, content: rawCode})
+		} else {
+			parts = append(parts, splitInlineCodeSpanToBudgetParts(text, code, budget)...)
+		}
+		cursor = code.full.end
+	}
+	parts = append(parts, plainTableCellParts(text, cursor, len(text), budget)...)
+	return parts
+}
+
+func plainTableCellParts(text string, start, end, budget int) []tableCellPart {
+	if start >= end {
+		return nil
+	}
+	content := text[start:end]
+	spans := splitMarkdownTableCellToBudgetSpans(content, budget)
+	parts := make([]tableCellPart, 0, len(spans))
+	for _, span := range spans {
+		shifted := textSpan{start: start + span.start, end: start + span.end}
+		parts = append(parts, tableCellPart{span: shifted, content: text[shifted.start:shifted.end]})
+	}
+	return parts
+}
+
+func splitInlineCodeSpanToBudgetParts(text string, code inlineCodeSpan, budget int) []tableCellPart {
+	body := text[code.body.start:code.body.end]
+	units := runeTextSpans(body)
+	parts := make([]tableCellPart, 0, len(units))
+	for start := 0; start < len(units); {
+		chosenEnd := start
+		chosenContent := ""
+		for end := start + 1; end <= len(units); end++ {
+			fragment := body[units[start].start:units[end-1].end]
+			decorated := protectInlineCodeFragment(fragment)
+			if estimateTokens(decorated) > budget {
+				break
+			}
+			chosenEnd = end
+			chosenContent = decorated
+		}
+		if chosenEnd == start {
+			chosenEnd = start + 1
+			chosenContent = body[units[start].start:units[start].end]
+		}
+		span := textSpan{
+			start: code.body.start + units[start].start,
+			end:   code.body.start + units[chosenEnd-1].end,
+		}
+		parts = append(parts, tableCellPart{span: span, content: chosenContent})
+		start = chosenEnd
+	}
+	if len(parts) == 0 {
+		return []tableCellPart{{span: code.full, content: text[code.full.start:code.full.end]}}
+	}
+	parts[0].span.start = code.full.start
+	parts[len(parts)-1].span.end = code.full.end
+	return parts
+}
+
+func protectInlineCodeFragment(fragment string) string {
+	maxRun := 0
+	for index := 0; index < len(fragment); {
+		if fragment[index] != '`' {
+			_, size := utf8.DecodeRuneInString(fragment[index:])
+			index += size
+			continue
+		}
+		runEnd := index + 1
+		for runEnd < len(fragment) && fragment[runEnd] == '`' {
+			runEnd++
+		}
+		if runEnd-index > maxRun {
+			maxRun = runEnd - index
+		}
+		index = runEnd
+	}
+	fence := strings.Repeat("`", maxRun+1)
+	return fence + fragment + fence
+}
+
+func markdownInlineCodeSpans(text string) []inlineCodeSpan {
+	spans := make([]inlineCodeSpan, 0)
+	for index := 0; index < len(text); {
+		if text[index] != '`' || isEscapedMarkdownDelimiter(text, index) {
+			_, size := utf8.DecodeRuneInString(text[index:])
+			index += size
+			continue
+		}
+		runEnd := index + 1
+		for runEnd < len(text) && text[runEnd] == '`' {
+			runEnd++
+		}
+		openingLength := runEnd - index
+		closing := findClosingBacktickRun(text, runEnd, len(text), openingLength)
+		if closing < 0 {
+			index = runEnd
+			continue
+		}
+		spans = append(spans, inlineCodeSpan{
+			full: textSpan{start: index, end: closing + openingLength},
+			body: textSpan{start: runEnd, end: closing},
+		})
+		index = closing + openingLength
 	}
 	return spans
 }
