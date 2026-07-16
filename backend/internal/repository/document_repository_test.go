@@ -45,6 +45,24 @@ func TestClaimPendingJobWaitsForSameDocumentRunningJob(t *testing.T) {
 	}
 }
 
+func TestClaimPendingJobIgnoresUnsupportedJobTypes(t *testing.T) {
+	db := newDocumentRepositoryTestDB(t)
+	repository := NewDocumentRepository(db)
+	document := createDocumentRepositoryTestDocument(t, db)
+	unsupported := model.DocumentJob{DocumentID: document.ID, JobType: "unknown_job", Status: "pending"}
+	if err := db.Create(&unsupported).Error; err != nil {
+		t.Fatalf("create unsupported job: %v", err)
+	}
+
+	claimed, err := repository.ClaimPendingJob(context.Background())
+	if err != nil {
+		t.Fatalf("claim pending job: %v", err)
+	}
+	if claimed != nil {
+		t.Fatalf("expected unsupported job type to remain unclaimed, got %#v", claimed)
+	}
+}
+
 func newDocumentRepositoryTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", uuid.NewString())

@@ -31,6 +31,8 @@ type DocumentRepository struct {
 	db *gorm.DB
 }
 
+var errDocumentJobBlocked = errors.New("document job blocked by running predecessor")
+
 func NewDocumentRepository(db *gorm.DB) *DocumentRepository {
 	return &DocumentRepository{db: db}
 }
@@ -325,18 +327,38 @@ func (r *DocumentRepository) ClaimPendingJob(ctx context.Context) (*model.Docume
 	var job model.DocumentJob
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.
-			Where("status = ?", "pending").
+			Where("status = ? AND job_type = ?", "pending", "process_document").
 			Where("locked_at IS NULL OR locked_at <= ?", time.Now()).
 			Where(`NOT EXISTS (
 				SELECT 1
 				FROM document_jobs AS running_jobs
 				WHERE running_jobs.document_id = document_jobs.document_id
 					AND running_jobs.status = ?
-			)`, "running").
+					AND running_jobs.job_type = ?
+			)`, "running", "process_document").
 			Order("created_at asc").
 			Clauses(clauseLockingUpdateSkipLocked()).
 			First(&job).Error; err != nil {
 			return err
+		}
+
+		var document model.Document
+		if err := tx.
+			Unscoped().
+			Select("id").
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", job.DocumentID).
+			First(&document).Error; err != nil {
+			return err
+		}
+		var runningCount int64
+		if err := tx.Model(&model.DocumentJob{}).
+			Where("document_id = ? AND job_type = ? AND status = ?", job.DocumentID, "process_document", "running").
+			Count(&runningCount).Error; err != nil {
+			return err
+		}
+		if runningCount > 0 {
+			return errDocumentJobBlocked
 		}
 
 		now := time.Now()
@@ -346,7 +368,7 @@ func (r *DocumentRepository) ClaimPendingJob(ctx context.Context) (*model.Docume
 			"updated_at": now,
 		}).Error
 	})
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	if errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, errDocumentJobBlocked) {
 		return nil, nil
 	}
 	if err != nil {
