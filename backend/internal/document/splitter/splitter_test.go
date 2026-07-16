@@ -126,6 +126,22 @@ func TestSplitDropsOverlapBeforeTrimmingNewBlockContent(t *testing.T) {
 	}
 }
 
+func TestSplitDoesNotCarryParagraphOverlapAcrossHeadingPath(t *testing.T) {
+	text := "# A\n\none two three four\n\n# B\n\nfive six"
+
+	chunks := New(6, 2).Split(text)
+
+	if len(chunks) != 2 {
+		t.Fatalf("expected one chunk per heading, got %#v", chunks)
+	}
+	if strings.Contains(chunks[1].Content, "three four") {
+		t.Fatalf("expected B section not to include A overlap, got %q", chunks[1].Content)
+	}
+	if chunks[1].Content != "B\nfive six" {
+		t.Fatalf("expected B heading and body to remain intact, got %q", chunks[1].Content)
+	}
+}
+
 func TestSplitDocumentTreatsPlainTextSyntaxAsLiteralContent(t *testing.T) {
 	document := parser.ParsedDocument{
 		FileType: "txt",

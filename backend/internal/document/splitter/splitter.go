@@ -105,7 +105,7 @@ func (s *Splitter) splitBlocks(blocks []block) []Chunk {
 
 			chunks = append(chunks, current.chunk(len(chunks), s.chunkSize))
 			overlap = ""
-			if current.structureType() == "paragraph" {
+			if current.structureType() == "paragraph" && sameSource(current, item) && sameHeadingPath(current.headingPath, item.headingPath) {
 				overlap = s.overlapText(current.body())
 			}
 			current = s.newChunkBuilder(item, overlap)
