@@ -41,6 +41,18 @@ func (r *ChunkRepository) CreateBatch(ctx context.Context, chunks []model.Docume
 	return r.db.WithContext(ctx).CreateInBatches(chunks, 50).Error
 }
 
+func (r *ChunkRepository) ReplaceByDocument(ctx context.Context, documentID uuid.UUID, chunks []model.DocumentChunk) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("document_id = ?", documentID).Delete(&model.DocumentChunk{}).Error; err != nil {
+			return err
+		}
+		if len(chunks) == 0 {
+			return nil
+		}
+		return tx.CreateInBatches(chunks, 50).Error
+	})
+}
+
 func (r *ChunkRepository) ListByDocument(ctx context.Context, documentID uuid.UUID) ([]model.DocumentChunk, error) {
 	var chunks []model.DocumentChunk
 	err := r.db.WithContext(ctx).

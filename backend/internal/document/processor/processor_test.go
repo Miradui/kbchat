@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/pgvector/pgvector-go"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
@@ -31,6 +32,27 @@ type cardinalityEmbedder struct {
 
 func (e cardinalityEmbedder) EmbedTexts(_ context.Context, texts []string) ([][]float32, error) {
 	count := len(texts) + e.delta
+	if count < 0 {
+		count = 0
+	}
+	vectors := make([][]float32, count)
+	for index := range vectors {
+		vectors[index] = []float32{float32(index + 1)}
+	}
+	return vectors, nil
+}
+
+type lateMismatchEmbedder struct {
+	delta int
+	calls int
+}
+
+func (e *lateMismatchEmbedder) EmbedTexts(_ context.Context, texts []string) ([][]float32, error) {
+	e.calls++
+	count := len(texts)
+	if e.calls == 2 {
+		count += e.delta
+	}
 	if count < 0 {
 		count = 0
 	}
@@ -251,6 +273,53 @@ func TestProcessDoesNotWriteEmbeddingCardinalityMismatch(t *testing.T) {
 			}
 			if len(chunks) != 0 {
 				t.Fatalf("expected mismatched embedding batch not to be stored, got %#v", chunks)
+			}
+		})
+	}
+}
+
+func TestProcessPreservesExistingChunksWhenLaterEmbeddingBatchMismatches(t *testing.T) {
+	for _, delta := range []int{-1, 1} {
+		t.Run(fmt.Sprintf("delta_%d", delta), func(t *testing.T) {
+			fixture := newProcessorTestFixture(t, "txt")
+			ctx := context.Background()
+			existing := model.DocumentChunk{
+				DocumentID:      fixture.document.ID,
+				KnowledgeBaseID: fixture.document.KnowledgeBaseID,
+				ChunkIndex:      0,
+				Content:         "existing complete index",
+				Embedding:       pgvector.NewVector([]float32{1}),
+			}
+			if err := fixture.chunks.CreateBatch(ctx, []model.DocumentChunk{existing}); err != nil {
+				t.Fatalf("seed existing chunk: %v", err)
+			}
+
+			segments := make([]parser.Segment, embeddingBatchSize+1)
+			for index := range segments {
+				segments[index] = parser.Segment{Content: fmt.Sprintf("new segment %02d", index)}
+			}
+			embedder := &lateMismatchEmbedder{delta: delta}
+			processor := New(
+				fixture.documents,
+				fixture.chunks,
+				structuredParser{document: parser.ParsedDocument{FileType: "txt", Segments: segments}},
+				splitter.New(100, 10),
+				embedder,
+			)
+
+			err := processor.Process(ctx, &model.DocumentJob{DocumentID: fixture.document.ID})
+			if err == nil || !strings.Contains(err.Error(), "embedding provider returned") {
+				t.Fatalf("expected later cardinality mismatch, got %v", err)
+			}
+			if embedder.calls != 2 {
+				t.Fatalf("expected mismatch on second embedding batch, got %d calls", embedder.calls)
+			}
+			chunks, listErr := fixture.chunks.ListByDocument(ctx, fixture.document.ID)
+			if listErr != nil {
+				t.Fatalf("list chunks after later mismatch: %v", listErr)
+			}
+			if len(chunks) != 1 || chunks[0].Content != existing.Content {
+				t.Fatalf("expected existing complete index to remain untouched, got %#v", chunks)
 			}
 		})
 	}

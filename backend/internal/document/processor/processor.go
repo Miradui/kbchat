@@ -68,10 +68,8 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 	if err := p.documents.UpdateStatus(ctx, document.ID, "embedding", ""); err != nil {
 		return err
 	}
-	if err := p.chunks.DeleteByDocument(ctx, document.ID); err != nil {
-		return err
-	}
 
+	rows := make([]model.DocumentChunk, 0, len(parts))
 	for start := 0; start < len(parts); start += embeddingBatchSize {
 		end := start + embeddingBatchSize
 		if end > len(parts) {
@@ -91,7 +89,6 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 			return err
 		}
 
-		rows := make([]model.DocumentChunk, 0, len(embeddings))
 		for i, vector := range embeddings {
 			part := parts[start+i]
 			metadata, err := buildChunkMetadata(part)
@@ -110,9 +107,9 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 			})
 		}
 
-		if err := p.chunks.CreateBatch(ctx, rows); err != nil {
-			return err
-		}
+	}
+	if err := p.chunks.ReplaceByDocument(ctx, document.ID, rows); err != nil {
+		return err
 	}
 
 	return p.documents.UpdateStatus(ctx, document.ID, "completed", "")
