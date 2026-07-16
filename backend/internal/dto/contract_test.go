@@ -40,3 +40,22 @@ func TestChatSessionResponseIncludesNullArchivedAt(t *testing.T) {
 		t.Fatalf("expected null archivedAt, got %s", archivedAt)
 	}
 }
+
+func TestSearchResponseIncludesNullRerankFallback(t *testing.T) {
+	payload, err := json.Marshal(SearchResponse{Items: []SearchResultResponse{}})
+	if err != nil {
+		t.Fatalf("marshal search response: %v", err)
+	}
+
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &body); err != nil {
+		t.Fatalf("unmarshal search response: %v", err)
+	}
+	fallback, ok := body["rerankFallback"]
+	if !ok {
+		t.Fatalf("expected rerankFallback in search response, got %s", payload)
+	}
+	if string(fallback) != "null" {
+		t.Fatalf("expected null rerankFallback, got %s", fallback)
+	}
+}

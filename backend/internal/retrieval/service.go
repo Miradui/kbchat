@@ -2,7 +2,7 @@ package retrieval
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"sort"
 
 	"github.com/google/uuid"
@@ -16,7 +16,21 @@ import (
 	"rag/backend/internal/rerank"
 )
 
-const rerankFailureModeFallback = "fallback"
+const (
+	rerankFailureModeFallback   = "fallback"
+	rerankFallbackProviderError = "provider_unavailable"
+	defaultVectorTopN           = 30
+	defaultRerankTopK           = 5
+	maxVectorTopN               = 100
+	maxRerankTopK               = 20
+)
+
+type searchOptions struct {
+	vectorTopN     int
+	rerankTopK     int
+	scoreThreshold float64
+	enableRerank   bool
+}
 
 type chunkSearcher interface {
 	SearchByVector(ctx context.Context, kbID uuid.UUID, vector []float32, limit int) ([]repository.SearchResult, error)
@@ -59,21 +73,7 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 		return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "knowledge base not found")
 	}
 
-	vectorTopN := req.VectorTopN
-	if vectorTopN <= 0 {
-		vectorTopN = s.cfg.VectorTopN
-	}
-	rerankTopK := req.RerankTopK
-	if rerankTopK <= 0 {
-		rerankTopK = s.cfg.RerankTopK
-	}
-	enableRerank := s.cfg.RerankEnabled
-	if req.EnableRerank != nil {
-		enableRerank = *req.EnableRerank
-	}
-	if !s.cfg.RerankEnabled {
-		enableRerank = false
-	}
+	options := s.resolveSearchOptions(kb, req)
 
 	embeddings, err := s.embedder.EmbedTexts(ctx, []string{req.Query})
 	if err != nil {
@@ -83,34 +83,38 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 		return nil, apperror.New(500, "EMBEDDING_FAILED", "embedding failed")
 	}
 
-	candidates, err := s.chunks.SearchByVector(ctx, kbID, embeddings[0], vectorTopN)
+	candidates, err := s.chunks.SearchByVector(ctx, kbID, embeddings[0], options.vectorTopN)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
 
-	vectorCandidates := candidates
+	vectorCandidates := limitSearchResults(candidates, options.vectorTopN)
+	candidates = vectorCandidates
 	rerankCandidates := []repository.SearchResult{}
 	rerankStageStatus := "disabled"
 	var rerankFallback *dto.RerankFallbackResponse
-	if enableRerank {
+	if options.enableRerank {
 		rerankCandidates, err = s.rerank(ctx, req.Query, vectorCandidates, 0)
 		if err != nil {
 			if s.cfg.RerankFailureMode == rerankFailureModeFallback {
-				candidates = fallbackVectorTopK(vectorCandidates, rerankTopK)
+				candidates = filterSearchResults(vectorCandidates, options.scoreThreshold, false)
+				candidates = fallbackVectorTopK(candidates, options.rerankTopK)
 				rerankStageStatus = "fallback"
 				rerankFallback = &dto.RerankFallbackResponse{
 					Used:   true,
-					Reason: fmt.Sprintf("rerank failed: %v", err),
+					Reason: rerankFallbackProviderError,
 				}
 			} else {
 				return nil, apperror.Wrap(500, "RERANK_FAILED", "retrieval rerank failed", err)
 			}
 		} else {
 			rerankStageStatus = "completed"
-			candidates = limitSearchResults(rerankCandidates, rerankTopK)
+			candidates = filterSearchResults(rerankCandidates, options.scoreThreshold, true)
+			candidates = limitSearchResults(candidates, options.rerankTopK)
 		}
-	} else if rerankTopK > 0 && len(candidates) > rerankTopK {
-		candidates = candidates[:rerankTopK]
+	} else {
+		candidates = filterSearchResults(vectorCandidates, options.scoreThreshold, false)
+		candidates = limitSearchResults(candidates, options.rerankTopK)
 	}
 
 	items := make([]dto.SearchResultResponse, 0, len(candidates))
@@ -131,6 +135,76 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 		res.Debug = buildSearchDebugResponse(req.Query, vectorCandidates, rerankCandidates, candidates, rerankStageStatus, rerankFallback)
 	}
 	return res, nil
+}
+
+func (s *Service) resolveSearchOptions(kb *model.KnowledgeBase, req dto.SearchRequest) searchOptions {
+	kbConfig := dto.RetrievalConfig{
+		VectorTopN:     positiveOrDefault(s.cfg.VectorTopN, defaultVectorTopN),
+		RerankTopK:     positiveOrDefault(s.cfg.RerankTopK, defaultRerankTopK),
+		ScoreThreshold: normalizedScoreThreshold(s.cfg.ScoreThreshold),
+		EnableRerank:   s.cfg.RerankEnabled,
+	}
+	if len(kb.RetrievalConfig) > 0 {
+		storedConfig := kbConfig
+		if err := json.Unmarshal(kb.RetrievalConfig, &storedConfig); err == nil {
+			kbConfig = storedConfig
+		}
+	}
+
+	vectorTopN := kbConfig.VectorTopN
+	if req.VectorTopN > 0 {
+		vectorTopN = req.VectorTopN
+	}
+	vectorTopN = cappedPositive(vectorTopN, positiveOrDefault(s.cfg.VectorTopN, defaultVectorTopN), maxVectorTopN)
+
+	rerankTopK := kbConfig.RerankTopK
+	if req.RerankTopK > 0 {
+		rerankTopK = req.RerankTopK
+	}
+	rerankTopK = cappedPositive(rerankTopK, positiveOrDefault(s.cfg.RerankTopK, defaultRerankTopK), maxRerankTopK)
+	if rerankTopK > vectorTopN {
+		rerankTopK = vectorTopN
+	}
+
+	enableRerank := kbConfig.EnableRerank
+	if req.EnableRerank != nil {
+		enableRerank = *req.EnableRerank
+	}
+	if !s.cfg.RerankEnabled {
+		enableRerank = false
+	}
+
+	return searchOptions{
+		vectorTopN:     vectorTopN,
+		rerankTopK:     rerankTopK,
+		scoreThreshold: normalizedScoreThreshold(kbConfig.ScoreThreshold),
+		enableRerank:   enableRerank,
+	}
+}
+
+func positiveOrDefault(value, fallback int) int {
+	if value > 0 {
+		return value
+	}
+	return fallback
+}
+
+func cappedPositive(value, fallback, maximum int) int {
+	value = positiveOrDefault(value, fallback)
+	if value > maximum {
+		return maximum
+	}
+	return value
+}
+
+func normalizedScoreThreshold(value float64) float64 {
+	if value < 0 {
+		return 0
+	}
+	if value > 1 {
+		return 1
+	}
+	return value
 }
 
 func (s *Service) rerank(ctx context.Context, query string, candidates []repository.SearchResult, topK int) ([]repository.SearchResult, error) {
@@ -184,6 +258,23 @@ func limitSearchResults(candidates []repository.SearchResult, topK int) []reposi
 		return candidates[:topK]
 	}
 	return candidates
+}
+
+func filterSearchResults(candidates []repository.SearchResult, threshold float64, useRerankScore bool) []repository.SearchResult {
+	filtered := make([]repository.SearchResult, 0, len(candidates))
+	for _, candidate := range candidates {
+		score := candidate.VectorScore
+		if useRerankScore {
+			if candidate.RerankScore == nil {
+				continue
+			}
+			score = *candidate.RerankScore
+		}
+		if score >= threshold {
+			filtered = append(filtered, candidate)
+		}
+	}
+	return filtered
 }
 
 func buildSearchDebugResponse(

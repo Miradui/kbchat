@@ -322,10 +322,7 @@ func (s *ChatService) generateAnswer(ctx context.Context, userID uuid.UUID, sess
 	}
 
 	searchRes, err := s.retrieval.Search(ctx, userID, session.KnowledgeBaseID, dto.SearchRequest{
-		Query:        retrievalQuery,
-		VectorTopN:   s.cfg.VectorTopN,
-		RerankTopK:   s.cfg.RerankTopK,
-		EnableRerank: &s.cfg.RerankEnabled,
+		Query: retrievalQuery,
 	})
 	if err != nil {
 		return generatedChatAnswer{}, err

@@ -293,6 +293,37 @@ func TestSendMessageReturnsRerankFallbackMetadata(t *testing.T) {
 	}
 }
 
+func TestSendMessageLetsRetrievalUseKnowledgeBaseConfiguration(t *testing.T) {
+	ctx := context.Background()
+	db := newChatServiceTestDB(t)
+	user := createChatServiceUser(t, db)
+	kb := createChatServiceKnowledgeBase(t, db, user.ID)
+	session := createChatServiceSession(t, db, user.ID, kb.ID)
+	retrieval := &fakeChatRetrieval{response: &dto.SearchResponse{Items: []dto.SearchResultResponse{}}}
+	chatProvider := &fakeChatProvider{responses: []string{
+		`{"intent":"knowledge_base","standaloneQuery":"policy","reason":"needs docs"}`,
+	}}
+	service := NewChatService(
+		config.Config{VectorTopN: 30, RerankTopK: 5, RerankEnabled: true, ChatHistoryLimit: 10},
+		repository.NewChatRepository(db),
+		repository.NewKnowledgeBaseRepository(db),
+		retrieval,
+		chatProvider,
+		nil,
+	)
+
+	if _, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{Content: "question"}); err != nil {
+		t.Fatalf("send message: %v", err)
+	}
+	if len(retrieval.calls) != 1 {
+		t.Fatalf("expected one retrieval call, got %#v", retrieval.calls)
+	}
+	call := retrieval.calls[0]
+	if call.VectorTopN != 0 || call.RerankTopK != 0 || call.EnableRerank != nil {
+		t.Fatalf("expected chat to leave retrieval overrides empty, got %#v", call)
+	}
+}
+
 func TestRegenerateMessageRerunsRetrievalAndCreatesNewAssistantMessage(t *testing.T) {
 	ctx := context.Background()
 	db := newChatServiceTestDB(t)

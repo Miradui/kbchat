@@ -10,7 +10,7 @@ type SearchRequest struct {
 
 type SearchResponse struct {
 	Items          []SearchResultResponse  `json:"items"`
-	RerankFallback *RerankFallbackResponse `json:"rerankFallback,omitempty"`
+	RerankFallback *RerankFallbackResponse `json:"rerankFallback"`
 	Debug          *SearchDebugResponse    `json:"debug,omitempty"`
 }
 
