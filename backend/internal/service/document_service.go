@@ -227,10 +227,8 @@ func (s *DocumentService) BatchRestore(ctx context.Context, ownerID uuid.UUID, r
 	if err := s.ensureDocumentsOwner(ctx, ownerID, ids, true); err != nil {
 		return nil, err
 	}
-	for _, id := range ids {
-		if err := s.documents.Restore(ctx, id); err != nil {
-			return nil, apperror.Internal(err)
-		}
+	if err := s.documents.BatchRestore(ctx, ids); err != nil {
+		return nil, apperror.Internal(err)
 	}
 	return &dto.DocumentBatchResultResponse{ProcessedCount: len(ids)}, nil
 }

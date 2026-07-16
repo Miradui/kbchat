@@ -298,6 +298,23 @@ func (r *DocumentRepository) Restore(ctx context.Context, id uuid.UUID) error {
 		Update("deleted_at", nil).Error
 }
 
+func (r *DocumentRepository) BatchRestore(ctx context.Context, documentIDs []uuid.UUID) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.
+			Unscoped().
+			Model(&model.Document{}).
+			Where("id IN ? AND deleted_at IS NOT NULL", documentIDs).
+			Update("deleted_at", nil)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != int64(len(documentIDs)) {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
+}
+
 func (r *DocumentRepository) PermanentDelete(ctx context.Context, documentID uuid.UUID) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("document_id = ?", documentID).Delete(&model.DocumentChunk{}).Error; err != nil {

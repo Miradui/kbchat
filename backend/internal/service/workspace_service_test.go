@@ -1010,6 +1010,47 @@ func TestDocumentBatchDeleteRollsBackWhenLaterWriteFails(t *testing.T) {
 	}
 }
 
+func TestDocumentBatchRestoreRollsBackWhenLaterWriteFails(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	docA := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual-a.pdf", "completed")
+	docB := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual-b.pdf", "completed")
+	if err := services.documents.Delete(ctx, owner.ID, docA.ID); err != nil {
+		t.Fatalf("delete document A: %v", err)
+	}
+	if err := services.documents.Delete(ctx, owner.ID, docB.ID); err != nil {
+		t.Fatalf("delete document B: %v", err)
+	}
+	trigger := fmt.Sprintf(`
+		CREATE TRIGGER fail_second_document_restore
+		BEFORE UPDATE OF deleted_at ON documents
+		WHEN NEW.id = '%s' AND NEW.deleted_at IS NULL
+		BEGIN
+			SELECT RAISE(ABORT, 'forced restore failure');
+		END`, docB.ID)
+	if err := services.db.Exec(trigger).Error; err != nil {
+		t.Fatalf("create restore failure trigger: %v", err)
+	}
+
+	if _, err := services.documents.BatchRestore(ctx, owner.ID, dto.DocumentBatchRequest{
+		DocumentIDs: []uuid.UUID{docA.ID, docB.ID},
+	}); err == nil {
+		t.Fatal("expected batch restore to fail")
+	}
+
+	var deletedCount int64
+	if err := services.db.Unscoped().Model(&model.Document{}).
+		Where("id IN ? AND deleted_at IS NOT NULL", []uuid.UUID{docA.ID, docB.ID}).
+		Count(&deletedCount).Error; err != nil {
+		t.Fatalf("count deleted documents: %v", err)
+	}
+	if deletedCount != 2 {
+		t.Fatalf("expected both documents to remain deleted after rollback, got %d", deletedCount)
+	}
+}
+
 func TestDocumentReprocessPreservesChunksUntilProcessorReplacement(t *testing.T) {
 	ctx := context.Background()
 	services := newWorkspaceTestServices(t)
