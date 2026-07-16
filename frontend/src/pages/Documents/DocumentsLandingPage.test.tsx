@@ -33,6 +33,42 @@ afterEach(() => {
 });
 
 describe('DocumentsLandingPage loading', () => {
+	it('shows processing progress, retry details, and failure reasons in the ledger', async () => {
+	  api.listGlobalDocuments.mockResolvedValue({
+		items: [
+		  {
+			...documentItem('retrying.pdf', 'embedding'),
+			jobStatus: 'pending',
+			progress: 75,
+			stage: 'embedding',
+			retryCount: 2,
+			maxRetries: 5,
+			nextRetryAt: '2026-07-01T08:30:00Z',
+		  },
+		  {
+			...documentItem('failed.pdf', 'failed'),
+			jobStatus: 'failed',
+			progress: 100,
+			stage: 'failed',
+			retryCount: 5,
+			maxRetries: 5,
+			errorMessage: 'PDF 解析失败',
+		  },
+		],
+		total: 2,
+		page: 1,
+		pageSize: 20,
+	  });
+
+	  renderWithRouter(<DocumentsLandingPage />, ['/documents']);
+
+	  expect(await screen.findByText('retrying.pdf')).toBeInTheDocument();
+	  expect(screen.getByText('75%')).toBeInTheDocument();
+	  expect(screen.getByText('重试 2 / 5')).toBeInTheDocument();
+	  expect(screen.getByText(/下次重试/)).toBeInTheDocument();
+	  expect(screen.getByText('PDF 解析失败')).toBeInTheDocument();
+	});
+
   it('polls while the current page contains a processing document', async () => {
     let poll: (() => void) | undefined;
     const realSetInterval = window.setInterval.bind(window);
@@ -116,7 +152,7 @@ const knowledgeBase = {
   createdAt: '2026-07-01T00:00:00Z', updatedAt: '2026-07-01T00:00:00Z',
 };
 
-function documentItem(filename: string, status: 'uploaded' | 'embedding' | 'completed') {
+function documentItem(filename: string, status: 'uploaded' | 'embedding' | 'completed' | 'failed') {
   return {
     id: filename,
     knowledgeBaseId: 'kb-1',

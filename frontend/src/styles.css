@@ -2385,12 +2385,18 @@ textarea {
 }
 
 .global-document-table {
-  min-width: 1120px;
+  min-width: 1280px;
 }
 
 .global-document-table th:first-child,
 .global-document-table td:first-child {
   width: 46px;
+}
+
+.global-document-table .document-error-cell {
+  max-width: 240px;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .overview-grid {

@@ -15,6 +15,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { WorkspaceShell } from '../../components/WorkspaceShell';
 import { DocumentDetailDrawer } from './DocumentDetailDrawer';
+import { DocumentProgress } from './DocumentProgress';
 import { DocumentRecycleBinDrawer } from './DocumentRecycleBinDrawer';
 import type {
   DocumentSort,
@@ -411,7 +412,7 @@ export function DocumentsLandingPage() {
           )}
 
         {loading && documents.length === 0 ? (
-          <LoadingSkeleton rows={5} columns={8} />
+          <LoadingSkeleton rows={5} columns={9} />
         ) : documents.length === 0 ? (
           <div className="empty-state">当前筛选下没有文档。选择知识库后导入 txt、md 或 pdf。</div>
         ) : (
@@ -432,6 +433,7 @@ export function DocumentsLandingPage() {
                   <th>类型</th>
                   <th>大小</th>
                   <th>状态</th>
+                  <th>错误信息</th>
                   <th>更新时间</th>
                   <th>操作</th>
                 </tr>
@@ -460,7 +462,9 @@ export function DocumentsLandingPage() {
                       <span className={`status-pill status-${statusClass(document.status)}`}>
                         {statusLabel(document.status)}
                       </span>
+                      <DocumentProgress compact document={document} />
                     </td>
+                    <td className="document-error-cell" data-label="错误信息">{document.errorMessage || '-'}</td>
                     <td data-label="更新时间">{formatDateTime(document.updatedAt || document.createdAt)}</td>
                     <td data-label="操作">
                       <div className="table-actions">
