@@ -63,6 +63,99 @@ func TestClaimPendingJobIgnoresUnsupportedJobTypes(t *testing.T) {
 	}
 }
 
+func TestCompleteJobFinalizesDocumentAndJob(t *testing.T) {
+	db := newDocumentRepositoryTestDB(t)
+	repository := NewDocumentRepository(db)
+	document := createDocumentRepositoryTestDocument(t, db)
+	if err := db.Model(&document).Updates(map[string]any{"status": "embedding", "error_message": "old error"}).Error; err != nil {
+		t.Fatalf("prepare document: %v", err)
+	}
+	job := model.DocumentJob{DocumentID: document.ID, JobType: "process_document", Status: "running"}
+	if err := db.Create(&job).Error; err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	if err := repository.CompleteJob(context.Background(), job.ID); err != nil {
+		t.Fatalf("complete job: %v", err)
+	}
+
+	assertDocumentJobTerminalState(t, db, document.ID, job.ID, "completed", "completed", "")
+}
+
+func TestFailJobFinalizesDocumentAndJob(t *testing.T) {
+	db := newDocumentRepositoryTestDB(t)
+	repository := NewDocumentRepository(db)
+	document := createDocumentRepositoryTestDocument(t, db)
+	if err := db.Model(&document).Update("status", "embedding").Error; err != nil {
+		t.Fatalf("prepare document: %v", err)
+	}
+	job := model.DocumentJob{DocumentID: document.ID, JobType: "process_document", Status: "running"}
+	if err := db.Create(&job).Error; err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	if err := repository.FailJob(context.Background(), job.ID, "embedding failed"); err != nil {
+		t.Fatalf("fail job: %v", err)
+	}
+
+	assertDocumentJobTerminalState(t, db, document.ID, job.ID, "failed", "failed", "embedding failed")
+}
+
+func TestCompleteJobRollsBackWhenDocumentFinalizationFails(t *testing.T) {
+	db := newDocumentRepositoryTestDB(t)
+	repository := NewDocumentRepository(db)
+	document := createDocumentRepositoryTestDocument(t, db)
+	if err := db.Model(&document).Update("status", "embedding").Error; err != nil {
+		t.Fatalf("prepare document: %v", err)
+	}
+	job := model.DocumentJob{DocumentID: document.ID, JobType: "process_document", Status: "running"}
+	if err := db.Create(&job).Error; err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if err := db.Exec(`
+		CREATE TRIGGER reject_document_completion
+		BEFORE UPDATE OF status ON documents
+		WHEN NEW.status = 'completed'
+		BEGIN
+			SELECT RAISE(FAIL, 'document completion rejected');
+		END
+	`).Error; err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+
+	if err := repository.CompleteJob(context.Background(), job.ID); err == nil {
+		t.Fatal("expected document finalization failure")
+	}
+
+	assertDocumentJobTerminalState(t, db, document.ID, job.ID, "embedding", "running", "")
+}
+
+func assertDocumentJobTerminalState(
+	t *testing.T,
+	db *gorm.DB,
+	documentID uuid.UUID,
+	jobID uuid.UUID,
+	expectedDocumentStatus string,
+	expectedJobStatus string,
+	expectedError string,
+) {
+	t.Helper()
+	var document model.Document
+	if err := db.First(&document, "id = ?", documentID).Error; err != nil {
+		t.Fatalf("reload document: %v", err)
+	}
+	var job model.DocumentJob
+	if err := db.First(&job, "id = ?", jobID).Error; err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if document.Status != expectedDocumentStatus || document.ErrorMessage != expectedError {
+		t.Fatalf("unexpected document terminal state: status=%q error=%q", document.Status, document.ErrorMessage)
+	}
+	if job.Status != expectedJobStatus || job.ErrorMessage != expectedError {
+		t.Fatalf("unexpected job terminal state: status=%q error=%q", job.Status, job.ErrorMessage)
+	}
+}
+
 func newDocumentRepositoryTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", uuid.NewString())

@@ -509,25 +509,56 @@ func (r *DocumentRepository) UpdateStatus(ctx context.Context, documentID uuid.U
 }
 
 func (r *DocumentRepository) CompleteJob(ctx context.Context, jobID uuid.UUID) error {
-	return r.db.WithContext(ctx).Model(&model.DocumentJob{}).
-		Where("id = ?", jobID).
-		Updates(map[string]any{
-			"status":        "completed",
-			"error_message": "",
-			"locked_at":     nil,
-			"updated_at":    time.Now(),
-		}).Error
+	return r.finalizeJob(ctx, jobID, "completed", "")
 }
 
 func (r *DocumentRepository) FailJob(ctx context.Context, jobID uuid.UUID, message string) error {
-	return r.db.WithContext(ctx).Model(&model.DocumentJob{}).
-		Where("id = ?", jobID).
-		Updates(map[string]any{
-			"status":        "failed",
-			"error_message": message,
-			"locked_at":     nil,
-			"updated_at":    time.Now(),
-		}).Error
+	return r.finalizeJob(ctx, jobID, "failed", message)
+}
+
+func (r *DocumentRepository) finalizeJob(
+	ctx context.Context,
+	jobID uuid.UUID,
+	status string,
+	errorMessage string,
+) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var job model.DocumentJob
+		if err := tx.Select("id", "document_id").Where("id = ?", jobID).First(&job).Error; err != nil {
+			return err
+		}
+
+		now := time.Now()
+		documentResult := tx.Unscoped().Model(&model.Document{}).
+			Where("id = ?", job.DocumentID).
+			Updates(map[string]any{
+				"status":        status,
+				"error_message": errorMessage,
+				"updated_at":    now,
+			})
+		if documentResult.Error != nil {
+			return documentResult.Error
+		}
+		if documentResult.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+
+		jobResult := tx.Model(&model.DocumentJob{}).
+			Where("id = ?", jobID).
+			Updates(map[string]any{
+				"status":        status,
+				"error_message": errorMessage,
+				"locked_at":     nil,
+				"updated_at":    now,
+			})
+		if jobResult.Error != nil {
+			return jobResult.Error
+		}
+		if jobResult.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
 }
 
 func (r *DocumentRepository) RetryJob(ctx context.Context, jobID uuid.UUID, retryCount int, retryAt time.Time, message string) error {

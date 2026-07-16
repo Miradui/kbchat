@@ -21,7 +21,6 @@ const (
 type DocumentStore interface {
 	RecoverRunningJobs(ctx context.Context) error
 	ClaimPendingJob(ctx context.Context) (*model.DocumentJob, error)
-	UpdateStatus(ctx context.Context, documentID uuid.UUID, status string, errorMessage string) error
 	CompleteJob(ctx context.Context, jobID uuid.UUID) error
 	FailJob(ctx context.Context, jobID uuid.UUID, message string) error
 	RetryJob(ctx context.Context, jobID uuid.UUID, retryCount int, retryAt time.Time, message string) error
@@ -181,8 +180,13 @@ func (w *Worker) process(ctx context.Context, job *model.DocumentJob) {
 			zap.Int("max_retries", w.maxRetries),
 			zap.Error(err),
 		)
-		_ = w.documents.UpdateStatus(ctx, job.DocumentID, "failed", message)
-		_ = w.documents.FailJob(ctx, job.ID, message)
+		if failErr := w.documents.FailJob(ctx, job.ID, message); failErr != nil {
+			w.logger.Error("finalize failed document job failed",
+				zap.String("job_id", job.ID.String()),
+				zap.String("document_id", job.DocumentID.String()),
+				zap.Error(failErr),
+			)
+		}
 		return
 	}
 

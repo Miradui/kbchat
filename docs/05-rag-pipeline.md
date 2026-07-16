@@ -113,6 +113,8 @@ chunk 顺序必须稳定，`chunkIndex` 跨所有 segment 从 0 开始递增。�
 
 Processor 必须先完成全部 Embedding 批次并验证每批返回向量数量，再在单个数据库事务中替换该文档的旧 chunks。任一 Provider 调用或数量校验失败时，不得留下部分新索引，也不得删除原有完整索引。
 
+Processor 成功替换 chunks 后不单独写入文档终态；worker 必须在同一数据库事务中将 `documents` 和对应 `document_jobs` 一起终结为 `completed` 或 `failed`。任一终态写入失败时整个事务回滚，不得留下 document/job 互相矛盾的状态。
+
 ## 检索流程
 
 ```text

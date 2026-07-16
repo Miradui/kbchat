@@ -111,8 +111,7 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 	if err := p.chunks.ReplaceByDocument(ctx, document.ID, rows); err != nil {
 		return err
 	}
-
-	return p.documents.UpdateStatus(ctx, document.ID, "completed", "")
+	return nil
 }
 
 func buildChunkMetadata(part splitter.Chunk) ([]byte, error) {

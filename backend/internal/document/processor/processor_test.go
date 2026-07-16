@@ -180,6 +180,31 @@ func TestProcessPersistsStructuredPDFPages(t *testing.T) {
 	}
 }
 
+func TestProcessLeavesTerminalStatusForWorker(t *testing.T) {
+	fixture := newProcessorTestFixture(t, "txt")
+	processor := New(
+		fixture.documents,
+		fixture.chunks,
+		structuredParser{document: parser.ParsedDocument{
+			FileType: "txt",
+			Segments: []parser.Segment{{Content: "content"}},
+		}},
+		splitter.New(100, 10),
+		cardinalityEmbedder{},
+	)
+
+	if err := processor.Process(context.Background(), &model.DocumentJob{DocumentID: fixture.document.ID}); err != nil {
+		t.Fatalf("process document: %v", err)
+	}
+	document, err := fixture.documents.FindByID(context.Background(), fixture.document.ID)
+	if err != nil || document == nil {
+		t.Fatalf("reload document: document=%#v err=%v", document, err)
+	}
+	if document.Status != "embedding" {
+		t.Fatalf("expected worker to own terminal status, got %q", document.Status)
+	}
+}
+
 func TestProcessSelectsSplitterStrategyFromParsedFileType(t *testing.T) {
 	tests := []struct {
 		name               string

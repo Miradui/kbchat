@@ -72,8 +72,8 @@ func TestWorkerFailsJobAfterRetryBudgetIsExhausted(t *testing.T) {
 	if store.failedJobs != 1 {
 		t.Fatalf("expected one failed job call, got %d", store.failedJobs)
 	}
-	if store.updatedStatuses != 1 || store.lastStatus != "failed" {
-		t.Fatalf("expected document to be marked failed, got status=%q updates=%d", store.lastStatus, store.updatedStatuses)
+	if store.updatedStatuses != 0 {
+		t.Fatalf("expected atomic job finalization to own document status, got %d direct updates", store.updatedStatuses)
 	}
 	if store.lastError != "pdf parser failed" {
 		t.Fatalf("expected error message to be stored, got %q", store.lastError)
