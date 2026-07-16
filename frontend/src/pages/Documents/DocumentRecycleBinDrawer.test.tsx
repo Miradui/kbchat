@@ -35,7 +35,7 @@ describe('DocumentRecycleBinDrawer', () => {
 
     renderWithRouter(<DocumentRecycleBinDrawer onChanged={onChanged} onClose={vi.fn()} />);
     expect(await screen.findByText('manual.pdf')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '恢复' }));
+    await user.click(screen.getByRole('button', { name: '恢复 manual.pdf' }));
 
     expect(await screen.findByText('文档已恢复，但回收站刷新失败：刷新服务暂不可用')).toBeInTheDocument();
     expect(screen.queryByText('文档恢复失败')).not.toBeInTheDocument();
@@ -101,6 +101,20 @@ describe('DocumentRecycleBinDrawer', () => {
     await act(async () => response.resolve(staleResponse));
 
     expect(itemReads).toBe(0);
+  });
+
+  it('identifies the document targeted by each row action', async () => {
+    api.listDocumentRecycleBin.mockResolvedValue(recycleResponse([
+      recycledDocument,
+      { ...recycledDocument, id: 'doc-2', name: 'policy.md' },
+    ]));
+
+    renderWithRouter(<DocumentRecycleBinDrawer onChanged={vi.fn()} onClose={vi.fn()} />);
+
+    expect(await screen.findByRole('button', { name: '恢复 manual.pdf' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '恢复 policy.md' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '永久删除 manual.pdf' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '永久删除 policy.md' })).toBeInTheDocument();
   });
 });
 

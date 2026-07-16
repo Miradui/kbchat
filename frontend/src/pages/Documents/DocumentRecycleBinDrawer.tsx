@@ -242,6 +242,7 @@ export function DocumentRecycleBinDrawer({
                 </div>
                 <div className="table-actions">
                   <button
+                    aria-label={workingId === item.id ? `正在恢复 ${item.name}` : `恢复 ${item.name}`}
                     className="secondary-button"
                     type="button"
                     onClick={() => void handleRestore(item)}
@@ -250,6 +251,7 @@ export function DocumentRecycleBinDrawer({
                     {workingId === item.id ? '恢复中...' : '恢复'}
                   </button>
                   <button
+                    aria-label={`永久删除 ${item.name}`}
                     className="danger-button"
                     type="button"
                     onClick={() => setDeleteTarget(item)}
