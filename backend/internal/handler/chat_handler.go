@@ -146,6 +146,26 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
+func (h *ChatHandler) RegenerateMessage(c *gin.Context) {
+	userID, sessionID, ok := userAndSessionID(c)
+	if !ok {
+		return
+	}
+
+	messageID, ok := parseUUIDParam(c, "messageId", "message id is invalid")
+	if !ok {
+		return
+	}
+
+	res, err := h.chats.RegenerateMessage(c.Request.Context(), userID, sessionID, messageID)
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, res)
+}
+
 func userAndSessionID(c *gin.Context) (uuid.UUID, uuid.UUID, bool) {
 	userID, ok := currentUserIDOrError(c)
 	if !ok {

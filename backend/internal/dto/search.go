@@ -5,10 +5,18 @@ type SearchRequest struct {
 	VectorTopN   int    `json:"vectorTopN"`
 	RerankTopK   int    `json:"rerankTopK"`
 	EnableRerank *bool  `json:"enableRerank"`
+	Debug        bool   `json:"debug"`
 }
 
 type SearchResponse struct {
-	Items []SearchResultResponse `json:"items"`
+	Items          []SearchResultResponse  `json:"items"`
+	RerankFallback *RerankFallbackResponse `json:"rerankFallback,omitempty"`
+	Debug          *SearchDebugResponse    `json:"debug,omitempty"`
+}
+
+type RerankFallbackResponse struct {
+	Used   bool   `json:"used"`
+	Reason string `json:"reason"`
 }
 
 type SearchResultResponse struct {
@@ -19,6 +27,58 @@ type SearchResultResponse struct {
 	PageNumber  *int     `json:"pageNumber"`
 	VectorScore float64  `json:"vectorScore"`
 	RerankScore *float64 `json:"rerankScore"`
+}
+
+type SearchDebugResponse struct {
+	Query          string                  `json:"query"`
+	RewrittenQuery string                  `json:"rewrittenQuery,omitempty"`
+	VectorStage    SearchDebugVectorStage  `json:"vectorStage"`
+	RerankStage    SearchDebugRerankStage  `json:"rerankStage"`
+	FinalStage     SearchDebugFinalStage   `json:"finalStage"`
+	RerankFallback *RerankFallbackResponse `json:"rerankFallback"`
+}
+
+type SearchDebugVectorStage struct {
+	Status string                  `json:"status"`
+	Items  []SearchDebugVectorItem `json:"items"`
+}
+
+type SearchDebugVectorItem struct {
+	ChunkID     string  `json:"chunkId"`
+	DocumentID  string  `json:"documentId"`
+	Filename    string  `json:"filename"`
+	PageNumber  *int    `json:"pageNumber"`
+	Content     string  `json:"content"`
+	VectorScore float64 `json:"vectorScore"`
+	Rank        int     `json:"rank"`
+}
+
+type SearchDebugRerankStage struct {
+	Status string                    `json:"status"`
+	Input  []SearchDebugRerankInput  `json:"input"`
+	Output []SearchDebugRerankOutput `json:"output"`
+}
+
+type SearchDebugRerankInput struct {
+	ChunkID string `json:"chunkId"`
+	Rank    int    `json:"rank"`
+}
+
+type SearchDebugRerankOutput struct {
+	ChunkID     string   `json:"chunkId"`
+	RerankScore *float64 `json:"rerankScore"`
+	Rank        int      `json:"rank"`
+}
+
+type SearchDebugFinalStage struct {
+	Items []SearchDebugFinalItem `json:"items"`
+}
+
+type SearchDebugFinalItem struct {
+	ChunkID     string   `json:"chunkId"`
+	VectorScore float64  `json:"vectorScore"`
+	RerankScore *float64 `json:"rerankScore"`
+	Rank        int      `json:"rank"`
 }
 
 type GlobalSearchResponse struct {

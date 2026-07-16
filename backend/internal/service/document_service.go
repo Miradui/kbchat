@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -81,7 +82,7 @@ func (s *DocumentService) Upload(ctx context.Context, ownerID, kbID uuid.UUID, f
 		return nil, apperror.Internal(err)
 	}
 
-	res := toDocumentResponse(document)
+	res := toDocumentResponse(document, job, s.maxDocumentRetries())
 	return &res, nil
 }
 
@@ -95,9 +96,14 @@ func (s *DocumentService) List(ctx context.Context, ownerID, kbID uuid.UUID) (*d
 		return nil, apperror.Internal(err)
 	}
 
+	jobsByDocumentID, err := s.latestJobsForDocuments(ctx, items)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+
 	res := dto.DocumentListResponse{Items: make([]dto.DocumentResponse, 0, len(items))}
 	for i := range items {
-		res.Items = append(res.Items, toDocumentResponse(&items[i]))
+		res.Items = append(res.Items, toDocumentResponse(&items[i], jobForDocument(jobsByDocumentID, items[i].ID), s.maxDocumentRetries()))
 	}
 	return &res, nil
 }
@@ -112,6 +118,15 @@ func (s *DocumentService) ListGlobal(ctx context.Context, ownerID uuid.UUID, que
 		return nil, apperror.Internal(err)
 	}
 	page, pageSize := normalizedPage(query.Page, query.PageSize)
+	ids := make([]uuid.UUID, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+	}
+	jobsByDocumentID, err := s.documents.LatestJobsByDocumentIDs(ctx, ids)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+
 	res := dto.GlobalDocumentListResponse{
 		Items:    make([]dto.GlobalDocumentResponse, 0, len(items)),
 		Total:    total,
@@ -119,7 +134,7 @@ func (s *DocumentService) ListGlobal(ctx context.Context, ownerID uuid.UUID, que
 		PageSize: pageSize,
 	}
 	for i := range items {
-		res.Items = append(res.Items, toGlobalDocumentResponse(&items[i]))
+		res.Items = append(res.Items, toGlobalDocumentResponse(&items[i], jobForDocument(jobsByDocumentID, items[i].ID), s.maxDocumentRetries()))
 	}
 	return &res, nil
 }
@@ -129,7 +144,11 @@ func (s *DocumentService) Get(ctx context.Context, ownerID, documentID uuid.UUID
 	if err != nil {
 		return nil, err
 	}
-	res := toDocumentResponse(document)
+	job, err := s.latestJobForDocument(ctx, document.ID)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	res := toDocumentResponse(document, job, s.maxDocumentRetries())
 	return &res, nil
 }
 
@@ -233,6 +252,8 @@ func (s *DocumentService) Reprocess(ctx context.Context, ownerID, documentID uui
 	if err := s.documents.UpdateStatus(ctx, document.ID, "uploaded", ""); err != nil {
 		return nil, apperror.Internal(err)
 	}
+	document.Status = "uploaded"
+	document.ErrorMessage = ""
 
 	job := &model.DocumentJob{
 		DocumentID: document.ID,
@@ -246,7 +267,7 @@ func (s *DocumentService) Reprocess(ctx context.Context, ownerID, documentID uui
 		return nil, apperror.Internal(err)
 	}
 
-	res := toDocumentResponse(document)
+	res := toDocumentResponse(document, job, s.maxDocumentRetries())
 	return &res, nil
 }
 
@@ -466,11 +487,52 @@ func (s *DocumentService) validateFile(file *multipart.FileHeader) error {
 	}
 }
 
-func toDocumentResponse(document *model.Document) dto.DocumentResponse {
+func (s *DocumentService) latestJobsForDocuments(ctx context.Context, documents []model.Document) (map[uuid.UUID]model.DocumentJob, error) {
+	ids := make([]uuid.UUID, 0, len(documents))
+	for _, document := range documents {
+		ids = append(ids, document.ID)
+	}
+	return s.documents.LatestJobsByDocumentIDs(ctx, ids)
+}
+
+func (s *DocumentService) latestJobForDocument(ctx context.Context, documentID uuid.UUID) (*model.DocumentJob, error) {
+	jobsByDocumentID, err := s.documents.LatestJobsByDocumentIDs(ctx, []uuid.UUID{documentID})
+	if err != nil {
+		return nil, err
+	}
+	return jobForDocument(jobsByDocumentID, documentID), nil
+}
+
+func jobForDocument(jobsByDocumentID map[uuid.UUID]model.DocumentJob, documentID uuid.UUID) *model.DocumentJob {
+	job, ok := jobsByDocumentID[documentID]
+	if !ok {
+		return nil
+	}
+	return &job
+}
+
+func (s *DocumentService) maxDocumentRetries() int {
+	if s.cfg.WorkerMaxRetries > 0 {
+		return s.cfg.WorkerMaxRetries
+	}
+	return 3
+}
+
+type documentProgressInfo struct {
+	JobStatus   string
+	Progress    int
+	Stage       string
+	RetryCount  int
+	MaxRetries  int
+	NextRetryAt *time.Time
+}
+
+func toDocumentResponse(document *model.Document, job *model.DocumentJob, maxRetries int) dto.DocumentResponse {
 	var errorMessage *string
 	if document.ErrorMessage != "" {
 		errorMessage = &document.ErrorMessage
 	}
+	progress := documentProgress(document.Status, job, maxRetries)
 
 	return dto.DocumentResponse{
 		ID:              document.ID.String(),
@@ -480,6 +542,12 @@ func toDocumentResponse(document *model.Document) dto.DocumentResponse {
 		FileSize:        document.FileSize,
 		Status:          document.Status,
 		ErrorMessage:    errorMessage,
+		JobStatus:       progress.JobStatus,
+		Progress:        progress.Progress,
+		Stage:           progress.Stage,
+		RetryCount:      progress.RetryCount,
+		MaxRetries:      progress.MaxRetries,
+		NextRetryAt:     progress.NextRetryAt,
 		CreatedAt:       document.CreatedAt,
 		UpdatedAt:       document.UpdatedAt,
 	}
@@ -505,11 +573,12 @@ func toGlobalDocumentRepoQuery(query dto.GlobalDocumentListQuery) (repository.Gl
 	return res, nil
 }
 
-func toGlobalDocumentResponse(document *repository.GlobalDocumentListItem) dto.GlobalDocumentResponse {
+func toGlobalDocumentResponse(document *repository.GlobalDocumentListItem, job *model.DocumentJob, maxRetries int) dto.GlobalDocumentResponse {
 	var errorMessage *string
 	if document.ErrorMessage != "" {
 		errorMessage = &document.ErrorMessage
 	}
+	progress := documentProgress(document.Status, job, maxRetries)
 	return dto.GlobalDocumentResponse{
 		ID:                document.ID.String(),
 		KnowledgeBaseID:   document.KnowledgeBaseID.String(),
@@ -519,8 +588,70 @@ func toGlobalDocumentResponse(document *repository.GlobalDocumentListItem) dto.G
 		FileSize:          document.FileSize,
 		Status:            document.Status,
 		ErrorMessage:      errorMessage,
+		JobStatus:         progress.JobStatus,
+		Progress:          progress.Progress,
+		Stage:             progress.Stage,
+		RetryCount:        progress.RetryCount,
+		MaxRetries:        progress.MaxRetries,
+		NextRetryAt:       progress.NextRetryAt,
 		CreatedAt:         document.CreatedAt,
 		UpdatedAt:         document.UpdatedAt,
+	}
+}
+
+func documentProgress(status string, job *model.DocumentJob, maxRetries int) documentProgressInfo {
+	stage := normalizedDocumentStage(status)
+	info := documentProgressInfo{
+		JobStatus:  inferredJobStatus(stage),
+		Progress:   progressForStage(stage),
+		Stage:      stage,
+		MaxRetries: maxRetries,
+	}
+	if job == nil {
+		return info
+	}
+	if strings.TrimSpace(job.Status) != "" {
+		info.JobStatus = job.Status
+	}
+	info.RetryCount = job.RetryCount
+	if job.Status == "pending" && job.LockedAt != nil {
+		info.NextRetryAt = job.LockedAt
+	}
+	return info
+}
+
+func normalizedDocumentStage(status string) string {
+	switch status {
+	case "parsing", "chunking", "embedding", "completed", "failed":
+		return status
+	default:
+		return "uploaded"
+	}
+}
+
+func inferredJobStatus(stage string) string {
+	switch stage {
+	case "completed", "failed":
+		return stage
+	case "uploaded":
+		return "pending"
+	default:
+		return "running"
+	}
+}
+
+func progressForStage(stage string) int {
+	switch stage {
+	case "parsing":
+		return 25
+	case "chunking":
+		return 50
+	case "embedding":
+		return 75
+	case "completed", "failed":
+		return 100
+	default:
+		return 0
 	}
 }
 

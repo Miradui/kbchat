@@ -52,6 +52,12 @@ type ChatMessageListResponse struct {
 }
 
 type SendChatMessageResponse struct {
-	Answer    string             `json:"answer"`
-	Citations []CitationResponse `json:"citations"`
+	Answer         string                  `json:"answer"`
+	Citations      []CitationResponse      `json:"citations"`
+	RerankFallback *RerankFallbackResponse `json:"rerankFallback"`
+}
+
+type RegenerateChatMessageResponse struct {
+	Message        ChatMessageResponse     `json:"message"`
+	RerankFallback *RerankFallbackResponse `json:"rerankFallback"`
 }

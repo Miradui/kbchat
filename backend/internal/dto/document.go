@@ -7,15 +7,21 @@ import (
 )
 
 type DocumentResponse struct {
-	ID              string    `json:"id"`
-	KnowledgeBaseID string    `json:"knowledgeBaseId"`
-	Filename        string    `json:"filename"`
-	FileType        string    `json:"fileType"`
-	FileSize        int64     `json:"fileSize"`
-	Status          string    `json:"status"`
-	ErrorMessage    *string   `json:"errorMessage"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
+	ID              string     `json:"id"`
+	KnowledgeBaseID string     `json:"knowledgeBaseId"`
+	Filename        string     `json:"filename"`
+	FileType        string     `json:"fileType"`
+	FileSize        int64      `json:"fileSize"`
+	Status          string     `json:"status"`
+	ErrorMessage    *string    `json:"errorMessage"`
+	JobStatus       string     `json:"jobStatus"`
+	Progress        int        `json:"progress"`
+	Stage           string     `json:"stage"`
+	RetryCount      int        `json:"retryCount"`
+	MaxRetries      int        `json:"maxRetries"`
+	NextRetryAt     *time.Time `json:"nextRetryAt"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	UpdatedAt       time.Time  `json:"updatedAt"`
 }
 
 type DocumentListResponse struct {
@@ -33,16 +39,22 @@ type GlobalDocumentListQuery struct {
 }
 
 type GlobalDocumentResponse struct {
-	ID                string    `json:"id"`
-	KnowledgeBaseID   string    `json:"knowledgeBaseId"`
-	KnowledgeBaseName string    `json:"knowledgeBaseName"`
-	Filename          string    `json:"filename"`
-	FileType          string    `json:"fileType"`
-	FileSize          int64     `json:"fileSize"`
-	Status            string    `json:"status"`
-	ErrorMessage      *string   `json:"errorMessage"`
-	CreatedAt         time.Time `json:"createdAt"`
-	UpdatedAt         time.Time `json:"updatedAt"`
+	ID                string     `json:"id"`
+	KnowledgeBaseID   string     `json:"knowledgeBaseId"`
+	KnowledgeBaseName string     `json:"knowledgeBaseName"`
+	Filename          string     `json:"filename"`
+	FileType          string     `json:"fileType"`
+	FileSize          int64      `json:"fileSize"`
+	Status            string     `json:"status"`
+	ErrorMessage      *string    `json:"errorMessage"`
+	JobStatus         string     `json:"jobStatus"`
+	Progress          int        `json:"progress"`
+	Stage             string     `json:"stage"`
+	RetryCount        int        `json:"retryCount"`
+	MaxRetries        int        `json:"maxRetries"`
+	NextRetryAt       *time.Time `json:"nextRetryAt"`
+	CreatedAt         time.Time  `json:"createdAt"`
+	UpdatedAt         time.Time  `json:"updatedAt"`
 }
 
 type GlobalDocumentListResponse struct {

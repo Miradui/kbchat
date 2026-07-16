@@ -2,6 +2,7 @@ package retrieval
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"github.com/google/uuid"
@@ -10,22 +11,33 @@ import (
 	"rag/backend/internal/config"
 	"rag/backend/internal/dto"
 	"rag/backend/internal/embedding"
+	"rag/backend/internal/model"
 	"rag/backend/internal/repository"
 	"rag/backend/internal/rerank"
 )
 
+const rerankFailureModeFallback = "fallback"
+
+type chunkSearcher interface {
+	SearchByVector(ctx context.Context, kbID uuid.UUID, vector []float32, limit int) ([]repository.SearchResult, error)
+}
+
+type knowledgeBaseFinder interface {
+	FindByIDAndOwner(ctx context.Context, id, ownerID uuid.UUID) (*model.KnowledgeBase, error)
+}
+
 type Service struct {
 	cfg            config.Config
-	chunks         *repository.ChunkRepository
-	knowledgeBases *repository.KnowledgeBaseRepository
+	chunks         chunkSearcher
+	knowledgeBases knowledgeBaseFinder
 	embedder       embedding.Provider
 	reranker       rerank.Provider
 }
 
 func NewService(
 	cfg config.Config,
-	chunks *repository.ChunkRepository,
-	knowledgeBases *repository.KnowledgeBaseRepository,
+	chunks chunkSearcher,
+	knowledgeBases knowledgeBaseFinder,
 	embedder embedding.Provider,
 	reranker rerank.Provider,
 ) *Service {
@@ -59,6 +71,9 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 	if req.EnableRerank != nil {
 		enableRerank = *req.EnableRerank
 	}
+	if !s.cfg.RerankEnabled {
+		enableRerank = false
+	}
 
 	embeddings, err := s.embedder.EmbedTexts(ctx, []string{req.Query})
 	if err != nil {
@@ -73,10 +88,26 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 		return nil, apperror.Internal(err)
 	}
 
+	vectorCandidates := candidates
+	rerankCandidates := []repository.SearchResult{}
+	rerankStageStatus := "disabled"
+	var rerankFallback *dto.RerankFallbackResponse
 	if enableRerank {
-		candidates, err = s.rerank(ctx, req.Query, candidates, rerankTopK)
+		rerankCandidates, err = s.rerank(ctx, req.Query, vectorCandidates, 0)
 		if err != nil {
-			return nil, apperror.Wrap(500, "RERANK_FAILED", "retrieval rerank failed", err)
+			if s.cfg.RerankFailureMode == rerankFailureModeFallback {
+				candidates = fallbackVectorTopK(vectorCandidates, rerankTopK)
+				rerankStageStatus = "fallback"
+				rerankFallback = &dto.RerankFallbackResponse{
+					Used:   true,
+					Reason: fmt.Sprintf("rerank failed: %v", err),
+				}
+			} else {
+				return nil, apperror.Wrap(500, "RERANK_FAILED", "retrieval rerank failed", err)
+			}
+		} else {
+			rerankStageStatus = "completed"
+			candidates = limitSearchResults(rerankCandidates, rerankTopK)
 		}
 	} else if rerankTopK > 0 && len(candidates) > rerankTopK {
 		candidates = candidates[:rerankTopK]
@@ -95,7 +126,11 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 		})
 	}
 
-	return &dto.SearchResponse{Items: items}, nil
+	res := &dto.SearchResponse{Items: items, RerankFallback: rerankFallback}
+	if req.Debug {
+		res.Debug = buildSearchDebugResponse(req.Query, vectorCandidates, rerankCandidates, candidates, rerankStageStatus, rerankFallback)
+	}
+	return res, nil
 }
 
 func (s *Service) rerank(ctx context.Context, query string, candidates []repository.SearchResult, topK int) ([]repository.SearchResult, error) {
@@ -134,4 +169,97 @@ func (s *Service) rerank(ctx context.Context, query string, candidates []reposit
 		reranked = reranked[:topK]
 	}
 	return reranked, nil
+}
+
+func fallbackVectorTopK(candidates []repository.SearchResult, topK int) []repository.SearchResult {
+	candidates = limitSearchResults(candidates, topK)
+	for i := range candidates {
+		candidates[i].RerankScore = nil
+	}
+	return candidates
+}
+
+func limitSearchResults(candidates []repository.SearchResult, topK int) []repository.SearchResult {
+	if topK > 0 && len(candidates) > topK {
+		return candidates[:topK]
+	}
+	return candidates
+}
+
+func buildSearchDebugResponse(
+	query string,
+	vectorCandidates []repository.SearchResult,
+	rerankCandidates []repository.SearchResult,
+	finalCandidates []repository.SearchResult,
+	rerankStageStatus string,
+	rerankFallback *dto.RerankFallbackResponse,
+) *dto.SearchDebugResponse {
+	return &dto.SearchDebugResponse{
+		Query: query,
+		VectorStage: dto.SearchDebugVectorStage{
+			Status: "completed",
+			Items:  toDebugVectorItems(vectorCandidates),
+		},
+		RerankStage: dto.SearchDebugRerankStage{
+			Status: rerankStageStatus,
+			Input:  toDebugRerankInput(vectorCandidates),
+			Output: toDebugRerankOutput(rerankCandidates),
+		},
+		FinalStage: dto.SearchDebugFinalStage{
+			Items: toDebugFinalItems(finalCandidates),
+		},
+		RerankFallback: rerankFallback,
+	}
+}
+
+func toDebugVectorItems(candidates []repository.SearchResult) []dto.SearchDebugVectorItem {
+	items := make([]dto.SearchDebugVectorItem, 0, len(candidates))
+	for i, candidate := range candidates {
+		items = append(items, dto.SearchDebugVectorItem{
+			ChunkID:     candidate.ChunkID.String(),
+			DocumentID:  candidate.DocumentID.String(),
+			Filename:    candidate.Filename,
+			PageNumber:  candidate.PageNumber,
+			Content:     candidate.Content,
+			VectorScore: candidate.VectorScore,
+			Rank:        i + 1,
+		})
+	}
+	return items
+}
+
+func toDebugRerankInput(candidates []repository.SearchResult) []dto.SearchDebugRerankInput {
+	items := make([]dto.SearchDebugRerankInput, 0, len(candidates))
+	for i, candidate := range candidates {
+		items = append(items, dto.SearchDebugRerankInput{
+			ChunkID: candidate.ChunkID.String(),
+			Rank:    i + 1,
+		})
+	}
+	return items
+}
+
+func toDebugRerankOutput(candidates []repository.SearchResult) []dto.SearchDebugRerankOutput {
+	items := make([]dto.SearchDebugRerankOutput, 0, len(candidates))
+	for i, candidate := range candidates {
+		items = append(items, dto.SearchDebugRerankOutput{
+			ChunkID:     candidate.ChunkID.String(),
+			RerankScore: candidate.RerankScore,
+			Rank:        i + 1,
+		})
+	}
+	return items
+}
+
+func toDebugFinalItems(candidates []repository.SearchResult) []dto.SearchDebugFinalItem {
+	items := make([]dto.SearchDebugFinalItem, 0, len(candidates))
+	for i, candidate := range candidates {
+		items = append(items, dto.SearchDebugFinalItem{
+			ChunkID:     candidate.ChunkID.String(),
+			VectorScore: candidate.VectorScore,
+			RerankScore: candidate.RerankScore,
+			Rank:        i + 1,
+		})
+	}
+	return items
 }

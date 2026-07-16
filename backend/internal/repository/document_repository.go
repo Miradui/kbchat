@@ -155,6 +155,30 @@ func (r *DocumentRepository) CreateJob(ctx context.Context, job *model.DocumentJ
 	return r.db.WithContext(ctx).Create(job).Error
 }
 
+func (r *DocumentRepository) LatestJobsByDocumentIDs(ctx context.Context, documentIDs []uuid.UUID) (map[uuid.UUID]model.DocumentJob, error) {
+	jobsByDocumentID := make(map[uuid.UUID]model.DocumentJob, len(documentIDs))
+	if len(documentIDs) == 0 {
+		return jobsByDocumentID, nil
+	}
+
+	var jobs []model.DocumentJob
+	err := r.db.WithContext(ctx).
+		Where("document_id IN ?", documentIDs).
+		Order("document_id asc, created_at desc").
+		Find(&jobs).Error
+	if err != nil {
+		return nil, err
+	}
+
+	for _, job := range jobs {
+		if _, exists := jobsByDocumentID[job.DocumentID]; exists {
+			continue
+		}
+		jobsByDocumentID[job.DocumentID] = job
+	}
+	return jobsByDocumentID, nil
+}
+
 func (r *DocumentRepository) ClaimPendingJob(ctx context.Context) (*model.DocumentJob, error) {
 	var job model.DocumentJob
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

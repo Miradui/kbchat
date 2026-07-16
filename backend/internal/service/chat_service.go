@@ -16,15 +16,18 @@ import (
 	"rag/backend/internal/dto"
 	"rag/backend/internal/model"
 	"rag/backend/internal/repository"
-	"rag/backend/internal/retrieval"
 	titlecore "rag/backend/internal/title"
 )
+
+type chatRetrievalService interface {
+	Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.SearchRequest) (*dto.SearchResponse, error)
+}
 
 type ChatService struct {
 	cfg            config.Config
 	chats          *repository.ChatRepository
 	knowledgeBases *repository.KnowledgeBaseRepository
-	retrieval      *retrieval.Service
+	retrieval      chatRetrievalService
 	chatProvider   chatcore.Provider
 	titleProvider  titlecore.Provider
 }
@@ -45,7 +48,7 @@ func NewChatService(
 	cfg config.Config,
 	chats *repository.ChatRepository,
 	knowledgeBases *repository.KnowledgeBaseRepository,
-	retrieval *retrieval.Service,
+	retrieval chatRetrievalService,
 	chatProvider chatcore.Provider,
 	titleProvider titlecore.Provider,
 ) *ChatService {
@@ -187,65 +190,9 @@ func (s *ChatService) SendMessage(ctx context.Context, userID, sessionID uuid.UU
 		return nil, apperror.Internal(err)
 	}
 
-	intent, err := classifyChatIntent(ctx, s.chatProvider, req.Content, history, s.cfg.ChatHistoryLimit)
-	if err != nil {
-		return nil, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "chat completion failed", err)
-	}
-
-	if intent.Intent == chatIntentConversation {
-		answer, err := s.chatProvider.Chat(ctx, buildConversationAnswerMessages(req.Content, history, s.cfg.ChatHistoryLimit))
-		if err != nil {
-			return nil, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "chat completion failed", err)
-		}
-
-		userMessage := &model.ChatMessage{
-			SessionID: session.ID,
-			Role:      "user",
-			Content:   req.Content,
-		}
-		assistantMessage := &model.ChatMessage{
-			SessionID: session.ID,
-			Role:      "assistant",
-			Content:   answer,
-		}
-		if err := s.chats.CreateMessages(ctx, userMessage, assistantMessage); err != nil {
-			return nil, apperror.Internal(err)
-		}
-		s.updateSessionTitleIfNeeded(ctx, session, req.Content, answer)
-
-		return &dto.SendChatMessageResponse{
-			Answer:    answer,
-			Citations: []dto.CitationResponse{},
-		}, nil
-	}
-
-	retrievalQuery := strings.TrimSpace(intent.StandaloneQuery)
-	if retrievalQuery == "" {
-		retrievalQuery = req.Content
-	}
-
-	searchRes, err := s.retrieval.Search(ctx, userID, session.KnowledgeBaseID, dto.SearchRequest{
-		Query:        retrievalQuery,
-		VectorTopN:   s.cfg.VectorTopN,
-		RerankTopK:   s.cfg.RerankTopK,
-		EnableRerank: &s.cfg.RerankEnabled,
-	})
+	generated, err := s.generateAnswer(ctx, userID, session, req.Content, history)
 	if err != nil {
 		return nil, err
-	}
-
-	citations := citationsFromSearch(searchRes.Items)
-	answer := "当前知识库中未找到足够依据回答该问题。"
-	if len(searchRes.Items) > 0 {
-		answer, err = s.chatProvider.Chat(ctx, buildAnswerMessages(req.Content, searchRes.Items, history, s.cfg.ChatHistoryLimit))
-		if err != nil {
-			return nil, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "chat completion failed", err)
-		}
-	}
-
-	citationJSON, err := json.Marshal(citations)
-	if err != nil {
-		return nil, apperror.Internal(err)
 	}
 
 	userMessage := &model.ChatMessage{
@@ -256,17 +203,147 @@ func (s *ChatService) SendMessage(ctx context.Context, userID, sessionID uuid.UU
 	assistantMessage := &model.ChatMessage{
 		SessionID: session.ID,
 		Role:      "assistant",
-		Content:   answer,
-		Citations: datatypes.JSON(citationJSON),
+		Content:   generated.answer,
+		Citations: generated.citationJSON,
 	}
 	if err := s.chats.CreateMessages(ctx, userMessage, assistantMessage); err != nil {
 		return nil, apperror.Internal(err)
 	}
-	s.updateSessionTitleIfNeeded(ctx, session, req.Content, answer)
+	s.updateSessionTitleIfNeeded(ctx, session, req.Content, generated.answer)
 
 	return &dto.SendChatMessageResponse{
-		Answer:    answer,
-		Citations: citations,
+		Answer:         generated.answer,
+		Citations:      generated.citations,
+		RerankFallback: generated.rerankFallback,
+	}, nil
+}
+
+func (s *ChatService) RegenerateMessage(ctx context.Context, userID, sessionID, messageID uuid.UUID) (*dto.RegenerateChatMessageResponse, error) {
+	session, err := s.findSession(ctx, userID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	messages, err := s.chats.ListMessages(ctx, session.ID)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+
+	targetIndex := -1
+	for i := range messages {
+		if messages[i].ID == messageID {
+			targetIndex = i
+			break
+		}
+	}
+	if targetIndex < 0 {
+		return nil, apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
+	}
+	if messages[targetIndex].Role != "assistant" {
+		return nil, apperror.Validation(map[string]any{"messageId": "only assistant messages can be regenerated"})
+	}
+
+	userIndex := -1
+	for i := targetIndex - 1; i >= 0; i-- {
+		if messages[i].Role == "user" && strings.TrimSpace(messages[i].Content) != "" {
+			userIndex = i
+			break
+		}
+	}
+	if userIndex < 0 {
+		return nil, apperror.Validation(map[string]any{"messageId": "assistant message has no previous user message"})
+	}
+
+	question := messages[userIndex].Content
+	history := append([]model.ChatMessage(nil), messages[:userIndex]...)
+	generated, err := s.generateAnswer(ctx, userID, session, question, history)
+	if err != nil {
+		return nil, err
+	}
+
+	assistantMessage := &model.ChatMessage{
+		SessionID: session.ID,
+		Role:      "assistant",
+		Content:   generated.answer,
+		Citations: generated.citationJSON,
+	}
+	if err := s.chats.CreateMessages(ctx, assistantMessage); err != nil {
+		return nil, apperror.Internal(err)
+	}
+
+	return &dto.RegenerateChatMessageResponse{
+		Message:        toChatMessageResponse(assistantMessage),
+		RerankFallback: generated.rerankFallback,
+	}, nil
+}
+
+type generatedChatAnswer struct {
+	answer         string
+	citations      []dto.CitationResponse
+	citationJSON   datatypes.JSON
+	rerankFallback *dto.RerankFallbackResponse
+}
+
+func (s *ChatService) generateAnswer(ctx context.Context, userID uuid.UUID, session *model.ChatSession, question string, history []model.ChatMessage) (generatedChatAnswer, error) {
+	intent, err := classifyChatIntent(ctx, s.chatProvider, question, history, s.cfg.ChatHistoryLimit)
+	if err != nil {
+		return generatedChatAnswer{}, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "chat completion failed", err)
+	}
+
+	if intent.Intent == chatIntentConversation {
+		answer, err := s.chatProvider.Chat(ctx, buildConversationAnswerMessages(question, history, s.cfg.ChatHistoryLimit))
+		if err != nil {
+			return generatedChatAnswer{}, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "chat completion failed", err)
+		}
+		citationJSON, err := json.Marshal([]dto.CitationResponse{})
+		if err != nil {
+			return generatedChatAnswer{}, apperror.Internal(err)
+		}
+		return generatedChatAnswer{
+			answer:       answer,
+			citations:    []dto.CitationResponse{},
+			citationJSON: datatypes.JSON(citationJSON),
+		}, nil
+	}
+
+	if s.retrieval == nil {
+		return generatedChatAnswer{}, apperror.New(500, "INTERNAL_ERROR", "retrieval service is not configured")
+	}
+
+	retrievalQuery := strings.TrimSpace(intent.StandaloneQuery)
+	if retrievalQuery == "" {
+		retrievalQuery = question
+	}
+
+	searchRes, err := s.retrieval.Search(ctx, userID, session.KnowledgeBaseID, dto.SearchRequest{
+		Query:        retrievalQuery,
+		VectorTopN:   s.cfg.VectorTopN,
+		RerankTopK:   s.cfg.RerankTopK,
+		EnableRerank: &s.cfg.RerankEnabled,
+	})
+	if err != nil {
+		return generatedChatAnswer{}, err
+	}
+
+	citations := citationsFromSearch(searchRes.Items)
+	answer := "当前知识库中未找到足够依据回答该问题。"
+	if len(searchRes.Items) > 0 {
+		answer, err = s.chatProvider.Chat(ctx, buildAnswerMessages(question, searchRes.Items, history, s.cfg.ChatHistoryLimit))
+		if err != nil {
+			return generatedChatAnswer{}, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "chat completion failed", err)
+		}
+	}
+
+	citationJSON, err := json.Marshal(citations)
+	if err != nil {
+		return generatedChatAnswer{}, apperror.Internal(err)
+	}
+
+	return generatedChatAnswer{
+		answer:         answer,
+		citations:      citations,
+		citationJSON:   datatypes.JSON(citationJSON),
+		rerankFallback: searchRes.RerankFallback,
 	}, nil
 }
 

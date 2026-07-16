@@ -12,6 +12,7 @@ import (
 	"rag/backend/internal/middleware"
 	chatprovider "rag/backend/internal/provider/chat"
 	embeddingprovider "rag/backend/internal/provider/embedding"
+	rerankprovider "rag/backend/internal/provider/rerank"
 	titleprovider "rag/backend/internal/provider/title"
 	"rag/backend/internal/repository"
 	"rag/backend/internal/rerank"
@@ -40,7 +41,7 @@ func New(cfg config.Config, db *gorm.DB, logger *zap.Logger) *gin.Engine {
 	globalSearchRepo := repository.NewGlobalSearchRepository(db)
 	localStorage := storage.NewLocalStorage(cfg.UploadDir)
 	embedder := embeddingprovider.NewOpenAICompatibleProvider(cfg)
-	reranker := rerank.NewDisabledProvider()
+	reranker := newRerankProvider(cfg)
 	chatProvider := chatprovider.NewOpenAICompatibleProvider(cfg)
 	titleProvider := titleprovider.NewOpenAICompatibleProvider(cfg)
 	authService := service.NewAuthService(cfg, userRepo)
@@ -148,7 +149,15 @@ func New(cfg config.Config, db *gorm.DB, logger *zap.Logger) *gin.Engine {
 	protected.POST("/chat/sessions/:id/archive", chatHandler.ArchiveSession)
 	protected.GET("/chat/sessions/:id/messages", chatHandler.ListMessages)
 	protected.POST("/chat/sessions/:id/messages", chatHandler.SendMessage)
+	protected.POST("/chat/sessions/:id/messages/:messageId/regenerate", chatHandler.RegenerateMessage)
 	protected.GET("/search", globalSearchHandler.Search)
 
 	return r
+}
+
+func newRerankProvider(cfg config.Config) rerank.Provider {
+	if !cfg.RerankEnabled {
+		return rerank.NewDisabledProvider()
+	}
+	return rerankprovider.NewOpenAICompatibleProvider(cfg)
 }

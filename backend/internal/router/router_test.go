@@ -10,6 +10,8 @@ import (
 
 	"rag/backend/internal/config"
 	"rag/backend/internal/logger"
+	rerankprovider "rag/backend/internal/provider/rerank"
+	corererank "rag/backend/internal/rerank"
 )
 
 func TestHealthz(t *testing.T) {
@@ -37,6 +39,27 @@ func TestAPIHealthz(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+}
+
+func TestNewRerankProviderUsesOpenAICompatibleProviderWhenEnabled(t *testing.T) {
+	provider := newRerankProvider(config.Config{
+		RerankEnabled: true,
+		RerankBaseURL: "https://example.test/v1",
+		RerankAPIKey:  "test-key",
+		RerankModel:   "test-rerank",
+	})
+
+	if _, ok := provider.(*rerankprovider.OpenAICompatibleProvider); !ok {
+		t.Fatalf("expected OpenAI-compatible provider, got %T", provider)
+	}
+}
+
+func TestNewRerankProviderUsesDisabledProviderWhenDisabled(t *testing.T) {
+	provider := newRerankProvider(config.Config{RerankEnabled: false})
+
+	if _, ok := provider.(*corererank.DisabledProvider); !ok {
+		t.Fatalf("expected disabled provider, got %T", provider)
 	}
 }
 

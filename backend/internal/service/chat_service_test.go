@@ -5,19 +5,33 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+
 	chatcore "rag/backend/internal/chat"
+	"rag/backend/internal/config"
 	"rag/backend/internal/dto"
 	"rag/backend/internal/model"
+	"rag/backend/internal/repository"
 	titlecore "rag/backend/internal/title"
 )
 
 type fakeChatProvider struct {
-	response string
-	messages []chatcore.Message
+	response  string
+	responses []string
+	messages  []chatcore.Message
+	calls     [][]chatcore.Message
 }
 
 func (p *fakeChatProvider) Chat(_ context.Context, messages []chatcore.Message) (string, error) {
 	p.messages = messages
+	p.calls = append(p.calls, messages)
+	if len(p.responses) > 0 {
+		response := p.responses[0]
+		p.responses = p.responses[1:]
+		return response, nil
+	}
 	return p.response, nil
 }
 
@@ -29,6 +43,20 @@ type fakeTitleProvider struct {
 func (p *fakeTitleProvider) SummarizeTitle(_ context.Context, messages []titlecore.Message) (string, error) {
 	p.messages = messages
 	return p.response, nil
+}
+
+type fakeChatRetrieval struct {
+	response *dto.SearchResponse
+	err      error
+	calls    []dto.SearchRequest
+}
+
+func (r *fakeChatRetrieval) Search(_ context.Context, _ uuid.UUID, _ uuid.UUID, req dto.SearchRequest) (*dto.SearchResponse, error) {
+	r.calls = append(r.calls, req)
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.response, nil
 }
 
 func TestBuildIntentClassificationMessagesUsesRecentHistory(t *testing.T) {
@@ -212,4 +240,188 @@ func TestCleanSessionTitleRemovesQuotesAndFallsBack(t *testing.T) {
 	if got := cleanSessionTitle("   "); got != defaultChatSessionTitle {
 		t.Fatalf("expected default title fallback, got %q", got)
 	}
+}
+
+func TestSendMessageReturnsRerankFallbackMetadata(t *testing.T) {
+	ctx := context.Background()
+	db := newChatServiceTestDB(t)
+	user := createChatServiceUser(t, db)
+	kb := createChatServiceKnowledgeBase(t, db, user.ID)
+	session := createChatServiceSession(t, db, user.ID, kb.ID)
+	chunkID := uuid.New()
+	retrieval := &fakeChatRetrieval{
+		response: &dto.SearchResponse{
+			Items: []dto.SearchResultResponse{
+				{
+					ChunkID:     chunkID.String(),
+					DocumentID:  uuid.New().String(),
+					Filename:    "manual.md",
+					Content:     "fallback citation",
+					VectorScore: 0.8,
+					RerankScore: nil,
+				},
+			},
+			RerankFallback: &dto.RerankFallbackResponse{Used: true, Reason: "rerank failed: provider unavailable"},
+		},
+	}
+	chatProvider := &fakeChatProvider{responses: []string{
+		`{"intent":"knowledge_base","standaloneQuery":"policy","reason":"needs docs"}`,
+		"answer from fallback chunks",
+	}}
+	service := NewChatService(
+		config.Config{VectorTopN: 30, RerankTopK: 5, RerankEnabled: true, ChatHistoryLimit: 10},
+		repository.NewChatRepository(db),
+		repository.NewKnowledgeBaseRepository(db),
+		retrieval,
+		chatProvider,
+		nil,
+	)
+
+	res, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{Content: "question"})
+	if err != nil {
+		t.Fatalf("send message: %v", err)
+	}
+
+	if res.RerankFallback == nil || !res.RerankFallback.Used {
+		t.Fatalf("expected rerank fallback in chat response, got %#v", res.RerankFallback)
+	}
+	if len(res.Citations) != 1 || res.Citations[0].ChunkID != chunkID.String() {
+		t.Fatalf("expected citations from final fallback chunks, got %#v", res.Citations)
+	}
+	if res.Citations[0].RerankScore != nil {
+		t.Fatalf("expected fallback citation rerankScore to stay nil, got %#v", res.Citations[0].RerankScore)
+	}
+}
+
+func TestRegenerateMessageRerunsRetrievalAndCreatesNewAssistantMessage(t *testing.T) {
+	ctx := context.Background()
+	db := newChatServiceTestDB(t)
+	user := createChatServiceUser(t, db)
+	kb := createChatServiceKnowledgeBase(t, db, user.ID)
+	session := createChatServiceSession(t, db, user.ID, kb.ID)
+	userMessage := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "original question"}
+	oldAssistant := model.ChatMessage{SessionID: session.ID, Role: "assistant", Content: "old answer"}
+	if err := db.Create(&userMessage).Error; err != nil {
+		t.Fatalf("create user message: %v", err)
+	}
+	if err := db.Create(&oldAssistant).Error; err != nil {
+		t.Fatalf("create assistant message: %v", err)
+	}
+
+	chunkID := uuid.New()
+	retrieval := &fakeChatRetrieval{
+		response: &dto.SearchResponse{
+			Items: []dto.SearchResultResponse{
+				{
+					ChunkID:     chunkID.String(),
+					DocumentID:  uuid.New().String(),
+					Filename:    "manual.md",
+					Content:     "fresh citation",
+					VectorScore: 0.9,
+				},
+			},
+		},
+	}
+	chatProvider := &fakeChatProvider{responses: []string{
+		`{"intent":"knowledge_base","standaloneQuery":"rewritten original question","reason":"needs docs"}`,
+		"new answer",
+	}}
+	service := NewChatService(
+		config.Config{VectorTopN: 30, RerankTopK: 5, RerankEnabled: true, ChatHistoryLimit: 10},
+		repository.NewChatRepository(db),
+		repository.NewKnowledgeBaseRepository(db),
+		retrieval,
+		chatProvider,
+		nil,
+	)
+
+	res, err := service.RegenerateMessage(ctx, user.ID, session.ID, oldAssistant.ID)
+	if err != nil {
+		t.Fatalf("regenerate message: %v", err)
+	}
+
+	if res.Message.ID == oldAssistant.ID.String() || res.Message.Role != "assistant" || res.Message.Content != "new answer" {
+		t.Fatalf("expected a new assistant message response, got %#v", res.Message)
+	}
+	if len(res.Message.Citations) != 1 || res.Message.Citations[0].ChunkID != chunkID.String() {
+		t.Fatalf("expected regenerated citations from fresh retrieval, got %#v", res.Message.Citations)
+	}
+	if len(retrieval.calls) != 1 || retrieval.calls[0].Query != "rewritten original question" {
+		t.Fatalf("expected regenerate to rerun retrieval with standalone query, got %#v", retrieval.calls)
+	}
+	var count int64
+	if err := db.Model(&model.ChatMessage{}).Where("session_id = ?", session.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count chat messages: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("expected regenerate to append one assistant message, got %d messages", count)
+	}
+}
+
+func TestRegenerateMessageRejectsNonAssistantMessage(t *testing.T) {
+	ctx := context.Background()
+	db := newChatServiceTestDB(t)
+	user := createChatServiceUser(t, db)
+	kb := createChatServiceKnowledgeBase(t, db, user.ID)
+	session := createChatServiceSession(t, db, user.ID, kb.ID)
+	userMessage := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "original question"}
+	if err := db.Create(&userMessage).Error; err != nil {
+		t.Fatalf("create user message: %v", err)
+	}
+	service := NewChatService(
+		config.Config{VectorTopN: 30, RerankTopK: 5, RerankEnabled: true, ChatHistoryLimit: 10},
+		repository.NewChatRepository(db),
+		repository.NewKnowledgeBaseRepository(db),
+		&fakeChatRetrieval{},
+		&fakeChatProvider{},
+		nil,
+	)
+
+	if _, err := service.RegenerateMessage(ctx, user.ID, session.ID, userMessage.ID); err == nil {
+		t.Fatal("expected regenerate to reject user messages")
+	}
+}
+
+func newChatServiceTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	if err := db.AutoMigrate(
+		&model.User{},
+		&model.KnowledgeBase{},
+		&model.ChatSession{},
+		&model.ChatMessage{},
+	); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	return db
+}
+
+func createChatServiceUser(t *testing.T, db *gorm.DB) model.User {
+	t.Helper()
+	user := model.User{Username: "owner", PasswordHash: "hash", DisplayName: "Owner"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	return user
+}
+
+func createChatServiceKnowledgeBase(t *testing.T, db *gorm.DB, ownerID uuid.UUID) model.KnowledgeBase {
+	t.Helper()
+	kb := model.KnowledgeBase{Name: "kb", OwnerID: ownerID, Visibility: "private"}
+	if err := db.Create(&kb).Error; err != nil {
+		t.Fatalf("create knowledge base: %v", err)
+	}
+	return kb
+}
+
+func createChatServiceSession(t *testing.T, db *gorm.DB, userID, kbID uuid.UUID) model.ChatSession {
+	t.Helper()
+	session := model.ChatSession{UserID: userID, KnowledgeBaseID: kbID, Title: "session"}
+	if err := db.Create(&session).Error; err != nil {
+		t.Fatalf("create chat session: %v", err)
+	}
+	return session
 }

@@ -1214,6 +1214,95 @@ func TestDocumentPreviewReturnsPDFMetadataWithoutReadingContent(t *testing.T) {
 	}
 }
 
+func TestDocumentResponsesExposeLatestJobProgress(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	services.documents.cfg.WorkerMaxRetries = 5
+	owner := createWorkspaceUser(t, services.db, "owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	doc := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual.pdf", "embedding")
+	oldJob := model.DocumentJob{
+		DocumentID: doc.ID,
+		JobType:    "process_document",
+		Status:     "failed",
+		RetryCount: 1,
+		CreatedAt:  time.Now().Add(-1 * time.Hour),
+		UpdatedAt:  time.Now().Add(-1 * time.Hour),
+	}
+	latestJob := model.DocumentJob{
+		DocumentID: doc.ID,
+		JobType:    "process_document",
+		Status:     "running",
+		RetryCount: 2,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	if err := services.db.Create(&oldJob).Error; err != nil {
+		t.Fatalf("create old document job: %v", err)
+	}
+	if err := services.db.Create(&latestJob).Error; err != nil {
+		t.Fatalf("create latest document job: %v", err)
+	}
+
+	detail, err := services.documents.Get(ctx, owner.ID, doc.ID)
+	if err != nil {
+		t.Fatalf("get document detail: %v", err)
+	}
+	if detail.JobStatus != "running" || detail.Stage != "embedding" || detail.Progress != 75 {
+		t.Fatalf("expected running embedding progress on detail, got %#v", detail)
+	}
+	if detail.RetryCount != 2 || detail.MaxRetries != 5 || detail.NextRetryAt != nil {
+		t.Fatalf("unexpected retry fields on detail: %#v", detail)
+	}
+
+	kbList, err := services.documents.List(ctx, owner.ID, kb.ID)
+	if err != nil {
+		t.Fatalf("list knowledge base documents: %v", err)
+	}
+	if len(kbList.Items) != 1 || kbList.Items[0].JobStatus != "running" || kbList.Items[0].Progress != 75 {
+		t.Fatalf("expected progress fields on knowledge base document list, got %#v", kbList.Items)
+	}
+
+	globalList, err := services.documents.ListGlobal(ctx, owner.ID, dto.GlobalDocumentListQuery{Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatalf("list global documents: %v", err)
+	}
+	if len(globalList.Items) != 1 || globalList.Items[0].JobStatus != "running" || globalList.Items[0].Progress != 75 {
+		t.Fatalf("expected progress fields on global document list, got %#v", globalList.Items)
+	}
+}
+
+func TestDocumentPendingRetryResponseExposesNextRetryAt(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	doc := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual.pdf", "uploaded")
+	retryAt := time.Now().Add(5 * time.Minute).UTC().Truncate(time.Second)
+	job := model.DocumentJob{
+		DocumentID: doc.ID,
+		JobType:    "process_document",
+		Status:     "pending",
+		RetryCount: 1,
+		LockedAt:   &retryAt,
+	}
+	if err := services.db.Create(&job).Error; err != nil {
+		t.Fatalf("create retry document job: %v", err)
+	}
+
+	detail, err := services.documents.Get(ctx, owner.ID, doc.ID)
+	if err != nil {
+		t.Fatalf("get document detail: %v", err)
+	}
+
+	if detail.JobStatus != "pending" || detail.Stage != "uploaded" || detail.Progress != 0 {
+		t.Fatalf("expected pending uploaded progress, got %#v", detail)
+	}
+	if detail.NextRetryAt == nil || !detail.NextRetryAt.Equal(retryAt) {
+		t.Fatalf("expected next retry time from lockedAt, got %#v", detail.NextRetryAt)
+	}
+}
+
 func TestDocumentChunksSupportPaginationAndSearch(t *testing.T) {
 	ctx := context.Background()
 	services := newWorkspaceTestServices(t)

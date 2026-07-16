@@ -25,6 +25,7 @@ const (
 	defaultEmbeddingDimension = 1536
 	defaultRerankBaseURL      = "https://api.openai.com/v1"
 	defaultRerankModel        = "rerank-model-name"
+	defaultRerankFailureMode  = "strict"
 	defaultUploadDir          = "./uploads"
 	defaultMaxUploadSizeMB    = 50
 	defaultVectorTopN         = 30
@@ -61,6 +62,7 @@ type Config struct {
 	RerankBaseURL      string
 	RerankAPIKey       string
 	RerankModel        string
+	RerankFailureMode  string
 	UploadDir          string
 	MaxUploadSizeMB    int
 	VectorTopN         int
@@ -99,6 +101,7 @@ func Load() Config {
 		RerankBaseURL:      normalizedBaseURL(getEnv("RERANK_BASE_URL", getEnv("OPENAI_BASE_URL", defaultRerankBaseURL))),
 		RerankAPIKey:       getEnv("RERANK_API_KEY", getEnv("OPENAI_API_KEY", "")),
 		RerankModel:        getEnv("RERANK_MODEL", defaultRerankModel),
+		RerankFailureMode:  normalizeRerankFailureMode(getEnv("RERANK_FAILURE_MODE", defaultRerankFailureMode)),
 		UploadDir:          getEnv("UPLOAD_DIR", defaultUploadDir),
 		MaxUploadSizeMB:    getEnvInt("MAX_UPLOAD_SIZE_MB", defaultMaxUploadSizeMB),
 		VectorTopN:         getEnvInt("VECTOR_TOP_N", defaultVectorTopN),
@@ -108,6 +111,15 @@ func Load() Config {
 		WorkerConcurrency:  getEnvInt("WORKER_CONCURRENCY", defaultWorkerConcurrency),
 		WorkerMaxRetries:   getEnvInt("WORKER_MAX_RETRIES", defaultWorkerMaxRetries),
 		WorkerRetryDelay:   getEnvDuration("WORKER_RETRY_DELAY", defaultWorkerRetryDelay),
+	}
+}
+
+func normalizeRerankFailureMode(value string) string {
+	switch value {
+	case "fallback":
+		return "fallback"
+	default:
+		return defaultRerankFailureMode
 	}
 }
 
