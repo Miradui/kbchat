@@ -47,6 +47,7 @@ const fallbackPreference: KnowledgeBaseWorkspacePreference = {
 export function DocumentsLandingPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const documentRequestIdRef = useRef(0);
+  const documentRequestsInFlightRef = useRef(0);
   const explicitRefreshInFlightRef = useRef(false);
   const mountedRef = useRef(true);
   const [categories, setCategories] = useState<KnowledgeBaseCategory[]>([]);
@@ -74,10 +75,15 @@ export function DocumentsLandingPage() {
   const [deleteTargetIds, setDeleteTargetIds] = useState<string[] | null>(null);
   const debouncedQuery = useDebouncedValue(queryDraft.trim(), 260);
 
-  const loadPage = useCallback(async () => {
+  const loadPage = useCallback(async (options: { background?: boolean } = {}) => {
+    if (options.background && documentRequestsInFlightRef.current > 0) {
+      return;
+    }
+    documentRequestsInFlightRef.current += 1;
     const requestId = documentRequestIdRef.current + 1;
     documentRequestIdRef.current = requestId;
-    const responses = await Promise.all([
+    try {
+      const responses = await Promise.all([
         listGlobalDocuments({
           q: debouncedQuery,
           knowledgeBaseId: knowledgeBaseFilter,
@@ -89,24 +95,30 @@ export function DocumentsLandingPage() {
         }),
         listKnowledgeBases({ pageSize: 100 }),
       ]).catch((err) => {
-      if (mountedRef.current && documentRequestIdRef.current === requestId) {
-        throw err;
+        if (mountedRef.current && documentRequestIdRef.current === requestId) {
+          throw err;
+        }
+        return null;
+      });
+      if (!responses || !mountedRef.current || documentRequestIdRef.current !== requestId) {
+        return;
       }
-      return null;
-    });
-    if (!responses || !mountedRef.current || documentRequestIdRef.current !== requestId) {
-      return;
+      const [documentResponse, kbResponse] = responses;
+      setLoadError('');
+      setDocuments(documentResponse.items);
+      setTotal(documentResponse.total);
+      setKnowledgeBases(kbResponse.items);
+      setUploadKnowledgeBaseId((current) => current || kbResponse.items[0]?.id || '');
+      setSelectedIds((current) => current.filter((id) => documentResponse.items.some((document) => document.id === id)));
+    } finally {
+      documentRequestsInFlightRef.current -= 1;
     }
-    const [documentResponse, kbResponse] = responses;
-    setLoadError('');
-    setDocuments(documentResponse.items);
-    setTotal(documentResponse.total);
-    setKnowledgeBases(kbResponse.items);
-    setUploadKnowledgeBaseId((current) => current || kbResponse.items[0]?.id || '');
-    setSelectedIds((current) => current.filter((id) => documentResponse.items.some((document) => document.id === id)));
   }, [debouncedQuery, fileType, knowledgeBaseFilter, page, pageSize, sort, status]);
 
-  const refreshPage = useCallback(async (fallback: string, options: { explicit?: boolean } = {}) => {
+  const refreshPage = useCallback(async (
+    fallback: string,
+    options: { background?: boolean; explicit?: boolean } = {},
+  ) => {
     if (options.explicit && explicitRefreshInFlightRef.current) {
       return;
     }
@@ -116,7 +128,7 @@ export function DocumentsLandingPage() {
       setActionError('');
     }
     try {
-      await loadPage();
+      await loadPage({ background: options.background });
     } catch (err) {
       if (mountedRef.current) {
         setLoadError(errorMessage(err, fallback));
@@ -177,9 +189,9 @@ export function DocumentsLandingPage() {
 
     let active = true;
     const timer = window.setInterval(() => {
-	  if (active) {
-		void refreshPage('文档状态刷新失败');
-	  }
+      if (active) {
+        void refreshPage('文档状态刷新失败', { background: true });
+      }
     }, 3000);
 
     return () => {

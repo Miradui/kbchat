@@ -217,6 +217,35 @@ describe('DocumentsLandingPage loading', () => {
 	expect(screen.getByRole('button', { name: '刷新' })).toBeEnabled();
   });
 
+  it('does not let a status poll supersede an explicit refresh', async () => {
+    let poll: (() => void) | undefined;
+    const realSetInterval = window.setInterval.bind(window);
+    vi.spyOn(window, 'setInterval').mockImplementation((handler, timeout, ...args) => {
+      if (timeout === 3000) {
+        poll = handler as () => void;
+        return 1;
+      }
+      return realSetInterval(handler, timeout, ...args);
+    });
+    const refresh = deferred<ReturnType<typeof documentResponse>>();
+    api.listGlobalDocuments
+      .mockResolvedValueOnce(documentResponse(documentItem('processing.pdf', 'embedding')))
+      .mockReturnValueOnce(refresh.promise)
+      .mockResolvedValueOnce(documentResponse(documentItem('poll.pdf', 'completed')));
+    const user = userEvent.setup();
+
+    renderWithRouter(<DocumentsLandingPage />, ['/documents']);
+    expect(await screen.findByText('processing.pdf')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '刷新' }));
+    if (!poll) throw new Error('poll callback was not registered');
+
+    await act(async () => poll?.());
+    expect(api.listGlobalDocuments).toHaveBeenCalledTimes(2);
+    await act(async () => refresh.resolve(documentResponse(documentItem('completed.pdf', 'completed'))));
+    expect(await screen.findByText('completed.pdf')).toBeInTheDocument();
+    expect(screen.queryByText('poll.pdf')).not.toBeInTheDocument();
+  });
+
   it('labels the upload target selector', async () => {
 	api.listGlobalDocuments.mockResolvedValue(documentResponse(documentItem('manual.pdf', 'completed')));
 
