@@ -78,6 +78,8 @@ chunkOverlap=120 tokens
 6. chunkOverlap 用于同一来源边界内相邻段落切片的尾部上下文补充；列表、表格和代码块不注入普通文本 overlap，避免破坏结构。overlap 不能破坏 chunkIndex 稳定递增。
 ```
 
+普通文本 overlap 必须能从单个超长 field 中按 token 预算取尾部；连续 CJK、Emoji、URL/hash 或无空格 ASCII 不得因 `strings.Fields` 粒度而静默丢失 overlap。主来源分片应为有效 overlap 预留预算，注入后的 chunk 仍必须不超过 chunkSize。
+
 Markdown 单个列表项超过预算时，每个分片重复原列表 marker；嵌套列表还必须重复原缩进。单个表格行超过预算时，按 cell 内容拆分并重建相同列数的行，同时重复 header/separator。转义管道 `\|` 和 inline code span 内的管道不作为列分隔符，极小预算 fallback 也不得把 `\|` 从中间拆开。标题前缀或重复结构包装不得挤掉 chunk 的主来源正文。
 
 没有正文的 Markdown heading 也必须保留为可检索的 `structureType=heading` chunk；连续子标题可合并为完整 headingPath，但在同级/上级标题替换前或文档结尾不得静默丢失。极小 token 预算下应按 heading 文本分片，不得产生空 chunk 或只保留祖先标题。

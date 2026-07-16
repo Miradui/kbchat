@@ -142,6 +142,11 @@ func (s *Splitter) splitOversizeBlock(item block) []block {
 	if budget < 1 {
 		budget = 1
 	}
+	if item.structureType == "paragraph" {
+		if overlapBudget := s.effectiveOverlapBudget(); overlapBudget > 0 && budget > overlapBudget {
+			budget -= overlapBudget
+		}
+	}
 
 	switch item.structureType {
 	case "code":
@@ -220,12 +225,21 @@ func (s *Splitter) overlapText(content string) string {
 	if content == "" || s.chunkOverlap <= 0 {
 		return ""
 	}
-	budget := s.chunkOverlap
-	maxOverlap := s.chunkSize / 4
-	if maxOverlap > 0 && budget > maxOverlap {
-		budget = maxOverlap
+	return tailByTokenBudget(content, s.effectiveOverlapBudget())
+}
+
+func (s *Splitter) effectiveOverlapBudget() int {
+	if s.chunkOverlap <= 0 {
+		return 0
 	}
-	return tailByTokenBudget(content, budget)
+	maxOverlap := s.chunkSize / 4
+	if maxOverlap <= 0 {
+		return 0
+	}
+	if s.chunkOverlap > maxOverlap {
+		return maxOverlap
+	}
+	return s.chunkOverlap
 }
 
 func newChunkBuilder(item block, overlap string) chunkBuilder {
@@ -1162,20 +1176,20 @@ func trimTextSpan(text string, start int, end int) (string, textSpan) {
 }
 
 func tailByTokenBudget(text string, budget int) string {
-	words := strings.Fields(text)
-	if len(words) == 0 {
+	text = strings.TrimSpace(text)
+	if text == "" || budget <= 0 {
 		return ""
 	}
-	for start := len(words) - 1; start >= 0; start-- {
-		candidate := strings.Join(words[start:], " ")
-		if estimateTokens(candidate) > budget {
-			if start == len(words)-1 {
-				return ""
-			}
-			return strings.Join(words[start+1:], " ")
+	start := len(text)
+	for start > 0 {
+		_, size := utf8.DecodeLastRuneInString(text[:start])
+		candidateStart := start - size
+		if estimateTokens(strings.TrimSpace(text[candidateStart:])) > budget {
+			break
 		}
+		start = candidateStart
 	}
-	return strings.Join(words, " ")
+	return strings.TrimSpace(text[start:])
 }
 
 func contentWithinBudget(prefix string, body string, budget int) string {

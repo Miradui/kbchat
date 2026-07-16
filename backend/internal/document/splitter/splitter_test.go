@@ -835,3 +835,42 @@ func TestSplitBoundsUnspacedASCIIAndEmojiByTokenBudget(t *testing.T) {
 		})
 	}
 }
+
+func TestSplitOverlapsUnspacedTextWithinTokenBudget(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+	}{
+		{name: "ascii", text: "abcdefghijklmnopqrstuvwxyz0123456789"},
+		{name: "cjk", text: "甲乙丙丁戊己庚辛壬癸"},
+		{name: "emoji", text: "😀😃😄😁😆😅😂🤣😊😇"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chunks := New(4, 1).SplitDocument(parser.ParsedDocument{
+				FileType: "txt",
+				Segments: []parser.Segment{{Content: tt.text}},
+			})
+			if len(chunks) < 2 {
+				t.Fatalf("expected multiple chunks, got %#v", chunks)
+			}
+
+			reconstructed := chunks[0].Content
+			for index := 1; index < len(chunks); index++ {
+				previousTail := tailByTokenBudget(chunks[index-1].Content, 1)
+				overlapPrefix := previousTail + "\n\n"
+				if previousTail == "" || !strings.HasPrefix(chunks[index].Content, overlapPrefix) {
+					t.Fatalf("expected chunk %d to overlap %q, got %#v", index, previousTail, chunks)
+				}
+				if chunks[index].TokenCount > 4 {
+					t.Fatalf("expected chunk %d within budget, got %#v", index, chunks[index])
+				}
+				reconstructed += strings.TrimPrefix(chunks[index].Content, overlapPrefix)
+			}
+			if reconstructed != tt.text {
+				t.Fatalf("expected overlap-deduplicated text %q, got %q from %#v", tt.text, reconstructed, chunks)
+			}
+		})
+	}
+}
