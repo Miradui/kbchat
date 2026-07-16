@@ -297,8 +297,14 @@ export type KnowledgeBaseSearchResult = {
   rerankScore?: number | null;
 };
 
+export type KnowledgeBaseRerankFallback = {
+  used: boolean;
+  reason?: string;
+};
+
 export type KnowledgeBaseSearchResponse = {
   items: KnowledgeBaseSearchResult[];
+  rerankFallback: KnowledgeBaseRerankFallback | null;
 };
 
 export type ChatSession = {

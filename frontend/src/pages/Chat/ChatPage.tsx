@@ -546,7 +546,7 @@ function formatScore(value: number): string {
 }
 
 function formatNullableScore(value: number | null): string {
-  return typeof value === 'number' ? value.toFixed(2) : '-';
+  return typeof value === 'number' ? value.toFixed(2) : '未精排';
 }
 
 function formatDateTime(value: string): string {

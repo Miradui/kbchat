@@ -25,6 +25,7 @@ import type {
   KnowledgeBase,
   KnowledgeBaseCategory,
   KnowledgeBasePermissionResponse,
+  KnowledgeBaseRerankFallback,
   KnowledgeBaseSearchResult,
   KnowledgeBaseWorkspacePreference,
   MemberRole,
@@ -60,6 +61,7 @@ export function KnowledgeBaseDetailPage() {
   const [memberQuery, setMemberQuery] = useState('');
   const [memberRole, setMemberRole] = useState<MemberRole>('member');
   const [userResults, setUserResults] = useState<UserSummary[]>([]);
+  const [searchFallback, setSearchFallback] = useState<KnowledgeBaseRerankFallback | null>(null);
   const [searchingUsers, setSearchingUsers] = useState(false);
   const [memberWorkingId, setMemberWorkingId] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -247,6 +249,7 @@ export function KnowledgeBaseDetailPage() {
 
     setSearching(true);
     setError('');
+    setSearchFallback(null);
 
     try {
       const response = await searchKnowledgeBase(knowledgeBase.id, {
@@ -256,9 +259,11 @@ export function KnowledgeBaseDetailPage() {
         enableRerank: knowledgeBase.retrievalConfig.enableRerank,
       });
       setSearchResults(response.items);
+      setSearchFallback(response.rerankFallback?.used ? response.rerankFallback : null);
     } catch (err) {
       setError(errorMessage(err, '知识库内检索失败'));
       setSearchResults([]);
+      setSearchFallback(null);
     } finally {
       setSearching(false);
     }
@@ -466,6 +471,16 @@ export function KnowledgeBaseDetailPage() {
                 </button>
               </form>
 
+              {searchFallback?.used && (
+                <div className="semantic-fallback-notice" role="status">
+                  <strong>Rerank 已降级</strong>
+                  <span>
+                    本次检索未完成精排，结果按向量召回顺序展示。
+                    {searchFallback.reason ? `原因：${searchFallback.reason}` : ''}
+                  </span>
+                </div>
+              )}
+
               {searchResults.length === 0 ? (
                 <div className="empty-state">暂无检索结果。完成文档处理后可在这里测试召回片段。</div>
               ) : (
@@ -478,7 +493,7 @@ export function KnowledgeBaseDetailPage() {
                           vector {formatScore(result.vectorScore)}
                           {result.rerankScore !== null && result.rerankScore !== undefined
                             ? ` · rerank ${formatScore(result.rerankScore)}`
-                            : ' · rerank -'}
+                            : ' · rerank 未精排'}
                         </span>
                       </header>
                       <p>{result.content}</p>
