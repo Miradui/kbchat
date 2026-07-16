@@ -82,6 +82,42 @@ func TestSplitPreservesEmptyHeadingBeforeSibling(t *testing.T) {
 	}
 }
 
+func TestSplitPreservesEmptyHeadingUnderTinyBudget(t *testing.T) {
+	chunks := New(1, 0).Split("# abcdefgh")
+
+	var content strings.Builder
+	for _, chunk := range chunks {
+		if chunk.Content == "" || chunk.TokenCount > 1 {
+			t.Fatalf("expected non-empty heading chunks within budget, got %#v", chunks)
+		}
+		if chunk.Metadata["structureType"] != "heading" {
+			t.Fatalf("expected heading structure metadata, got %#v", chunk.Metadata)
+		}
+		content.WriteString(chunk.Content)
+	}
+	if content.String() != "abcdefgh" {
+		t.Fatalf("expected complete heading content, got %q from %#v", content.String(), chunks)
+	}
+}
+
+func TestSplitPreservesNestedLeafHeadingUnderTinyBudget(t *testing.T) {
+	chunks := New(1, 0).Split("# A\n## B")
+
+	var foundLeaf bool
+	for _, chunk := range chunks {
+		if chunk.Content != "B" {
+			continue
+		}
+		path, ok := chunk.Metadata["headingPath"].([]string)
+		if ok && strings.Join(path, " > ") == "A > B" {
+			foundLeaf = true
+		}
+	}
+	if !foundLeaf {
+		t.Fatalf("expected nested leaf heading to remain searchable, got %#v", chunks)
+	}
+}
+
 func TestSplitPrefersParagraphBoundariesBeforeHardSplitting(t *testing.T) {
 	text := strings.Join([]string{
 		"# Release Notes",

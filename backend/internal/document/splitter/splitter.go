@@ -31,6 +31,7 @@ type block struct {
 	fileType      string
 	pageNumber    *int
 	headingPath   []string
+	headingOnly   bool
 	structureType string
 	startOffset   int
 	endOffset     int
@@ -55,6 +56,7 @@ type chunkBuilder struct {
 	fileType       string
 	pageNumber     *int
 	headingPath    []string
+	headingOnly    bool
 	parts          []string
 	structureTypes map[string]struct{}
 	startOffset    int
@@ -145,7 +147,7 @@ func (s *Splitter) splitOversizeBlock(item block) []block {
 	case "code":
 		return splitOversizeCodeBlock(item, budget)
 	case "heading":
-		return []block{item}
+		return splitOversizeHeadingBlock(item, s.chunkSize)
 	case "table":
 		return splitOversizeTableBlock(item, budget)
 	case "list":
@@ -154,6 +156,21 @@ func (s *Splitter) splitOversizeBlock(item block) []block {
 
 	spans := splitTextToBudgetSpans(item.content, budget)
 	return blocksFromSpans(item, spans, nil)
+}
+
+func splitOversizeHeadingBlock(item block, budget int) []block {
+	spans := splitTextToBudgetSpans(item.content, budget)
+	result := make([]block, 0, len(spans))
+	for _, span := range spans {
+		part := item.content[span.start:span.end]
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		partItem := item
+		partItem.content = part
+		result = append(result, partItem)
+	}
+	return result
 }
 
 func blocksFromSpans(item block, spans []textSpan, decorate func(string) string) []block {
@@ -171,6 +188,7 @@ func blocksFromSpans(item block, spans []textSpan, decorate func(string) string)
 			fileType:      item.fileType,
 			pageNumber:    copyIntPointer(item.pageNumber),
 			headingPath:   copyStrings(item.headingPath),
+			headingOnly:   item.headingOnly,
 			structureType: item.structureType,
 			startOffset:   item.startOffset + span.start,
 			endOffset:     item.startOffset + span.end,
@@ -215,6 +233,7 @@ func newChunkBuilder(item block, overlap string) chunkBuilder {
 		fileType:       item.fileType,
 		pageNumber:     copyIntPointer(item.pageNumber),
 		headingPath:    copyStrings(item.headingPath),
+		headingOnly:    item.headingOnly,
 		structureTypes: map[string]struct{}{},
 		startOffset:    item.startOffset,
 		endOffset:      item.endOffset,
@@ -240,6 +259,9 @@ func (b chunkBuilder) body() string {
 
 func (b chunkBuilder) content() string {
 	body := b.body()
+	if b.headingOnly {
+		return body
+	}
 	prefix := headingPrefix(b.headingPath)
 	if prefix == "" {
 		return body
@@ -266,6 +288,7 @@ func (b *chunkBuilder) addBlock(item block) {
 		b.structureTypes = map[string]struct{}{}
 	}
 	b.parts = append(b.parts, item.content)
+	b.headingOnly = b.headingOnly || item.headingOnly
 	b.structureTypes[item.structureType] = struct{}{}
 	if item.startOffset < b.startOffset {
 		b.startOffset = item.startOffset
@@ -276,7 +299,11 @@ func (b *chunkBuilder) addBlock(item block) {
 }
 
 func (b chunkBuilder) chunk(index int, maxTokens int) Chunk {
-	content := contentWithinBudget(headingPrefix(b.headingPath), b.body(), maxTokens)
+	prefix := headingPrefix(b.headingPath)
+	if b.headingOnly {
+		prefix = ""
+	}
+	content := contentWithinBudget(prefix, b.body(), maxTokens)
 	metadata := map[string]any{
 		"fileType":      b.fileType,
 		"headingPath":   copyStrings(b.headingPath),
@@ -324,10 +351,11 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 			return
 		}
 		blocks = append(blocks, block{
-			content:       "",
+			content:       headingPrefix(headingPath),
 			fileType:      fileType,
 			pageNumber:    copyIntPointer(pageNumber),
 			headingPath:   copyStrings(headingPath),
+			headingOnly:   true,
 			structureType: "heading",
 			startOffset:   lastHeadingStart,
 			endOffset:     lastHeadingEnd,
