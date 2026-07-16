@@ -52,8 +52,13 @@ export function DocumentRecycleBinDrawer({
     if (!mountedRef.current || requestIdRef.current !== requestId) {
       return;
     }
-    setItems(response.items);
     setTotal(response.total);
+    const lastPage = Math.max(1, Math.ceil(response.total / pageSize));
+    if (page > lastPage) {
+      setPage(lastPage);
+      return;
+    }
+    setItems(response.items);
   }, [page, pageSize]);
 
   const refreshPage = useCallback(async (fallback: string) => {

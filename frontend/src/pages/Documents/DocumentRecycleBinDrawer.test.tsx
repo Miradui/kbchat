@@ -159,6 +159,28 @@ describe('DocumentRecycleBinDrawer', () => {
     expect(onChanged).not.toHaveBeenCalled();
     expect(api.listDocumentRecycleBin).toHaveBeenCalledTimes(1);
   });
+
+  it('returns to the last valid page after removing its final item', async () => {
+    const lastPageDocument = { ...recycledDocument, id: 'last', name: 'last.pdf' };
+    const remainingDocument = { ...recycledDocument, id: 'remaining', name: 'remaining.pdf' };
+    api.listDocumentRecycleBin
+      .mockResolvedValueOnce(recycleResponse([recycledDocument], 21))
+      .mockResolvedValueOnce(recycleResponse([lastPageDocument], 21))
+      .mockResolvedValueOnce(recycleResponse([], 20))
+      .mockResolvedValueOnce(recycleResponse([remainingDocument], 20));
+    api.restoreDocument.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+
+    renderWithRouter(<DocumentRecycleBinDrawer onChanged={vi.fn()} onClose={vi.fn()} />);
+    expect(await screen.findByText('manual.pdf')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '›' }));
+    expect(await screen.findByText('last.pdf')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '恢复 last.pdf' }));
+
+    expect(await screen.findByText('remaining.pdf')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '1' })).toHaveClass('active-page');
+    expect(screen.queryByText('文档回收站为空。')).not.toBeInTheDocument();
+  });
 });
 
 const recycledDocument = {
