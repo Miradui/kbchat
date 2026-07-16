@@ -144,18 +144,24 @@ func (s *ChatService) DeleteSession(ctx context.Context, userID, sessionID uuid.
 	return nil
 }
 
-func (s *ChatService) ArchiveSession(ctx context.Context, userID, sessionID uuid.UUID) error {
+func (s *ChatService) ArchiveSession(ctx context.Context, userID, sessionID uuid.UUID) (*dto.ChatSessionResponse, error) {
 	session, err := s.findSession(ctx, userID, sessionID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if session.ArchivedAt != nil {
-		return nil
+		res := toChatSessionResponse(session)
+		return &res, nil
 	}
 	if err := s.chats.ArchiveSession(ctx, session.ID, time.Now()); err != nil {
-		return apperror.Internal(err)
+		return nil, apperror.Internal(err)
 	}
-	return nil
+	archived, err := s.findSession(ctx, userID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	res := toChatSessionResponse(archived)
+	return &res, nil
 }
 
 func (s *ChatService) ListMessages(ctx context.Context, userID, sessionID uuid.UUID) (*dto.ChatMessageListResponse, error) {

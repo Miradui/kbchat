@@ -26,10 +26,12 @@ func (r *ChatRepository) CreateSession(ctx context.Context, session *model.ChatS
 func (r *ChatRepository) ListSessions(ctx context.Context, userID uuid.UUID) ([]model.ChatSession, error) {
 	var sessions []model.ChatSession
 	err := r.db.WithContext(ctx).
-		Where("user_id = ?", userID).
-		Where("deleted_at IS NULL").
-		Where("archived_at IS NULL").
-		Order("updated_at desc").
+		Joins("JOIN knowledge_bases ON knowledge_bases.id = chat_sessions.knowledge_base_id").
+		Where("chat_sessions.user_id = ?", userID).
+		Where("knowledge_bases.owner_id = ?", userID).
+		Where("knowledge_bases.deleted_at IS NULL").
+		Where("chat_sessions.archived_at IS NULL").
+		Order("chat_sessions.updated_at desc").
 		Find(&sessions).Error
 	return sessions, err
 }
@@ -59,7 +61,7 @@ func (r *ChatRepository) UpdateSessionTitle(ctx context.Context, sessionID uuid.
 func (r *ChatRepository) ArchiveSession(ctx context.Context, sessionID uuid.UUID, archivedAt time.Time) error {
 	return r.db.WithContext(ctx).
 		Model(&model.ChatSession{}).
-		Where("id = ?", sessionID).
+		Where("id = ? AND archived_at IS NULL", sessionID).
 		Updates(map[string]any{
 			"archived_at": archivedAt,
 			"updated_at":  archivedAt,

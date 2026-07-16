@@ -307,7 +307,7 @@ export type ChatSession = {
   title: string;
   createdAt: string;
   updatedAt: string;
-  archivedAt?: string | null;
+  archivedAt: string | null;
 };
 
 export type ChatSessionListResponse = {
