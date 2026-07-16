@@ -46,6 +46,22 @@ func TestParseDocumentPreservesTextFormatAndLiteralSyntax(t *testing.T) {
 	}
 }
 
+func TestParseDocumentRejectsInvalidUTF8Text(t *testing.T) {
+	for _, fileType := range []string{"txt", "md"} {
+		t.Run(fileType, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "invalid."+fileType)
+			if err := os.WriteFile(path, []byte{0xff, 0xfe, 'x'}, 0o600); err != nil {
+				t.Fatalf("write invalid UTF-8 fixture: %v", err)
+			}
+
+			_, err := NewDefaultParser().ParseDocument(path, fileType)
+			if err == nil || !strings.Contains(err.Error(), "valid UTF-8") {
+				t.Fatalf("expected explicit UTF-8 parse error, got %v", err)
+			}
+		})
+	}
+}
+
 func TestCollectPDFSegmentsPreservesPhysicalPageNumbers(t *testing.T) {
 	pages := map[int]string{
 		1: " first page ",

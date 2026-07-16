@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ledongthuc/pdf"
 )
@@ -48,6 +49,9 @@ func (p *DefaultParser) ParseDocument(path string, fileType string) (ParsedDocum
 		if err != nil {
 			return ParsedDocument{}, err
 		}
+		if !utf8.Valid(content) {
+			return ParsedDocument{}, fmt.Errorf("parse %s: content is not valid UTF-8", fileType)
+		}
 		return ParsedDocument{
 			FileType: fileType,
 			Segments: []Segment{{Content: strings.TrimPrefix(string(content), "\ufeff")}},
@@ -62,6 +66,9 @@ func (p *DefaultParser) ParseDocument(path string, fileType string) (ParsedDocum
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return ParsedDocument{}, err
+		}
+		if !utf8.Valid(content) {
+			return ParsedDocument{}, fmt.Errorf("parse %s: content is not valid UTF-8", fileType)
 		}
 		return ParsedDocument{
 			FileType: fileType,
