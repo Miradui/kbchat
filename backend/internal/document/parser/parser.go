@@ -9,7 +9,7 @@ import (
 )
 
 type Parser interface {
-	Parse(path string, fileType string) (string, error)
+	ParseDocument(path string, fileType string) (ParsedDocument, error)
 }
 
 type ParsedDocument struct {

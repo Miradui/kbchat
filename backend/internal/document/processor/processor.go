@@ -52,7 +52,7 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 	if err := p.documents.UpdateStatus(ctx, document.ID, "parsing", ""); err != nil {
 		return err
 	}
-	text, err := p.parser.Parse(document.StoragePath, document.FileType)
+	parsedDocument, err := p.parser.ParseDocument(document.StoragePath, document.FileType)
 	if err != nil {
 		return err
 	}
@@ -60,7 +60,7 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 	if err := p.documents.UpdateStatus(ctx, document.ID, "chunking", ""); err != nil {
 		return err
 	}
-	parts := p.splitter.Split(text)
+	parts := p.splitter.SplitDocument(parsedDocument)
 	if len(parts) == 0 {
 		return fmt.Errorf("document contains no extractable text")
 	}
@@ -104,6 +104,7 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 				ChunkIndex:      part.Index,
 				Content:         part.Content,
 				TokenCount:      part.TokenCount,
+				PageNumber:      part.PageNumber,
 				Metadata:        metadata,
 				Embedding:       pgvector.NewVector(vector),
 			})

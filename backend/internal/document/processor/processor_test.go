@@ -1,12 +1,51 @@
 package processor
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+
+	"rag/backend/internal/document/parser"
 	"rag/backend/internal/document/splitter"
+	"rag/backend/internal/model"
+	"rag/backend/internal/repository"
 )
+
+type structuredParser struct {
+	document parser.ParsedDocument
+}
+
+func (p structuredParser) ParseDocument(_ string, _ string) (parser.ParsedDocument, error) {
+	return p.document, nil
+}
+
+type cardinalityEmbedder struct {
+	delta int
+}
+
+func (e cardinalityEmbedder) EmbedTexts(_ context.Context, texts []string) ([][]float32, error) {
+	count := len(texts) + e.delta
+	if count < 0 {
+		count = 0
+	}
+	vectors := make([][]float32, count)
+	for index := range vectors {
+		vectors[index] = []float32{float32(index + 1)}
+	}
+	return vectors, nil
+}
+
+type processorTestFixture struct {
+	documents *repository.DocumentRepository
+	chunks    *repository.ChunkRepository
+	document  model.Document
+}
 
 func TestBuildChunkMetadataMergesSplitterMetadata(t *testing.T) {
 	metadataBytes, err := buildChunkMetadata(splitter.Chunk{
@@ -75,4 +114,204 @@ func TestValidateEmbeddingCountRejectsProviderCardinalityMismatch(t *testing.T) 
 			}
 		})
 	}
+}
+
+func TestProcessPersistsStructuredPDFPages(t *testing.T) {
+	pageOne := 1
+	pageThree := 3
+	parsed := parser.ParsedDocument{
+		FileType: "pdf",
+		Segments: []parser.Segment{
+			{Content: "first physical page", PageNumber: &pageOne},
+			{Content: "third physical page", PageNumber: &pageThree},
+		},
+	}
+	fixture := newProcessorTestFixture(t, "pdf")
+	processor := New(
+		fixture.documents,
+		fixture.chunks,
+		structuredParser{document: parsed},
+		splitter.New(100, 10),
+		cardinalityEmbedder{},
+	)
+
+	if err := processor.Process(context.Background(), &model.DocumentJob{DocumentID: fixture.document.ID}); err != nil {
+		t.Fatalf("process PDF: %v", err)
+	}
+
+	chunks, err := fixture.chunks.ListByDocument(context.Background(), fixture.document.ID)
+	if err != nil {
+		t.Fatalf("list PDF chunks: %v", err)
+	}
+	if len(chunks) != 2 {
+		t.Fatalf("expected one stored chunk per non-empty PDF page, got %#v", chunks)
+	}
+	for index, expectedPage := range []int{1, 3} {
+		chunk := chunks[index]
+		if chunk.PageNumber == nil || *chunk.PageNumber != expectedPage {
+			t.Fatalf("expected physical page %d at chunk %d, got %#v", expectedPage, index, chunk)
+		}
+		metadata := decodeChunkMetadata(t, chunk.Metadata)
+		if metadata["fileType"] != "pdf" || metadata["pageNumber"] != float64(expectedPage) {
+			t.Fatalf("expected stored PDF metadata for page %d, got %#v", expectedPage, metadata)
+		}
+	}
+}
+
+func TestProcessSelectsSplitterStrategyFromParsedFileType(t *testing.T) {
+	tests := []struct {
+		name               string
+		fileType           string
+		content            string
+		wantHeadingPathLen int
+		wantLiteral        string
+	}{
+		{
+			name:        "plain text keeps markdown syntax literal",
+			fileType:    "txt",
+			content:     "# literal heading\n- literal list\nvalue | is | literal",
+			wantLiteral: "# literal heading",
+		},
+		{
+			name:               "markdown preserves heading structure",
+			fileType:           "md",
+			content:            "# Product Guide\nbody text",
+			wantHeadingPathLen: 1,
+			wantLiteral:        "Product Guide\nbody text",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newProcessorTestFixture(t, tt.fileType)
+			parsed := parser.ParsedDocument{
+				FileType: tt.fileType,
+				Segments: []parser.Segment{{Content: tt.content}},
+			}
+			processor := New(
+				fixture.documents,
+				fixture.chunks,
+				structuredParser{document: parsed},
+				splitter.New(100, 10),
+				cardinalityEmbedder{},
+			)
+
+			if err := processor.Process(context.Background(), &model.DocumentJob{DocumentID: fixture.document.ID}); err != nil {
+				t.Fatalf("process %s: %v", tt.fileType, err)
+			}
+			chunks, err := fixture.chunks.ListByDocument(context.Background(), fixture.document.ID)
+			if err != nil || len(chunks) != 1 {
+				t.Fatalf("expected one stored %s chunk, chunks=%#v err=%v", tt.fileType, chunks, err)
+			}
+			if !strings.Contains(chunks[0].Content, tt.wantLiteral) {
+				t.Fatalf("expected %q in stored %s content %q", tt.wantLiteral, tt.fileType, chunks[0].Content)
+			}
+			metadata := decodeChunkMetadata(t, chunks[0].Metadata)
+			if metadata["fileType"] != tt.fileType {
+				t.Fatalf("expected %s metadata, got %#v", tt.fileType, metadata)
+			}
+			headingPathLength := 0
+			if headingPath := metadata["headingPath"]; headingPath != nil {
+				values, ok := headingPath.([]any)
+				if !ok {
+					t.Fatalf("expected heading path array or null, got %#v", headingPath)
+				}
+				headingPathLength = len(values)
+			}
+			if headingPathLength != tt.wantHeadingPathLen {
+				t.Fatalf("expected heading path length %d, got %#v", tt.wantHeadingPathLen, metadata["headingPath"])
+			}
+		})
+	}
+}
+
+func TestProcessDoesNotWriteEmbeddingCardinalityMismatch(t *testing.T) {
+	for _, delta := range []int{-1, 1} {
+		t.Run(fmt.Sprintf("delta_%d", delta), func(t *testing.T) {
+			fixture := newProcessorTestFixture(t, "txt")
+			parsed := parser.ParsedDocument{
+				FileType: "txt",
+				Segments: []parser.Segment{{Content: "alpha beta"}},
+			}
+			processor := New(
+				fixture.documents,
+				fixture.chunks,
+				structuredParser{document: parsed},
+				splitter.New(100, 10),
+				cardinalityEmbedder{delta: delta},
+			)
+
+			err := processor.Process(context.Background(), &model.DocumentJob{DocumentID: fixture.document.ID})
+			if err == nil || !strings.Contains(err.Error(), "embedding provider returned") {
+				t.Fatalf("expected cardinality mismatch error, got %v", err)
+			}
+			chunks, listErr := fixture.chunks.ListByDocument(context.Background(), fixture.document.ID)
+			if listErr != nil {
+				t.Fatalf("list chunks after mismatch: %v", listErr)
+			}
+			if len(chunks) != 0 {
+				t.Fatalf("expected mismatched embedding batch not to be stored, got %#v", chunks)
+			}
+		})
+	}
+}
+
+func newProcessorTestFixture(t *testing.T, fileType string) processorTestFixture {
+	t.Helper()
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", uuid.NewString())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get sqlite connection: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	if err := db.AutoMigrate(
+		&model.User{},
+		&model.KnowledgeBase{},
+		&model.Document{},
+		&model.DocumentChunk{},
+	); err != nil {
+		t.Fatalf("auto migrate processor fixture: %v", err)
+	}
+
+	user := model.User{Username: "processor-" + uuid.NewString(), PasswordHash: "hash"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("create processor user: %v", err)
+	}
+	knowledgeBase := model.KnowledgeBase{Name: "Processor Test", OwnerID: user.ID}
+	if err := db.Create(&knowledgeBase).Error; err != nil {
+		t.Fatalf("create processor knowledge base: %v", err)
+	}
+	document := model.Document{
+		KnowledgeBaseID: knowledgeBase.ID,
+		UploaderID:      user.ID,
+		Filename:        "fixture." + fileType,
+		FileType:        fileType,
+		StoragePath:     "unused-by-structured-parser",
+		Status:          "uploaded",
+	}
+	if err := db.Create(&document).Error; err != nil {
+		t.Fatalf("create processor document: %v", err)
+	}
+
+	return processorTestFixture{
+		documents: repository.NewDocumentRepository(db),
+		chunks:    repository.NewChunkRepository(db),
+		document:  document,
+	}
+}
+
+func decodeChunkMetadata(t *testing.T, raw []byte) map[string]any {
+	t.Helper()
+	var metadata map[string]any
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		t.Fatalf("decode chunk metadata: %v", err)
+	}
+	return metadata
 }
