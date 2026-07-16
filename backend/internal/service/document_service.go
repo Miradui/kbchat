@@ -238,7 +238,7 @@ func (s *DocumentService) Reprocess(ctx context.Context, ownerID, documentID uui
 	if err != nil {
 		return nil, err
 	}
-	job, created, err := s.documents.QueueReprocess(ctx, document.ID)
+	job, created, err := s.documents.QueueReprocess(ctx, document.ID, ownerID)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -246,10 +246,6 @@ func (s *DocumentService) Reprocess(ctx context.Context, ownerID, documentID uui
 		document.Status = "uploaded"
 		document.ErrorMessage = ""
 	}
-	if err := s.knowledgeBases.TouchUpdatedBy(ctx, document.KnowledgeBaseID, ownerID); err != nil {
-		return nil, apperror.Internal(err)
-	}
-
 	res := toDocumentResponse(document, job, s.maxDocumentRetries())
 	return &res, nil
 }
@@ -262,29 +258,8 @@ func (s *DocumentService) BatchReprocess(ctx context.Context, ownerID uuid.UUID,
 	if err := s.ensureDocumentsOwner(ctx, ownerID, ids, false); err != nil {
 		return nil, err
 	}
-	documents := make([]model.Document, 0, len(ids))
-	for _, id := range ids {
-		document, err := s.documents.FindByIDAndOwner(ctx, id, ownerID)
-		if err != nil {
-			return nil, apperror.Internal(err)
-		}
-		if document == nil {
-			return nil, apperror.NotFound("DOCUMENT_NOT_FOUND", "document not found")
-		}
-		documents = append(documents, *document)
-	}
-	if err := s.documents.QueueBatchReprocess(ctx, ids); err != nil {
+	if err := s.documents.QueueBatchReprocess(ctx, ids, ownerID); err != nil {
 		return nil, apperror.Internal(err)
-	}
-	touchedKnowledgeBases := make(map[uuid.UUID]struct{}, len(documents))
-	for i := range documents {
-		if _, exists := touchedKnowledgeBases[documents[i].KnowledgeBaseID]; exists {
-			continue
-		}
-		touchedKnowledgeBases[documents[i].KnowledgeBaseID] = struct{}{}
-		if err := s.knowledgeBases.TouchUpdatedBy(ctx, documents[i].KnowledgeBaseID, ownerID); err != nil {
-			return nil, apperror.Internal(err)
-		}
 	}
 	return &dto.DocumentBatchResultResponse{ProcessedCount: len(ids)}, nil
 }

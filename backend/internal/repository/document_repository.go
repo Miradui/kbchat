@@ -169,7 +169,7 @@ func (r *DocumentRepository) CreateJob(ctx context.Context, job *model.DocumentJ
 	return r.db.WithContext(ctx).Create(job).Error
 }
 
-func (r *DocumentRepository) QueueReprocess(ctx context.Context, documentID uuid.UUID) (*model.DocumentJob, bool, error) {
+func (r *DocumentRepository) QueueReprocess(ctx context.Context, documentID, updatedByID uuid.UUID) (*model.DocumentJob, bool, error) {
 	var job model.DocumentJob
 	created := false
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -216,6 +216,9 @@ func (r *DocumentRepository) QueueReprocess(ctx context.Context, documentID uuid
 		if err := tx.Create(&job).Error; err != nil {
 			return err
 		}
+		if err := touchReprocessedKnowledgeBase(tx, document.KnowledgeBaseID, updatedByID, now); err != nil {
+			return err
+		}
 		created = true
 		return nil
 	})
@@ -225,7 +228,7 @@ func (r *DocumentRepository) QueueReprocess(ctx context.Context, documentID uuid
 	return &job, created, nil
 }
 
-func (r *DocumentRepository) QueueBatchReprocess(ctx context.Context, documentIDs []uuid.UUID) error {
+func (r *DocumentRepository) QueueBatchReprocess(ctx context.Context, documentIDs []uuid.UUID, updatedByID uuid.UUID) error {
 	orderedIDs := append([]uuid.UUID(nil), documentIDs...)
 	sort.Slice(orderedIDs, func(i, j int) bool {
 		return orderedIDs[i].String() < orderedIDs[j].String()
@@ -244,6 +247,7 @@ func (r *DocumentRepository) QueueBatchReprocess(ctx context.Context, documentID
 			return gorm.ErrRecordNotFound
 		}
 
+		touchedKnowledgeBases := make(map[uuid.UUID]time.Time, len(documents))
 		for i := range documents {
 			var activeJobs []model.DocumentJob
 			if err := tx.
@@ -280,6 +284,12 @@ func (r *DocumentRepository) QueueBatchReprocess(ctx context.Context, documentID
 				Status:     "pending",
 			}
 			if err := tx.Create(&job).Error; err != nil {
+				return err
+			}
+			touchedKnowledgeBases[documents[i].KnowledgeBaseID] = now
+		}
+		for knowledgeBaseID, updatedAt := range touchedKnowledgeBases {
+			if err := touchReprocessedKnowledgeBase(tx, knowledgeBaseID, updatedByID, updatedAt); err != nil {
 				return err
 			}
 		}
@@ -516,4 +526,20 @@ func clauseLockingUpdateSkipLocked() clause.Expression {
 
 func isTerminalDocumentStatus(status string) bool {
 	return status == "completed" || status == "failed"
+}
+
+func touchReprocessedKnowledgeBase(tx *gorm.DB, knowledgeBaseID, updatedByID uuid.UUID, updatedAt time.Time) error {
+	result := tx.Model(&model.KnowledgeBase{}).
+		Where("id = ?", knowledgeBaseID).
+		Updates(map[string]any{
+			"updated_by_id": updatedByID,
+			"updated_at":    updatedAt,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }

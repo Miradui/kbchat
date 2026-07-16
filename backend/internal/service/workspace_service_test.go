@@ -1251,6 +1251,88 @@ func TestDocumentReprocessQueuesSuccessorWhileWorkerFinishes(t *testing.T) {
 	}
 }
 
+func TestDocumentReprocessRollsBackWhenKnowledgeBaseTouchFails(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	document := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual.pdf", "completed")
+	trigger := fmt.Sprintf(`
+		CREATE TRIGGER fail_reprocess_knowledge_base_touch
+		BEFORE UPDATE OF updated_by_id ON knowledge_bases
+		WHEN NEW.id = '%s'
+		BEGIN
+			SELECT RAISE(ABORT, 'forced knowledge base touch failure');
+		END`, kb.ID)
+	if err := services.db.Exec(trigger).Error; err != nil {
+		t.Fatalf("create knowledge base failure trigger: %v", err)
+	}
+
+	if _, err := services.documents.Reprocess(ctx, owner.ID, document.ID); err == nil {
+		t.Fatal("expected reprocess to fail")
+	}
+
+	var stored model.Document
+	if err := services.db.First(&stored, "id = ?", document.ID).Error; err != nil {
+		t.Fatalf("reload document: %v", err)
+	}
+	if stored.Status != "completed" {
+		t.Fatalf("expected document status rollback, got %q", stored.Status)
+	}
+	var jobCount int64
+	if err := services.db.Model(&model.DocumentJob{}).Where("document_id = ?", document.ID).Count(&jobCount).Error; err != nil {
+		t.Fatalf("count document jobs: %v", err)
+	}
+	if jobCount != 0 {
+		t.Fatalf("expected queued job rollback, got %d", jobCount)
+	}
+}
+
+func TestDocumentBatchReprocessRollsBackWhenKnowledgeBaseTouchFails(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	kbA := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-a", "private", time.Now())
+	kbB := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-b", "private", time.Now())
+	docA := createWorkspaceDocument(t, services.db, kbA.ID, owner.ID, "manual-a.pdf", "completed")
+	docB := createWorkspaceDocument(t, services.db, kbB.ID, owner.ID, "manual-b.pdf", "completed")
+	trigger := fmt.Sprintf(`
+		CREATE TRIGGER fail_batch_reprocess_knowledge_base_touch
+		BEFORE UPDATE OF updated_by_id ON knowledge_bases
+		WHEN NEW.id = '%s'
+		BEGIN
+			SELECT RAISE(ABORT, 'forced batch knowledge base touch failure');
+		END`, kbB.ID)
+	if err := services.db.Exec(trigger).Error; err != nil {
+		t.Fatalf("create knowledge base failure trigger: %v", err)
+	}
+
+	if _, err := services.documents.BatchReprocess(ctx, owner.ID, dto.DocumentBatchRequest{
+		DocumentIDs: []uuid.UUID{docA.ID, docB.ID},
+	}); err == nil {
+		t.Fatal("expected batch reprocess to fail")
+	}
+
+	var completedCount int64
+	if err := services.db.Model(&model.Document{}).
+		Where("id IN ? AND status = ?", []uuid.UUID{docA.ID, docB.ID}, "completed").
+		Count(&completedCount).Error; err != nil {
+		t.Fatalf("count completed documents: %v", err)
+	}
+	if completedCount != 2 {
+		t.Fatalf("expected document statuses rollback, got %d", completedCount)
+	}
+	var jobCount int64
+	if err := services.db.Model(&model.DocumentJob{}).
+		Where("document_id IN ?", []uuid.UUID{docA.ID, docB.ID}).
+		Count(&jobCount).Error; err != nil {
+		t.Fatalf("count document jobs: %v", err)
+	}
+	if jobCount != 0 {
+		t.Fatalf("expected queued jobs rollback, got %d", jobCount)
+	}
+}
+
 func TestDocumentBatchOperationsRejectForeignIDsWithoutPartialMutation(t *testing.T) {
 	ctx := context.Background()
 	services := newWorkspaceTestServices(t)
