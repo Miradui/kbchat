@@ -627,7 +627,7 @@ func splitOversizeTableBlock(item block, budget int) []block {
 			if cellContent == "" {
 				continue
 			}
-			for _, relative := range splitTextToBudgetSpans(cellContent, cellBudget) {
+			for _, relative := range splitMarkdownTableCellToBudgetSpans(cellContent, cellBudget) {
 				span := textSpan{start: cell.start + relative.start, end: cell.start + relative.end}
 				values := make([]string, len(cells))
 				values[cellIndex] = item.content[span.start:span.end]
@@ -859,6 +859,31 @@ func runeTextSpans(text string) []textSpan {
 	spans := make([]textSpan, 0, utf8.RuneCountInString(text))
 	for index, r := range text {
 		spans = append(spans, textSpan{start: index, end: index + utf8.RuneLen(r)})
+	}
+	return spans
+}
+
+func splitMarkdownTableCellToBudgetSpans(text string, budget int) []textSpan {
+	spans := splitTextToBudgetSpans(text, budget)
+	for _, span := range spans[1:] {
+		if span.start < len(text) && text[span.start] == '|' && isEscapedMarkdownDelimiter(text, span.start) {
+			return packTextSpans(text, markdownTableCellTextUnits(text), budget)
+		}
+	}
+	return spans
+}
+
+func markdownTableCellTextUnits(text string) []textSpan {
+	spans := make([]textSpan, 0, utf8.RuneCountInString(text))
+	for index := 0; index < len(text); {
+		if text[index] == '\\' && index+1 < len(text) && text[index+1] == '|' && isEscapedMarkdownDelimiter(text, index+1) {
+			spans = append(spans, textSpan{start: index, end: index + 2})
+			index += 2
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(text[index:])
+		spans = append(spans, textSpan{start: index, end: index + size})
+		index += size
 	}
 	return spans
 }

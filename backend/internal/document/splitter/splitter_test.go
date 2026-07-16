@@ -516,6 +516,33 @@ func TestSplitKeepsEscapedPipeInsideOversizeMarkdownTableCell(t *testing.T) {
 	}
 }
 
+func TestSplitKeepsEscapedPipeAtomicAtMinimumTableCellBudget(t *testing.T) {
+	header := "| A | B |\n| --- | --- |"
+	text := header + "\n| aaa\\|bbb | x |"
+
+	chunks := New(14, 0).Split(text)
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected oversized table cell to split, got %#v", chunks)
+	}
+	foundEscapedPipe := false
+	for index, chunk := range chunks {
+		if chunk.TokenCount > 14 {
+			t.Fatalf("expected token budget at %d, got %#v", index, chunk)
+		}
+		lines := strings.Split(chunk.Content, "\n")
+		if len(lines) != 3 || countUnescapedPipes(lines[2]) != 3 {
+			t.Fatalf("expected a two-column table row at %d, got %q", index, chunk.Content)
+		}
+		if strings.Contains(lines[2], "\\|") {
+			foundEscapedPipe = true
+		}
+	}
+	if !foundEscapedPipe {
+		t.Fatalf("expected escaped pipe to remain atomic, got %#v", chunks)
+	}
+}
+
 func TestSplitTreatsEscapedMarkdownPipesAsParagraphContent(t *testing.T) {
 	chunks := New(100, 0).Split("alpha \\| beta \\| gamma")
 
