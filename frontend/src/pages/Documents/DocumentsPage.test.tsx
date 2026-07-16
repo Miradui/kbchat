@@ -81,6 +81,51 @@ describe('DocumentsPage polling', () => {
     expect(screen.getByText('b-current.pdf')).toBeInTheDocument();
     expect(screen.queryByText('a-late.pdf')).not.toBeInTheDocument();
   });
+
+  it('does not let an old poll invalidate a slower active-route load', async () => {
+    const kbBLoad = deferred<{ items: ReturnType<typeof documentItem>[] }>();
+    let kbACalls = 0;
+    api.listDocuments.mockImplementation((id: string) => {
+      if (id === 'kb-a') {
+        kbACalls += 1;
+        return Promise.resolve({
+          items: [documentItem('kb-a', kbACalls === 1 ? 'a-processing.pdf' : 'a-old-poll.pdf', 'embedding')],
+        });
+      }
+      return kbBLoad.promise;
+    });
+    let poll: (() => void) | undefined;
+    const realSetInterval = window.setInterval.bind(window);
+    vi.spyOn(window, 'setInterval').mockImplementation((handler, timeout, ...args) => {
+      if (timeout === 3000) {
+        poll = handler as () => void;
+        return 1;
+      }
+      return realSetInterval(handler, timeout, ...args);
+    });
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <>
+        <RouteNavigation />
+        <Routes><Route element={<DocumentsPage />} path="/knowledge-bases/:id/documents" /></Routes>
+      </>,
+      ['/knowledge-bases/kb-a/documents'],
+    );
+
+    expect(await screen.findByText('a-processing.pdf')).toBeInTheDocument();
+    await waitFor(() => expect(window.setInterval).toHaveBeenCalledWith(expect.any(Function), 3000));
+    if (!poll) throw new Error('poll callback was not registered');
+    await user.click(screen.getByRole('button', { name: '切换知识库' }));
+    await waitFor(() => expect(api.listDocuments).toHaveBeenCalledWith('kb-b'));
+    act(() => poll?.());
+    await waitFor(() => expect(api.listDocuments).toHaveBeenCalledTimes(3));
+
+    await act(async () => kbBLoad.resolve({ items: [documentItem('kb-b', 'b-slow.pdf', 'completed')] }));
+
+    expect(await screen.findByText('b-slow.pdf')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
+  });
 });
 
 function RouteNavigation() {

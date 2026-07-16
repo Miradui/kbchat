@@ -57,7 +57,8 @@ export function DocumentsPage() {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const activeKnowledgeBaseIdRef = useRef(id);
-  const documentRequestIdRef = useRef(0);
+  const pageRequestIdRef = useRef(0);
+  const pollRequestIdRef = useRef(0);
   activeKnowledgeBaseIdRef.current = id;
   const [categories, setCategories] = useState<KnowledgeBaseCategory[]>([]);
   const [expandedIds, setExpandedIds] = useState<string[]>([]);
@@ -83,10 +84,11 @@ export function DocumentsPage() {
     }
 
     const targetKnowledgeBaseId = id;
-    const requestId = documentRequestIdRef.current + 1;
-    documentRequestIdRef.current = requestId;
+    const requestId = pageRequestIdRef.current + 1;
+    pageRequestIdRef.current = requestId;
+    pollRequestIdRef.current += 1;
     const isCurrentRequest = () =>
-      documentRequestIdRef.current === requestId && activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId;
+      pageRequestIdRef.current === requestId && activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId;
     setError('');
     const responses = await Promise.all([
       getKnowledgeBase(targetKnowledgeBaseId),
@@ -110,6 +112,10 @@ export function DocumentsPage() {
 
   useEffect(() => {
     let mounted = true;
+    pollRequestIdRef.current += 1;
+    setKnowledgeBase(null);
+    setDocuments([]);
+    setSelectedIds([]);
     setLoading(true);
 
     loadPage()
@@ -160,10 +166,13 @@ export function DocumentsPage() {
 
     const timer = window.setInterval(() => {
       const targetKnowledgeBaseId = id;
-      const requestId = documentRequestIdRef.current + 1;
-      documentRequestIdRef.current = requestId;
+      const requestId = pollRequestIdRef.current + 1;
+      const pageRequestId = pageRequestIdRef.current;
+      pollRequestIdRef.current = requestId;
       const isCurrentRequest = () =>
-        documentRequestIdRef.current === requestId && activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId;
+        pollRequestIdRef.current === requestId
+        && pageRequestIdRef.current === pageRequestId
+        && activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId;
       listDocuments(targetKnowledgeBaseId)
         .then((response) => {
           if (isCurrentRequest()) {
