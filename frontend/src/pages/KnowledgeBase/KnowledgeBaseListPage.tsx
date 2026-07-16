@@ -32,6 +32,7 @@ import {
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { WorkspaceShell } from '../../components/WorkspaceShell';
+import { useDialogModal } from '../../components/ui/Dialog';
 import { tokenStore } from '../../store/tokenStore';
 import type {
   KnowledgeBase,
@@ -1031,9 +1032,17 @@ function KnowledgeBaseFormDrawer({
   onClose: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const panelRef = useDialogModal<HTMLElement>(true, busy ? () => undefined : onClose);
   return (
     <aside className="drawer-backdrop" role="presentation">
-      <section className="drawer-panel kb-form-drawer" role="dialog" aria-modal="true" aria-labelledby="kb-form-title">
+      <section
+        aria-labelledby="kb-form-title"
+        aria-modal="true"
+        className="drawer-panel kb-form-drawer"
+        ref={panelRef}
+        role="dialog"
+        tabIndex={-1}
+      >
         <header>
           <div>
             <h2 id="kb-form-title">{form.id ? '编辑知识库' : '新建知识库'}</h2>
@@ -1143,9 +1152,17 @@ function KnowledgeBaseRecycleBinDrawer({
   onRestore: (item: RecycleBinItem) => void;
   onRestoreAll: () => void;
 }) {
+  const panelRef = useDialogModal<HTMLElement>(true, onClose);
   return (
     <aside className="drawer-backdrop" role="presentation">
-      <section className="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="kb-recycle-title">
+      <section
+        aria-labelledby="kb-recycle-title"
+        aria-modal="true"
+        className="drawer-panel"
+        ref={panelRef}
+        role="dialog"
+        tabIndex={-1}
+      >
         <header>
           <div>
             <h2 id="kb-recycle-title">知识库回收站</h2>

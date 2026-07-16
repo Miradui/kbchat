@@ -23,7 +23,37 @@ function getFocusable(panel: HTMLElement): HTMLElement[] {
 export function Dialog({ open, title, description, onClose, children }: DialogProps) {
   const titleId = useId();
   const descriptionId = useId();
-  const panelRef = useRef<HTMLDivElement>(null);
+  const panelRef = useDialogModal<HTMLDivElement>(open, onClose);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="ui-dialog-backdrop"
+      data-testid="dialog-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        aria-describedby={description ? descriptionId : undefined}
+        aria-labelledby={titleId}
+        aria-modal="true"
+        className="ui-dialog"
+        ref={panelRef}
+        role="dialog"
+        tabIndex={-1}
+      >
+        <h2 id={titleId}>{title}</h2>
+        {description && <p id={descriptionId}>{description}</p>}
+        {children}
+      </div>
+    </div>
+  );
+}
+
+export function useDialogModal<T extends HTMLElement = HTMLElement>(open: boolean, onClose: () => void) {
+  const panelRef = useRef<T>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
 
@@ -77,29 +107,5 @@ export function Dialog({ open, title, description, onClose, children }: DialogPr
     };
   }, [open]);
 
-  if (!open) return null;
-
-  return (
-    <div
-      className="ui-dialog-backdrop"
-      data-testid="dialog-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onCloseRef.current();
-      }}
-    >
-      <div
-        aria-describedby={description ? descriptionId : undefined}
-        aria-labelledby={titleId}
-        aria-modal="true"
-        className="ui-dialog"
-        ref={panelRef}
-        role="dialog"
-        tabIndex={-1}
-      >
-        <h2 id={titleId}>{title}</h2>
-        {description && <p id={descriptionId}>{description}</p>}
-        {children}
-      </div>
-    </div>
-  );
+  return panelRef;
 }

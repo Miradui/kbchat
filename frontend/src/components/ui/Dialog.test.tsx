@@ -1,8 +1,9 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { Dialog } from './Dialog';
+import { Dialog, useDialogModal } from './Dialog';
 
 afterEach(() => {
   document.body.style.overflow = '';
@@ -87,4 +88,42 @@ describe('Dialog', () => {
     expect(() => rerender(<Dialog open={false} title="说明" onClose={() => undefined}><p>内容</p></Dialog>)).not.toThrow();
     expect(focusSpy).not.toHaveBeenCalled();
   });
+
+  it('reuses modal keyboard behavior in drawer-shaped panels', async () => {
+    const user = userEvent.setup();
+    render(<DrawerHarness />);
+    const opener = screen.getByRole('button', { name: '打开抽屉' });
+
+    await user.click(opener);
+
+    const close = screen.getByRole('button', { name: '关闭抽屉' });
+    const input = screen.getByLabelText('抽屉字段');
+    expect(close).toHaveFocus();
+    expect(document.body.style.overflow).toBe('hidden');
+    await user.tab({ shift: true });
+    expect(input).toHaveFocus();
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('dialog', { name: '测试抽屉' })).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+    expect(document.body.style.overflow).toBe('');
+  });
 });
+
+function DrawerHarness() {
+  const [open, setOpen] = useState(false);
+  const panelRef = useDialogModal(open, () => setOpen(false));
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)}>打开抽屉</button>
+      {open && (
+        <aside>
+          <section aria-label="测试抽屉" aria-modal="true" ref={panelRef} role="dialog" tabIndex={-1}>
+            <button type="button" onClick={() => setOpen(false)}>关闭抽屉</button>
+            <label>抽屉字段<input /></label>
+          </section>
+        </aside>
+      )}
+    </>
+  );
+}
