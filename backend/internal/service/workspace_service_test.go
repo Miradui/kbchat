@@ -1051,6 +1051,86 @@ func TestDocumentBatchRestoreRollsBackWhenLaterWriteFails(t *testing.T) {
 	}
 }
 
+func TestDocumentBatchReprocessRollsBackWhenLaterWriteFails(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	docA := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual-a.pdf", "completed")
+	docB := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual-b.pdf", "completed")
+	trigger := fmt.Sprintf(`
+		CREATE TRIGGER fail_second_document_reprocess
+		BEFORE UPDATE OF status ON documents
+		WHEN NEW.id = '%s' AND NEW.status = 'uploaded'
+		BEGIN
+			SELECT RAISE(ABORT, 'forced reprocess failure');
+		END`, docB.ID)
+	if err := services.db.Exec(trigger).Error; err != nil {
+		t.Fatalf("create reprocess failure trigger: %v", err)
+	}
+
+	if _, err := services.documents.BatchReprocess(ctx, owner.ID, dto.DocumentBatchRequest{
+		DocumentIDs: []uuid.UUID{docA.ID, docB.ID},
+	}); err == nil {
+		t.Fatal("expected batch reprocess to fail")
+	}
+
+	var completedCount int64
+	if err := services.db.Model(&model.Document{}).
+		Where("id IN ? AND status = ?", []uuid.UUID{docA.ID, docB.ID}, "completed").
+		Count(&completedCount).Error; err != nil {
+		t.Fatalf("count completed documents: %v", err)
+	}
+	if completedCount != 2 {
+		t.Fatalf("expected both document statuses to roll back, got %d", completedCount)
+	}
+	var jobCount int64
+	if err := services.db.Model(&model.DocumentJob{}).
+		Where("document_id IN ?", []uuid.UUID{docA.ID, docB.ID}).
+		Count(&jobCount).Error; err != nil {
+		t.Fatalf("count document jobs: %v", err)
+	}
+	if jobCount != 0 {
+		t.Fatalf("expected queued jobs to roll back, got %d", jobCount)
+	}
+}
+
+func TestDocumentBatchReprocessReusesActiveJobs(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	docA := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual-a.pdf", "embedding")
+	docB := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual-b.pdf", "completed")
+	activeJob := model.DocumentJob{DocumentID: docA.ID, JobType: "process_document", Status: "running"}
+	if err := services.db.Create(&activeJob).Error; err != nil {
+		t.Fatalf("create active document job: %v", err)
+	}
+
+	if _, err := services.documents.BatchReprocess(ctx, owner.ID, dto.DocumentBatchRequest{
+		DocumentIDs: []uuid.UUID{docA.ID, docB.ID},
+	}); err != nil {
+		t.Fatalf("batch reprocess: %v", err)
+	}
+
+	var docAActiveCount int64
+	if err := services.db.Model(&model.DocumentJob{}).
+		Where("document_id = ? AND status IN ?", docA.ID, []string{"pending", "running"}).
+		Count(&docAActiveCount).Error; err != nil {
+		t.Fatalf("count document A jobs: %v", err)
+	}
+	if docAActiveCount != 1 {
+		t.Fatalf("expected active job to be reused, got %d jobs", docAActiveCount)
+	}
+	var documents []model.Document
+	if err := services.db.Where("id IN ?", []uuid.UUID{docA.ID, docB.ID}).Order("filename asc").Find(&documents).Error; err != nil {
+		t.Fatalf("reload documents: %v", err)
+	}
+	if len(documents) != 2 || documents[0].Status != "embedding" || documents[1].Status != "uploaded" {
+		t.Fatalf("expected active stage preserved and idle document queued, got %#v", documents)
+	}
+}
+
 func TestDocumentReprocessPreservesChunksUntilProcessorReplacement(t *testing.T) {
 	ctx := context.Background()
 	services := newWorkspaceTestServices(t)

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -215,6 +216,59 @@ func (r *DocumentRepository) QueueReprocess(ctx context.Context, documentID uuid
 		return nil, false, err
 	}
 	return &job, created, nil
+}
+
+func (r *DocumentRepository) QueueBatchReprocess(ctx context.Context, documentIDs []uuid.UUID) error {
+	orderedIDs := append([]uuid.UUID(nil), documentIDs...)
+	sort.Slice(orderedIDs, func(i, j int) bool {
+		return orderedIDs[i].String() < orderedIDs[j].String()
+	})
+
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var documents []model.Document
+		if err := tx.
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id IN ?", orderedIDs).
+			Order("id asc").
+			Find(&documents).Error; err != nil {
+			return err
+		}
+		if len(documents) != len(orderedIDs) {
+			return gorm.ErrRecordNotFound
+		}
+
+		for i := range documents {
+			var activeJob model.DocumentJob
+			err := tx.
+				Where("document_id = ? AND status IN ?", documents[i].ID, []string{"pending", "running"}).
+				Order("created_at desc").
+				First(&activeJob).Error
+			if err == nil {
+				continue
+			}
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+
+			now := time.Now()
+			if err := tx.Model(&documents[i]).Updates(map[string]any{
+				"status":        "uploaded",
+				"error_message": "",
+				"updated_at":    now,
+			}).Error; err != nil {
+				return err
+			}
+			job := model.DocumentJob{
+				DocumentID: documents[i].ID,
+				JobType:    "process_document",
+				Status:     "pending",
+			}
+			if err := tx.Create(&job).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (r *DocumentRepository) LatestJobsByDocumentIDs(ctx context.Context, documentIDs []uuid.UUID) (map[uuid.UUID]model.DocumentJob, error) {
