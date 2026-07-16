@@ -646,12 +646,24 @@ func tableCellTextSpans(text string, row textSpan) []textSpan {
 			pipes = append(pipes, index)
 		}
 	}
-	if len(pipes) < 2 {
+	if len(pipes) == 0 {
 		return nil
 	}
-	cells := make([]textSpan, 0, len(pipes)-1)
-	for index := 0; index+1 < len(pipes); index++ {
-		_, cell := trimTextSpan(text, pipes[index]+1, pipes[index+1])
+
+	cellStart := row.start
+	pipeStart := 0
+	if pipes[0] == row.start {
+		cellStart = row.start + 1
+		pipeStart = 1
+	}
+	cells := make([]textSpan, 0, len(pipes)+1)
+	for _, pipe := range pipes[pipeStart:] {
+		_, cell := trimTextSpan(text, cellStart, pipe)
+		cells = append(cells, cell)
+		cellStart = pipe + 1
+	}
+	if cellStart < row.end {
+		_, cell := trimTextSpan(text, cellStart, row.end)
 		cells = append(cells, cell)
 	}
 	return cells

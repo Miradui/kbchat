@@ -464,3 +464,29 @@ func TestSplitKeepsColumnsForSingleOversizeMarkdownTableRow(t *testing.T) {
 		t.Fatalf("expected table cell order %q, got %q", rowValues, strings.Join(values, " "))
 	}
 }
+
+func TestSplitKeepsEdgeCellsForOversizeMarkdownTableWithoutOuterPipes(t *testing.T) {
+	header := "Name | Detail | Status\n--- | --- | ---"
+	rowValues := "alpha beta gamma delta epsilon zeta eta theta iota stable"
+	text := header + "\nalpha | beta gamma delta epsilon zeta eta theta iota | stable"
+
+	chunks := New(18, 2).Split(text)
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected oversized table row to split, got %#v", chunks)
+	}
+	values := make([]string, 0)
+	for index, chunk := range chunks {
+		if chunk.TokenCount > 18 || !strings.HasPrefix(chunk.Content, header+"\n") {
+			t.Fatalf("unexpected table chunk %d: %#v", index, chunk)
+		}
+		lines := strings.Split(chunk.Content, "\n")
+		if len(lines) != 3 || strings.Count(lines[2], "|") != 4 {
+			t.Fatalf("expected a three-column table row at %d, got %q", index, chunk.Content)
+		}
+		values = append(values, strings.Fields(strings.ReplaceAll(lines[2], "|", " "))...)
+	}
+	if strings.Join(values, " ") != rowValues {
+		t.Fatalf("expected edge cells to remain %q, got %q", rowValues, strings.Join(values, " "))
+	}
+}
