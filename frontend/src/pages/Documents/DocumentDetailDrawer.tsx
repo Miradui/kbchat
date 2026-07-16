@@ -271,7 +271,7 @@ export function DocumentDetailDrawer({
             <LoadingSkeleton rows={6} columns={2} compact />
           ) : (
             <>
-              {error && <p className="drawer-error-text">{error}</p>}
+              {error && <p className="drawer-error-text" role="alert">{error}</p>}
               {document ? (
                 <div className="document-detail-content">
                   <section className="document-detail-summary">
@@ -345,7 +345,7 @@ export function DocumentDetailDrawer({
                       </div>
                     </header>
                     {previewError ? (
-                      <div className="empty-state">{previewError}</div>
+                      <div className="empty-state" role="alert">{previewError}</div>
                     ) : !preview ? (
                       <LoadingSkeleton rows={3} columns={1} compact />
                     ) : preview.kind === 'text' ? (
@@ -386,7 +386,7 @@ export function DocumentDetailDrawer({
                     </header>
 
                     {chunkError ? (
-                      <div className="empty-state">{chunkError}</div>
+                      <div className="empty-state" role="alert">{chunkError}</div>
                     ) : chunksLoading ? (
                       <LoadingSkeleton rows={4} columns={1} compact />
                     ) : chunks.length === 0 ? (

@@ -82,6 +82,30 @@ describe('DocumentDetailDrawer progress', () => {
 
     expect(onChanged).not.toHaveBeenCalled();
   });
+
+  it('announces a document detail loading error', async () => {
+    api.getDocument.mockRejectedValueOnce(new Error('offline'));
+
+    renderWithRouter(<DocumentDetailDrawer documentId="doc-1" onClose={vi.fn()} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('文档详情加载失败');
+  });
+
+  it('announces a preview loading error', async () => {
+    api.getDocumentPreview.mockRejectedValueOnce(new Error('offline'));
+
+    renderWithRouter(<DocumentDetailDrawer documentId="doc-1" onClose={vi.fn()} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('文档预览加载失败');
+  });
+
+  it('announces a chunk loading error', async () => {
+    api.listDocumentChunks.mockRejectedValueOnce(new Error('offline'));
+
+    renderWithRouter(<DocumentDetailDrawer documentId="doc-1" onClose={vi.fn()} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Chunks 加载失败');
+  });
 });
 
 const documentItem = {
