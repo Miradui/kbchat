@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { ApiError } from '../../api/client';
@@ -28,6 +28,8 @@ export function DocumentDetailDrawer({
   onChanged,
   onClose,
 }: DocumentDetailDrawerProps) {
+  const mountedRef = useRef(true);
+  const mutationInFlightRef = useRef(false);
   const [document, setDocument] = useState<DocumentItem | null>(null);
   const [preview, setPreview] = useState<DocumentPreviewResponse | null>(null);
   const [previewUrl, setPreviewUrl] = useState('');
@@ -140,16 +142,27 @@ export function DocumentDetailDrawer({
     };
   }, [previewUrl]);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   async function handleReprocess() {
-    if (!document) {
+    if (!document || mutationInFlightRef.current) {
       return;
     }
 
+    mutationInFlightRef.current = true;
     setSubmitting(true);
     setError('');
 
     try {
       const nextDocument = await reprocessDocument(document.id);
+      if (!mountedRef.current) {
+        return;
+      }
       setDocument(nextDocument);
       setChunks([]);
       setChunkTotal(0);
@@ -158,29 +171,43 @@ export function DocumentDetailDrawer({
       setPreviewError('');
       onChanged?.();
     } catch (err) {
-      setError(errorMessage(err, '文档重处理失败'));
+      if (mountedRef.current) {
+        setError(errorMessage(err, '文档重处理失败'));
+      }
     } finally {
-      setSubmitting(false);
+      mutationInFlightRef.current = false;
+      if (mountedRef.current) {
+        setSubmitting(false);
+      }
     }
   }
 
   async function handleDelete() {
-    if (!document) {
+    if (!document || mutationInFlightRef.current) {
       return;
     }
 
+    mutationInFlightRef.current = true;
     setSubmitting(true);
     setError('');
 
     try {
       await deleteDocument(document.id);
+      if (!mountedRef.current) {
+        return;
+      }
       setConfirmDelete(false);
       onChanged?.();
       onClose();
     } catch (err) {
-      setError(errorMessage(err, '文档删除失败'));
+      if (mountedRef.current) {
+        setError(errorMessage(err, '文档删除失败'));
+      }
     } finally {
-      setSubmitting(false);
+      mutationInFlightRef.current = false;
+      if (mountedRef.current) {
+        setSubmitting(false);
+      }
     }
   }
 
@@ -191,15 +218,19 @@ export function DocumentDetailDrawer({
   }
 
   async function handleDownload() {
-    if (!document) {
+    if (!document || mutationInFlightRef.current) {
       return;
     }
 
+    mutationInFlightRef.current = true;
     setSubmitting(true);
     setError('');
 
     try {
       const blob = await downloadDocument(document.id);
+      if (!mountedRef.current) {
+        return;
+      }
       const objectUrl = URL.createObjectURL(blob);
       const anchor = window.document.createElement('a');
       anchor.href = objectUrl;
@@ -209,9 +240,14 @@ export function DocumentDetailDrawer({
       anchor.remove();
       URL.revokeObjectURL(objectUrl);
     } catch (err) {
-      setError(errorMessage(err, '文档下载失败'));
+      if (mountedRef.current) {
+        setError(errorMessage(err, '文档下载失败'));
+      }
     } finally {
-      setSubmitting(false);
+      mutationInFlightRef.current = false;
+      if (mountedRef.current) {
+        setSubmitting(false);
+      }
     }
   }
 
@@ -277,7 +313,17 @@ export function DocumentDetailDrawer({
                   )}
 
                   <div className="document-detail-actions">
-                    <Link className="secondary-link" to={`/knowledge-bases/${document.knowledgeBaseId}/documents`}>
+                    <Link
+                      aria-disabled={submitting}
+                      className="secondary-link"
+                      tabIndex={submitting ? -1 : undefined}
+                      to={`/knowledge-bases/${document.knowledgeBaseId}/documents`}
+                      onClick={(event) => {
+                        if (submitting) {
+                          event.preventDefault();
+                        }
+                      }}
+                    >
                       进入处理队列
                     </Link>
                     <button className="secondary-button" type="button" onClick={() => void handleDownload()} disabled={submitting}>

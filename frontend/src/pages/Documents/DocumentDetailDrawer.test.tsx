@@ -1,4 +1,5 @@
-import { screen } from '@testing-library/react';
+import { act, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithRouter } from '../../test/render';
@@ -51,4 +52,49 @@ describe('DocumentDetailDrawer progress', () => {
     expect(await screen.findByText('75%')).toBeInTheDocument();
     expect(screen.queryByText(/^重试/)).not.toBeInTheDocument();
   });
+
+  it('disables queue navigation while reprocessing', async () => {
+    const reprocess = deferred<typeof documentItem>();
+    api.reprocessDocument.mockReturnValueOnce(reprocess.promise);
+    const user = userEvent.setup();
+
+    renderWithRouter(<DocumentDetailDrawer documentId="doc-1" onClose={vi.fn()} />);
+    expect(await screen.findByText('manual.pdf')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '重处理' }));
+
+    expect(screen.getByRole('link', { name: '进入处理队列' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('link', { name: '进入处理队列' })).toHaveAttribute('tabindex', '-1');
+  });
+
+  it('does not notify after a pending reprocess unmounts', async () => {
+    const reprocess = deferred<typeof documentItem>();
+    api.reprocessDocument.mockReturnValueOnce(reprocess.promise);
+    const onChanged = vi.fn();
+    const user = userEvent.setup();
+    const rendered = renderWithRouter(
+      <DocumentDetailDrawer documentId="doc-1" onChanged={onChanged} onClose={vi.fn()} />,
+    );
+    expect(await screen.findByText('manual.pdf')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '重处理' }));
+
+    rendered.unmount();
+    await act(async () => reprocess.resolve(documentItem));
+
+    expect(onChanged).not.toHaveBeenCalled();
+  });
 });
+
+const documentItem = {
+  id: 'doc-1', knowledgeBaseId: 'kb-1', filename: 'manual.pdf', fileType: 'pdf', fileSize: 1024,
+  status: 'embedding' as const, errorMessage: null, jobStatus: 'running', progress: 75, stage: 'embedding',
+  retryCount: 2, maxRetries: 5, nextRetryAt: '2026-07-16T10:00:00Z',
+  createdAt: '2026-07-01T00:00:00Z', updatedAt: '2026-07-16T09:00:00Z',
+};
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
