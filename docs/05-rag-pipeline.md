@@ -84,6 +84,8 @@ Markdown 单个列表项超过预算时，每个分片重复原列表 marker；�
 
 没有正文的 Markdown heading 也必须保留为可检索的 `structureType=heading` chunk；连续子标题可合并为完整 headingPath，但在同级/上级标题替换前或文档结尾不得静默丢失。极小 token 预算下应按 heading 文本分片，不得产生空 chunk 或只保留祖先标题。
 
+Markdown fenced code opening/closing 最多允许 3 个前导空格，4 个及以上不得被误判为 fence。Backtick fence 的 info string 不得包含 backtick；tilde fence 的 info string 可以包含 backtick。Closing fence 只允许同类 marker、不短于 opening，且 marker 后只能有空格或 tab。
+
 每个 chunk 必须保存：
 
 ```text

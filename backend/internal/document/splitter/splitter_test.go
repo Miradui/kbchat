@@ -512,6 +512,58 @@ func TestSplitRequiresPlainClosingCodeFence(t *testing.T) {
 	}
 }
 
+func TestSplitDoesNotCloseFenceIndentedFourSpaces(t *testing.T) {
+	text := strings.Join([]string{
+		"```",
+		"x",
+		"    ```",
+		"after",
+		"```",
+	}, "\n")
+
+	chunks := New(40, 0).Split(text)
+
+	if len(chunks) != 1 || chunks[0].Metadata["structureType"] != "code" {
+		t.Fatalf("expected one code block, got %#v", chunks)
+	}
+	if !strings.Contains(chunks[0].Content, "    ```\nafter") {
+		t.Fatalf("expected four-space fence to remain code content, got %q", chunks[0].Content)
+	}
+}
+
+func TestSplitLimitsFenceIndentToThreeSpaces(t *testing.T) {
+	valid := New(20, 0).Split("   ```\ncode\n   ```")
+	if len(valid) != 1 || valid[0].Metadata["structureType"] != "code" {
+		t.Fatalf("expected three-space fence to be code, got %#v", valid)
+	}
+
+	invalid := New(20, 0).Split("prefix\n\n    ```\ntext\n    ```")
+	for _, chunk := range invalid {
+		if chunk.Metadata["structureType"] == "code" {
+			t.Fatalf("expected four-space opening fence not to be fenced code, got %#v", invalid)
+		}
+	}
+}
+
+func TestSplitRejectsBacktickFenceInfoContainingBacktick(t *testing.T) {
+	text := "``` go`bad\nbody\n```"
+	chunks := New(30, 0).Split(text)
+
+	for _, chunk := range chunks {
+		if strings.Contains(chunk.Content, "go`bad") && chunk.Metadata["structureType"] == "code" {
+			t.Fatalf("expected invalid backtick info string to remain paragraph content, got %#v", chunks)
+		}
+	}
+}
+
+func TestSplitAllowsBacktickInTildeFenceInfo(t *testing.T) {
+	chunks := New(30, 0).Split("~~~ go`ok\nbody\n~~~")
+
+	if len(chunks) != 1 || chunks[0].Metadata["structureType"] != "code" {
+		t.Fatalf("expected tilde fence info to allow backticks, got %#v", chunks)
+	}
+}
+
 func TestSplitKeepsBodyWhenHeadingPrefixExceedsBudget(t *testing.T) {
 	chunks := New(4, 0).Split("# one two three four five\nbody")
 

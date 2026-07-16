@@ -429,7 +429,7 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 		}
 
 		if markdown {
-			if fence, ok := parseFence(trimmed); ok {
+			if fence, ok := parseFence(raw); ok {
 				flush()
 				codeStart := lineStart
 				codeEnd := lineEnd
@@ -510,8 +510,8 @@ func updateHeadingPath(path []string, level int, title string) []string {
 }
 
 func parseFence(line string) (string, bool) {
-	line = strings.TrimSpace(line)
-	if line == "" || (line[0] != '`' && line[0] != '~') {
+	line, ok := markdownFenceLine(line)
+	if !ok || line == "" || (line[0] != '`' && line[0] != '~') {
 		return "", false
 	}
 	length := 0
@@ -521,20 +521,36 @@ func parseFence(line string) (string, bool) {
 	if length < 3 {
 		return "", false
 	}
+	if line[0] == '`' && strings.ContainsRune(line[length:], '`') {
+		return "", false
+	}
 	return line[:length], true
 }
 
 func isClosingFence(line string, fence string) bool {
-	line = strings.TrimSpace(line)
-	if len(line) < len(fence) || fence == "" {
+	line, ok := markdownFenceLine(line)
+	if !ok || len(line) < len(fence) || fence == "" {
 		return false
 	}
-	for index := range line {
-		if line[index] != fence[0] {
-			return false
+	length := 0
+	for length < len(line) && line[length] == fence[0] {
+		length++
+	}
+	return length >= len(fence) && strings.Trim(line[length:], " \t") == ""
+}
+
+func markdownFenceLine(line string) (string, bool) {
+	indent := 0
+	for indent < len(line) && line[indent] == ' ' {
+		indent++
+		if indent > 3 {
+			return "", false
 		}
 	}
-	return true
+	if indent < len(line) && line[indent] == '\t' {
+		return "", false
+	}
+	return line[indent:], true
 }
 
 func structureTypeForLine(line string) string {
@@ -639,7 +655,7 @@ func splitOversizeCodeBlock(item block, budget int) []block {
 	}
 
 	opening := item.content[lines[0].start:lines[0].end]
-	fence, ok := parseFence(strings.TrimSpace(opening))
+	fence, ok := parseFence(opening)
 	closing := item.content[lines[len(lines)-1].start:lines[len(lines)-1].end]
 	if !ok || !isClosingFence(closing, fence) {
 		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
