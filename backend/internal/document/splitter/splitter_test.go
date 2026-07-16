@@ -402,3 +402,65 @@ func TestSplitKeepsBodyWhenHeadingPrefixExceedsBudget(t *testing.T) {
 		t.Fatalf("expected body to take priority over oversized heading prefix, got %#v", chunks[0])
 	}
 }
+
+func TestSplitRepeatsMarkerForSingleOversizeMarkdownListItem(t *testing.T) {
+	tests := []struct {
+		name   string
+		marker string
+	}{
+		{name: "unordered", marker: "- "},
+		{name: "ordered", marker: "1. "},
+	}
+	body := "alpha beta gamma delta epsilon zeta eta theta"
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chunks := New(6, 2).Split(tt.marker + body)
+			if len(chunks) < 2 {
+				t.Fatalf("expected oversized list item to split, got %#v", chunks)
+			}
+			parts := make([]string, 0, len(chunks))
+			for index, chunk := range chunks {
+				if chunk.TokenCount > 6 || chunk.Metadata["structureType"] != "list" {
+					t.Fatalf("unexpected list chunk %d: %#v", index, chunk)
+				}
+				if !strings.HasPrefix(chunk.Content, tt.marker) {
+					t.Fatalf("expected marker %q on chunk %d, got %q", tt.marker, index, chunk.Content)
+				}
+				parts = append(parts, strings.TrimPrefix(chunk.Content, tt.marker))
+			}
+			if strings.Join(strings.Fields(strings.Join(parts, " ")), " ") != body {
+				t.Fatalf("expected list body order to remain %q, got %#v", body, chunks)
+			}
+		})
+	}
+}
+
+func TestSplitKeepsColumnsForSingleOversizeMarkdownTableRow(t *testing.T) {
+	header := "| Name | Value |\n| --- | --- |"
+	rowValues := "alpha beta gamma delta epsilon zeta eta theta stable"
+	text := header + "\n| alpha beta gamma delta epsilon zeta eta theta | stable |"
+
+	chunks := New(18, 2).Split(text)
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected oversized table row to split, got %#v", chunks)
+	}
+	values := make([]string, 0)
+	for index, chunk := range chunks {
+		if chunk.TokenCount > 18 || chunk.Metadata["structureType"] != "table" {
+			t.Fatalf("unexpected table chunk %d: %#v", index, chunk)
+		}
+		if !strings.HasPrefix(chunk.Content, header+"\n") {
+			t.Fatalf("expected repeated table header at %d, got %q", index, chunk.Content)
+		}
+		lines := strings.Split(chunk.Content, "\n")
+		if len(lines) != 3 || strings.Count(lines[2], "|") != 3 {
+			t.Fatalf("expected a two-column table row at %d, got %q", index, chunk.Content)
+		}
+		values = append(values, strings.Fields(strings.ReplaceAll(lines[2], "|", " "))...)
+	}
+	if strings.Join(values, " ") != rowValues {
+		t.Fatalf("expected table cell order %q, got %q", rowValues, strings.Join(values, " "))
+	}
+}

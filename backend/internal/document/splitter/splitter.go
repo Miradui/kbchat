@@ -136,12 +136,11 @@ func (s *Splitter) splitOversizeBlock(item block) []block {
 		return splitOversizeCodeBlock(item, budget)
 	case "table":
 		return splitOversizeTableBlock(item, budget)
+	case "list":
+		return splitOversizeListBlock(item, budget)
 	}
 
 	spans := splitTextToBudgetSpans(item.content, budget)
-	if item.structureType == "list" {
-		spans = splitLineAwareTextToBudgetSpans(item.content, budget)
-	}
 	return blocksFromSpans(item, spans, nil)
 }
 
@@ -480,6 +479,66 @@ func isListLine(line string) bool {
 	return true
 }
 
+func splitOversizeListBlock(item block, budget int) []block {
+	lines := lineTextSpans(item.content)
+	result := make([]block, 0, len(lines))
+	pending := make([]textSpan, 0, len(lines))
+	flushPending := func() {
+		if len(pending) == 0 {
+			return
+		}
+		result = append(result, blocksFromSpans(item, packTextSpans(item.content, pending, budget), nil)...)
+		pending = nil
+	}
+
+	for _, line := range lines {
+		content := item.content[line.start:line.end]
+		if estimateTokens(content) <= budget {
+			pending = append(pending, line)
+			continue
+		}
+
+		flushPending()
+		marker, ok := listMarker(content)
+		bodyContent, body := trimTextSpan(item.content, line.start+len(marker), line.end)
+		bodyBudget := budget - estimateTokens(marker)
+		if !ok || bodyContent == "" || bodyBudget < 1 {
+			spans := offsetTextSpans(splitTextToBudgetSpans(content, budget), line.start)
+			result = append(result, blocksFromSpans(item, spans, nil)...)
+			continue
+		}
+
+		relativeSpans := splitTextToBudgetSpans(bodyContent, bodyBudget)
+		spans := make([]textSpan, 0, len(relativeSpans))
+		for _, span := range relativeSpans {
+			spans = append(spans, textSpan{start: body.start + span.start, end: body.start + span.end})
+		}
+		parts := blocksFromSpans(item, spans, func(part string) string { return marker + part })
+		if len(parts) > 0 {
+			parts[0].startOffset = item.startOffset + line.start
+		}
+		result = append(result, parts...)
+	}
+	flushPending()
+	return result
+}
+
+func listMarker(line string) (string, bool) {
+	if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") || strings.HasPrefix(line, "+ ") {
+		return line[:2], true
+	}
+	dot := strings.Index(line, ". ")
+	if dot <= 0 {
+		return "", false
+	}
+	for _, r := range line[:dot] {
+		if !unicode.IsDigit(r) {
+			return "", false
+		}
+	}
+	return line[:dot+2], true
+}
+
 func splitOversizeCodeBlock(item block, budget int) []block {
 	lines := lineTextSpans(item.content)
 	if len(lines) < 3 {
@@ -525,14 +584,89 @@ func splitOversizeTableBlock(item block, budget int) []block {
 		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
 	}
 
-	bodySpans := packTextSpans(item.content, lines[2:], bodyBudget)
-	result := blocksFromSpans(item, bodySpans, func(content string) string {
-		return header + "\n" + content
-	})
+	result := make([]block, 0, len(lines)-2)
+	pending := make([]textSpan, 0, len(lines)-2)
+	flushPending := func() {
+		if len(pending) == 0 {
+			return
+		}
+		spans := packTextSpans(item.content, pending, bodyBudget)
+		result = append(result, blocksFromSpans(item, spans, func(content string) string {
+			return header + "\n" + content
+		})...)
+		pending = nil
+	}
+
+	for _, row := range lines[2:] {
+		rowContent := item.content[row.start:row.end]
+		if estimateTokens(rowContent) <= bodyBudget {
+			pending = append(pending, row)
+			continue
+		}
+
+		flushPending()
+		cells := tableCellTextSpans(item.content, row)
+		emptyRow := formatMarkdownTableRow(make([]string, len(cells)))
+		cellBudget := bodyBudget - estimateTokens(emptyRow)
+		if len(cells) == 0 || cellBudget < 1 {
+			spans := offsetTextSpans(splitTextToBudgetSpans(rowContent, bodyBudget), row.start)
+			result = append(result, blocksFromSpans(item, spans, func(content string) string {
+				return header + "\n" + content
+			})...)
+			continue
+		}
+
+		for cellIndex, cell := range cells {
+			cellContent := item.content[cell.start:cell.end]
+			if cellContent == "" {
+				continue
+			}
+			for _, relative := range splitTextToBudgetSpans(cellContent, cellBudget) {
+				span := textSpan{start: cell.start + relative.start, end: cell.start + relative.end}
+				values := make([]string, len(cells))
+				values[cellIndex] = item.content[span.start:span.end]
+				rowPart := formatMarkdownTableRow(values)
+				result = append(result, blocksFromSpans(item, []textSpan{span}, func(string) string {
+					return header + "\n" + rowPart
+				})...)
+			}
+		}
+	}
+	flushPending()
 	if len(result) > 0 {
 		result[0].startOffset = item.startOffset + lines[0].start
 	}
 	return result
+}
+
+func tableCellTextSpans(text string, row textSpan) []textSpan {
+	pipes := make([]int, 0)
+	for index := row.start; index < row.end; index++ {
+		if text[index] == '|' {
+			pipes = append(pipes, index)
+		}
+	}
+	if len(pipes) < 2 {
+		return nil
+	}
+	cells := make([]textSpan, 0, len(pipes)-1)
+	for index := 0; index+1 < len(pipes); index++ {
+		_, cell := trimTextSpan(text, pipes[index]+1, pipes[index+1])
+		cells = append(cells, cell)
+	}
+	return cells
+}
+
+func formatMarkdownTableRow(cells []string) string {
+	return "| " + strings.Join(cells, " | ") + " |"
+}
+
+func offsetTextSpans(spans []textSpan, offset int) []textSpan {
+	shifted := make([]textSpan, 0, len(spans))
+	for _, span := range spans {
+		shifted = append(shifted, textSpan{start: span.start + offset, end: span.end + offset})
+	}
+	return shifted
 }
 
 func isMarkdownTableSeparator(line string) bool {
