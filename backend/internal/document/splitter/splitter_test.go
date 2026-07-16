@@ -584,12 +584,34 @@ func TestSplitLimitsFenceIndentToThreeSpaces(t *testing.T) {
 }
 
 func TestSplitPreservesLeadingIndentationBeforeFenceParsing(t *testing.T) {
-	chunks := New(20, 0).Split("    ```\ntext\n    ```")
+	text := "    ```\ntext\n    ```"
+	chunks := New(20, 0).Split(text)
 
 	for _, chunk := range chunks {
 		if chunk.Metadata["structureType"] == "code" {
 			t.Fatalf("expected document-leading four-space fence not to become fenced code, got %#v", chunks)
 		}
+	}
+	if len(chunks) != 1 || chunks[0].Content != text {
+		t.Fatalf("expected paragraph content to preserve leading indentation, got %#v", chunks)
+	}
+	if chunks[0].Metadata["startOffset"] != 0 || chunks[0].Metadata["endOffset"] != len(text) {
+		t.Fatalf("expected original paragraph offsets, got %#v", chunks[0].Metadata)
+	}
+}
+
+func TestSplitPreservesLeadingIndentationForFirstListItem(t *testing.T) {
+	text := "  - child"
+	chunks := New(20, 0).Split(text)
+
+	if len(chunks) != 1 || chunks[0].Content != text {
+		t.Fatalf("expected list content to preserve leading indentation, got %#v", chunks)
+	}
+	if chunks[0].Metadata["structureType"] != "list" {
+		t.Fatalf("expected list structure metadata, got %#v", chunks[0].Metadata)
+	}
+	if chunks[0].Metadata["startOffset"] != 0 || chunks[0].Metadata["endOffset"] != len(text) {
+		t.Fatalf("expected original list offsets, got %#v", chunks[0].Metadata)
 	}
 }
 
