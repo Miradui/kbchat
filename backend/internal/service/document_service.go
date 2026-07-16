@@ -174,17 +174,8 @@ func (s *DocumentService) BatchDelete(ctx context.Context, ownerID uuid.UUID, re
 	if err := s.ensureDocumentsOwner(ctx, ownerID, ids, false); err != nil {
 		return nil, err
 	}
-	for _, id := range ids {
-		document, err := s.documents.FindByIDAndOwner(ctx, id, ownerID)
-		if err != nil {
-			return nil, apperror.Internal(err)
-		}
-		if document == nil {
-			return nil, apperror.NotFound("DOCUMENT_NOT_FOUND", "document not found")
-		}
-		if err := s.documents.Delete(ctx, document); err != nil {
-			return nil, apperror.Internal(err)
-		}
+	if err := s.documents.BatchDelete(ctx, ids); err != nil {
+		return nil, apperror.Internal(err)
 	}
 	return &dto.DocumentBatchResultResponse{ProcessedCount: len(ids)}, nil
 }

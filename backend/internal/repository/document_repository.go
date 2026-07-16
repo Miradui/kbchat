@@ -151,6 +151,19 @@ func (r *DocumentRepository) Delete(ctx context.Context, document *model.Documen
 	return r.db.WithContext(ctx).Delete(document).Error
 }
 
+func (r *DocumentRepository) BatchDelete(ctx context.Context, documentIDs []uuid.UUID) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Where("id IN ?", documentIDs).Delete(&model.Document{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != int64(len(documentIDs)) {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
+}
+
 func (r *DocumentRepository) CreateJob(ctx context.Context, job *model.DocumentJob) error {
 	return r.db.WithContext(ctx).Create(job).Error
 }

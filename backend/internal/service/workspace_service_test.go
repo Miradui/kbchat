@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"mime/multipart"
 	"net/http/httptest"
 	"os"
@@ -971,6 +972,41 @@ func TestDocumentBatchDeleteRestoreAndReprocess(t *testing.T) {
 	}
 	if len(restoredList.Items) != 2 {
 		t.Fatalf("expected 2 restored documents, got %#v", restoredList.Items)
+	}
+}
+
+func TestDocumentBatchDeleteRollsBackWhenLaterWriteFails(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	docA := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual-a.pdf", "completed")
+	docB := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual-b.pdf", "completed")
+	trigger := fmt.Sprintf(`
+		CREATE TRIGGER fail_second_document_delete
+		BEFORE UPDATE OF deleted_at ON documents
+		WHEN NEW.id = '%s' AND NEW.deleted_at IS NOT NULL
+		BEGIN
+			SELECT RAISE(ABORT, 'forced delete failure');
+		END`, docB.ID)
+	if err := services.db.Exec(trigger).Error; err != nil {
+		t.Fatalf("create delete failure trigger: %v", err)
+	}
+
+	if _, err := services.documents.BatchDelete(ctx, owner.ID, dto.DocumentBatchRequest{
+		DocumentIDs: []uuid.UUID{docA.ID, docB.ID},
+	}); err == nil {
+		t.Fatal("expected batch delete to fail")
+	}
+
+	var activeCount int64
+	if err := services.db.Unscoped().Model(&model.Document{}).
+		Where("id IN ? AND deleted_at IS NULL", []uuid.UUID{docA.ID, docB.ID}).
+		Count(&activeCount).Error; err != nil {
+		t.Fatalf("count active documents: %v", err)
+	}
+	if activeCount != 2 {
+		t.Fatalf("expected both documents to remain active after rollback, got %d", activeCount)
 	}
 }
 
