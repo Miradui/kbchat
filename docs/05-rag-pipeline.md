@@ -27,6 +27,8 @@ document_jobs.status=failed
 document_jobs.error_message=失败原因
 ```
 
+当前 MVP worker 按单服务实例运行。worker 启动时会把上一次进程中断遗留的 `running` 任务恢复为 `pending` 并重新领取，避免服务重启后文档永久卡住。该策略不支持多个服务实例同时共享同一任务表；如需多实例部署，必须改为带租约到期时间和心跳续租的领取协议。
+
 ## 文档解析范围
 
 MVP 支持：

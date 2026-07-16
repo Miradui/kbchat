@@ -207,6 +207,18 @@ func (r *DocumentRepository) ClaimPendingJob(ctx context.Context) (*model.Docume
 	return &job, nil
 }
 
+func (r *DocumentRepository) RecoverRunningJobs(ctx context.Context) error {
+	now := time.Now()
+	return r.db.WithContext(ctx).
+		Model(&model.DocumentJob{}).
+		Where("status = ?", "running").
+		Updates(map[string]any{
+			"status":     "pending",
+			"locked_at":  nil,
+			"updated_at": now,
+		}).Error
+}
+
 func (r *DocumentRepository) FindByID(ctx context.Context, id uuid.UUID) (*model.Document, error) {
 	var document model.Document
 	err := r.db.WithContext(ctx).Where("id = ?", id).Where("deleted_at IS NULL").First(&document).Error

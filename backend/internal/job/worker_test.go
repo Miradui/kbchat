@@ -107,6 +107,26 @@ func TestWorkerProcessesJobsConcurrently(t *testing.T) {
 	}
 }
 
+func TestWorkerRecoversInterruptedJobsBeforeClaiming(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	store := newFakeDocumentStore()
+	store.onRecover = cancel
+	worker := NewWorkerWithOptions(store, &fakeProcessor{}, zap.NewNop(), Options{
+		Interval:    time.Millisecond,
+		Concurrency: 1,
+	})
+
+	worker.Start(ctx)
+
+	if store.recoverCalls != 1 {
+		t.Fatalf("expected interrupted jobs to be recovered once, got %d", store.recoverCalls)
+	}
+	if store.claimCalls != 0 {
+		t.Fatalf("expected recovery to happen before claiming, got %d claim calls", store.claimCalls)
+	}
+}
+
 type fakeDocumentStore struct {
 	mu sync.Mutex
 
@@ -115,11 +135,14 @@ type fakeDocumentStore struct {
 	completedJobs   int
 	failedJobs      int
 	retryCalls      int
+	recoverCalls    int
+	claimCalls      int
 	updatedStatuses int
 	lastRetryCount  int
 	lastRetryAt     time.Time
 	lastStatus      string
 	lastError       string
+	onRecover       func()
 }
 
 func newFakeDocumentStore() *fakeDocumentStore {
@@ -130,6 +153,7 @@ func (s *fakeDocumentStore) ClaimPendingJob(ctx context.Context) (*model.Documen
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.claimCalls++
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -140,6 +164,18 @@ func (s *fakeDocumentStore) ClaimPendingJob(ctx context.Context) (*model.Documen
 	s.jobs = s.jobs[1:]
 	job.Status = "running"
 	return job, nil
+}
+
+func (s *fakeDocumentStore) RecoverRunningJobs(context.Context) error {
+	s.mu.Lock()
+	s.recoverCalls++
+	onRecover := s.onRecover
+	s.mu.Unlock()
+
+	if onRecover != nil {
+		onRecover()
+	}
+	return nil
 }
 
 func (s *fakeDocumentStore) UpdateStatus(_ context.Context, _ uuid.UUID, status string, errorMessage string) error {

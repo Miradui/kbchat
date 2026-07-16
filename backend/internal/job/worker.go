@@ -19,6 +19,7 @@ const (
 )
 
 type DocumentStore interface {
+	RecoverRunningJobs(ctx context.Context) error
 	ClaimPendingJob(ctx context.Context) (*model.DocumentJob, error)
 	UpdateStatus(ctx context.Context, documentID uuid.UUID, status string, errorMessage string) error
 	CompleteJob(ctx context.Context, jobID uuid.UUID) error
@@ -86,6 +87,10 @@ func NewWorkerWithOptions(
 
 func (w *Worker) Start(ctx context.Context) {
 	w.logger.Info("document worker started")
+	if err := w.documents.RecoverRunningJobs(ctx); err != nil {
+		w.logger.Error("recover interrupted document jobs failed", zap.Error(err))
+		return
+	}
 
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
