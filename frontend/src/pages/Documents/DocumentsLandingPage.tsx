@@ -62,7 +62,8 @@ export function DocumentsLandingPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
+  const [loadError, setLoadError] = useState('');
+  const [actionError, setActionError] = useState('');
   const [detailDocumentId, setDetailDocumentId] = useState<string | null>(null);
   const [showRecycleBin, setShowRecycleBin] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -72,7 +73,6 @@ export function DocumentsLandingPage() {
   const loadPage = useCallback(async () => {
     const requestId = documentRequestIdRef.current + 1;
     documentRequestIdRef.current = requestId;
-    setError('');
     const responses = await Promise.all([
         listGlobalDocuments({
           q: debouncedQuery,
@@ -94,6 +94,7 @@ export function DocumentsLandingPage() {
       return;
     }
     const [documentResponse, kbResponse] = responses;
+    setLoadError('');
     setDocuments(documentResponse.items);
     setTotal(documentResponse.total);
     setKnowledgeBases(kbResponse.items);
@@ -113,7 +114,7 @@ export function DocumentsLandingPage() {
     loadPage()
       .catch((err) => {
         if (mounted) {
-          setError(errorMessage(err, '全局文档加载失败'));
+          setLoadError(errorMessage(err, '全局文档加载失败'));
         }
       })
       .finally(() => {
@@ -136,7 +137,7 @@ export function DocumentsLandingPage() {
     const timer = window.setInterval(() => {
       loadPage().catch((err) => {
         if (active) {
-          setError(errorMessage(err, '文档状态刷新失败'));
+          setLoadError(errorMessage(err, '文档状态刷新失败'));
         }
       });
     }, 3000);
@@ -188,13 +189,13 @@ export function DocumentsLandingPage() {
     }
 
     setUploading(true);
-    setError('');
+    setActionError('');
 
     try {
       await uploadGlobalDocument(uploadKnowledgeBaseId, file);
       await loadPage();
     } catch (err) {
-      setError(errorMessage(err, '全局上传失败'));
+      setActionError(errorMessage(err, '全局上传失败'));
     } finally {
       setUploading(false);
       event.target.value = '';
@@ -225,14 +226,14 @@ export function DocumentsLandingPage() {
     }
 
     setSubmitting(true);
-    setError('');
+    setActionError('');
 
     try {
       await batchReprocessDocuments(selectedIds);
       setSelectedIds([]);
       await loadPage();
     } catch (err) {
-      setError(errorMessage(err, '批量重处理失败'));
+      setActionError(errorMessage(err, '批量重处理失败'));
     } finally {
       setSubmitting(false);
     }
@@ -244,7 +245,7 @@ export function DocumentsLandingPage() {
     }
 
     setSubmitting(true);
-    setError('');
+    setActionError('');
 
     try {
       await batchDeleteDocuments(deleteTargetIds);
@@ -252,7 +253,7 @@ export function DocumentsLandingPage() {
       setSelectedIds([]);
       await loadPage();
     } catch (err) {
-      setError(errorMessage(err, '批量删除失败'));
+      setActionError(errorMessage(err, '批量删除失败'));
     } finally {
       setSubmitting(false);
     }
@@ -313,7 +314,9 @@ export function DocumentsLandingPage() {
           <MetricCard label="失败" value={failedCount} tone="danger" />
         </div>
 
-        {error && <p className="document-alert error-text">{error}</p>}
+        {(actionError || loadError) && (
+          <p className="document-alert error-text" role="alert">{actionError || loadError}</p>
+        )}
 
         <div className={listRefreshing ? 'panel data-panel document-list-panel is-refreshing' : 'panel data-panel document-list-panel'}>
           <div className="panel-header document-list-header">

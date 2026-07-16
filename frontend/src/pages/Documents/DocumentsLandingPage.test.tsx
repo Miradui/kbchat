@@ -2,6 +2,7 @@ import { act, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ApiError } from '../../api/client';
 import { renderWithRouter } from '../../test/render';
 import { DocumentsLandingPage } from './DocumentsLandingPage';
 
@@ -56,6 +57,39 @@ describe('DocumentsLandingPage loading', () => {
 
     expect(await screen.findByText('completed.pdf')).toBeInTheDocument();
     expect(screen.queryByText('processing.pdf')).not.toBeInTheDocument();
+  });
+
+  it('keeps an upload error visible after a successful status poll', async () => {
+	let poll: (() => void) | undefined;
+	const realSetInterval = window.setInterval.bind(window);
+	vi.spyOn(window, 'setInterval').mockImplementation((handler, timeout, ...args) => {
+	  if (timeout === 3000) {
+		poll = handler as () => void;
+		return 1;
+	  }
+	  return realSetInterval(handler, timeout, ...args);
+	});
+	api.listGlobalDocuments
+	  .mockResolvedValueOnce(documentResponse(documentItem('processing.pdf', 'embedding')))
+	  .mockResolvedValueOnce(documentResponse(documentItem('processing.pdf', 'embedding')));
+	api.uploadGlobalDocument.mockRejectedValue(new ApiError(400, {
+	  code: 'DOCUMENT_UPLOAD_FAILED',
+	  message: '上传内容无效',
+	  details: {},
+	}));
+	const user = userEvent.setup();
+	const { container } = renderWithRouter(<DocumentsLandingPage />, ['/documents']);
+
+	expect(await screen.findByText('processing.pdf')).toBeInTheDocument();
+	const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+	if (!fileInput) throw new Error('file input was not rendered');
+	await user.upload(fileInput, new File(['broken'], 'broken.pdf', { type: 'application/pdf' }));
+	expect(await screen.findByText('上传内容无效')).toBeInTheDocument();
+	if (!poll) throw new Error('poll callback was not registered');
+
+	await act(async () => poll?.());
+
+	expect(screen.getByText('上传内容无效')).toBeInTheDocument();
   });
 
   it('ignores an older document response after filters change', async () => {
