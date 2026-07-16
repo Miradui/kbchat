@@ -24,6 +24,7 @@ export function DocumentRecycleBinDrawer({
   const requestIdRef = useRef(0);
   const mountedRef = useRef(true);
   const explicitRefreshInFlightRef = useRef(false);
+  const mutationInFlightRef = useRef(false);
   const [items, setItems] = useState<RecycleBinItem[]>([]);
   const [page, setPage] = useState(1);
   const [pageSize] = useState(20);
@@ -77,11 +78,19 @@ export function DocumentRecycleBinDrawer({
   }, [loadPage]);
 
   const refreshAfterMutation = useCallback(async (successLabel: string) => {
+    if (!mountedRef.current) {
+      return;
+    }
     onChanged();
+    if (!mountedRef.current) {
+      return;
+    }
     try {
       await loadPage();
     } catch (err) {
-      setError(`${successLabel}，但回收站刷新失败：${errorMessage(err, '请求失败')}`);
+      if (mountedRef.current) {
+        setError(`${successLabel}，但回收站刷新失败：${errorMessage(err, '请求失败')}`);
+      }
     }
   }, [loadPage, onChanged]);
 
@@ -115,6 +124,10 @@ export function DocumentRecycleBinDrawer({
   }, []);
 
   async function handleRestore(item: RecycleBinItem) {
+    if (mutationInFlightRef.current) {
+      return;
+    }
+    mutationInFlightRef.current = true;
     setWorkingId(item.id);
     setError('');
 
@@ -122,20 +135,26 @@ export function DocumentRecycleBinDrawer({
       try {
         await restoreDocument(item.id);
       } catch (err) {
-        setError(errorMessage(err, '文档恢复失败'));
+        if (mountedRef.current) {
+          setError(errorMessage(err, '文档恢复失败'));
+        }
         return;
       }
       await refreshAfterMutation('文档已恢复');
     } finally {
-      setWorkingId(null);
+      mutationInFlightRef.current = false;
+      if (mountedRef.current) {
+        setWorkingId(null);
+      }
     }
   }
 
   async function handleRestorePage() {
-    if (items.length === 0) {
+    if (items.length === 0 || mutationInFlightRef.current) {
       return;
     }
 
+    mutationInFlightRef.current = true;
     setSubmitting(true);
     setError('');
 
@@ -143,20 +162,26 @@ export function DocumentRecycleBinDrawer({
       try {
         await batchRestoreDocuments(items.map((item) => item.id));
       } catch (err) {
-        setError(errorMessage(err, '批量恢复失败'));
+        if (mountedRef.current) {
+          setError(errorMessage(err, '批量恢复失败'));
+        }
         return;
       }
       await refreshAfterMutation('本页文档已恢复');
     } finally {
-      setSubmitting(false);
+      mutationInFlightRef.current = false;
+      if (mountedRef.current) {
+        setSubmitting(false);
+      }
     }
   }
 
   async function handlePermanentDelete() {
-    if (!deleteTarget) {
+    if (!deleteTarget || mutationInFlightRef.current) {
       return;
     }
 
+    mutationInFlightRef.current = true;
     setSubmitting(true);
     setError('');
 
@@ -164,17 +189,28 @@ export function DocumentRecycleBinDrawer({
       try {
         await deleteDocumentPermanently(deleteTarget.id);
       } catch (err) {
-        setError(errorMessage(err, '文档永久删除失败'));
+        if (mountedRef.current) {
+          setError(errorMessage(err, '文档永久删除失败'));
+        }
         return;
       }
-      setDeleteTarget(null);
+      if (mountedRef.current) {
+        setDeleteTarget(null);
+      }
       await refreshAfterMutation('文档已永久删除');
     } finally {
-      setSubmitting(false);
+      mutationInFlightRef.current = false;
+      if (mountedRef.current) {
+        setSubmitting(false);
+      }
     }
   }
 
   async function handleEmptyRecycleBin() {
+    if (mutationInFlightRef.current) {
+      return;
+    }
+    mutationInFlightRef.current = true;
     setSubmitting(true);
     setError('');
 
@@ -182,17 +218,25 @@ export function DocumentRecycleBinDrawer({
       try {
         await emptyDocumentRecycleBin();
       } catch (err) {
-        setError(errorMessage(err, '清空失败，后端按 all-or-nothing 语义未执行部分删除。'));
+        if (mountedRef.current) {
+          setError(errorMessage(err, '清空失败，后端按 all-or-nothing 语义未执行部分删除。'));
+        }
         return;
       }
-      setConfirmEmpty(false);
+      if (mountedRef.current) {
+        setConfirmEmpty(false);
+      }
       await refreshAfterMutation('回收站已清空');
     } finally {
-      setSubmitting(false);
+      mutationInFlightRef.current = false;
+      if (mountedRef.current) {
+        setSubmitting(false);
+      }
     }
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const mutationBusy = workingId !== null || submitting;
 
   return (
     <>
@@ -203,7 +247,7 @@ export function DocumentRecycleBinDrawer({
             <h2 id="document-recycle-title">文档回收站</h2>
             <p className="muted-text">展示当前用户已删除的文档，可恢复到原知识库。</p>
           </div>
-          <button className="secondary-button" type="button" onClick={onClose}>
+          <button className="secondary-button" type="button" onClick={onClose} disabled={mutationBusy}>
             关闭
           </button>
         </header>
@@ -213,14 +257,14 @@ export function DocumentRecycleBinDrawer({
             className="secondary-button"
             type="button"
             onClick={() => void refreshPage('文档回收站刷新失败')}
-            disabled={loading || refreshing}
+            disabled={loading || refreshing || mutationBusy}
           >
             {refreshing ? '刷新中...' : '刷新'}
           </button>
-          <button className="secondary-button" type="button" onClick={() => void handleRestorePage()} disabled={submitting || items.length === 0}>
+          <button className="secondary-button" type="button" onClick={() => void handleRestorePage()} disabled={mutationBusy || items.length === 0}>
             {submitting ? '恢复中...' : '恢复本页'}
           </button>
-          <button className="danger-button" type="button" onClick={() => setConfirmEmpty(true)} disabled={submitting || items.length === 0}>
+          <button className="danger-button" type="button" onClick={() => setConfirmEmpty(true)} disabled={mutationBusy || items.length === 0}>
             清空回收站
           </button>
         </div>
@@ -246,7 +290,7 @@ export function DocumentRecycleBinDrawer({
                     className="secondary-button"
                     type="button"
                     onClick={() => void handleRestore(item)}
-                    disabled={workingId === item.id || submitting}
+                    disabled={mutationBusy}
                   >
                     {workingId === item.id ? '恢复中...' : '恢复'}
                   </button>
@@ -255,7 +299,7 @@ export function DocumentRecycleBinDrawer({
                     className="danger-button"
                     type="button"
                     onClick={() => setDeleteTarget(item)}
-                    disabled={submitting}
+                    disabled={mutationBusy}
                   >
                     永久删除
                   </button>
@@ -268,13 +312,13 @@ export function DocumentRecycleBinDrawer({
         <footer className="drawer-pagination">
           <span>共 {total} 条</span>
           <div className="pager">
-            <button className="secondary-button" type="button" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+            <button className="secondary-button" type="button" disabled={mutationBusy || page <= 1} onClick={() => setPage(page - 1)}>
               ‹
             </button>
             <button className="secondary-button active-page" type="button">
               {page}
             </button>
-            <button className="secondary-button" type="button" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>
+            <button className="secondary-button" type="button" disabled={mutationBusy || page >= totalPages} onClick={() => setPage(page + 1)}>
               ›
             </button>
           </div>

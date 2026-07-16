@@ -116,6 +116,49 @@ describe('DocumentRecycleBinDrawer', () => {
     expect(screen.getByRole('button', { name: '永久删除 manual.pdf' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '永久删除 policy.md' })).toBeInTheDocument();
   });
+
+  it('locks all recycle actions while a restore is pending', async () => {
+    const restore = deferred<void>();
+    api.listDocumentRecycleBin.mockResolvedValue(recycleResponse([
+      recycledDocument,
+      { ...recycledDocument, id: 'doc-2', name: 'policy.md' },
+    ], 21));
+    api.restoreDocument.mockReturnValueOnce(restore.promise);
+    const user = userEvent.setup();
+
+    renderWithRouter(<DocumentRecycleBinDrawer onChanged={vi.fn()} onClose={vi.fn()} />);
+    await user.click(await screen.findByRole('button', { name: '恢复 manual.pdf' }));
+
+    expect(screen.getByRole('button', { name: '正在恢复 manual.pdf' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '恢复 policy.md' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '永久删除 manual.pdf' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '恢复本页' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '清空回收站' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '刷新' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '关闭' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '›' })).toBeDisabled();
+
+    await act(async () => restore.resolve());
+    expect(screen.getByRole('button', { name: '关闭' })).toBeEnabled();
+  });
+
+  it('does not refresh or notify after a pending mutation unmounts', async () => {
+    const restore = deferred<void>();
+    api.listDocumentRecycleBin.mockResolvedValue(recycleResponse([recycledDocument]));
+    api.restoreDocument.mockReturnValueOnce(restore.promise);
+    const onChanged = vi.fn();
+    const user = userEvent.setup();
+    const rendered = renderWithRouter(
+      <DocumentRecycleBinDrawer onChanged={onChanged} onClose={vi.fn()} />,
+    );
+    await user.click(await screen.findByRole('button', { name: '恢复 manual.pdf' }));
+
+    rendered.unmount();
+    await act(async () => restore.resolve());
+
+    expect(onChanged).not.toHaveBeenCalled();
+    expect(api.listDocumentRecycleBin).toHaveBeenCalledTimes(1);
+  });
 });
 
 const recycledDocument = {
