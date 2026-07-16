@@ -47,6 +47,7 @@ const fallbackPreference: KnowledgeBaseWorkspacePreference = {
 export function DocumentsLandingPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const documentRequestIdRef = useRef(0);
+  const explicitRefreshInFlightRef = useRef(false);
   const mountedRef = useRef(true);
   const [categories, setCategories] = useState<KnowledgeBaseCategory[]>([]);
   const [expandedIds, setExpandedIds] = useState<string[]>([]);
@@ -62,6 +63,7 @@ export function DocumentsLandingPage() {
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -104,12 +106,27 @@ export function DocumentsLandingPage() {
     setSelectedIds((current) => current.filter((id) => documentResponse.items.some((document) => document.id === id)));
   }, [debouncedQuery, fileType, knowledgeBaseFilter, page, pageSize, sort, status]);
 
-  const refreshPage = useCallback(async (fallback: string) => {
+  const refreshPage = useCallback(async (fallback: string, options: { explicit?: boolean } = {}) => {
+    if (options.explicit && explicitRefreshInFlightRef.current) {
+      return;
+    }
+    if (options.explicit) {
+      explicitRefreshInFlightRef.current = true;
+      setRefreshing(true);
+      setActionError('');
+    }
     try {
       await loadPage();
     } catch (err) {
       if (mountedRef.current) {
         setLoadError(errorMessage(err, fallback));
+      }
+    } finally {
+      if (options.explicit) {
+        explicitRefreshInFlightRef.current = false;
+        if (mountedRef.current) {
+          setRefreshing(false);
+        }
       }
     }
   }, [loadPage]);
@@ -291,7 +308,7 @@ export function DocumentsLandingPage() {
     }
   }
 
-  const listRefreshing = loading && documents.length > 0;
+  const listRefreshing = (loading || refreshing) && documents.length > 0;
 
   return (
     <WorkspaceShell active="documents" categories={categories} expandedIds={expandedIds}>
@@ -308,6 +325,7 @@ export function DocumentsLandingPage() {
             <span className="document-aside-label">上传目标</span>
             <label className="document-target-select">
               <select
+                aria-label="上传目标"
                 value={uploadKnowledgeBaseId}
                 onChange={(event) => setUploadKnowledgeBaseId(event.target.value)}
                 disabled={knowledgeBases.length === 0}
@@ -350,7 +368,10 @@ export function DocumentsLandingPage() {
           <p className="document-alert error-text" role="alert">{actionError || loadError}</p>
         )}
 
-        <div className={listRefreshing ? 'panel data-panel document-list-panel is-refreshing' : 'panel data-panel document-list-panel'}>
+        <div
+          aria-busy={loading || refreshing}
+          className={listRefreshing ? 'panel data-panel document-list-panel is-refreshing' : 'panel data-panel document-list-panel'}
+        >
           <div className="panel-header document-list-header">
             <div>
               <h2>文档列表</h2>
@@ -361,8 +382,13 @@ export function DocumentsLandingPage() {
               <button className="secondary-button" type="button" onClick={() => setShowRecycleBin(true)}>
                 文档回收站
               </button>
-			  <button className="secondary-button" type="button" onClick={() => void refreshPage('文档列表刷新失败')}>
-                刷新
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={refreshing}
+                onClick={() => void refreshPage('文档列表刷新失败', { explicit: true })}
+              >
+                {refreshing ? '刷新中...' : '刷新'}
               </button>
             </div>
           </div>

@@ -150,6 +150,81 @@ describe('DocumentsLandingPage loading', () => {
 	expect(await screen.findByRole('alert')).toHaveTextContent('刷新服务暂不可用');
   });
 
+  it('replaces an old action error with the explicit refresh result', async () => {
+	api.listGlobalDocuments
+	  .mockResolvedValueOnce(documentResponse(documentItem('manual.pdf', 'completed')))
+	  .mockRejectedValueOnce(new ApiError(503, {
+		code: 'SERVICE_UNAVAILABLE',
+		message: '刷新服务暂不可用',
+		details: {},
+	  }));
+	api.uploadGlobalDocument.mockRejectedValue(new ApiError(400, {
+	  code: 'DOCUMENT_UPLOAD_FAILED',
+	  message: '上传内容无效',
+	  details: {},
+	}));
+	const user = userEvent.setup();
+	const { container } = renderWithRouter(<DocumentsLandingPage />, ['/documents']);
+
+	expect(await screen.findByText('manual.pdf')).toBeInTheDocument();
+	const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+	if (!fileInput) throw new Error('file input was not rendered');
+	await user.upload(fileInput, new File(['broken'], 'broken.pdf', { type: 'application/pdf' }));
+	expect(await screen.findByRole('alert')).toHaveTextContent('上传内容无效');
+	await user.click(screen.getByRole('button', { name: '刷新' }));
+
+	expect(await screen.findByRole('alert')).toHaveTextContent('刷新服务暂不可用');
+	expect(screen.queryByText('上传内容无效')).not.toBeInTheDocument();
+  });
+
+  it('clears an old action error after an explicit refresh succeeds', async () => {
+	api.listGlobalDocuments
+	  .mockResolvedValueOnce(documentResponse(documentItem('manual.pdf', 'completed')))
+	  .mockResolvedValueOnce(documentResponse(documentItem('manual.pdf', 'completed')));
+	api.uploadGlobalDocument.mockRejectedValue(new ApiError(400, {
+	  code: 'DOCUMENT_UPLOAD_FAILED',
+	  message: '上传内容无效',
+	  details: {},
+	}));
+	const user = userEvent.setup();
+	const { container } = renderWithRouter(<DocumentsLandingPage />, ['/documents']);
+
+	expect(await screen.findByText('manual.pdf')).toBeInTheDocument();
+	const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+	if (!fileInput) throw new Error('file input was not rendered');
+	await user.upload(fileInput, new File(['broken'], 'broken.pdf', { type: 'application/pdf' }));
+	expect(await screen.findByRole('alert')).toHaveTextContent('上传内容无效');
+	await user.click(screen.getByRole('button', { name: '刷新' }));
+
+	expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('disables explicit refresh while the request is pending', async () => {
+	const refresh = deferred<ReturnType<typeof documentResponse>>();
+	api.listGlobalDocuments
+	  .mockResolvedValueOnce(documentResponse(documentItem('manual.pdf', 'completed')))
+	  .mockReturnValueOnce(refresh.promise);
+	const user = userEvent.setup();
+
+	renderWithRouter(<DocumentsLandingPage />, ['/documents']);
+	expect(await screen.findByText('manual.pdf')).toBeInTheDocument();
+	const refreshButton = screen.getByRole('button', { name: '刷新' });
+	await user.click(refreshButton);
+
+	expect(screen.getByRole('button', { name: '刷新中...' })).toBeDisabled();
+	expect(api.listGlobalDocuments).toHaveBeenCalledTimes(2);
+	await act(async () => refresh.resolve(documentResponse(documentItem('manual.pdf', 'completed'))));
+	expect(screen.getByRole('button', { name: '刷新' })).toBeEnabled();
+  });
+
+  it('labels the upload target selector', async () => {
+	api.listGlobalDocuments.mockResolvedValue(documentResponse(documentItem('manual.pdf', 'completed')));
+
+	renderWithRouter(<DocumentsLandingPage />, ['/documents']);
+
+	expect(await screen.findByRole('combobox', { name: '上传目标' })).toBeInTheDocument();
+  });
+
   it('distinguishes a successful upload from a following refresh failure', async () => {
 	api.listGlobalDocuments
 	  .mockResolvedValueOnce(documentResponse(documentItem('manual.pdf', 'completed')))
