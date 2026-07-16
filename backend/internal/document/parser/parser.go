@@ -1,7 +1,7 @@
 package parser
 
 import (
-	"bytes"
+	"fmt"
 	"os"
 	"strings"
 
@@ -12,6 +12,16 @@ type Parser interface {
 	Parse(path string, fileType string) (string, error)
 }
 
+type ParsedDocument struct {
+	FileType string
+	Segments []Segment
+}
+
+type Segment struct {
+	Content    string
+	PageNumber *int
+}
+
 type DefaultParser struct{}
 
 func NewDefaultParser() *DefaultParser {
@@ -19,39 +29,84 @@ func NewDefaultParser() *DefaultParser {
 }
 
 func (p *DefaultParser) Parse(path string, fileType string) (string, error) {
-	switch strings.ToLower(fileType) {
+	document, err := p.ParseDocument(path, fileType)
+	if err != nil {
+		return "", err
+	}
+	contents := make([]string, 0, len(document.Segments))
+	for _, segment := range document.Segments {
+		contents = append(contents, segment.Content)
+	}
+	return strings.Join(contents, "\n"), nil
+}
+
+func (p *DefaultParser) ParseDocument(path string, fileType string) (ParsedDocument, error) {
+	fileType = normalizeFileType(fileType)
+	switch fileType {
 	case "txt", "md":
 		content, err := os.ReadFile(path)
 		if err != nil {
-			return "", err
+			return ParsedDocument{}, err
 		}
-		return strings.TrimPrefix(string(content), "\ufeff"), nil
+		return ParsedDocument{
+			FileType: fileType,
+			Segments: []Segment{{Content: strings.TrimPrefix(string(content), "\ufeff")}},
+		}, nil
 	case "pdf":
-		return parsePDF(path)
+		segments, err := parsePDFSegments(path)
+		if err != nil {
+			return ParsedDocument{}, err
+		}
+		return ParsedDocument{FileType: fileType, Segments: segments}, nil
 	default:
 		content, err := os.ReadFile(path)
 		if err != nil {
-			return "", err
+			return ParsedDocument{}, err
 		}
-		return string(content), nil
+		return ParsedDocument{
+			FileType: fileType,
+			Segments: []Segment{{Content: strings.TrimPrefix(string(content), "\ufeff")}},
+		}, nil
 	}
 }
 
-func parsePDF(path string) (string, error) {
+func normalizeFileType(fileType string) string {
+	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(fileType)), ".")
+}
+
+func parsePDFSegments(path string) ([]Segment, error) {
 	file, reader, err := pdf.Open(path)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer file.Close()
 
-	textReader, err := reader.GetPlainText()
-	if err != nil {
-		return "", err
-	}
+	fonts := make(map[string]*pdf.Font)
+	return collectPDFSegments(reader.NumPage(), func(pageNumber int) (string, error) {
+		page := reader.Page(pageNumber)
+		for _, name := range page.Fonts() {
+			if _, exists := fonts[name]; !exists {
+				font := page.Font(name)
+				fonts[name] = &font
+			}
+		}
+		return page.GetPlainText(fonts)
+	})
+}
 
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(textReader); err != nil {
-		return "", err
+func collectPDFSegments(pageCount int, readPage func(pageNumber int) (string, error)) ([]Segment, error) {
+	segments := make([]Segment, 0, pageCount)
+	for pageNumber := 1; pageNumber <= pageCount; pageNumber++ {
+		content, err := readPage(pageNumber)
+		if err != nil {
+			return nil, fmt.Errorf("parse pdf page %d: %w", pageNumber, err)
+		}
+		content = strings.TrimSpace(strings.TrimPrefix(content, "\ufeff"))
+		if content == "" {
+			continue
+		}
+		page := pageNumber
+		segments = append(segments, Segment{Content: content, PageNumber: &page})
 	}
-	return strings.TrimPrefix(buf.String(), "\ufeff"), nil
+	return segments, nil
 }
