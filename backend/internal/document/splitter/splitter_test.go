@@ -360,6 +360,17 @@ func TestSplitKeepsOversizeMarkdownListItemsOnWholeLines(t *testing.T) {
 	}
 }
 
+func TestSplitPreservesNestedMarkdownListIndentation(t *testing.T) {
+	chunks := New(100, 0).Split("- parent\n  - child")
+
+	if len(chunks) != 1 {
+		t.Fatalf("expected one list chunk, got %#v", chunks)
+	}
+	if chunks[0].Content != "- parent\n  - child" {
+		t.Fatalf("expected nested list indentation to remain intact, got %q", chunks[0].Content)
+	}
+}
+
 func TestSplitDoesNotCarryStructuredOverlapIntoParagraphs(t *testing.T) {
 	text := "- alpha beta gamma\n\nplain paragraph content"
 
