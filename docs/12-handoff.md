@@ -302,4 +302,5 @@ Authorization: Bearer <token>
 - processor 成功替换 chunks 后由 worker 在单个 transaction 内同时终结 document/job；失败终态也复用同一原子路径。
 - 知识库列表与统计排除软删除文档和软删除会话。
 - Markdown overlap 不跨 headingPath；超长嵌套列表重复缩进 marker；表格识别忽略转义管道和 inline code span 管道，并保持极小预算下的转义原子性。
+- 无正文的 Markdown heading 保留为 heading chunk，不会在同级切换或文档结尾静默丢失。
 - 全局文档台账展示进度、重试计划和失败原因；轮询不会清除操作错误，所有刷新入口都会捕获失败，写成功后的刷新失败使用独立提示。

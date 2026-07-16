@@ -80,6 +80,8 @@ chunkOverlap=120 tokens
 
 Markdown 单个列表项超过预算时，每个分片重复原列表 marker；嵌套列表还必须重复原缩进。单个表格行超过预算时，按 cell 内容拆分并重建相同列数的行，同时重复 header/separator。转义管道 `\|` 和 inline code span 内的管道不作为列分隔符，极小预算 fallback 也不得把 `\|` 从中间拆开。标题前缀或重复结构包装不得挤掉 chunk 的主来源正文。
 
+没有正文的 Markdown heading 也必须保留为可检索的 `structureType=heading` chunk；连续子标题可合并为完整 headingPath，但在同级/上级标题替换前或文档结尾不得静默丢失。
+
 每个 chunk 必须保存：
 
 ```text

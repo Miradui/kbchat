@@ -52,6 +52,36 @@ func TestSplitPreservesHeadingPathMetadataAndContentPrefix(t *testing.T) {
 	}
 }
 
+func TestSplitPreservesTrailingHeadingWithoutBody(t *testing.T) {
+	text := "# Product Guide\n\nIntro paragraph.\n\n## Appendix"
+
+	chunks := New(30, 0).Split(text)
+
+	var appendix Chunk
+	for _, chunk := range chunks {
+		if chunk.Content == "Product Guide > Appendix" {
+			appendix = chunk
+			break
+		}
+	}
+	if appendix.Content == "" {
+		t.Fatalf("expected trailing heading to remain searchable, got %#v", chunks)
+	}
+	if appendix.Metadata["structureType"] != "heading" {
+		t.Fatalf("expected heading structure metadata, got %#v", appendix.Metadata)
+	}
+}
+
+func TestSplitPreservesEmptyHeadingBeforeSibling(t *testing.T) {
+	text := "# Empty Section\n\n# Filled Section\n\nBody."
+
+	chunks := New(30, 0).Split(text)
+
+	if len(chunks) != 2 || chunks[0].Content != "Empty Section" || chunks[1].Content != "Filled Section\nBody." {
+		t.Fatalf("expected empty sibling heading and following content, got %#v", chunks)
+	}
+}
+
 func TestSplitPrefersParagraphBoundariesBeforeHardSplitting(t *testing.T) {
 	text := strings.Join([]string{
 		"# Release Notes",

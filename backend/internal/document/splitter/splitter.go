@@ -144,6 +144,8 @@ func (s *Splitter) splitOversizeBlock(item block) []block {
 	switch item.structureType {
 	case "code":
 		return splitOversizeCodeBlock(item, budget)
+	case "heading":
+		return []block{item}
 	case "table":
 		return splitOversizeTableBlock(item, budget)
 	case "list":
@@ -312,6 +314,26 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 	pendingStart := 0
 	pendingEnd := 0
 	offset := 0
+	lastHeadingLevel := 0
+	lastHeadingStart := 0
+	lastHeadingEnd := 0
+	contentAfterHeading := true
+
+	appendPendingHeading := func() {
+		if lastHeadingLevel == 0 || contentAfterHeading {
+			return
+		}
+		blocks = append(blocks, block{
+			content:       "",
+			fileType:      fileType,
+			pageNumber:    copyIntPointer(pageNumber),
+			headingPath:   copyStrings(headingPath),
+			structureType: "heading",
+			startOffset:   lastHeadingStart,
+			endOffset:     lastHeadingEnd,
+		})
+		contentAfterHeading = true
+	}
 
 	flush := func() {
 		if len(pendingLines) == 0 {
@@ -329,6 +351,7 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 				startOffset:   contentSpan.start,
 				endOffset:     contentSpan.end,
 			})
+			contentAfterHeading = true
 		}
 		pendingLines = nil
 		pendingType = ""
@@ -351,7 +374,14 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 		if markdown {
 			if level, title, ok := parseHeading(trimmed); ok {
 				flush()
+				if level <= lastHeadingLevel {
+					appendPendingHeading()
+				}
 				headingPath = updateHeadingPath(headingPath, level, title)
+				lastHeadingLevel = level
+				lastHeadingStart = lineStart
+				lastHeadingEnd = lineEnd
+				contentAfterHeading = false
 				continue
 			}
 		}
@@ -381,6 +411,7 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 						startOffset:   contentSpan.start,
 						endOffset:     contentSpan.end,
 					})
+					contentAfterHeading = true
 				}
 				continue
 			}
@@ -402,6 +433,7 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 	}
 
 	flush()
+	appendPendingHeading()
 	return blocks
 }
 
