@@ -460,7 +460,13 @@ func structureTypeForLine(line string) string {
 }
 
 func isTableLine(line string) bool {
-	return strings.Count(line, "|") >= 2
+	count := 0
+	for index := 0; index < len(line); index++ {
+		if line[index] == '|' && !isEscapedMarkdownDelimiter(line, index) {
+			count++
+		}
+	}
+	return count >= 2
 }
 
 func isListLine(line string) bool {
@@ -642,7 +648,7 @@ func splitOversizeTableBlock(item block, budget int) []block {
 func tableCellTextSpans(text string, row textSpan) []textSpan {
 	pipes := make([]int, 0)
 	for index := row.start; index < row.end; index++ {
-		if text[index] == '|' {
+		if text[index] == '|' && !isEscapedMarkdownDelimiter(text, index) {
 			pipes = append(pipes, index)
 		}
 	}
@@ -667,6 +673,14 @@ func tableCellTextSpans(text string, row textSpan) []textSpan {
 		cells = append(cells, cell)
 	}
 	return cells
+}
+
+func isEscapedMarkdownDelimiter(text string, index int) bool {
+	backslashes := 0
+	for previous := index - 1; previous >= 0 && text[previous] == '\\'; previous-- {
+		backslashes++
+	}
+	return backslashes%2 == 1
 }
 
 func formatMarkdownTableRow(cells []string) string {

@@ -492,6 +492,58 @@ func TestSplitKeepsColumnsForSingleOversizeMarkdownTableRow(t *testing.T) {
 	}
 }
 
+func TestSplitKeepsEscapedPipeInsideOversizeMarkdownTableCell(t *testing.T) {
+	header := "| A | B |\n| --- | --- |"
+	text := header + "\n| alpha \\| beta gamma delta epsilon zeta eta theta | stable |"
+
+	chunks := New(18, 0).Split(text)
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected oversized table row to split, got %#v", chunks)
+	}
+	foundEscapedPipe := false
+	for index, chunk := range chunks {
+		lines := strings.Split(chunk.Content, "\n")
+		if len(lines) != 3 || countUnescapedPipes(lines[2]) != 3 {
+			t.Fatalf("expected a two-column table row at %d, got %q", index, chunk.Content)
+		}
+		if strings.Contains(lines[2], "\\|") {
+			foundEscapedPipe = true
+		}
+	}
+	if !foundEscapedPipe {
+		t.Fatalf("expected escaped pipe to remain inside its source cell, got %#v", chunks)
+	}
+}
+
+func TestSplitTreatsEscapedMarkdownPipesAsParagraphContent(t *testing.T) {
+	chunks := New(100, 0).Split("alpha \\| beta \\| gamma")
+
+	if len(chunks) != 1 {
+		t.Fatalf("expected one paragraph chunk, got %#v", chunks)
+	}
+	if chunks[0].Metadata["structureType"] != "paragraph" {
+		t.Fatalf("expected escaped pipes to remain paragraph content, got %#v", chunks[0])
+	}
+}
+
+func countUnescapedPipes(line string) int {
+	count := 0
+	for index := 0; index < len(line); index++ {
+		if line[index] != '|' {
+			continue
+		}
+		backslashes := 0
+		for previous := index - 1; previous >= 0 && line[previous] == '\\'; previous-- {
+			backslashes++
+		}
+		if backslashes%2 == 0 {
+			count++
+		}
+	}
+	return count
+}
+
 func TestSplitKeepsEdgeCellsForOversizeMarkdownTableWithoutOuterPipes(t *testing.T) {
 	header := "Name | Detail | Status\n--- | --- | ---"
 	rowValues := "alpha beta gamma delta epsilon zeta eta theta iota stable"
