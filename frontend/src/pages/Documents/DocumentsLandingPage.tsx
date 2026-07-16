@@ -45,6 +45,7 @@ const fallbackPreference: KnowledgeBaseWorkspacePreference = {
 
 export function DocumentsLandingPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const documentRequestIdRef = useRef(0);
   const [categories, setCategories] = useState<KnowledgeBaseCategory[]>([]);
   const [expandedIds, setExpandedIds] = useState<string[]>([]);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
@@ -69,25 +70,41 @@ export function DocumentsLandingPage() {
   const debouncedQuery = useDebouncedValue(queryDraft.trim(), 260);
 
   const loadPage = useCallback(async () => {
+    const requestId = documentRequestIdRef.current + 1;
+    documentRequestIdRef.current = requestId;
     setError('');
-    const [documentResponse, kbResponse] = await Promise.all([
-      listGlobalDocuments({
-        q: debouncedQuery,
-        knowledgeBaseId: knowledgeBaseFilter,
-        status,
-        fileType,
-        sort,
-        page,
-        pageSize,
-      }),
-      listKnowledgeBases({ pageSize: 100 }),
-    ]);
+    const responses = await Promise.all([
+        listGlobalDocuments({
+          q: debouncedQuery,
+          knowledgeBaseId: knowledgeBaseFilter,
+          status,
+          fileType,
+          sort,
+          page,
+          pageSize,
+        }),
+        listKnowledgeBases({ pageSize: 100 }),
+      ]).catch((err) => {
+      if (documentRequestIdRef.current === requestId) {
+        throw err;
+      }
+      return null;
+    });
+    if (!responses || documentRequestIdRef.current !== requestId) {
+      return;
+    }
+    const [documentResponse, kbResponse] = responses;
     setDocuments(documentResponse.items);
     setTotal(documentResponse.total);
     setKnowledgeBases(kbResponse.items);
     setUploadKnowledgeBaseId((current) => current || kbResponse.items[0]?.id || '');
     setSelectedIds((current) => current.filter((id) => documentResponse.items.some((document) => document.id === id)));
   }, [debouncedQuery, fileType, knowledgeBaseFilter, page, pageSize, sort, status]);
+
+  const hasProcessingDocuments = useMemo(
+    () => documents.some((document) => document.status !== 'completed' && document.status !== 'failed'),
+    [documents],
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -109,6 +126,26 @@ export function DocumentsLandingPage() {
       mounted = false;
     };
   }, [loadPage]);
+
+  useEffect(() => {
+    if (!hasProcessingDocuments) {
+      return;
+    }
+
+    let active = true;
+    const timer = window.setInterval(() => {
+      loadPage().catch((err) => {
+        if (active) {
+          setError(errorMessage(err, '文档状态刷新失败'));
+        }
+      });
+    }, 3000);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [hasProcessingDocuments, loadPage]);
 
   useEffect(() => {
     let mounted = true;
