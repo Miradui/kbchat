@@ -95,9 +95,9 @@ func (r *KnowledgeBaseRepository) ListWorkspace(ctx context.Context, ownerID uui
 		`).
 		Joins("JOIN users ON users.id = knowledge_bases.owner_id").
 		Joins("LEFT JOIN users AS updated_users ON updated_users.id = knowledge_bases.updated_by_id").
-		Joins("LEFT JOIN documents ON documents.knowledge_base_id = knowledge_bases.id").
+		Joins("LEFT JOIN documents ON documents.knowledge_base_id = knowledge_bases.id AND documents.deleted_at IS NULL").
 		Joins("LEFT JOIN knowledge_base_view_events ON knowledge_base_view_events.knowledge_base_id = knowledge_bases.id AND knowledge_base_view_events.user_id = ?", ownerID).
-		Joins("LEFT JOIN chat_sessions ON chat_sessions.knowledge_base_id = knowledge_bases.id AND chat_sessions.user_id = ?", ownerID).
+		Joins("LEFT JOIN chat_sessions ON chat_sessions.knowledge_base_id = knowledge_bases.id AND chat_sessions.user_id = ? AND chat_sessions.deleted_at IS NULL", ownerID).
 		Joins("LEFT JOIN chat_messages ON chat_messages.session_id = chat_sessions.id AND chat_messages.role = ?", "user").
 		Joins("LEFT JOIN knowledge_base_favorites ON knowledge_base_favorites.knowledge_base_id = knowledge_bases.id AND knowledge_base_favorites.user_id = ?", ownerID).
 		Group("knowledge_bases.id, users.id, updated_users.id, knowledge_base_favorites.user_id").
@@ -181,6 +181,7 @@ func (r *KnowledgeBaseRepository) statsForRange(ctx context.Context, ownerID uui
 		Joins("JOIN chat_sessions ON chat_sessions.id = chat_messages.session_id").
 		Joins("JOIN knowledge_bases ON knowledge_bases.id = chat_sessions.knowledge_base_id").
 		Where("knowledge_bases.owner_id = ? AND chat_sessions.user_id = ? AND chat_messages.role = ?", ownerID, ownerID, "user").
+		Where("chat_sessions.deleted_at IS NULL").
 		Where("knowledge_bases.deleted_at IS NULL")
 
 	if !start.IsZero() {

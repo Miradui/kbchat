@@ -735,6 +735,41 @@ func TestKnowledgeBaseStatsUseOwnerDataOnly(t *testing.T) {
 	}
 }
 
+func TestKnowledgeBaseCountsExcludeSoftDeletedDocumentsAndSessions(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "company-policy", "private", time.Now())
+	document := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "policy.md", "completed")
+	session := createWorkspaceChatSession(t, services.db, owner.ID, kb.ID, "policy question")
+	message := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "what is the policy?"}
+	if err := services.db.Create(&message).Error; err != nil {
+		t.Fatalf("create question: %v", err)
+	}
+	if err := services.documents.Delete(ctx, owner.ID, document.ID); err != nil {
+		t.Fatalf("soft delete document: %v", err)
+	}
+	if err := services.db.Delete(&session).Error; err != nil {
+		t.Fatalf("soft delete chat session: %v", err)
+	}
+
+	workspace, err := services.kbs.ListWorkspace(ctx, owner.ID, dto.KnowledgeBaseListQuery{Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatalf("list workspace: %v", err)
+	}
+	if len(workspace.Items) != 1 || workspace.Items[0].DocumentCount != 0 || workspace.Items[0].QuestionCount != 0 {
+		t.Fatalf("expected deleted resources excluded from workspace counts, got %#v", workspace.Items)
+	}
+
+	stats, err := services.kbs.Stats(ctx, owner.ID, "month")
+	if err != nil {
+		t.Fatalf("load workspace stats: %v", err)
+	}
+	if stats.Documents.Value != 0 || stats.Questions.Value != 0 {
+		t.Fatalf("expected deleted resources excluded from stats, got %#v", stats)
+	}
+}
+
 func TestGlobalDocumentListAndKeywordSearchUseOwnerScope(t *testing.T) {
 	ctx := context.Background()
 	services := newWorkspaceTestServices(t)
