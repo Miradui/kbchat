@@ -640,6 +640,16 @@ function SearchDebugPanel({ debug }: { debug: KnowledgeBaseSearchDebug }) {
         <section>
           <h3>Rerank 阶段</h3>
           <p className="muted-text">状态：{debug.rerankStage.status} · 输入 {debug.rerankStage.input.length} 条</p>
+          {debug.rerankStage.input.length > 0 && (
+            <ol aria-label="Rerank 输入映射">
+              {debug.rerankStage.input.map((item) => (
+                <li key={`${item.chunkId}-input`}>
+                  <strong>#{item.rank} {item.chunkId}</strong>
+                  {item.pageNumber !== null && <span>第 {item.pageNumber} 页</span>}
+                </li>
+              ))}
+            </ol>
+          )}
           {debug.rerankStage.output.length > 0 && (
             <ol>
               {debug.rerankStage.output.map((item) => (

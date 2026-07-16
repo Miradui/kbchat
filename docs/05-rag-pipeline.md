@@ -63,7 +63,7 @@ chunkSize=800 tokens
 chunkOverlap=120 tokens
 ```
 
-当前 MVP 未绑定特定模型 tokenizer，预算估算采用保守启发式：连续 ASCII 每 4 个 rune 约计 1 token，非 ASCII rune（包括 CJK 和 Emoji）按 1 token 计。该估算用于防止长 URL、hash、base64 或连续 Emoji 绕过 chunk 上限；未来接入模型专用 tokenizer 时必须保持相同的最大预算不变量。
+当前 MVP 未绑定特定模型 tokenizer，预算估算采用保守启发式：每个空白分隔字段内的连续 ASCII 每 4 个 rune 约计 1 token，非 ASCII rune（包括 CJK 和 Emoji）按 1 token 计。该估算用于防止长 URL、hash、base64 或连续 Emoji 绕过 chunk 上限；未来接入模型专用 tokenizer 时必须保持相同的最大预算不变量。
 
 所有格式共享 token 预算、稳定 `chunkIndex` 和超长内容的递归拆分，但结构策略按来源格式区分：
 

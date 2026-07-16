@@ -165,11 +165,10 @@ func TestSearchFallbackRerankFailureKeepsVectorOrderWithoutRerankScores(t *testi
 
 func TestSearchDebugIncludesVectorRerankAndFinalStages(t *testing.T) {
 	chunkA, chunkB, chunkC := uuid.New(), uuid.New(), uuid.New()
-	pageA, pageB, pageC := 3, 5, 8
+	pageA, pageC := 3, 8
 	candidateA := searchResult(chunkA, 0.91)
 	candidateA.PageNumber = &pageA
 	candidateB := searchResult(chunkB, 0.88)
-	candidateB.PageNumber = &pageB
 	candidateC := searchResult(chunkC, 0.80)
 	candidateC.PageNumber = &pageC
 	service, _ := newTestService(config.Config{
@@ -244,6 +243,9 @@ func TestSearchDebugIncludesVectorRerankAndFinalStages(t *testing.T) {
 		debugPayload.RerankStage.Output[0]["pageNumber"] != float64(pageC) ||
 		debugPayload.FinalStage.Items[0]["pageNumber"] != float64(pageC) {
 		t.Fatalf("expected physical page numbers in every debug stage, got %s", debugJSON)
+	}
+	if pageNumber, exists := debugPayload.RerankStage.Input[1]["pageNumber"]; !exists || pageNumber != nil {
+		t.Fatalf("expected a null page number to remain explicit in debug JSON, got %s", debugJSON)
 	}
 }
 

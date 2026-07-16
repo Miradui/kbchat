@@ -49,7 +49,7 @@ describe('KnowledgeBaseDetailPage retrieval debug', () => {
       debug: {
         query: '报销',
         vectorStage: { status: 'completed', items: [{ chunkId: 'c1', documentId: 'd1', filename: 'policy.pdf', content: '向量内容', pageNumber: 3, vectorScore: 0.8, rank: 1 }] },
-        rerankStage: { status: 'fallback', input: [{ chunkId: 'c1', pageNumber: 3, rank: 1 }], output: [{ chunkId: 'c1', pageNumber: 5, rerankScore: null, rank: 1 }] },
+        rerankStage: { status: 'fallback', input: [{ chunkId: 'c1', pageNumber: 4, rank: 1 }], output: [{ chunkId: 'c1', pageNumber: 5, rerankScore: null, rank: 1 }] },
         finalStage: { items: [{ chunkId: 'c1', pageNumber: 8, vectorScore: 0.8, rerankScore: null, rank: 1 }] },
         rerankFallback: { used: true, reason: 'provider_unavailable' },
       },
@@ -70,6 +70,7 @@ describe('KnowledgeBaseDetailPage retrieval debug', () => {
     expect(screen.getByText('Rerank 阶段')).toBeInTheDocument();
     expect(screen.getByText('最终结果')).toBeInTheDocument();
     expect(screen.getByText('第 3 页')).toBeInTheDocument();
+    expect(screen.getByText('第 4 页')).toBeInTheDocument();
     expect(screen.getByText('第 5 页')).toBeInTheDocument();
     expect(screen.getByText('第 8 页')).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('Rerank 服务暂不可用');
