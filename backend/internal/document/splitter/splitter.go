@@ -104,7 +104,10 @@ func (s *Splitter) splitBlocks(blocks []block) []Chunk {
 			}
 
 			chunks = append(chunks, current.chunk(len(chunks), s.chunkSize))
-			overlap = s.overlapText(current.body())
+			overlap = ""
+			if current.structureType() == "paragraph" {
+				overlap = s.overlapText(current.body())
+			}
 			current = s.newChunkBuilder(item, overlap)
 			overlap = ""
 		}
@@ -258,10 +261,7 @@ func (b *chunkBuilder) addBlock(item block) {
 }
 
 func (b chunkBuilder) chunk(index int, maxTokens int) Chunk {
-	content := b.content()
-	if estimateTokens(content) > maxTokens {
-		content = trimContentToBudget(content, maxTokens)
-	}
+	content := contentWithinBudget(headingPrefix(b.headingPath), b.body(), maxTokens)
 	metadata := map[string]any{
 		"fileType":      b.fileType,
 		"headingPath":   copyStrings(b.headingPath),
@@ -353,7 +353,7 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 					raw = strings.TrimSuffix(lines[i], "\n")
 					codeEnd = offset + len(raw)
 					offset += len(lines[i])
-					if strings.HasPrefix(strings.TrimSpace(raw), fence) {
+					if isClosingFence(raw, fence) {
 						break
 					}
 				}
@@ -423,13 +423,31 @@ func updateHeadingPath(path []string, level int, title string) []string {
 }
 
 func parseFence(line string) (string, bool) {
-	if strings.HasPrefix(line, "```") {
-		return "```", true
+	line = strings.TrimSpace(line)
+	if line == "" || (line[0] != '`' && line[0] != '~') {
+		return "", false
 	}
-	if strings.HasPrefix(line, "~~~") {
-		return "~~~", true
+	length := 0
+	for length < len(line) && line[length] == line[0] {
+		length++
 	}
-	return "", false
+	if length < 3 {
+		return "", false
+	}
+	return line[:length], true
+}
+
+func isClosingFence(line string, fence string) bool {
+	line = strings.TrimSpace(line)
+	if len(line) < len(fence) || fence == "" {
+		return false
+	}
+	for index := range line {
+		if line[index] != fence[0] {
+			return false
+		}
+	}
+	return true
 }
 
 func structureTypeForLine(line string) string {
@@ -471,7 +489,7 @@ func splitOversizeCodeBlock(item block, budget int) []block {
 	opening := item.content[lines[0].start:lines[0].end]
 	fence, ok := parseFence(strings.TrimSpace(opening))
 	closing := item.content[lines[len(lines)-1].start:lines[len(lines)-1].end]
-	if !ok || !strings.HasPrefix(strings.TrimSpace(closing), fence) {
+	if !ok || !isClosingFence(closing, fence) {
 		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
 	}
 
@@ -723,6 +741,36 @@ func tailByTokenBudget(text string, budget int) string {
 		}
 	}
 	return strings.Join(words, " ")
+}
+
+func contentWithinBudget(prefix string, body string, budget int) string {
+	prefix = strings.TrimSpace(prefix)
+	body = strings.TrimSpace(body)
+	content := body
+	if prefix != "" && body != "" {
+		content = prefix + "\n" + body
+	} else if prefix != "" {
+		content = prefix
+	}
+	if estimateTokens(content) <= budget {
+		return content
+	}
+
+	if estimateTokens(body) > budget {
+		body = trimContentToBudget(body, budget)
+	}
+	remaining := budget - estimateTokens(body)
+	if remaining <= 0 || prefix == "" {
+		return body
+	}
+	prefix = trimContentToBudget(prefix, remaining)
+	if prefix == "" {
+		return body
+	}
+	if body == "" {
+		return prefix
+	}
+	return prefix + "\n" + body
 }
 
 func trimContentToBudget(text string, budget int) string {

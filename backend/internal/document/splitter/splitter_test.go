@@ -359,3 +359,46 @@ func TestSplitKeepsOversizeMarkdownListItemsOnWholeLines(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitDoesNotCarryStructuredOverlapIntoParagraphs(t *testing.T) {
+	text := "- alpha beta gamma\n\nplain paragraph content"
+
+	chunks := New(5, 2).Split(text)
+
+	if len(chunks) != 2 {
+		t.Fatalf("expected separate list and paragraph chunks, got %#v", chunks)
+	}
+	if strings.Contains(chunks[1].Content, "gamma") || !strings.Contains(chunks[1].Content, "plain paragraph content") {
+		t.Fatalf("expected paragraph without list overlap, got %q", chunks[1].Content)
+	}
+}
+
+func TestSplitRequiresPlainClosingCodeFence(t *testing.T) {
+	text := strings.Join([]string{
+		"```go",
+		"first()",
+		"```javascript",
+		"still_code()",
+		"```",
+	}, "\n")
+
+	chunks := New(20, 0).Split(text)
+
+	if len(chunks) != 1 || chunks[0].Metadata["structureType"] != "code" {
+		t.Fatalf("expected one complete code block, got %#v", chunks)
+	}
+	if !strings.Contains(chunks[0].Content, "```javascript\nstill_code()") {
+		t.Fatalf("expected info-string-like line to remain code content, got %q", chunks[0].Content)
+	}
+}
+
+func TestSplitKeepsBodyWhenHeadingPrefixExceedsBudget(t *testing.T) {
+	chunks := New(4, 0).Split("# one two three four five\nbody")
+
+	if len(chunks) != 1 {
+		t.Fatalf("expected one body chunk, got %#v", chunks)
+	}
+	if !strings.Contains(chunks[0].Content, "body") || chunks[0].TokenCount > 4 {
+		t.Fatalf("expected body to take priority over oversized heading prefix, got %#v", chunks[0])
+	}
+}
