@@ -1,4 +1,4 @@
-import { act, screen } from '@testing-library/react';
+import { act, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -62,11 +62,16 @@ describe('DocumentsLandingPage loading', () => {
 
 	  renderWithRouter(<DocumentsLandingPage />, ['/documents']);
 
-	  expect(await screen.findByText('retrying.pdf')).toBeInTheDocument();
-	  expect(screen.getByText('75%')).toBeInTheDocument();
-	  expect(screen.getByText('重试 2 / 5')).toBeInTheDocument();
-	  expect(screen.getByText(/下次重试/)).toBeInTheDocument();
-	  expect(screen.getByText('PDF 解析失败')).toBeInTheDocument();
+	  const retryingRow = (await screen.findByText('retrying.pdf')).closest('tr');
+	  const failedRow = screen.getByText('failed.pdf').closest('tr');
+	  if (!retryingRow || !failedRow) throw new Error('document rows were not rendered');
+	  expect(within(retryingRow).getByText('75%')).toBeInTheDocument();
+	  expect(within(retryingRow).getByText('重试 2 / 5')).toBeInTheDocument();
+	  expect(within(retryingRow).getByText(/下次重试/)).toBeInTheDocument();
+	  expect(within(retryingRow).queryByText('PDF 解析失败')).not.toBeInTheDocument();
+	  expect(within(failedRow).getByText('100%')).toBeInTheDocument();
+	  expect(within(failedRow).getByText('重试 5 / 5')).toBeInTheDocument();
+	  expect(within(failedRow).getByText('PDF 解析失败')).toBeInTheDocument();
 	});
 
   it('polls while the current page contains a processing document', async () => {
