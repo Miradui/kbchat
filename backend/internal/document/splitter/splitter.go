@@ -36,6 +36,11 @@ type block struct {
 	endOffset     int
 }
 
+type textSpan struct {
+	start int
+	end   int
+}
+
 type chunkBuilder struct {
 	fileType       string
 	pageNumber     *int
@@ -123,11 +128,10 @@ func (s *Splitter) splitOversizeBlock(item block) []block {
 		budget = 1
 	}
 
-	parts := splitTextToBudget(item.content, budget, s.chunkOverlap)
-	result := make([]block, 0, len(parts))
-	offset := item.startOffset
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
+	spans := splitTextToBudgetSpans(item.content, budget)
+	result := make([]block, 0, len(spans))
+	for _, span := range spans {
+		part := item.content[span.start:span.end]
 		if part == "" {
 			continue
 		}
@@ -137,10 +141,9 @@ func (s *Splitter) splitOversizeBlock(item block) []block {
 			pageNumber:    copyIntPointer(item.pageNumber),
 			headingPath:   copyStrings(item.headingPath),
 			structureType: item.structureType,
-			startOffset:   offset,
-			endOffset:     offset + len(part),
+			startOffset:   item.startOffset + span.start,
+			endOffset:     item.startOffset + span.end,
 		})
-		offset += len(part)
 	}
 	return result
 }
@@ -226,7 +229,7 @@ func (b *chunkBuilder) addBlock(item block) {
 	}
 	b.parts = append(b.parts, item.content)
 	b.structureTypes[item.structureType] = struct{}{}
-	if b.startOffset == 0 || item.startOffset < b.startOffset {
+	if item.startOffset < b.startOffset {
 		b.startOffset = item.startOffset
 	}
 	if item.endOffset > b.endOffset {
@@ -282,7 +285,7 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 			return
 		}
 
-		content := blockContent(pendingLines, pendingType)
+		content, contentSpan := trimTextSpan(text, pendingStart, pendingEnd)
 		if content != "" {
 			blocks = append(blocks, block{
 				content:       content,
@@ -290,8 +293,8 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 				pageNumber:    copyIntPointer(pageNumber),
 				headingPath:   copyStrings(headingPath),
 				structureType: pendingType,
-				startOffset:   pendingStart,
-				endOffset:     pendingEnd,
+				startOffset:   contentSpan.start,
+				endOffset:     contentSpan.end,
 			})
 		}
 		pendingLines = nil
@@ -323,7 +326,6 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 		if markdown {
 			if fence, ok := parseFence(trimmed); ok {
 				flush()
-				codeLines := []string{raw}
 				codeStart := lineStart
 				codeEnd := lineEnd
 				for i+1 < len(lines) {
@@ -331,12 +333,11 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 					raw = strings.TrimSuffix(lines[i], "\n")
 					codeEnd = offset + len(raw)
 					offset += len(lines[i])
-					codeLines = append(codeLines, raw)
 					if strings.HasPrefix(strings.TrimSpace(raw), fence) {
 						break
 					}
 				}
-				content := strings.TrimSpace(strings.Join(codeLines, "\n"))
+				content, contentSpan := trimTextSpan(text, codeStart, codeEnd)
 				if content != "" {
 					blocks = append(blocks, block{
 						content:       content,
@@ -344,8 +345,8 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 						pageNumber:    copyIntPointer(pageNumber),
 						headingPath:   copyStrings(headingPath),
 						structureType: "code",
-						startOffset:   codeStart,
-						endOffset:     codeEnd,
+						startOffset:   contentSpan.start,
+						endOffset:     contentSpan.end,
 					})
 				}
 				continue
@@ -369,13 +370,6 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 
 	flush()
 	return blocks
-}
-
-func blockContent(lines []string, structureType string) string {
-	if structureType == "paragraph" {
-		return strings.TrimSpace(strings.Join(lines, " "))
-	}
-	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func parseHeading(line string) (int, string, bool) {
@@ -448,116 +442,154 @@ func isListLine(line string) bool {
 	return true
 }
 
-func splitTextToBudget(text string, budget int, overlap int) []string {
-	text = strings.TrimSpace(text)
-	if text == "" {
+func splitTextToBudgetSpans(text string, budget int) []textSpan {
+	content, whole := trimTextSpan(text, 0, len(text))
+	if content == "" {
 		return nil
 	}
-	if estimateTokens(text) <= budget {
-		return []string{text}
+	if estimateTokens(content) <= budget {
+		return []textSpan{whole}
 	}
 
-	if parts := splitParagraphs(text); len(parts) > 1 {
-		return packTextUnits(parts, "\n\n", budget, overlap)
+	if units := paragraphTextSpans(text); len(units) > 1 {
+		return packTextSpans(text, units, budget)
 	}
-	if parts := splitSentences(text); len(parts) > 1 {
-		return packTextUnits(parts, " ", budget, overlap)
+	if units := sentenceTextSpans(text); len(units) > 1 {
+		return packTextSpans(text, units, budget)
 	}
-	if parts := strings.Fields(text); len(parts) > 1 {
-		return packTextUnits(parts, " ", budget, overlap)
+	if units := wordTextSpans(text); len(units) > 1 {
+		return packTextSpans(text, units, budget)
 	}
-	return packRunes(text, budget, overlap)
+	return packTextSpans(text, runeTextSpans(text), budget)
 }
 
-func splitParagraphs(text string) []string {
-	raw := strings.Split(text, "\n\n")
-	parts := make([]string, 0, len(raw))
-	for _, part := range raw {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			parts = append(parts, part)
-		}
-	}
-	return parts
-}
-
-func splitSentences(text string) []string {
-	var parts []string
-	start := 0
-	for index, r := range text {
-		if strings.ContainsRune(".!?。！？；;", r) {
-			end := index + utf8.RuneLen(r)
-			part := strings.TrimSpace(text[start:end])
-			if part != "" {
-				parts = append(parts, part)
-			}
-			start = end
-		}
-	}
-	if start < len(text) {
-		part := strings.TrimSpace(text[start:])
-		if part != "" {
-			parts = append(parts, part)
-		}
-	}
-	return parts
-}
-
-func packTextUnits(units []string, joiner string, budget int, overlap int) []string {
-	var chunks []string
+func packTextSpans(text string, units []textSpan, budget int) []textSpan {
+	result := make([]textSpan, 0, len(units))
 	for start := 0; start < len(units); {
-		end := start
-		var candidate []string
-		for end < len(units) {
-			next := append(copyStrings(candidate), units[end])
-			if len(candidate) > 0 && estimateTokens(strings.Join(next, joiner)) > budget {
-				break
-			}
-			candidate = next
-			end++
-			if estimateTokens(strings.Join(candidate, joiner)) >= budget {
-				break
-			}
-		}
-		if end == start {
-			chunks = append(chunks, splitTextToBudget(units[start], budget, overlap)...)
+		unitContent, unit := trimTextSpan(text, units[start].start, units[start].end)
+		if unitContent == "" {
 			start++
 			continue
 		}
-		chunks = append(chunks, strings.Join(candidate, joiner))
-		if end >= len(units) {
-			break
+		if estimateTokens(unitContent) > budget {
+			for _, nested := range splitTextToBudgetSpans(unitContent, budget) {
+				result = append(result, textSpan{
+					start: unit.start + nested.start,
+					end:   unit.start + nested.end,
+				})
+			}
+			start++
+			continue
 		}
-		nextStart := end
-		for nextStart > start && estimateTokens(strings.Join(units[nextStart:end], joiner)) < overlap {
-			nextStart--
+
+		end := start + 1
+		chosen := unit
+		for end < len(units) {
+			candidateContent, candidate := trimTextSpan(text, unit.start, units[end].end)
+			if estimateTokens(candidateContent) > budget {
+				break
+			}
+			chosen = candidate
+			end++
 		}
-		if nextStart <= start {
-			nextStart = end
-		}
-		start = nextStart
+		result = append(result, chosen)
+		start = end
 	}
-	return chunks
+	return result
 }
 
-func packRunes(text string, budget int, overlap int) []string {
-	runes := []rune(text)
-	step := budget - overlap
-	if step <= 0 {
-		step = budget
-	}
-	var chunks []string
-	for start := 0; start < len(runes); start += step {
-		end := start + budget
-		if end > len(runes) {
-			end = len(runes)
-		}
-		chunks = append(chunks, strings.TrimSpace(string(runes[start:end])))
-		if end == len(runes) {
+func paragraphTextSpans(text string) []textSpan {
+	spans := make([]textSpan, 0)
+	start := 0
+	for start < len(text) {
+		separator := strings.Index(text[start:], "\n\n")
+		if separator < 0 {
+			if content, span := trimTextSpan(text, start, len(text)); content != "" {
+				spans = append(spans, span)
+			}
 			break
 		}
+		end := start + separator
+		if content, span := trimTextSpan(text, start, end); content != "" {
+			spans = append(spans, span)
+		}
+		start = end + 2
+		for start < len(text) && text[start] == '\n' {
+			start++
+		}
 	}
-	return chunks
+	return spans
+}
+
+func sentenceTextSpans(text string) []textSpan {
+	spans := make([]textSpan, 0)
+	start := 0
+	for index, r := range text {
+		if !strings.ContainsRune(".!?。！？；;", r) {
+			continue
+		}
+		end := index + utf8.RuneLen(r)
+		if content, span := trimTextSpan(text, start, end); content != "" {
+			spans = append(spans, span)
+		}
+		start = end
+	}
+	if content, span := trimTextSpan(text, start, len(text)); content != "" {
+		spans = append(spans, span)
+	}
+	return spans
+}
+
+func wordTextSpans(text string) []textSpan {
+	spans := make([]textSpan, 0)
+	start := -1
+	for index, r := range text {
+		if unicode.IsSpace(r) {
+			if start >= 0 {
+				spans = append(spans, textSpan{start: start, end: index})
+				start = -1
+			}
+			continue
+		}
+		if start < 0 {
+			start = index
+		}
+	}
+	if start >= 0 {
+		spans = append(spans, textSpan{start: start, end: len(text)})
+	}
+	return spans
+}
+
+func runeTextSpans(text string) []textSpan {
+	spans := make([]textSpan, 0, utf8.RuneCountInString(text))
+	for index, r := range text {
+		spans = append(spans, textSpan{start: index, end: index + utf8.RuneLen(r)})
+	}
+	return spans
+}
+
+func trimTextSpan(text string, start int, end int) (string, textSpan) {
+	if start < 0 {
+		start = 0
+	}
+	if end > len(text) {
+		end = len(text)
+	}
+	if start >= end {
+		return "", textSpan{start: start, end: start}
+	}
+	raw := text[start:end]
+	content := strings.TrimSpace(raw)
+	if content == "" {
+		return "", textSpan{start: start, end: start}
+	}
+	relativeStart := strings.Index(raw, content)
+	span := textSpan{
+		start: start + relativeStart,
+		end:   start + relativeStart + len(content),
+	}
+	return content, span
 }
 
 func tailByTokenBudget(text string, budget int) string {

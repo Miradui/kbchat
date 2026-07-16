@@ -236,3 +236,56 @@ func TestSplitDocumentKeepsOversizePDFChunksWithinTheirPage(t *testing.T) {
 		t.Fatalf("expected final chunk to belong only to page 2, got %#v", chunks[len(chunks)-1])
 	}
 }
+
+func TestSplitDocumentKeepsMergedChunkStartAtZero(t *testing.T) {
+	text := "alpha beta\n\ngamma delta"
+	document := parser.ParsedDocument{
+		FileType: "txt",
+		Segments: []parser.Segment{{Content: text}},
+	}
+
+	chunks := New(100, 10).SplitDocument(document)
+
+	if len(chunks) != 1 {
+		t.Fatalf("expected merged plain-text chunk, got %#v", chunks)
+	}
+	if chunks[0].Metadata["startOffset"] != 0 || chunks[0].Metadata["endOffset"] != len(text) {
+		t.Fatalf("expected merged source range [0,%d], got %#v", len(text), chunks[0].Metadata)
+	}
+}
+
+func TestSplitDocumentMapsOversizePrimaryContentToNormalizedSegment(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+	}{
+		{name: "ascii", text: "zero one two three four five six seven eight nine ten eleven"},
+		{name: "utf8", text: "甲乙 丙丁 戊己 庚辛 壬癸 子丑 寅卯 辰巳"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chunks := New(6, 2).SplitDocument(parser.ParsedDocument{
+				FileType: "txt",
+				Segments: []parser.Segment{{Content: tt.text}},
+			})
+			if len(chunks) < 2 {
+				t.Fatalf("expected oversized text to split, got %#v", chunks)
+			}
+
+			previousEnd := 0
+			for index, chunk := range chunks {
+				start, startOK := chunk.Metadata["startOffset"].(int)
+				end, endOK := chunk.Metadata["endOffset"].(int)
+				if !startOK || !endOK || start < previousEnd || end <= start || end > len(tt.text) {
+					t.Fatalf("invalid primary source range at %d: %#v", index, chunk.Metadata)
+				}
+				primary := tt.text[start:end]
+				if !strings.HasSuffix(chunk.Content, primary) {
+					t.Fatalf("expected chunk %d to end with source range %q, got %q", index, primary, chunk.Content)
+				}
+				previousEnd = end
+			}
+		})
+	}
+}
