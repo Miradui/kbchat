@@ -995,6 +995,40 @@ func TestDocumentReprocessPreservesChunksUntilProcessorReplacement(t *testing.T)
 	}
 }
 
+func TestDocumentReprocessReusesActiveProcessingJob(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	document := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual.pdf", "embedding")
+	activeJob := model.DocumentJob{
+		DocumentID: document.ID,
+		JobType:    "process_document",
+		Status:     "running",
+	}
+	if err := services.db.Create(&activeJob).Error; err != nil {
+		t.Fatalf("create active document job: %v", err)
+	}
+
+	response, err := services.documents.Reprocess(ctx, owner.ID, document.ID)
+	if err != nil {
+		t.Fatalf("reprocess active document: %v", err)
+	}
+
+	var activeCount int64
+	if err := services.db.Model(&model.DocumentJob{}).
+		Where("document_id = ? AND status IN ?", document.ID, []string{"pending", "running"}).
+		Count(&activeCount).Error; err != nil {
+		t.Fatalf("count active document jobs: %v", err)
+	}
+	if activeCount != 1 {
+		t.Fatalf("expected one active job after idempotent reprocess, got %d", activeCount)
+	}
+	if response.Status != "embedding" || response.JobStatus != "running" {
+		t.Fatalf("expected current processing stage to remain unchanged, got %#v", response)
+	}
+}
+
 func TestDocumentBatchOperationsRejectForeignIDsWithoutPartialMutation(t *testing.T) {
 	ctx := context.Background()
 	services := newWorkspaceTestServices(t)

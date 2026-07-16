@@ -155,6 +155,55 @@ func (r *DocumentRepository) CreateJob(ctx context.Context, job *model.DocumentJ
 	return r.db.WithContext(ctx).Create(job).Error
 }
 
+func (r *DocumentRepository) QueueReprocess(ctx context.Context, documentID uuid.UUID) (*model.DocumentJob, bool, error) {
+	var job model.DocumentJob
+	created := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var document model.Document
+		if err := tx.
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", documentID).
+			First(&document).Error; err != nil {
+			return err
+		}
+
+		err := tx.
+			Where("document_id = ? AND status IN ?", documentID, []string{"pending", "running"}).
+			Order("created_at desc").
+			First(&job).Error
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		now := time.Now()
+		if err := tx.Model(&document).Updates(map[string]any{
+			"status":        "uploaded",
+			"error_message": "",
+			"updated_at":    now,
+		}).Error; err != nil {
+			return err
+		}
+
+		job = model.DocumentJob{
+			DocumentID: documentID,
+			JobType:    "process_document",
+			Status:     "pending",
+		}
+		if err := tx.Create(&job).Error; err != nil {
+			return err
+		}
+		created = true
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return &job, created, nil
+}
+
 func (r *DocumentRepository) LatestJobsByDocumentIDs(ctx context.Context, documentIDs []uuid.UUID) (map[uuid.UUID]model.DocumentJob, error) {
 	jobsByDocumentID := make(map[uuid.UUID]model.DocumentJob, len(documentIDs))
 	if len(documentIDs) == 0 {

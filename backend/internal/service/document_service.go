@@ -249,19 +249,13 @@ func (s *DocumentService) Reprocess(ctx context.Context, ownerID, documentID uui
 	if err != nil {
 		return nil, err
 	}
-	if err := s.documents.UpdateStatus(ctx, document.ID, "uploaded", ""); err != nil {
+	job, created, err := s.documents.QueueReprocess(ctx, document.ID)
+	if err != nil {
 		return nil, apperror.Internal(err)
 	}
-	document.Status = "uploaded"
-	document.ErrorMessage = ""
-
-	job := &model.DocumentJob{
-		DocumentID: document.ID,
-		JobType:    "process_document",
-		Status:     "pending",
-	}
-	if err := s.documents.CreateJob(ctx, job); err != nil {
-		return nil, apperror.Internal(err)
+	if created {
+		document.Status = "uploaded"
+		document.ErrorMessage = ""
 	}
 	if err := s.knowledgeBases.TouchUpdatedBy(ctx, document.KnowledgeBaseID, ownerID); err != nil {
 		return nil, apperror.Internal(err)
