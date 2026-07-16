@@ -39,6 +39,12 @@ md
 pdf
 ```
 
+解析产物按来源格式保留必要边界：
+
+1. TXT 和 Markdown 各产生普通文本 segment；Markdown 语法保持原样，交给切片阶段解释。
+2. PDF 按物理页产生 segment，页码从 1 开始；空白页可以跳过，但后续非空页必须保留原物理页码，不能重新编号。
+3. 当前 PDF 解析只提取可读取文本，不包含 OCR、版面树、跨栏阅读顺序修复或表格重建。
+
 后续版本支持：
 
 ```text
@@ -57,14 +63,15 @@ chunkSize=800 tokens
 chunkOverlap=120 tokens
 ```
 
-切片策略采用结构感知 + 递归 token 切分：
+所有格式共享 token 预算、稳定 `chunkIndex` 和超长内容的递归拆分，但结构策略按来源格式区分：
 
 ```text
-1. 先保留文档结构：Markdown 标题、段落、列表、表格、代码块。
-2. 标题层级写入 headingPath，并作为 chunk 内容前缀参与 embedding。
-3. 同一标题路径下的小结构块可合并到 chunkSize 以内。
-4. 超过 chunkSize 的结构块按优先级递归拆分：段落 -> 句子 -> 空白词元 -> rune 硬切。
-5. chunkOverlap 用于相邻切片的尾部上下文补充，不能破坏 chunkIndex 稳定递增。
+1. TXT：按纯文本段落、句子、空白词元和 rune 切分；`#`、列表符号、管道符和代码围栏都按字面正文处理。
+2. Markdown：保留标题、段落、列表、表格和代码块；标题层级写入 headingPath，并作为 chunk 内容前缀参与 embedding。
+3. PDF：物理页是硬边界，只在页内按段落、句子、空白词元和 rune 切分；chunk 合并和 overlap 均不得跨页。
+4. 同一来源边界和标题路径下的小结构块可合并到 chunkSize 以内。
+5. 超过 chunkSize 的结构块按优先级递归拆分：段落 -> 句子 -> 空白词元 -> rune 硬切。
+6. chunkOverlap 用于同一来源边界内相邻切片的尾部上下文补充，不能破坏 chunkIndex 稳定递增。
 ```
 
 每个 chunk 必须保存：
@@ -84,13 +91,19 @@ metadata 至少包含：
 
 ```text
 source=document_processor
+fileType
 headingPath
 structureType
 startOffset
 endOffset
+pageNumber（仅有物理页概念时）
 ```
 
-chunk 顺序必须稳定，`chunkIndex` 从 0 开始递增。
+`pageNumber` 对 PDF 表示原文件的 1-based 物理页码；TXT、Markdown 等没有物理页概念的格式保持 `null`。PDF 即使跳过空白页也不得压缩页码。
+
+`startOffset` 和 `endOffset` 是规范化 segment 内的 UTF-8 byte offset：换行会统一为 `\n`，首尾空白和 BOM 可能被去除。PDF 的 offset 是页内 offset。它们不是原文件的精确字节坐标，不可用于在原始二进制文件中直接 seek。
+
+chunk 顺序必须稳定，`chunkIndex` 跨所有 segment 从 0 开始递增。当前 MVP 不做 OCR、通用文档 AST、PDF 版面树、PDF 表格重建、跨页 chunk 或 docx 解析。
 
 ## 检索流程
 

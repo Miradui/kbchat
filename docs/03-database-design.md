@@ -170,6 +170,10 @@ CREATE TABLE document_chunks (
 
 `embedding vector(1536)` 是当前 MVP 默认值，必须与 `EMBEDDING_DIMENSION=1536` 保持一致。当前 Qwen3 Embedding 模型需要在 Provider 调用时显式请求输出 1536 维，以兼容 pgvector ivfflat 索引限制。更换 embedding 模型维度时，必须新增数据库 migration 修改向量维度并重建索引。
 
+`page_number` 对 PDF chunk 保存原文件的 1-based 物理页码；空白页被跳过时后续页码仍保持原值。TXT、Markdown 等没有物理页概念的格式保存 `NULL`。当前 PDF chunk 不跨页，因此单值 `page_number` 能明确定位来源页。
+
+`metadata` 中的 `startOffset`、`endOffset` 表示规范化 segment 内的 UTF-8 byte offset；PDF 使用页内 offset。该范围不是原文件二进制的精确字节坐标。`metadata.fileType` 记录切片策略使用的规范化文件类型。
+
 ## document_jobs
 
 ```sql

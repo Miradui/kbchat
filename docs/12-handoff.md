@@ -24,8 +24,8 @@
    - 用户私有知识库 CRUD API。
    - 文档上传、列表、详情、删除、重处理和 chunks 空列表 API。
    - 数据库任务 worker。
-   - txt、md、pdf 文档解析入口。
-   - 文本切片。
+   - txt、md、pdf 文档解析入口；PDF 按物理页保留真实页码。
+   - 按来源格式切片：TXT 按纯文本处理，Markdown 保留结构，PDF 页内切片且不跨页合并或 overlap。
    - OpenAI-compatible Embedding Provider。
    - 文档处理状态流转和 chunks 入库。
    - 向量检索 API。
@@ -281,3 +281,12 @@ Authorization: Bearer <token>
 - 前端已接入 Chat fallback、最新 assistant 回答 regenerate、知识库检索三阶段 debug，以及文档任务进度/重试信息。
 - Chat 发送与 regenerate 已互斥，切换会话后旧请求不会回写当前会话；知识库检索也会忽略晚到的旧响应。
 - 新增后端检索/契约/Chat 配置测试和前端资源、Chat、KnowledgeBase、DocumentDetail 测试。
+
+## Document Format-aware Processing Update
+
+- 文档 parser 现在输出带来源格式和可选物理页码的结构化 segments；旧的扁平文本方法仅保留为兼容包装，标准 processor 链路不再使用它。
+- TXT 不解释 Markdown 标题、列表、表格或代码围栏；Markdown 继续保留标题路径、列表、表格和代码块结构。
+- PDF 按非空物理页切片，空白页跳过但页码不重排；chunk、overlap 都不跨页，`document_chunks.page_number` 和 metadata 同步保存物理页码。
+- `startOffset` / `endOffset` 定义为规范化 segment 内的 UTF-8 byte offset，PDF 为页内 offset，不代表原文件精确字节坐标。
+- Processor 级 SQLite + repository 测试覆盖 PDF 页码入库、TXT/Markdown 策略选择，以及 Embedding Provider 少返回或多返回向量时不写入错误批次。
+- 当前范围不包含 OCR、PDF 版面树/表格重建、跨页 chunk、通用文档 AST 或 docx 解析。
