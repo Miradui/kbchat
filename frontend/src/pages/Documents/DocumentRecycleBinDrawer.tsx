@@ -39,6 +39,15 @@ export function DocumentRecycleBinDrawer({
     setTotal(response.total);
   }, [page, pageSize]);
 
+  const refreshAfterMutation = useCallback(async (successLabel: string) => {
+    onChanged();
+    try {
+      await loadPage();
+    } catch (err) {
+      setError(`${successLabel}，但回收站刷新失败：${errorMessage(err, '请求失败')}`);
+    }
+  }, [loadPage, onChanged]);
+
   useEffect(() => {
     let mounted = true;
     setLoading(true);
@@ -65,11 +74,13 @@ export function DocumentRecycleBinDrawer({
     setError('');
 
     try {
-      await restoreDocument(item.id);
-      await loadPage();
-      onChanged();
-    } catch (err) {
-      setError(errorMessage(err, '文档恢复失败'));
+      try {
+        await restoreDocument(item.id);
+      } catch (err) {
+        setError(errorMessage(err, '文档恢复失败'));
+        return;
+      }
+      await refreshAfterMutation('文档已恢复');
     } finally {
       setWorkingId(null);
     }
@@ -84,11 +95,13 @@ export function DocumentRecycleBinDrawer({
     setError('');
 
     try {
-      await batchRestoreDocuments(items.map((item) => item.id));
-      await loadPage();
-      onChanged();
-    } catch (err) {
-      setError(errorMessage(err, '批量恢复失败'));
+      try {
+        await batchRestoreDocuments(items.map((item) => item.id));
+      } catch (err) {
+        setError(errorMessage(err, '批量恢复失败'));
+        return;
+      }
+      await refreshAfterMutation('本页文档已恢复');
     } finally {
       setSubmitting(false);
     }
@@ -103,12 +116,14 @@ export function DocumentRecycleBinDrawer({
     setError('');
 
     try {
-      await deleteDocumentPermanently(deleteTarget.id);
+      try {
+        await deleteDocumentPermanently(deleteTarget.id);
+      } catch (err) {
+        setError(errorMessage(err, '文档永久删除失败'));
+        return;
+      }
       setDeleteTarget(null);
-      await loadPage();
-      onChanged();
-    } catch (err) {
-      setError(errorMessage(err, '文档永久删除失败'));
+      await refreshAfterMutation('文档已永久删除');
     } finally {
       setSubmitting(false);
     }
@@ -119,12 +134,14 @@ export function DocumentRecycleBinDrawer({
     setError('');
 
     try {
-      await emptyDocumentRecycleBin();
+      try {
+        await emptyDocumentRecycleBin();
+      } catch (err) {
+        setError(errorMessage(err, '清空失败，后端按 all-or-nothing 语义未执行部分删除。'));
+        return;
+      }
       setConfirmEmpty(false);
-      await loadPage();
-      onChanged();
-    } catch (err) {
-      setError(errorMessage(err, '清空失败，后端按 all-or-nothing 语义未执行部分删除。'));
+      await refreshAfterMutation('回收站已清空');
     } finally {
       setSubmitting(false);
     }
