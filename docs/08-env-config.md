@@ -88,6 +88,8 @@ VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1
 | `WORKER_RETRY_DELAY` | `10s` | 文档处理任务重试退避时间，使用 Go duration 格式 |
 | `VITE_API_BASE_URL` | `/api/v1` | 前端 API 地址；跨域/分离部署时设置为完整后端地址 |
 
+`VECTOR_TOP_N`、`RERANK_TOP_K` 和 `SCORE_THRESHOLD` 是知识库未保存对应 `retrievalConfig` 时的默认值。运行时限制 `vectorTopN<=100`、`rerankTopK<=20`，并保证 `rerankTopK<=vectorTopN`。
+
 ## Embedding 维度约束
 
 `EMBEDDING_DIMENSION` 必须与数据库字段保持一致：

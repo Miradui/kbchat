@@ -7,7 +7,7 @@
 1. `docs/` AI 开发规范文档包。
 2. 根目录 `AGENTS.md`。
 3. 后端 Gin 基础工程。
-4. 前端 Vite React 基础工程；后续暂缓，先开发后端。
+4. 前端 Vite React 工程已接入登录、知识库、文档、检索和聊天主流程；仍需结合真实后端环境持续联调。
 5. `deploy/docker-compose.yml` 和 `backend/migrations/001_init_schema.sql`。
 6. 根目录 `.env` 已写入用户提供的远程 PostgreSQL 和 Redis 配置。
 7. 后端已改用 GORM 做数据库访问。
@@ -170,13 +170,13 @@ Authorization: Bearer <token>
 
 后端 MVP 主链路已跑通，下一步建议：
 
-1. 前端联调登录、知识库、文档、聊天页面。
+1. 使用真实后端环境回归登录、知识库、文档、检索 debug、聊天和 regenerate 页面。
 2. 使用真实 Rerank 环境做端到端联调；当前 `.env` 中 `RERANK_ENABLED=false`。
-3. 前端接入真实成员管理、会话详情/改名/删除、下载和 chunks 分页。
+3. 回归真实成员管理、会话详情/改名/删除、下载和 chunks 分页，并补充跨视口交互验证。
 4. 优化文档处理 worker 的重试和并发控制。
 5. 补 README 启动说明。
 
-前端页面后续再联调，不作为当前优先级。
+前端已完成本轮 API 契约接入，但真实 Provider、异步请求和移动端布局仍需持续联调。
 
 ## 注意事项
 
@@ -271,3 +271,13 @@ Authorization: Bearer <token>
 - 新增 `POST /api/v1/chat/sessions/:id/messages/:messageId/regenerate`，只能重新生成 assistant 消息，会基于其前一条 user 消息重新执行意图分类、检索、Rerank、Prompt 和 Chat Provider，并追加新 assistant 消息。
 - `GET /api/v1/documents`、`GET /api/v1/knowledge-bases/:id/documents`、`GET /api/v1/documents/:id` 返回 `jobStatus`、`progress`、`stage`、`retryCount`、`maxRetries`、`nextRetryAt`。
 - 本次未新增数据库字段或 migration；document progress 来自已有 `documents.status` 和最新 `document_jobs`。
+
+## Post-merge RAG Correctness and Frontend Integration Update
+
+- 标准检索现在默认读取知识库 `retrievalConfig`；Chat 不再用全局 TopN/TopK 覆盖知识库配置。
+- 最终候选应用 `scoreThreshold`：Rerank 成功使用 `rerankScore`，disabled/fallback 使用 `vectorScore`；过滤后的 chunks 才能进入 Prompt 和 citations。
+- `vectorTopN` 最大 `100`，`rerankTopK` 最大 `20` 且不会超过 `vectorTopN`。
+- fallback 公共原因固定为 `provider_unavailable`，不再返回第三方 Provider 原始错误文本；未 fallback 时 Search 显式返回 `rerankFallback=null`。
+- 前端已接入 Chat fallback、最新 assistant 回答 regenerate、知识库检索三阶段 debug，以及文档任务进度/重试信息。
+- Chat 发送与 regenerate 已互斥，切换会话后旧请求不会回写当前会话；知识库检索也会忽略晚到的旧响应。
+- 新增后端检索/契约/Chat 配置测试和前端资源、Chat、KnowledgeBase、DocumentDetail 测试。

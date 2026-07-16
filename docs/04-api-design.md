@@ -690,6 +690,10 @@ q=关键词
 
 结果必须按 `rerankScore` 降序排列。若关闭 Rerank，`rerankScore` 可为空，结果按向量召回顺序截断到 `rerankTopK`。
 
+未传 `vectorTopN`、`rerankTopK` 或 `enableRerank` 时，使用当前知识库持久化的 `retrievalConfig`；环境变量仅作为知识库配置缺失时的默认值。服务端限制 `vectorTopN<=100`、`rerankTopK<=20`，并保证 `rerankTopK<=vectorTopN`。
+
+最终结果必须应用知识库 `scoreThreshold`：Rerank 成功时使用 `rerankScore` 判断，Rerank 关闭或 fallback 时使用 `vectorScore` 判断。未达到阈值的 chunk 不得进入 `items`、Prompt 或 citations。
+
 `debug` 默认为 `false`。当 `debug=true` 时，响应增加 `debug`，用于检索调试面板；普通响应不包含该字段，避免响应体过大。
 
 ```json
@@ -750,7 +754,7 @@ q=关键词
   ],
   "rerankFallback": {
     "used": true,
-    "reason": "rerank failed: provider unavailable"
+    "reason": "provider_unavailable"
   }
 }
 ```
@@ -876,7 +880,7 @@ q=关键词
 {
   "rerankFallback": {
     "used": true,
-    "reason": "rerank failed: provider unavailable"
+    "reason": "provider_unavailable"
   }
 }
 ```

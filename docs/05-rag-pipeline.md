@@ -164,6 +164,7 @@ chatHistoryLimit=10
 2. 只检索 `documents.status=completed` 的文档 chunks。
 3. 召回数量使用 `vectorTopN`。
 4. 相似度分数返回为 `vectorScore`。
+5. `vectorTopN` 最大为 `100`；最终 `rerankTopK` 最大为 `20`，且不得大于本轮 `vectorTopN`。
 
 ## Rerank 约束
 
@@ -172,6 +173,7 @@ chatHistoryLimit=10
 3. 最终结果按 `rerankScore` 降序排序。
 4. 进入 Prompt 的 chunks 数量为 `rerankTopK`。
 5. citations 只能来自进入 Prompt 的 chunks。
+6. Rerank 成功时按 `rerankScore >= scoreThreshold` 过滤；关闭或 fallback 时按 `vectorScore >= scoreThreshold` 过滤。
 
 ## Rerank Provider 与失败策略
 
@@ -200,7 +202,9 @@ Content-Type: application/json
 失败策略由 `RERANK_FAILURE_MODE` 控制：
 
 1. `strict`：默认值。Rerank 失败返回 `RERANK_FAILED`，不进入 Chat Provider，不伪造答案或引用。
-2. `fallback`：Rerank 失败时保留向量召回顺序并截断到 `rerankTopK`，所有结果 `rerankScore=null`，搜索响应包含 `rerankFallback.used=true` 和失败原因。fallback 下 citations 仍只能来自最终进入 Prompt 的这些 vector topK chunks。
+2. `fallback`：Rerank 失败时保留向量召回顺序，先应用 `scoreThreshold`，再截断到 `rerankTopK`；所有结果 `rerankScore=null`。公共响应只返回稳定原因码 `provider_unavailable`，不得返回 Provider 原始错误文本。fallback 下 citations 仍只能来自最终进入 Prompt 的这些 vector topK chunks。
+
+标准检索默认读取当前知识库持久化的 `retrievalConfig`。搜索 API 显式传入的 TopN、TopK 和启用开关可以覆盖知识库配置；Chat 不传覆盖值，始终复用知识库配置。环境变量只提供缺省值和全局 Provider 开关。
 
 ## Prompt 规则
 
