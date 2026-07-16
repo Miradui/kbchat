@@ -1363,24 +1363,124 @@ textarea {
   grid-template-columns: minmax(240px, 1fr) auto;
 }
 
+.semantic-debug-toggle {
+  align-items: center;
+  color: var(--color-text-secondary);
+  display: flex;
+  font-size: 13px;
+  gap: var(--space-2);
+  grid-column: 1 / -1;
+  width: fit-content;
+}
+
+.semantic-debug-toggle input {
+  height: 16px;
+  width: 16px;
+}
+
 .semantic-fallback-notice {
-  background: #fffbeb;
-  border: 1px solid #fde68a;
-  border-radius: 8px;
-  color: #92400e;
+  background: var(--color-warning-soft);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 35%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--color-warning);
   display: grid;
   gap: 4px;
   padding: 10px 12px;
 }
 
 .semantic-fallback-notice strong {
-  color: #78350f;
+  color: var(--color-warning);
   font-size: 13px;
 }
 
 .semantic-fallback-notice span {
   font-size: 13px;
   line-height: 1.6;
+}
+
+.semantic-debug-panel {
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.semantic-debug-panel > header {
+  align-items: center;
+  display: flex;
+  gap: var(--space-3);
+  justify-content: space-between;
+}
+
+.semantic-debug-panel > header div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.semantic-debug-panel > header span,
+.semantic-debug-grid span {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.semantic-debug-grid {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.semantic-debug-grid > section {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+  padding: var(--space-3);
+}
+
+.semantic-debug-grid h3 {
+  font-size: 14px;
+  margin: 0 0 var(--space-2);
+}
+
+.semantic-debug-grid ol {
+  display: grid;
+  gap: var(--space-2);
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+}
+
+.semantic-debug-grid li {
+  border-top: 1px solid var(--color-border);
+  display: grid;
+  gap: var(--space-1);
+  overflow-wrap: anywhere;
+  padding-top: var(--space-2);
+}
+
+.semantic-debug-grid p {
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.debug-stage-status {
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-2);
+  text-transform: capitalize;
+}
+
+.debug-stage-status.is-completed {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.debug-stage-status.is-disabled,
+.debug-stage-status.is-fallback {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
 }
 
 .semantic-result-list {
@@ -2687,6 +2787,59 @@ textarea {
   padding-top: 9px;
 }
 
+.message-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-2);
+}
+
+.message-actions .secondary-button {
+  min-height: 36px;
+  padding: 6px 10px;
+}
+
+.document-progress {
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.document-progress header,
+.document-progress-meta {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: space-between;
+}
+
+.document-progress header span,
+.document-progress-meta {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.document-progress progress {
+  accent-color: var(--color-primary);
+  height: 8px;
+  width: 100%;
+}
+
+.document-progress.is-compact {
+  background: transparent;
+  border: 0;
+  margin-top: var(--space-2);
+  min-width: 160px;
+  padding: 0;
+}
+
+.document-progress.is-compact .document-progress-meta span:first-child {
+  display: none;
+}
+
 .composer {
   background: var(--surface);
   border-top: 1px solid var(--border);
@@ -2862,7 +3015,8 @@ textarea {
   .summary-grid,
   .config-grid,
   .form-grid,
-  .semantic-search-form {
+  .semantic-search-form,
+  .semantic-debug-grid {
     grid-template-columns: 1fr;
   }
 
