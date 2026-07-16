@@ -291,4 +291,5 @@ Authorization: Bearer <token>
 - 超长 Markdown 列表优先按完整 item 行切分，单行仍超预算时重复原 marker；表格分片重复 header/separator，超长行按 cell 拆成相同列数；代码分片保持成对 fence。这些结构块不注入普通文本 overlap。
 - Processor 级 SQLite + repository 测试覆盖 PDF 页码入库、TXT/Markdown 策略选择、Embedding Provider 单批少/多返回零写入，以及后续批次失败时保留旧的完整 chunks。
 - Processor 在所有 Embedding 批次成功后才通过数据库事务替换旧 chunks，避免重处理失败留下部分新索引。
+- Chunk repository 测试使用 51 条 replacement 在第二批制造主键冲突，验证删除和首批写入一起回滚；repository 也会在事务开始前拒绝混入其他文档的 chunk。
 - 当前范围不包含 OCR、PDF 版面树/表格重建、跨页 chunk、通用文档 AST 或 docx 解析。

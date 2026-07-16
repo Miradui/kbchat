@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -42,6 +43,11 @@ func (r *ChunkRepository) CreateBatch(ctx context.Context, chunks []model.Docume
 }
 
 func (r *ChunkRepository) ReplaceByDocument(ctx context.Context, documentID uuid.UUID, chunks []model.DocumentChunk) error {
+	for index := range chunks {
+		if chunks[index].DocumentID != documentID {
+			return fmt.Errorf("replacement chunk %d belongs to document %s, expected %s", index, chunks[index].DocumentID, documentID)
+		}
+	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("document_id = ?", documentID).Delete(&model.DocumentChunk{}).Error; err != nil {
 			return err
