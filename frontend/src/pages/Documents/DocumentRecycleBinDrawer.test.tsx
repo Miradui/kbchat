@@ -1,4 +1,4 @@
-import { act, screen } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -163,11 +163,12 @@ describe('DocumentRecycleBinDrawer', () => {
   it('returns to the last valid page after removing its final item', async () => {
     const lastPageDocument = { ...recycledDocument, id: 'last', name: 'last.pdf' };
     const remainingDocument = { ...recycledDocument, id: 'remaining', name: 'remaining.pdf' };
+    const firstPage = deferred<ReturnType<typeof recycleResponse>>();
     api.listDocumentRecycleBin
       .mockResolvedValueOnce(recycleResponse([recycledDocument], 21))
       .mockResolvedValueOnce(recycleResponse([lastPageDocument], 21))
       .mockResolvedValueOnce(recycleResponse([], 20))
-      .mockResolvedValueOnce(recycleResponse([remainingDocument], 20));
+      .mockReturnValueOnce(firstPage.promise);
     api.restoreDocument.mockResolvedValue(undefined);
     const user = userEvent.setup();
 
@@ -177,9 +178,39 @@ describe('DocumentRecycleBinDrawer', () => {
     expect(await screen.findByText('last.pdf')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '恢复 last.pdf' }));
 
+    await waitFor(() => expect(api.listDocumentRecycleBin).toHaveBeenCalledTimes(4));
+    expect(screen.queryByText('last.pdf')).not.toBeInTheDocument();
+    expect(api.restoreDocument).toHaveBeenCalledTimes(1);
+
+    await act(async () => firstPage.resolve(recycleResponse([remainingDocument], 20)));
     expect(await screen.findByText('remaining.pdf')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '1' })).toHaveClass('active-page');
     expect(screen.queryByText('文档回收站为空。')).not.toBeInTheDocument();
+  });
+
+  it('does not expose removed last-page items when the fallback page fails to load', async () => {
+    const lastPageDocument = { ...recycledDocument, id: 'last', name: 'last.pdf' };
+    api.listDocumentRecycleBin
+      .mockResolvedValueOnce(recycleResponse([recycledDocument], 21))
+      .mockResolvedValueOnce(recycleResponse([lastPageDocument], 21))
+      .mockResolvedValueOnce(recycleResponse([], 20))
+      .mockRejectedValueOnce(new ApiError(503, {
+        code: 'SERVICE_UNAVAILABLE',
+        message: '第一页暂不可用',
+        details: {},
+      }));
+    api.restoreDocument.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+
+    renderWithRouter(<DocumentRecycleBinDrawer onChanged={vi.fn()} onClose={vi.fn()} />);
+    expect(await screen.findByText('manual.pdf')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '›' }));
+    expect(await screen.findByText('last.pdf')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '恢复 last.pdf' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('第一页暂不可用');
+    expect(screen.queryByText('last.pdf')).not.toBeInTheDocument();
+    expect(api.restoreDocument).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -55,6 +55,7 @@ export function DocumentRecycleBinDrawer({
     setTotal(response.total);
     const lastPage = Math.max(1, Math.ceil(response.total / pageSize));
     if (page > lastPage) {
+      setItems([]);
       setPage(lastPage);
       return;
     }
