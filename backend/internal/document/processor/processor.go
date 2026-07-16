@@ -87,6 +87,9 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 		if err != nil {
 			return err
 		}
+		if err := validateEmbeddingCount(len(texts), len(embeddings)); err != nil {
+			return err
+		}
 
 		rows := make([]model.DocumentChunk, 0, len(embeddings))
 		for i, vector := range embeddings {
@@ -121,4 +124,11 @@ func buildChunkMetadata(part splitter.Chunk) ([]byte, error) {
 	}
 	metadata["source"] = "document_processor"
 	return json.Marshal(metadata)
+}
+
+func validateEmbeddingCount(expected, actual int) error {
+	if expected != actual {
+		return fmt.Errorf("embedding provider returned %d vectors for %d texts", actual, expected)
+	}
+	return nil
 }

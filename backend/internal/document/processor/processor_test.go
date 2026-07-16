@@ -2,6 +2,7 @@ package processor
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"rag/backend/internal/document/splitter"
@@ -42,5 +43,36 @@ func TestBuildChunkMetadataMergesSplitterMetadata(t *testing.T) {
 	}
 	if metadata["startOffset"] == nil || metadata["endOffset"] == nil {
 		t.Fatalf("expected offset metadata, got %#v", metadata)
+	}
+}
+
+func TestValidateEmbeddingCountRejectsProviderCardinalityMismatch(t *testing.T) {
+	tests := []struct {
+		name     string
+		expected int
+		actual   int
+		wantErr  bool
+	}{
+		{name: "matching vectors", expected: 2, actual: 2, wantErr: false},
+		{name: "missing vector", expected: 2, actual: 1, wantErr: true},
+		{name: "extra vector", expected: 1, actual: 2, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateEmbeddingCount(tt.expected, tt.actual)
+			if !tt.wantErr {
+				if err != nil {
+					t.Fatalf("expected matching batch to pass, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected embedding cardinality mismatch error")
+			}
+			if !strings.Contains(err.Error(), "embedding provider returned") {
+				t.Fatalf("expected actionable provider error, got %q", err)
+			}
+		})
 	}
 }
