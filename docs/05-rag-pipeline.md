@@ -173,6 +173,35 @@ chatHistoryLimit=10
 4. 进入 Prompt 的 chunks 数量为 `rerankTopK`。
 5. citations 只能来自进入 Prompt 的 chunks。
 
+## Rerank Provider 与失败策略
+
+启用 `RERANK_ENABLED=true` 时，后端使用 OpenAI-compatible Rerank Provider；关闭时跳过 Rerank，按向量召回顺序截断到 `rerankTopK`，并保持 `rerankScore=null`。
+
+当前 Provider 请求假设：
+
+```text
+POST {RERANK_BASE_URL}/rerank
+Authorization: Bearer {RERANK_API_KEY}
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "model": "rerank-model-name",
+  "query": "用户检索问题",
+  "documents": ["chunk content 1", "chunk content 2"]
+}
+```
+
+响应必须包含 `results[].index`，并通过 `results[].relevance_score` 或 `results[].score` 提供分数。`index` 映射回向量召回候选的原始顺序，再由服务端映射成 chunk ID。Provider 超时默认为 60s。
+
+失败策略由 `RERANK_FAILURE_MODE` 控制：
+
+1. `strict`：默认值。Rerank 失败返回 `RERANK_FAILED`，不进入 Chat Provider，不伪造答案或引用。
+2. `fallback`：Rerank 失败时保留向量召回顺序并截断到 `rerankTopK`，所有结果 `rerankScore=null`，搜索响应包含 `rerankFallback.used=true` 和失败原因。fallback 下 citations 仍只能来自最终进入 Prompt 的这些 vector topK chunks。
+
 ## Prompt 规则
 
 Prompt 必须包含：
@@ -225,5 +254,41 @@ content: ...
 2. 不要把未进入 Prompt 的 chunk 放入 citations。
 3. 不要跨知识库检索。
 4. 不要在模型失败时伪造回答。
-5. Rerank 失败应返回 `RERANK_FAILED`，除非明确实现降级策略并在文档中更新。
+5. Rerank 失败默认返回 `RERANK_FAILED`；只有配置 `RERANK_FAILURE_MODE=fallback` 时才允许降级为 vector topK，并必须显式标记 fallback。
 6. 不要把完整无限历史直接塞进 Prompt；必须受 `CHAT_HISTORY_LIMIT` 控制。
+
+## 检索 Debug Payload
+
+`POST /api/v1/knowledge-bases/:id/search` 支持请求字段 `debug`，默认 `false`。关闭时响应体保持普通检索响应，不返回调试字段。
+
+开启 `debug=true` 时，响应增加：
+
+1. `query`：当前检索 query；当前搜索接口没有改写步骤，因此不返回 `rewrittenQuery`。
+2. `vectorStage`：pgvector TopN 原始召回 chunks，包含 `chunkId`、`documentId`、`filename`、`pageNumber`、`content`、`vectorScore`、`rank`。
+3. `rerankStage`：Rerank 输入和输出映射，包含 `chunkId`、`rerankScore`、`rank`；`status` 为 `completed`、`disabled` 或 `fallback`。
+4. `finalStage`：最终返回给用户或进入 Prompt 的 chunks，包含 `chunkId`、`vectorScore`、`rerankScore`、`rank`。
+5. `rerankFallback`：沿用普通响应中的 fallback 语义；未 fallback 时为 `null`。
+
+debug payload 仍然只来自当前用户拥有的知识库。知识库权限校验必须先通过 `knowledge_bases.owner_id`，chunk 检索必须限定当前 knowledge base。
+
+## Chat Rerank Fallback 透传
+
+聊天知识库问答复用标准检索路径。若 `RERANK_FAILURE_MODE=fallback` 且 Rerank 失败，Chat 响应返回 `rerankFallback.used=true` 和原因；citations 来自最终进入 Prompt 的 vector topK chunks，且 `rerankScore=null`。
+
+若未发生 fallback，Chat 响应返回 `rerankFallback=null`。若 `RERANK_FAILURE_MODE=strict` 且 Rerank 失败，仍返回 `RERANK_FAILED`，不调用最终回答 Chat Provider，不保存伪造 assistant 消息。
+
+## Chat Regenerate 规则
+
+`POST /api/v1/chat/sessions/:sessionId/messages/:messageId/regenerate` 只允许重新生成 assistant 消息。服务端找到目标 assistant 消息之前最近一条 user 消息，并用这条 user 消息重新执行完整链路：
+
+```text
+前序历史 + 原 user 消息
+-> 意图分类和 standaloneQuery 改写
+-> 向量召回
+-> Rerank 或 fallback
+-> Prompt 组装
+-> Chat Provider
+-> 新 assistant 消息
+```
+
+旧 assistant 消息不会被覆盖或删除。新响应的 citations 只能来自本次重新检索进入 Prompt 的 chunks，不能复用旧 assistant 消息保存的 citations。

@@ -9,7 +9,7 @@ Included in the MVP:
 - Login and current-user auth with JWT.
 - Knowledge bases, categories, tags, favorites, recent views, and recycle bin.
 - Document upload, parsing, chunking, embedding, preview, download, reprocess, and recycle bin.
-- pgvector semantic search, rerank-ready RAG path, chat sessions, citations, and archived sessions.
+- pgvector semantic search, OpenAI-compatible rerank, chat sessions, citations, and archived sessions.
 - Knowledge-base member management with `owner`, `manager`, and `member` views.
 
 Out of MVP for now:
@@ -60,7 +60,7 @@ At minimum, configure:
 - `CHAT_BASE_URL`, `CHAT_API_KEY`, `CHAT_MODEL`
 - `TITLE_BASE_URL`, `TITLE_API_KEY`, `TITLE_MODEL`
 - `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`
-- `RERANK_ENABLED`, `RERANK_BASE_URL`, `RERANK_API_KEY`, `RERANK_MODEL`
+- `RERANK_ENABLED`, `RERANK_BASE_URL`, `RERANK_API_KEY`, `RERANK_MODEL`, `RERANK_FAILURE_MODE`
 
 ## Backend
 
@@ -86,6 +86,8 @@ The document worker runs inside the backend server process. It is configured wit
 - `WORKER_CONCURRENCY` for parallel document jobs.
 - `WORKER_MAX_RETRIES` for failed job retry budget.
 - `WORKER_RETRY_DELAY` for retry backoff, using Go duration syntax such as `10s` or `1m`.
+
+Rerank uses an OpenAI-compatible `/rerank` endpoint when `RERANK_ENABLED=true`. The backend posts `model`, `query`, and candidate chunk `documents`, then maps response `results[].index` and `relevance_score` or `score` back to chunk IDs. `RERANK_FAILURE_MODE=strict` is the default and returns `RERANK_FAILED`; `fallback` keeps vector order, leaves `rerankScore` empty, and marks `rerankFallback` in search responses.
 
 ## Frontend
 
@@ -123,5 +125,5 @@ For API behavior, prefer real HTTP smoke tests against the local backend after m
 
 - API fields are camelCase; database fields are snake_case.
 - Knowledge-base data access must check ownership through `knowledge_bases.owner_id`.
-- Citations must come only from reranked chunks included in the prompt.
-- Rerank is part of the intended standard RAG path, even when disabled by config during local development.
+- Citations must come only from the final chunks included in the prompt.
+- Rerank is part of the standard RAG path when enabled; local development can set `RERANK_ENABLED=false` to use vector topK without rerank scores.

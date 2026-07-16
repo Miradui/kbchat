@@ -35,6 +35,7 @@ RERANK_ENABLED=false
 RERANK_BASE_URL=https://api.openai.com/v1
 RERANK_API_KEY=replace-with-rerank-api-key
 RERANK_MODEL=rerank-model-name
+RERANK_FAILURE_MODE=strict
 
 UPLOAD_DIR=./uploads
 MAX_UPLOAD_SIZE_MB=50
@@ -76,6 +77,7 @@ VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1
 | `RERANK_BASE_URL` | `https://api.openai.com/v1` | Rerank OpenAI-compatible 地址 |
 | `RERANK_API_KEY` | 无 | Rerank API Key |
 | `RERANK_MODEL` | `rerank-model-name` | Rerank 模型 |
+| `RERANK_FAILURE_MODE` | `strict` | Rerank 失败策略：`strict` 返回 `RERANK_FAILED`；`fallback` 降级为 vector topK 并标记 `rerankFallback` |
 | `UPLOAD_DIR` | `./uploads` | 本地上传目录 |
 | `VECTOR_TOP_N` | `30` | 向量召回数量 |
 | `RERANK_TOP_K` | `5` | Rerank 后数量 |
@@ -104,12 +106,34 @@ embedding vector(1536)
 
 当前使用 Qwen3 Embedding 时，Provider 必须请求输出 `1536` 维，避免超过 pgvector `ivfflat` 索引的维度限制。
 
+## Rerank Provider 约束
+
+当 `RERANK_ENABLED=true` 时，后端会创建真实 OpenAI-compatible Rerank Provider；当 `RERANK_ENABLED=false` 时使用 disabled provider，检索结果按向量顺序截断到 `RERANK_TOP_K`，`rerankScore` 为空。
+
+Rerank Provider 请求：
+
+```text
+POST {RERANK_BASE_URL}/rerank
+Authorization: Bearer {RERANK_API_KEY}
+```
+
+请求体包含 `model`、`query` 和候选 chunk 内容数组 `documents`。响应必须返回 `results[].index`，并通过 `results[].relevance_score` 或 `results[].score` 返回分数。`index` 必须在候选数组范围内，否则视为 Provider 响应错误。HTTP 超时为 60s。
+
+`RERANK_FAILURE_MODE` 支持：
+
+```text
+strict
+fallback
+```
+
+默认 `strict`。`fallback` 只应在可接受召回质量降级时使用；此模式不会填充 `rerankScore`，并会在搜索响应中返回 `rerankFallback`。
+
 ## AI 开发约束
 
 1. 不要在代码中硬编码 API Key。
 2. 不要提交真实 `.env`。
 3. 不要让配置默认绕过鉴权。
 4. 不要在未迁移数据库的情况下修改 embedding 维度。
-5. 默认 Rerank 开启；本地 `.env` 可用 `RERANK_ENABLED=false` 临时关闭。
+5. 程序默认 Rerank 开启；示例 `.env.example` 为方便本地启动设置为 `RERANK_ENABLED=false`，真实 RAG 验证应显式开启并配置 `RERANK_*`。
 6. `CHAT_HISTORY_LIMIT` 不要设置过大，避免上下文成本失控；需要长记忆时应另行设计摘要机制。
 7. 会话标题摘要必须使用 `TITLE_*` 独立模型配置，不要复用 `CHAT_*`。

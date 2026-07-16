@@ -29,13 +29,17 @@
    - OpenAI-compatible Embedding Provider。
    - 文档处理状态流转和 chunks 入库。
    - 向量检索 API。
-   - Rerank Provider 接口和 disabled 实现；当前 `RERANK_ENABLED=false` 时跳过 rerank。
+   - OpenAI-compatible Rerank Provider、disabled provider 和可配置失败策略；当前 `RERANK_ENABLED=false` 时跳过 rerank。
+   - 语义搜索 debug payload：`POST /api/v1/knowledge-bases/:id/search` 可传 `debug=true` 返回 vector/rerank/final 三段调试信息。
    - 聊天会话和消息 API。
    - OpenAI-compatible Chat Provider。
    - OpenAI-compatible Title Provider；会话默认标题会在首次问答后用独立 `TITLE_*` API 摘要更新，不复用 Chat Provider。
    - 多轮 RAG Prompt 组装：最近历史用于 Chat Provider 意图分类、检索问题改写和最终回答上下文。
    - AI 意图分类分支：Chat Provider 输出 `conversation` 或 `knowledge_base`；程序按 intent 路由。`conversation` 跳过知识库检索，直接基于历史回答，`citations=[]`。
    - answer + citations 返回和消息保存。
+   - Chat 响应显式返回 `rerankFallback`；fallback 模式下 citations 来自最终 vector topK 且 `rerankScore=null`。
+   - Chat regenerate API：指定 assistant 消息后基于前一条 user 消息重新完整检索生成，并新增 assistant 消息。
+   - 文档 DTO 返回最新处理任务状态、阶段、稳定进度、重试次数、最大重试次数和下一次重试时间。
    - 知识库工作台接口：分类树、增强列表、统计、收藏、最近浏览。
    - 全局文档列表和全局导入文档接口。
    - 全局关键词搜索接口，覆盖当前用户拥有的知识库、文档和 chunk 内容。
@@ -86,7 +90,7 @@ Title: 需要独立 TITLE_BASE_URL / TITLE_API_KEY / TITLE_MODEL；用于首次�
 Embedding: 已配置独立 EMBEDDING_BASE_URL / EMBEDDING_API_KEY / EMBEDDING_MODEL
 Embedding dimension: 1536
 Embedding note: 当前使用 Qwen3 Embedding，Provider 调用时必须请求输出 1536 维，以兼容 pgvector ivfflat 索引。
-Rerank: 已配置独立 RERANK_BASE_URL / RERANK_API_KEY / RERANK_MODEL，但 RERANK_ENABLED=false
+Rerank: 已配置独立 RERANK_BASE_URL / RERANK_API_KEY / RERANK_MODEL；`RERANK_ENABLED=true` 使用真实 `/rerank` Provider，`RERANK_ENABLED=false` 使用 vector topK；`RERANK_FAILURE_MODE=strict` 默认失败返回 `RERANK_FAILED`，可设为 `fallback` 降级并在搜索响应返回 `rerankFallback`
 ```
 
 ## 当前后端接口
@@ -153,6 +157,7 @@ DELETE /api/v1/chat/sessions/:id
 POST /api/v1/chat/sessions/:id/archive
 GET  /api/v1/chat/sessions/:id/messages
 POST /api/v1/chat/sessions/:id/messages
+POST /api/v1/chat/sessions/:id/messages/:messageId/regenerate
 ```
 
 除登录和健康检查外，接口需要：
@@ -166,7 +171,7 @@ Authorization: Bearer <token>
 后端 MVP 主链路已跑通，下一步建议：
 
 1. 前端联调登录、知识库、文档、聊天页面。
-2. 实现 Rerank Provider；当前 `.env` 中 `RERANK_ENABLED=false`。
+2. 使用真实 Rerank 环境做端到端联调；当前 `.env` 中 `RERANK_ENABLED=false`。
 3. 前端接入真实成员管理、会话详情/改名/删除、下载和 chunks 分页。
 4. 优化文档处理 worker 的重试和并发控制。
 5. 补 README 启动说明。
@@ -179,7 +184,7 @@ Authorization: Bearer <token>
 2. GORM 当前只做 ORM 访问，不让 AutoMigrate 修改已存在表结构。
 3. 如果新增表，优先更新 SQL migration，再补 GORM model。
 4. 不要把 `.env` 内容复制进文档或提交历史。
-5. Rerank、citations、权限校验仍是后续 RAG 模块必须遵守的硬约束。
+5. Rerank、citations、权限校验仍是后续 RAG 模块必须遵守的硬约束；fallback 模式不得伪造 `rerankScore`。
 6. 已用真实 HTTP 链路验证：上传 txt 文档后 worker 可处理到 `completed`，并生成 chunks。
 7. 已用真实 HTTP 链路验证：search API 可基于 query embedding 返回当前知识库 chunks；当前 Rerank 关闭时 `rerankScore=null`。
 8. 已用真实 HTTP 链路验证：聊天问答可返回 answer 和 citations，并保存 user/assistant 两条消息。
@@ -189,6 +194,16 @@ Authorization: Bearer <token>
 12. 知识库 `visibility=public|private` 当前只用于前端展示，不改变文档、检索、聊天等主数据访问控制；这些接口仍按 `knowledge_bases.owner_id` 校验。权限管理接口允许 owner 或 manager 管理成员。
 13. 浏览量和最近浏览通过 `POST /api/v1/knowledge-bases/:id/view` 显式记录，不在 GET 接口中隐式写入。
 14. `GET /api/v1/search` 是关键词搜索；知识库内语义检索仍使用 `POST /api/v1/knowledge-bases/:id/search`。
+15. `POST /api/v1/knowledge-bases/:id/search` 仅在请求 `debug=true` 时返回调试 payload；普通响应不携带 debug。
+16. Chat regenerate 不覆盖旧 assistant 消息；它会新增一条 assistant 消息，并且 citations 只来自本次重新检索进入 prompt 的 chunks。
+
+## Rerank Provider Update
+
+- 新增 `backend/internal/provider/rerank`，实现 OpenAI-compatible `/rerank` Provider。
+- Provider 请求体为 `model`、`query`、`documents`，响应通过 `results[].index` 映射回 chunk，并读取 `relevance_score` 或 `score`。
+- `backend/internal/router` 现在根据 `RERANK_ENABLED` 选择真实 provider 或 disabled provider。
+- 新增 `RERANK_FAILURE_MODE`，默认 `strict` 返回 `RERANK_FAILED`；`fallback` 保留 vector topK、保持 `rerankScore=null`，并在语义搜索响应返回 `rerankFallback`。
+- 已补单元测试覆盖 provider 选择、rerank 成功排序截断、strict 失败、fallback 降级和关闭 rerank 的 vector topK 行为。
 ## P0 Update
 
 - `backend/migrations/005_kb_profile_and_updated_by.sql` 新增 `users.avatar_url` 和 `knowledge_bases.updated_by_id`。
@@ -247,3 +262,12 @@ Authorization: Bearer <token>
 - 文档处理 worker 支持失败重试：`WORKER_MAX_RETRIES`，默认 `3`；`WORKER_RETRY_DELAY`，默认 `10s`。
 - 失败任务在重试预算耗尽前会重新进入 pending，并使用 `document_jobs.locked_at` 作为下一次可领取时间；耗尽后才将文档状态置为 `failed`。
 - 已补 `backend/internal/job` 单元测试覆盖重试、耗尽失败和并发处理。
+
+## Backend API Completion Update
+
+- `backend/internal/dto/search.go` 新增 `debug` 请求字段和 `debug` 响应 payload。
+- `backend/internal/retrieval/service.go` 在 `debug=true` 时返回 vector stage、rerank stage、final stage 和 `rerankFallback`，默认响应不变。
+- `backend/internal/dto/chat.go` 的发送消息响应新增 `rerankFallback`；未 fallback 时为 `null`。
+- 新增 `POST /api/v1/chat/sessions/:id/messages/:messageId/regenerate`，只能重新生成 assistant 消息，会基于其前一条 user 消息重新执行意图分类、检索、Rerank、Prompt 和 Chat Provider，并追加新 assistant 消息。
+- `GET /api/v1/documents`、`GET /api/v1/knowledge-bases/:id/documents`、`GET /api/v1/documents/:id` 返回 `jobStatus`、`progress`、`stage`、`retryCount`、`maxRetries`、`nextRetryAt`。
+- 本次未新增数据库字段或 migration；document progress 来自已有 `documents.status` 和最新 `document_jobs`。

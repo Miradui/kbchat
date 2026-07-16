@@ -436,6 +436,21 @@ pageSize
 
 响应项包含 `knowledgeBaseId` 和 `knowledgeBaseName`。
 
+文档列表和详情响应都会补充处理进度字段，字段来自 `documents.status` 和最新 `document_jobs` 任务，不返回精细伪造进度：
+
+```json
+{
+  "jobStatus": "pending|running|failed|completed",
+  "progress": 75,
+  "stage": "uploaded|parsing|chunking|embedding|completed|failed",
+  "retryCount": 1,
+  "maxRetries": 3,
+  "nextRetryAt": "2026-06-08T00:00:00Z"
+}
+```
+
+`nextRetryAt` 无重试计划时为 `null`。稳定进度映射为 `uploaded=0`、`parsing=25`、`chunking=50`、`embedding=75`、`completed=100`、`failed=100`。
+
 ### POST /documents/batch-delete
 
 批量软删除当前用户拥有的文档，采用 all-or-nothing 语义。
@@ -649,7 +664,8 @@ q=关键词
   "query": "如何申请报销？",
   "vectorTopN": 30,
   "rerankTopK": 5,
-  "enableRerank": true
+  "enableRerank": true,
+  "debug": false
 }
 ```
 
@@ -667,11 +683,77 @@ q=关键词
       "vectorScore": 0.78,
       "rerankScore": 0.91
     }
-  ]
+  ],
+  "rerankFallback": null
 }
 ```
 
-结果必须按 `rerankScore` 降序排列。若关闭 Rerank，`rerankScore` 可为空，但 MVP 默认开启。
+结果必须按 `rerankScore` 降序排列。若关闭 Rerank，`rerankScore` 可为空，结果按向量召回顺序截断到 `rerankTopK`。
+
+`debug` 默认为 `false`。当 `debug=true` 时，响应增加 `debug`，用于检索调试面板；普通响应不包含该字段，避免响应体过大。
+
+```json
+{
+  "debug": {
+    "query": "如何申请报销？",
+    "vectorStage": {
+      "status": "completed",
+      "items": [
+        {
+          "chunkId": "uuid",
+          "documentId": "uuid",
+          "filename": "财务制度.pdf",
+          "pageNumber": 4,
+          "content": "相关片段",
+          "vectorScore": 0.78,
+          "rank": 1
+        }
+      ]
+    },
+    "rerankStage": {
+      "status": "completed|disabled|fallback",
+      "input": [{ "chunkId": "uuid", "rank": 1 }],
+      "output": [{ "chunkId": "uuid", "rerankScore": 0.91, "rank": 1 }]
+    },
+    "finalStage": {
+      "items": [{ "chunkId": "uuid", "vectorScore": 0.78, "rerankScore": 0.91, "rank": 1 }]
+    },
+    "rerankFallback": null
+  }
+}
+```
+
+默认 `RERANK_FAILURE_MODE=strict`，Rerank 失败返回：
+
+```json
+{
+  "code": "RERANK_FAILED",
+  "message": "retrieval rerank failed",
+  "details": {}
+}
+```
+
+若配置 `RERANK_FAILURE_MODE=fallback`，Rerank 失败时保留向量召回排序，不伪造 `rerankScore`，并在响应中标记：
+
+```json
+{
+  "items": [
+    {
+      "chunkId": "uuid",
+      "documentId": "uuid",
+      "filename": "财务制度.pdf",
+      "content": "相关片段",
+      "pageNumber": 4,
+      "vectorScore": 0.78,
+      "rerankScore": null
+    }
+  ],
+  "rerankFallback": {
+    "used": true,
+    "reason": "rerank failed: provider unavailable"
+  }
+}
+```
 
 ## Chat
 
@@ -770,7 +852,49 @@ q=关键词
       "vectorScore": 0.76,
       "rerankScore": 0.93
     }
-  ]
+  ],
+  "rerankFallback": null
+}
+```
+
+当聊天知识库检索发生 Rerank fallback 时，响应显式返回：
+
+```json
+{
+  "rerankFallback": {
+    "used": true,
+    "reason": "rerank failed: provider unavailable"
+  }
+}
+```
+
+strict 模式下 Rerank 失败仍返回 `RERANK_FAILED`，不调用最终回答 Chat Provider，不保存伪造 assistant 消息。
+
+### POST /chat/sessions/:sessionId/messages/:messageId/regenerate
+
+重新生成指定 assistant 消息。必须校验 session 属于当前用户，且 session 所属知识库属于当前用户。
+
+MVP 语义：
+
+1. 只能 regenerate `assistant` 消息；传入 user 消息返回 `VALIDATION_ERROR`。
+2. 服务端找到该 assistant 消息之前最近一条 user 消息。
+3. 使用这条 user 消息重新执行意图分类、检索、Rerank、Prompt 和 Chat Provider。
+4. 新增一条 assistant 消息，不覆盖、不删除旧 assistant 消息。
+5. citations 只来自本次重新检索且进入 prompt 的 chunks，不复用旧 citations。
+
+响应：
+
+```json
+{
+  "message": {
+    "id": "new_assistant_message_uuid",
+    "sessionId": "session_uuid",
+    "role": "assistant",
+    "content": "重新生成的回答",
+    "citations": [],
+    "createdAt": "2026-06-08T00:00:00Z"
+  },
+  "rerankFallback": null
 }
 ```
 
