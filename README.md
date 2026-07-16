@@ -87,6 +87,8 @@ The document worker runs inside the backend server process. It is configured wit
 - `WORKER_MAX_RETRIES` for failed job retry budget.
 - `WORKER_RETRY_DELAY` for retry backoff, using Go duration syntax such as `10s` or `1m`.
 
+Different documents may run concurrently, but jobs for the same document are serialized. Reprocessing keeps the previous chunks until all new embeddings succeed and the replacement transaction commits.
+
 Rerank uses an OpenAI-compatible `/rerank` endpoint when `RERANK_ENABLED=true`. The backend posts `model`, `query`, and candidate chunk `documents`, then maps response `results[].index` and `relevance_score` or `score` back to chunk IDs. `RERANK_FAILURE_MODE=strict` is the default and returns `RERANK_FAILED`; `fallback` keeps vector order, leaves `rerankScore` empty, and marks `rerankFallback` in search responses.
 
 ## Frontend

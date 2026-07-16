@@ -479,7 +479,9 @@ pageSize
 
 ### POST /documents/batch-reprocess
 
-批量重处理当前用户拥有的文档。服务端会清理原有 chunks，并重新创建 `process_document` 任务。
+批量重处理当前用户拥有的文档，采用 all-or-nothing 语义。旧 chunks 会保留到全部新 Embedding 成功并在事务中完成替换；排队或处理失败不得提前删除旧索引。
+
+同一文档仍处于 `uploaded|parsing|chunking|embedding` 且已有 `pending|running` 的 `process_document` 任务时复用现有任务。若文档已进入 `completed|failed`、但旧 running job 尚在收尾，则创建一个 pending 后继任务；worker 必须等待同文档 running 前驱结束后再领取后继任务。
 
 ```json
 {
@@ -592,7 +594,7 @@ Content-Disposition: attachment
 
 ### POST /documents/:id/reprocess
 
-清理旧 chunks，重新创建处理任务。
+安全排队重处理任务。旧 chunks 会保留到新 Embedding 全部成功并事务替换；活动任务复用和 worker 收尾窗口的后继任务语义与批量接口一致。
 
 ### GET /documents/:id/chunks
 

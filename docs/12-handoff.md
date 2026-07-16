@@ -229,7 +229,7 @@ Authorization: Bearer <token>
 - 当前批量接口仅覆盖知识库工作台高频操作，且采用 all-or-nothing 语义：只要混入非 owner 资源，整批失败且不产生部分变更
 - 新增 `POST /api/v1/documents/batch-delete`、`POST /api/v1/documents/batch-restore`
 - 新增 `POST /api/v1/documents/batch-reprocess`
-- 当前文档批量接口同样采用 all-or-nothing 语义；批量重处理会清理旧 chunks 并重新写入 `process_document` 任务
+- 当前文档批量接口同样采用 all-or-nothing 语义；批量重处理保留旧 chunks，直到 processor 完成全部 Embedding 后事务替换
 - 新增 `POST /api/v1/knowledge-base-categories/reorder`
 - 当前分类树重排接口要求提交当前用户完整分类树，并一次性保存 `parentId` / `sortOrder`；若缺项、跨用户或形成环路则整批失败
 - 新增 `backend/migrations/008_kb_workspace_preference.sql`
@@ -293,3 +293,12 @@ Authorization: Bearer <token>
 - Processor 在所有 Embedding 批次成功后才通过数据库事务替换旧 chunks，避免重处理失败留下部分新索引。
 - Chunk repository 测试使用 51 条 replacement 在第二批制造主键冲突，验证删除和首批写入一起回滚；repository 也会在事务开始前拒绝混入其他文档的 chunk。
 - 当前范围不包含 OCR、PDF 版面树/表格重建、跨页 chunk、通用文档 AST 或 docx 解析。
+
+## Completion Audit Reliability Update
+
+- 文档批量删除、恢复和重处理在 repository transaction 内执行；中途写入或知识库 touch 失败时整批回滚。
+- 单文档与批量重处理不会提前删除旧 chunks；同一文档处理中复用活动 job，worker 收尾窗口则创建 pending 后继 job。
+- worker 不会在同一文档仍有 running job 时领取后继 pending job，避免并发替换同一索引。
+- 知识库列表与统计排除软删除文档和软删除会话。
+- Markdown overlap 不跨 headingPath；超长嵌套列表重复缩进 marker；表格识别忽略转义管道和 inline code span 管道，并保持极小预算下的转义原子性。
+- 全局文档台账展示进度、重试计划和失败原因；轮询不会清除操作错误，所有刷新入口都会捕获失败，写成功后的刷新失败使用独立提示。

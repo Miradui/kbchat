@@ -29,6 +29,8 @@ document_jobs.error_message=失败原因
 
 当前 MVP worker 按单服务实例运行。worker 启动时会把上一次进程中断遗留的 `running` 任务恢复为 `pending` 并重新领取，避免服务重启后文档永久卡住。该策略不支持多个服务实例同时共享同一任务表；如需多实例部署，必须改为带租约到期时间和心跳续租的领取协议。
 
+单实例内可以并发处理不同文档，但同一文档必须串行：存在 running job 时，不得领取该文档的 pending 后继任务。重处理请求在文档仍处于处理中时复用活动任务；若 processor 已把文档写成 `completed` 或 worker 已写成 `failed`、但旧 job 仍处于 running 收尾窗口，则排入 pending 后继任务，避免请求成功却没有后续处理。
+
 ## 文档解析范围
 
 MVP 支持：
@@ -76,7 +78,7 @@ chunkOverlap=120 tokens
 6. chunkOverlap 用于同一来源边界内相邻段落切片的尾部上下文补充；列表、表格和代码块不注入普通文本 overlap，避免破坏结构。overlap 不能破坏 chunkIndex 稳定递增。
 ```
 
-Markdown 单个列表项超过预算时，每个分片重复原列表 marker；单个表格行超过预算时，按 cell 内容拆分并重建相同列数的行，同时重复 header/separator。标题前缀或重复结构包装不得挤掉 chunk 的主来源正文。
+Markdown 单个列表项超过预算时，每个分片重复原列表 marker；嵌套列表还必须重复原缩进。单个表格行超过预算时，按 cell 内容拆分并重建相同列数的行，同时重复 header/separator。转义管道 `\|` 和 inline code span 内的管道不作为列分隔符，极小预算 fallback 也不得把 `\|` 从中间拆开。标题前缀或重复结构包装不得挤掉 chunk 的主来源正文。
 
 每个 chunk 必须保存：
 
