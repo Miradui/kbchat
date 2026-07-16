@@ -504,7 +504,7 @@ func TestSplitKeepsEscapedPipeInsideOversizeMarkdownTableCell(t *testing.T) {
 	foundEscapedPipe := false
 	for index, chunk := range chunks {
 		lines := strings.Split(chunk.Content, "\n")
-		if len(lines) != 3 || countUnescapedPipes(lines[2]) != 3 {
+		if len(lines) != 3 || countMarkdownTableDelimiters(lines[2]) != 3 {
 			t.Fatalf("expected a two-column table row at %d, got %q", index, chunk.Content)
 		}
 		if strings.Contains(lines[2], "\\|") {
@@ -531,7 +531,7 @@ func TestSplitKeepsEscapedPipeAtomicAtMinimumTableCellBudget(t *testing.T) {
 			t.Fatalf("expected token budget at %d, got %#v", index, chunk)
 		}
 		lines := strings.Split(chunk.Content, "\n")
-		if len(lines) != 3 || countUnescapedPipes(lines[2]) != 3 {
+		if len(lines) != 3 || countMarkdownTableDelimiters(lines[2]) != 3 {
 			t.Fatalf("expected a two-column table row at %d, got %q", index, chunk.Content)
 		}
 		if strings.Contains(lines[2], "\\|") {
@@ -554,9 +554,49 @@ func TestSplitTreatsEscapedMarkdownPipesAsParagraphContent(t *testing.T) {
 	}
 }
 
-func countUnescapedPipes(line string) int {
+func TestSplitTreatsInlineCodePipesAsParagraphContent(t *testing.T) {
+	chunks := New(100, 0).Split("alpha `a|b|c` omega")
+
+	if len(chunks) != 1 {
+		t.Fatalf("expected one paragraph chunk, got %#v", chunks)
+	}
+	if chunks[0].Metadata["structureType"] != "paragraph" {
+		t.Fatalf("expected inline code pipes to remain paragraph content, got %#v", chunks[0])
+	}
+}
+
+func TestSplitKeepsInlineCodePipesInsideOversizeMarkdownTableCell(t *testing.T) {
+	header := "| A | B |\n| --- | --- |"
+	text := header + "\n| alpha beta gamma `a|b|c` delta epsilon | stable |"
+
+	chunks := New(18, 0).Split(text)
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected oversized table row to split, got %#v", chunks)
+	}
+	foundCodeSpan := false
+	for index, chunk := range chunks {
+		lines := strings.Split(chunk.Content, "\n")
+		if len(lines) != 3 || countMarkdownTableDelimiters(lines[2]) != 3 {
+			t.Fatalf("expected a two-column table row at %d, got %q", index, chunk.Content)
+		}
+		if strings.Contains(lines[2], "`a|b|c`") {
+			foundCodeSpan = true
+		}
+	}
+	if !foundCodeSpan {
+		t.Fatalf("expected inline code span to remain in one source cell, got %#v", chunks)
+	}
+}
+
+func countMarkdownTableDelimiters(line string) int {
 	count := 0
+	inCode := false
 	for index := 0; index < len(line); index++ {
+		if line[index] == '`' {
+			inCode = !inCode
+			continue
+		}
 		if line[index] != '|' {
 			continue
 		}
@@ -564,7 +604,7 @@ func countUnescapedPipes(line string) int {
 		for previous := index - 1; previous >= 0 && line[previous] == '\\'; previous-- {
 			backslashes++
 		}
-		if backslashes%2 == 0 {
+		if backslashes%2 == 0 && !inCode {
 			count++
 		}
 	}

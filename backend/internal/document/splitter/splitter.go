@@ -460,13 +460,7 @@ func structureTypeForLine(line string) string {
 }
 
 func isTableLine(line string) bool {
-	count := 0
-	for index := 0; index < len(line); index++ {
-		if line[index] == '|' && !isEscapedMarkdownDelimiter(line, index) {
-			count++
-		}
-	}
-	return count >= 2
+	return len(markdownTableDelimiterIndexes(line, 0, len(line))) >= 2
 }
 
 func isListLine(line string) bool {
@@ -646,12 +640,7 @@ func splitOversizeTableBlock(item block, budget int) []block {
 }
 
 func tableCellTextSpans(text string, row textSpan) []textSpan {
-	pipes := make([]int, 0)
-	for index := row.start; index < row.end; index++ {
-		if text[index] == '|' && !isEscapedMarkdownDelimiter(text, index) {
-			pipes = append(pipes, index)
-		}
-	}
+	pipes := markdownTableDelimiterIndexes(text, row.start, row.end)
 	if len(pipes) == 0 {
 		return nil
 	}
@@ -681,6 +670,49 @@ func isEscapedMarkdownDelimiter(text string, index int) bool {
 		backslashes++
 	}
 	return backslashes%2 == 1
+}
+
+func markdownTableDelimiterIndexes(text string, start, end int) []int {
+	delimiters := make([]int, 0)
+	for index := start; index < end; {
+		if text[index] == '`' && !isEscapedMarkdownDelimiter(text, index) {
+			runEnd := index + 1
+			for runEnd < end && text[runEnd] == '`' {
+				runEnd++
+			}
+			if closing := findClosingBacktickRun(text, runEnd, end, runEnd-index); closing >= 0 {
+				index = closing + (runEnd - index)
+				continue
+			}
+			index = runEnd
+			continue
+		}
+		if text[index] == '|' && !isEscapedMarkdownDelimiter(text, index) {
+			delimiters = append(delimiters, index)
+		}
+		_, size := utf8.DecodeRuneInString(text[index:end])
+		index += size
+	}
+	return delimiters
+}
+
+func findClosingBacktickRun(text string, start, end, openingLength int) int {
+	for index := start; index < end; {
+		if text[index] != '`' {
+			_, size := utf8.DecodeRuneInString(text[index:end])
+			index += size
+			continue
+		}
+		runEnd := index + 1
+		for runEnd < end && text[runEnd] == '`' {
+			runEnd++
+		}
+		if runEnd-index == openingLength {
+			return index
+		}
+		index = runEnd
+	}
+	return -1
 }
 
 func formatMarkdownTableRow(cells []string) string {
