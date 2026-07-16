@@ -615,6 +615,18 @@ func TestSplitPreservesLeadingIndentationForFirstListItem(t *testing.T) {
 	}
 }
 
+func TestSplitTrimsTrailingWhitespaceFromSourceOffset(t *testing.T) {
+	text := "x   "
+	chunks := New(20, 0).Split(text)
+
+	if len(chunks) != 1 || chunks[0].Content != "x" {
+		t.Fatalf("expected trailing whitespace to be cleaned from content, got %#v", chunks)
+	}
+	if chunks[0].Metadata["startOffset"] != 0 || chunks[0].Metadata["endOffset"] != 1 {
+		t.Fatalf("expected cleaned source range [0,1], got %#v", chunks[0].Metadata)
+	}
+}
+
 func TestSplitRejectsBacktickFenceInfoContainingBacktick(t *testing.T) {
 	text := "``` go`bad\nbody\n```"
 	chunks := New(30, 0).Split(text)

@@ -386,8 +386,8 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 			return
 		}
 
-		content := text[pendingStart:pendingEnd]
-		contentSpan := textSpan{start: pendingStart, end: pendingEnd}
+		content := strings.TrimRightFunc(text[pendingStart:pendingEnd], unicode.IsSpace)
+		contentSpan := textSpan{start: pendingStart, end: pendingStart + len(content)}
 		if content != "" {
 			blocks = append(blocks, block{
 				content:       content,
