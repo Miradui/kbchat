@@ -60,12 +60,14 @@ type SearchDebugRerankStage struct {
 }
 
 type SearchDebugRerankInput struct {
-	ChunkID string `json:"chunkId"`
-	Rank    int    `json:"rank"`
+	ChunkID    string `json:"chunkId"`
+	PageNumber *int   `json:"pageNumber"`
+	Rank       int    `json:"rank"`
 }
 
 type SearchDebugRerankOutput struct {
 	ChunkID     string   `json:"chunkId"`
+	PageNumber  *int     `json:"pageNumber"`
 	RerankScore *float64 `json:"rerankScore"`
 	Rank        int      `json:"rank"`
 }
@@ -76,6 +78,7 @@ type SearchDebugFinalStage struct {
 
 type SearchDebugFinalItem struct {
 	ChunkID     string   `json:"chunkId"`
+	PageNumber  *int     `json:"pageNumber"`
 	VectorScore float64  `json:"vectorScore"`
 	RerankScore *float64 `json:"rerankScore"`
 	Rank        int      `json:"rank"`

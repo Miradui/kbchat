@@ -630,6 +630,7 @@ function SearchDebugPanel({ debug }: { debug: KnowledgeBaseSearchDebug }) {
                 <li key={item.chunkId}>
                   <strong>#{item.rank} {item.filename}</strong>
                   <span>vector {formatScore(item.vectorScore)}</span>
+                  {item.pageNumber !== null && <span>第 {item.pageNumber} 页</span>}
                   <p>{item.content}</p>
                 </li>
               ))}
@@ -645,6 +646,7 @@ function SearchDebugPanel({ debug }: { debug: KnowledgeBaseSearchDebug }) {
                 <li key={item.chunkId}>
                   <strong>#{item.rank} {item.chunkId}</strong>
                   <span>rerank {item.rerankScore === null ? '未精排' : formatScore(item.rerankScore)}</span>
+                  {item.pageNumber !== null && <span>第 {item.pageNumber} 页</span>}
                 </li>
               ))}
             </ol>
@@ -659,6 +661,7 @@ function SearchDebugPanel({ debug }: { debug: KnowledgeBaseSearchDebug }) {
               {debug.finalStage.items.map((item) => (
                 <li key={item.chunkId}>
                   <strong>#{item.rank} {item.chunkId}</strong>
+                  {item.pageNumber !== null && <span>第 {item.pageNumber} 页</span>}
                   <span>
                     vector {formatScore(item.vectorScore)} · rerank {item.rerankScore === null ? '未精排' : formatScore(item.rerankScore)}
                   </span>

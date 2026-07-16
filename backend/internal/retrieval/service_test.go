@@ -165,15 +165,22 @@ func TestSearchFallbackRerankFailureKeepsVectorOrderWithoutRerankScores(t *testi
 
 func TestSearchDebugIncludesVectorRerankAndFinalStages(t *testing.T) {
 	chunkA, chunkB, chunkC := uuid.New(), uuid.New(), uuid.New()
+	pageA, pageB, pageC := 3, 5, 8
+	candidateA := searchResult(chunkA, 0.91)
+	candidateA.PageNumber = &pageA
+	candidateB := searchResult(chunkB, 0.88)
+	candidateB.PageNumber = &pageB
+	candidateC := searchResult(chunkC, 0.80)
+	candidateC.PageNumber = &pageC
 	service, _ := newTestService(config.Config{
 		RerankEnabled:     true,
 		RerankFailureMode: "strict",
 		VectorTopN:        3,
 		RerankTopK:        2,
 	}, []repository.SearchResult{
-		searchResult(chunkA, 0.91),
-		searchResult(chunkB, 0.88),
-		searchResult(chunkC, 0.80),
+		candidateA,
+		candidateB,
+		candidateC,
 	}, []rerank.Result{
 		{ID: chunkC.String(), Score: 0.99},
 		{ID: chunkA.String(), Score: 0.72},
@@ -211,6 +218,32 @@ func TestSearchDebugIncludesVectorRerankAndFinalStages(t *testing.T) {
 	}
 	if len(res.Debug.FinalStage.Items) != 2 || res.Debug.FinalStage.Items[0].ChunkID != chunkC.String() {
 		t.Fatalf("expected final stage to match response topK, got %#v", res.Debug.FinalStage.Items)
+	}
+
+	debugJSON, err := json.Marshal(res.Debug)
+	if err != nil {
+		t.Fatalf("marshal debug payload: %v", err)
+	}
+	var debugPayload struct {
+		VectorStage struct {
+			Items []map[string]any `json:"items"`
+		} `json:"vectorStage"`
+		RerankStage struct {
+			Input  []map[string]any `json:"input"`
+			Output []map[string]any `json:"output"`
+		} `json:"rerankStage"`
+		FinalStage struct {
+			Items []map[string]any `json:"items"`
+		} `json:"finalStage"`
+	}
+	if err := json.Unmarshal(debugJSON, &debugPayload); err != nil {
+		t.Fatalf("unmarshal debug payload: %v", err)
+	}
+	if debugPayload.VectorStage.Items[0]["pageNumber"] != float64(pageA) ||
+		debugPayload.RerankStage.Input[0]["pageNumber"] != float64(pageA) ||
+		debugPayload.RerankStage.Output[0]["pageNumber"] != float64(pageC) ||
+		debugPayload.FinalStage.Items[0]["pageNumber"] != float64(pageC) {
+		t.Fatalf("expected physical page numbers in every debug stage, got %s", debugJSON)
 	}
 }
 

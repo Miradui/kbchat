@@ -290,8 +290,8 @@ content: ...
 
 1. `query`：当前检索 query；当前搜索接口没有改写步骤，因此不返回 `rewrittenQuery`。
 2. `vectorStage`：pgvector TopN 原始召回 chunks，包含 `chunkId`、`documentId`、`filename`、`pageNumber`、`content`、`vectorScore`、`rank`。
-3. `rerankStage`：Rerank 输入和输出映射，包含 `chunkId`、`rerankScore`、`rank`；`status` 为 `completed`、`disabled` 或 `fallback`。
-4. `finalStage`：最终返回给用户或进入 Prompt 的 chunks，包含 `chunkId`、`vectorScore`、`rerankScore`、`rank`。
+3. `rerankStage`：Rerank 输入和输出映射，包含 `chunkId`、`pageNumber`、`rerankScore`、`rank`；`status` 为 `completed`、`disabled` 或 `fallback`。
+4. `finalStage`：最终返回给用户或进入 Prompt 的 chunks，包含 `chunkId`、`pageNumber`、`vectorScore`、`rerankScore`、`rank`。
 5. `rerankFallback`：沿用普通响应中的 fallback 语义；未 fallback 时为 `null`。
 
 debug payload 仍然只来自当前用户拥有的知识库。知识库权限校验必须先通过 `knowledge_bases.owner_id`，chunk 检索必须限定当前 knowledge base。

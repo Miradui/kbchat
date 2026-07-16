@@ -301,7 +301,7 @@ export type KnowledgeBaseSearchResult = {
   documentId: string;
   filename: string;
   content: string;
-  pageNumber?: number | null;
+  pageNumber: number | null;
   vectorScore: number;
   rerankScore?: number | null;
 };
@@ -326,12 +326,13 @@ export type KnowledgeBaseSearchDebug = {
   };
   rerankStage: {
     status: 'completed' | 'disabled' | 'fallback';
-    input: Array<{ chunkId: string; rank: number }>;
-    output: Array<{ chunkId: string; rerankScore: number | null; rank: number }>;
+    input: Array<{ chunkId: string; pageNumber: number | null; rank: number }>;
+    output: Array<{ chunkId: string; pageNumber: number | null; rerankScore: number | null; rank: number }>;
   };
   finalStage: {
     items: Array<{
       chunkId: string;
+      pageNumber: number | null;
       vectorScore: number;
       rerankScore: number | null;
       rank: number;

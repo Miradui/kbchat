@@ -323,8 +323,9 @@ func toDebugRerankInput(candidates []repository.SearchResult) []dto.SearchDebugR
 	items := make([]dto.SearchDebugRerankInput, 0, len(candidates))
 	for i, candidate := range candidates {
 		items = append(items, dto.SearchDebugRerankInput{
-			ChunkID: candidate.ChunkID.String(),
-			Rank:    i + 1,
+			ChunkID:    candidate.ChunkID.String(),
+			PageNumber: candidate.PageNumber,
+			Rank:       i + 1,
 		})
 	}
 	return items
@@ -335,6 +336,7 @@ func toDebugRerankOutput(candidates []repository.SearchResult) []dto.SearchDebug
 	for i, candidate := range candidates {
 		items = append(items, dto.SearchDebugRerankOutput{
 			ChunkID:     candidate.ChunkID.String(),
+			PageNumber:  candidate.PageNumber,
 			RerankScore: candidate.RerankScore,
 			Rank:        i + 1,
 		})
@@ -347,6 +349,7 @@ func toDebugFinalItems(candidates []repository.SearchResult) []dto.SearchDebugFi
 	for i, candidate := range candidates {
 		items = append(items, dto.SearchDebugFinalItem{
 			ChunkID:     candidate.ChunkID.String(),
+			PageNumber:  candidate.PageNumber,
 			VectorScore: candidate.VectorScore,
 			RerankScore: candidate.RerankScore,
 			Rank:        i + 1,
