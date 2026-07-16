@@ -249,9 +249,6 @@ func (s *DocumentService) Reprocess(ctx context.Context, ownerID, documentID uui
 	if err != nil {
 		return nil, err
 	}
-	if err := s.chunks.DeleteByDocument(ctx, document.ID); err != nil {
-		return nil, apperror.Internal(err)
-	}
 	if err := s.documents.UpdateStatus(ctx, document.ID, "uploaded", ""); err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -289,9 +286,6 @@ func (s *DocumentService) BatchReprocess(ctx context.Context, ownerID uuid.UUID,
 		}
 		if document == nil {
 			return nil, apperror.NotFound("DOCUMENT_NOT_FOUND", "document not found")
-		}
-		if err := s.chunks.DeleteByDocument(ctx, document.ID); err != nil {
-			return nil, apperror.Internal(err)
 		}
 		if err := s.documents.UpdateStatus(ctx, document.ID, "uploaded", ""); err != nil {
 			return nil, apperror.Internal(err)

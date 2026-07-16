@@ -898,7 +898,7 @@ func TestDocumentBatchDeleteRestoreAndReprocess(t *testing.T) {
 	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
 	docA := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual-a.pdf", "completed")
 	docB := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual-b.pdf", "failed")
-	createWorkspaceChunk(t, services.db, kb.ID, "manual content before reprocess")
+	oldChunk := createWorkspaceDocumentChunk(t, services.db, kb.ID, docA.ID, 0, "manual content before reprocess")
 
 	reprocessRes, err := services.documents.BatchReprocess(ctx, owner.ID, dto.DocumentBatchRequest{
 		DocumentIDs: []uuid.UUID{docA.ID, docB.ID},
@@ -920,6 +920,13 @@ func TestDocumentBatchDeleteRestoreAndReprocess(t *testing.T) {
 	}
 	if reprocessedA.Status != "uploaded" || reprocessedB.Status != "uploaded" {
 		t.Fatalf("expected reprocessed documents reset to uploaded, got %#v %#v", reprocessedA, reprocessedB)
+	}
+	var preservedChunkCount int64
+	if err := services.db.Model(&model.DocumentChunk{}).Where("id = ?", oldChunk.ID).Count(&preservedChunkCount).Error; err != nil {
+		t.Fatalf("count batch reprocess chunk: %v", err)
+	}
+	if preservedChunkCount != 1 {
+		t.Fatalf("expected batch reprocess to preserve old chunk until processor replacement, got %d", preservedChunkCount)
 	}
 
 	deleteRes, err := services.documents.BatchDelete(ctx, owner.ID, dto.DocumentBatchRequest{
@@ -964,6 +971,27 @@ func TestDocumentBatchDeleteRestoreAndReprocess(t *testing.T) {
 	}
 	if len(restoredList.Items) != 2 {
 		t.Fatalf("expected 2 restored documents, got %#v", restoredList.Items)
+	}
+}
+
+func TestDocumentReprocessPreservesChunksUntilProcessorReplacement(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	document := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual.pdf", "completed")
+	oldChunk := createWorkspaceDocumentChunk(t, services.db, kb.ID, document.ID, 0, "old searchable content")
+
+	if _, err := services.documents.Reprocess(ctx, owner.ID, document.ID); err != nil {
+		t.Fatalf("reprocess document: %v", err)
+	}
+
+	var preservedCount int64
+	if err := services.db.Model(&model.DocumentChunk{}).Where("id = ?", oldChunk.ID).Count(&preservedCount).Error; err != nil {
+		t.Fatalf("count preserved chunk: %v", err)
+	}
+	if preservedCount != 1 {
+		t.Fatalf("expected old chunk to remain until processor replacement, got %d", preservedCount)
 	}
 }
 
