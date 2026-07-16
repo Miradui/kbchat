@@ -219,7 +219,11 @@ func (b chunkBuilder) empty() bool {
 }
 
 func (b chunkBuilder) body() string {
-	return strings.TrimSpace(strings.Join(b.parts, "\n\n"))
+	body := strings.Join(b.parts, "\n\n")
+	if len(b.parts) > 0 && startsWithWhitespace(b.parts[0]) {
+		return strings.TrimRightFunc(body, unicode.IsSpace)
+	}
+	return strings.TrimSpace(body)
 }
 
 func (b chunkBuilder) content() string {
@@ -480,7 +484,7 @@ func isListLine(line string) bool {
 }
 
 func splitOversizeListBlock(item block, budget int) []block {
-	lines := lineTextSpans(item.content)
+	lines := listLineTextSpans(item.content)
 	result := make([]block, 0, len(lines))
 	pending := make([]textSpan, 0, len(lines))
 	flushPending := func() {
@@ -524,19 +528,24 @@ func splitOversizeListBlock(item block, budget int) []block {
 }
 
 func listMarker(line string) (string, bool) {
-	if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") || strings.HasPrefix(line, "+ ") {
-		return line[:2], true
+	contentStart := 0
+	for contentStart < len(line) && (line[contentStart] == ' ' || line[contentStart] == '\t') {
+		contentStart++
 	}
-	dot := strings.Index(line, ". ")
+	content := line[contentStart:]
+	if strings.HasPrefix(content, "- ") || strings.HasPrefix(content, "* ") || strings.HasPrefix(content, "+ ") {
+		return line[:contentStart+2], true
+	}
+	dot := strings.Index(content, ". ")
 	if dot <= 0 {
 		return "", false
 	}
-	for _, r := range line[:dot] {
+	for _, r := range content[:dot] {
 		if !unicode.IsDigit(r) {
 			return "", false
 		}
 	}
-	return line[:dot+2], true
+	return line[:contentStart+dot+2], true
 }
 
 func splitOversizeCodeBlock(item block, budget int) []block {
@@ -768,6 +777,26 @@ func lineTextSpans(text string) []textSpan {
 	return spans
 }
 
+func listLineTextSpans(text string) []textSpan {
+	spans := make([]textSpan, 0)
+	for start := 0; start < len(text); {
+		end := len(text)
+		if newline := strings.IndexByte(text[start:], '\n'); newline >= 0 {
+			end = start + newline
+		}
+		raw := text[start:end]
+		if strings.TrimSpace(raw) != "" {
+			content := strings.TrimRightFunc(raw, unicode.IsSpace)
+			spans = append(spans, textSpan{start: start, end: start + len(content)})
+		}
+		if end == len(text) {
+			break
+		}
+		start = end + 1
+	}
+	return spans
+}
+
 func splitTextToBudgetSpans(text string, budget int) []textSpan {
 	content, whole := trimTextSpan(text, 0, len(text))
 	if content == "" {
@@ -962,7 +991,11 @@ func tailByTokenBudget(text string, budget int) string {
 
 func contentWithinBudget(prefix string, body string, budget int) string {
 	prefix = strings.TrimSpace(prefix)
-	body = strings.TrimSpace(body)
+	leadingWhitespace := body[:len(body)-len(strings.TrimLeftFunc(body, unicode.IsSpace))]
+	body = strings.TrimRightFunc(body, unicode.IsSpace)
+	if leadingWhitespace == "" {
+		body = strings.TrimLeftFunc(body, unicode.IsSpace)
+	}
 	content := body
 	if prefix != "" && body != "" {
 		content = prefix + "\n" + body
@@ -974,7 +1007,7 @@ func contentWithinBudget(prefix string, body string, budget int) string {
 	}
 
 	if estimateTokens(body) > budget {
-		body = trimContentToBudget(body, budget)
+		body = leadingWhitespace + trimContentToBudget(strings.TrimSpace(body), budget)
 	}
 	remaining := budget - estimateTokens(body)
 	if remaining <= 0 || prefix == "" {
@@ -988,6 +1021,14 @@ func contentWithinBudget(prefix string, body string, budget int) string {
 		return prefix
 	}
 	return prefix + "\n" + body
+}
+
+func startsWithWhitespace(text string) bool {
+	if text == "" {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(text)
+	return unicode.IsSpace(r)
 }
 
 func trimContentToBudget(text string, budget int) string {

@@ -387,6 +387,33 @@ func TestSplitPreservesNestedMarkdownListIndentation(t *testing.T) {
 	}
 }
 
+func TestSplitRepeatsIndentedMarkerForOversizeNestedMarkdownListItem(t *testing.T) {
+	body := "alpha beta gamma delta epsilon zeta eta theta"
+	chunks := New(6, 0).Split("- parent\n  - " + body)
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected nested list item to split, got %#v", chunks)
+	}
+	parts := make([]string, 0, len(chunks))
+	for index, chunk := range chunks {
+		if chunk.TokenCount > 6 || chunk.Metadata["structureType"] != "list" {
+			t.Fatalf("unexpected nested list chunk %d: %#v", index, chunk)
+		}
+		for _, line := range strings.Split(chunk.Content, "\n") {
+			if line == "- parent" {
+				continue
+			}
+			if !strings.HasPrefix(line, "  - ") {
+				t.Fatalf("expected nested marker on continuation at %d, got %q", index, chunk.Content)
+			}
+			parts = append(parts, strings.TrimPrefix(line, "  - "))
+		}
+	}
+	if strings.Join(strings.Fields(strings.Join(parts, " ")), " ") != body {
+		t.Fatalf("expected nested item body %q, got %#v", body, chunks)
+	}
+}
+
 func TestSplitDoesNotCarryStructuredOverlapIntoParagraphs(t *testing.T) {
 	text := "- alpha beta gamma\n\nplain paragraph content"
 
