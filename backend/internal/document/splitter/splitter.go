@@ -1323,7 +1323,7 @@ func normalize(text string) string {
 	text = strings.TrimPrefix(text, "\ufeff")
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
-	return strings.TrimSpace(text)
+	return text
 }
 
 func estimateTokens(text string) int {

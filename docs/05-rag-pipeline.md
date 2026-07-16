@@ -117,6 +117,8 @@ pageNumber（仅有物理页概念时）
 
 `startOffset` 和 `endOffset` 是 chunk 主来源内容在规范化 segment 内的 UTF-8 byte offset：换行会统一为 `\n`，首尾空白和 BOM 可能被去除。PDF 的 offset 是页内 offset。额外复制的 overlap、Markdown 标题前缀、代码 fence 或表格 header 不扩张该范围。它们不是原文件的精确字节坐标，不可用于在原始二进制文件中直接 seek。
 
+规范化阶段不得在 Markdown 结构识别前对整个 segment 执行 `TrimSpace`，否则会破坏文件首行的 fence/list/code 缩进语义。空白清理应在 block 边界内执行，并同步调整上述 normalized offset。
+
 chunk 顺序必须稳定，`chunkIndex` 跨所有 segment 从 0 开始递增。当前 MVP 不做 OCR、通用文档 AST、PDF 版面树、PDF 表格重建、跨页 chunk 或 docx 解析。
 
 Processor 必须先完成全部 Embedding 批次并验证每批返回向量数量，再在单个数据库事务中替换该文档的旧 chunks。任一 Provider 调用或数量校验失败时，不得留下部分新索引，也不得删除原有完整索引。

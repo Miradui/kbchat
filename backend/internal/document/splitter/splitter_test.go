@@ -583,6 +583,16 @@ func TestSplitLimitsFenceIndentToThreeSpaces(t *testing.T) {
 	}
 }
 
+func TestSplitPreservesLeadingIndentationBeforeFenceParsing(t *testing.T) {
+	chunks := New(20, 0).Split("    ```\ntext\n    ```")
+
+	for _, chunk := range chunks {
+		if chunk.Metadata["structureType"] == "code" {
+			t.Fatalf("expected document-leading four-space fence not to become fenced code, got %#v", chunks)
+		}
+	}
+}
+
 func TestSplitRejectsBacktickFenceInfoContainingBacktick(t *testing.T) {
 	text := "``` go`bad\nbody\n```"
 	chunks := New(30, 0).Split(text)
