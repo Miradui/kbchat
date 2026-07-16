@@ -285,6 +285,7 @@ export type KnowledgeBaseSearchRequest = {
   vectorTopN?: number;
   rerankTopK?: number;
   enableRerank?: boolean;
+  debug?: boolean;
 };
 
 export type KnowledgeBaseSearchResult = {
@@ -304,6 +305,30 @@ export type KnowledgeBaseRerankFallback = {
 
 export type KnowledgeBaseSearchResponse = {
   items: KnowledgeBaseSearchResult[];
+  rerankFallback: KnowledgeBaseRerankFallback | null;
+  debug?: KnowledgeBaseSearchDebug;
+};
+
+export type KnowledgeBaseSearchDebug = {
+  query: string;
+  rewrittenQuery?: string;
+  vectorStage: {
+    status: string;
+    items: Array<KnowledgeBaseSearchResult & { rank: number }>;
+  };
+  rerankStage: {
+    status: 'completed' | 'disabled' | 'fallback';
+    input: Array<{ chunkId: string; rank: number }>;
+    output: Array<{ chunkId: string; rerankScore: number | null; rank: number }>;
+  };
+  finalStage: {
+    items: Array<{
+      chunkId: string;
+      vectorScore: number;
+      rerankScore: number | null;
+      rank: number;
+    }>;
+  };
   rerankFallback: KnowledgeBaseRerankFallback | null;
 };
 
@@ -346,4 +371,10 @@ export type ChatMessageListResponse = {
 export type SendChatMessageResponse = {
   answer: string;
   citations: Citation[];
+  rerankFallback: KnowledgeBaseRerankFallback | null;
+};
+
+export type RegenerateChatMessageResponse = {
+  message: ChatMessage;
+  rerankFallback: KnowledgeBaseRerankFallback | null;
 };

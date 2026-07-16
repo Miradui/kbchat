@@ -31,6 +31,7 @@ import type {
   LoginResponse,
   MemberRole,
   RecycleBinListResponse,
+  RegenerateChatMessageResponse,
   SendChatMessageResponse,
   User,
   UserSearchResponse,
@@ -450,6 +451,16 @@ export function sendChatMessage(
     method: 'POST',
     body: { content },
   });
+}
+
+export function regenerateChatMessage(
+  sessionId: string,
+  messageId: string,
+): Promise<RegenerateChatMessageResponse> {
+  return apiRequest<RegenerateChatMessageResponse>(
+    `/chat/sessions/${sessionId}/messages/${messageId}/regenerate`,
+    { method: 'POST' },
+  );
 }
 
 function withQuery(path: string, params: Record<string, unknown>): string {
