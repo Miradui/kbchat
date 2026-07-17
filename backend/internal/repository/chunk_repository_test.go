@@ -2,13 +2,17 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 
 	"rag/backend/internal/model"
 )
@@ -73,6 +77,36 @@ func TestChunkRepositoryReplaceByDocumentRejectsChunksForAnotherDocument(t *test
 	if len(other) != 0 {
 		t.Fatalf("expected rejected replacement not to write another document, got %#v", other)
 	}
+}
+
+func TestChunkRepositorySearchByVectorUsesPublishedChunksDuringReprocessing(t *testing.T) {
+	fixture := newChunkRepositoryTestFixture(t)
+	trace := &queryTraceLogger{Interface: logger.Default.LogMode(logger.Silent)}
+	repository := NewChunkRepository(fixture.repository.db.Session(&gorm.Session{
+		DryRun: true,
+		Logger: trace,
+	}))
+
+	if _, err := repository.SearchByVector(context.Background(), fixture.documentA.KnowledgeBaseID, []float32{1}, 5); err != nil && !errors.Is(err, gorm.ErrDryRunModeUnsupported) {
+		t.Fatalf("build vector search query: %v", err)
+	}
+
+	query := strings.ToLower(trace.query)
+	if strings.Contains(query, "documents.status") {
+		t.Fatalf("expected published chunks to remain searchable across document processing states, got %q", trace.query)
+	}
+	if !strings.Contains(query, "documents.deleted_at is null") {
+		t.Fatalf("expected deleted documents to remain excluded, got %q", trace.query)
+	}
+}
+
+type queryTraceLogger struct {
+	logger.Interface
+	query string
+}
+
+func (l *queryTraceLogger) Trace(_ context.Context, _ time.Time, fc func() (string, int64), _ error) {
+	l.query, _ = fc()
 }
 
 type chunkRepositoryTestFixture struct {

@@ -111,7 +111,6 @@ func (r *ChunkRepository) SearchByVector(ctx context.Context, kbID uuid.UUID, ve
 		`, pgvector.NewVector(vector)).
 		Joins("JOIN documents ON documents.id = document_chunks.document_id").
 		Where("document_chunks.knowledge_base_id = ?", kbID).
-		Where("documents.status = ?", "completed").
 		Where("documents.deleted_at IS NULL").
 		Order(clause.Expr{SQL: "document_chunks.embedding <=> ?", Vars: []any{pgvector.NewVector(vector)}}).
 		Limit(limit).

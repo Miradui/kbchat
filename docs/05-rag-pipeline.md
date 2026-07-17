@@ -129,6 +129,8 @@ chunk 顺序必须稳定，`chunkIndex` 跨所有 segment 从 0 开始递增。�
 
 Processor 必须先完成全部 Embedding 批次并验证每批返回向量数量，再在单个数据库事务中替换该文档的旧 chunks。任一 Provider 调用或数量校验失败时，不得留下部分新索引，也不得删除原有完整索引。
 
+`document_chunks` 表示文档当前已发布的检索快照。重处理排队、解析、切片、Embedding 或最终失败期间，旧 chunks 必须继续可检索；首次处理的文档在成功发布前没有 chunks，因此不会提前进入召回。检索只排除已软删除文档，不以当前 `documents.status` 隐藏仍有效的旧快照。
+
 Processor 成功替换 chunks 后不单独写入文档终态；worker 必须在同一数据库事务中将 `documents` 和对应 `document_jobs` 一起终结为 `completed` 或 `failed`。任一终态写入失败时整个事务回滚，不得留下 document/job 互相矛盾的状态。终态写入只接受当前 `running` 的 `process_document` job；迟到或重复的旧 job 不得覆盖后继重处理的文档状态。
 
 ## 检索流程
@@ -202,7 +204,7 @@ chatHistoryLimit=10
 ## pgvector 查询约束
 
 1. 必须按 `knowledge_base_id` 过滤。
-2. 只检索 `documents.status=completed` 的文档 chunks。
+2. 只检索未软删除文档的已发布 chunks；重处理期间及重处理失败后继续使用旧快照，不按当前 `documents.status` 隐藏已有 chunks。
 3. 召回数量使用 `vectorTopN`。
 4. 相似度分数返回为 `vectorScore`。
 5. `vectorTopN` 最大为 `100`；最终 `rerankTopK` 最大为 `20`，且不得大于本轮 `vectorTopN`。
