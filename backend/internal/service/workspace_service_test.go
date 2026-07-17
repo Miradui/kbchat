@@ -26,6 +26,7 @@ import (
 
 type workspaceTestServices struct {
 	db         *gorm.DB
+	uploadRoot string
 	users      *UserService
 	kbs        *KnowledgeBaseService
 	chats      *ChatService
@@ -74,16 +75,18 @@ func newWorkspaceTestServices(t *testing.T) workspaceTestServices {
 	searchRepo := repository.NewGlobalSearchRepository(db)
 	chatRepo := repository.NewChatRepository(db)
 	userRepo := repository.NewUserRepository(db)
+	uploadRoot := t.TempDir()
 
 	kbService := NewKnowledgeBaseService(kbRepo, categoryRepo, favoriteRepo, viewRepo, preferenceRepo, tagRepo, tagBindingRepo, memberRepo, userRepo)
 	return workspaceTestServices{
 		db:         db,
+		uploadRoot: uploadRoot,
 		users:      NewUserService(userRepo),
 		kbs:        kbService,
 		chats:      NewChatService(config.Config{ChatHistoryLimit: 10}, chatRepo, kbRepo, nil, nil, nil),
 		categories: NewKnowledgeBaseCategoryService(categoryRepo, kbRepo),
 		tags:       NewKnowledgeBaseTagService(tagRepo, tagBindingRepo),
-		documents:  NewDocumentService(config.Config{MaxUploadSizeMB: 50}, documentRepo, chunkRepo, kbRepo, storage.NewLocalStorage(t.TempDir())),
+		documents:  NewDocumentService(config.Config{MaxUploadSizeMB: 50}, documentRepo, chunkRepo, kbRepo, storage.NewLocalStorage(uploadRoot)),
 		search:     NewGlobalSearchService(searchRepo),
 	}
 }
@@ -437,6 +440,46 @@ func TestKnowledgeBaseWorkspaceUploadTouchesUpdatedBy(t *testing.T) {
 	}
 	if !detail.UpdatedAt.After(oldUpdatedAt) {
 		t.Fatalf("expected upload to advance updatedAt beyond %s, got %s", oldUpdatedAt, detail.UpdatedAt)
+	}
+}
+
+func TestKnowledgeBaseWorkspaceUploadRollsBackWhenTouchFails(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "upload-rollback-owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "upload-rollback-kb", "private", time.Now())
+	if err := services.db.Exec(`
+		CREATE TRIGGER fail_upload_kb_touch
+		BEFORE UPDATE ON knowledge_bases
+		BEGIN
+			SELECT RAISE(FAIL, 'touch failed');
+		END
+	`).Error; err != nil {
+		t.Fatalf("create touch failure trigger: %v", err)
+	}
+
+	file := createUploadFile(t, "rollback.txt", "must not persist")
+	if _, err := services.documents.Upload(ctx, owner.ID, kb.ID, file); err == nil {
+		t.Fatal("expected upload to fail when knowledge base touch fails")
+	}
+
+	var documentCount int64
+	if err := services.db.Model(&model.Document{}).Count(&documentCount).Error; err != nil {
+		t.Fatalf("count documents: %v", err)
+	}
+	var jobCount int64
+	if err := services.db.Model(&model.DocumentJob{}).Count(&jobCount).Error; err != nil {
+		t.Fatalf("count document jobs: %v", err)
+	}
+	if documentCount != 0 || jobCount != 0 {
+		t.Fatalf("expected database rollback, got documents=%d jobs=%d", documentCount, jobCount)
+	}
+	files, err := filepath.Glob(filepath.Join(services.uploadRoot, kb.ID.String(), "*"))
+	if err != nil {
+		t.Fatalf("list uploaded files: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("expected uploaded file cleanup, got %v", files)
 	}
 }
 

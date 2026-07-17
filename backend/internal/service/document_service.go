@@ -77,11 +77,8 @@ func (s *DocumentService) Upload(ctx context.Context, ownerID, kbID uuid.UUID, f
 		JobType: "process_document",
 		Status:  "pending",
 	}
-	if err := s.documents.CreateWithJob(ctx, document, job); err != nil {
+	if err := s.documents.CreateWithJob(ctx, document, job, ownerID); err != nil {
 		_ = s.storage.Delete(storagePath)
-		return nil, apperror.Internal(err)
-	}
-	if err := s.knowledgeBases.TouchUpdatedBy(ctx, kbID, ownerID); err != nil {
 		return nil, apperror.Internal(err)
 	}
 

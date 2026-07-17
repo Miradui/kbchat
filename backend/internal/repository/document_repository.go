@@ -40,13 +40,16 @@ func NewDocumentRepository(db *gorm.DB) *DocumentRepository {
 	return &DocumentRepository{db: db}
 }
 
-func (r *DocumentRepository) CreateWithJob(ctx context.Context, document *model.Document, job *model.DocumentJob) error {
+func (r *DocumentRepository) CreateWithJob(ctx context.Context, document *model.Document, job *model.DocumentJob, updatedByID uuid.UUID) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(document).Error; err != nil {
 			return err
 		}
 		job.DocumentID = document.ID
-		return tx.Create(job).Error
+		if err := tx.Create(job).Error; err != nil {
+			return err
+		}
+		return touchKnowledgeBase(tx, document.KnowledgeBaseID, updatedByID, time.Now())
 	})
 }
 
@@ -221,7 +224,7 @@ func (r *DocumentRepository) QueueReprocess(ctx context.Context, documentID, upd
 		if err := tx.Create(&job).Error; err != nil {
 			return err
 		}
-		if err := touchReprocessedKnowledgeBase(tx, document.KnowledgeBaseID, updatedByID, now); err != nil {
+		if err := touchKnowledgeBase(tx, document.KnowledgeBaseID, updatedByID, now); err != nil {
 			return err
 		}
 		created = true
@@ -294,7 +297,7 @@ func (r *DocumentRepository) QueueBatchReprocess(ctx context.Context, documentID
 			touchedKnowledgeBases[documents[i].KnowledgeBaseID] = now
 		}
 		for knowledgeBaseID, updatedAt := range touchedKnowledgeBases {
-			if err := touchReprocessedKnowledgeBase(tx, knowledgeBaseID, updatedByID, updatedAt); err != nil {
+			if err := touchKnowledgeBase(tx, knowledgeBaseID, updatedByID, updatedAt); err != nil {
 				return err
 			}
 		}
@@ -599,7 +602,7 @@ func isTerminalDocumentStatus(status string) bool {
 	return status == "completed" || status == "failed"
 }
 
-func touchReprocessedKnowledgeBase(tx *gorm.DB, knowledgeBaseID, updatedByID uuid.UUID, updatedAt time.Time) error {
+func touchKnowledgeBase(tx *gorm.DB, knowledgeBaseID, updatedByID uuid.UUID, updatedAt time.Time) error {
 	result := tx.Model(&model.KnowledgeBase{}).
 		Where("id = ?", knowledgeBaseID).
 		Updates(map[string]any{
