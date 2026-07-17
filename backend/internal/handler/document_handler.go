@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 
@@ -14,14 +15,22 @@ import (
 )
 
 type DocumentHandler struct {
-	documents *service.DocumentService
+	documents             *service.DocumentService
+	maxUploadRequestBytes int64
 }
 
-func NewDocumentHandler(documents *service.DocumentService) *DocumentHandler {
-	return &DocumentHandler{documents: documents}
+func NewDocumentHandler(documents *service.DocumentService, maxUploadSizeMB int) *DocumentHandler {
+	if maxUploadSizeMB <= 0 {
+		maxUploadSizeMB = 50
+	}
+	return &DocumentHandler{
+		documents:             documents,
+		maxUploadRequestBytes: int64(maxUploadSizeMB)*1024*1024 + 1*1024*1024,
+	}
 }
 
 func (h *DocumentHandler) Upload(c *gin.Context) {
+	h.limitUploadBody(c)
 	userID, ok := currentUserIDOrError(c)
 	if !ok {
 		return
@@ -34,7 +43,7 @@ func (h *DocumentHandler) Upload(c *gin.Context) {
 
 	file, err := c.FormFile("file")
 	if err != nil {
-		RespondError(c, apperror.Validation(map[string]any{"file": "文件不能为空"}))
+		RespondError(c, uploadFileError(err))
 		return
 	}
 
@@ -48,18 +57,19 @@ func (h *DocumentHandler) Upload(c *gin.Context) {
 }
 
 func (h *DocumentHandler) UploadGlobal(c *gin.Context) {
+	h.limitUploadBody(c)
 	userID, ok := currentUserIDOrError(c)
 	if !ok {
+		return
+	}
+	file, err := c.FormFile("file")
+	if err != nil {
+		RespondError(c, uploadFileError(err))
 		return
 	}
 	kbID, err := uuid.Parse(c.PostForm("knowledgeBaseId"))
 	if err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"knowledgeBaseId": "知识库 ID 不合法"}))
-		return
-	}
-	file, err := c.FormFile("file")
-	if err != nil {
-		RespondError(c, apperror.Validation(map[string]any{"file": "文件不能为空"}))
 		return
 	}
 	res, err := h.documents.Upload(c.Request.Context(), userID, kbID, file)
@@ -68,6 +78,18 @@ func (h *DocumentHandler) UploadGlobal(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, res)
+}
+
+func (h *DocumentHandler) limitUploadBody(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, h.maxUploadRequestBytes)
+}
+
+func uploadFileError(err error) error {
+	var maxBytesError *http.MaxBytesError
+	if errors.As(err, &maxBytesError) {
+		return apperror.Validation(map[string]any{"file": "file size exceeds limit"})
+	}
+	return apperror.Validation(map[string]any{"file": "文件不能为空"})
 }
 
 func (h *DocumentHandler) List(c *gin.Context) {

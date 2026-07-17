@@ -58,7 +58,7 @@ func New(cfg config.Config, db *gorm.DB, logger *zap.Logger) *gin.Engine {
 	knowledgeBaseHandler := handler.NewKnowledgeBaseHandler(knowledgeBaseService)
 	knowledgeBaseCategoryHandler := handler.NewKnowledgeBaseCategoryHandler(knowledgeBaseCategoryService)
 	knowledgeBaseTagHandler := handler.NewKnowledgeBaseTagHandler(knowledgeBaseTagService)
-	documentHandler := handler.NewDocumentHandler(documentService)
+	documentHandler := handler.NewDocumentHandler(documentService, cfg.MaxUploadSizeMB)
 	searchHandler := handler.NewSearchHandler(retrievalService)
 	chatHandler := handler.NewChatHandler(chatService)
 	globalSearchHandler := handler.NewGlobalSearchHandler(globalSearchService)
