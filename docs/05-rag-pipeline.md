@@ -92,6 +92,8 @@ Markdown fenced code opening/closing 最多允许 3 个前导空格，4 个及�
 
 Markdown 顶级 ATX heading、列表 marker 和 GFM table 最多允许 3 个前导空格；独立出现且缩进 4 个及以上空格的语法按字面正文保留，不提升为对应结构。已经进入列表 block 后，更深缩进的列表 marker 仍按嵌套列表处理并保留原缩进。
 
+Markdown 列表 marker 后未被空行中断、且至少缩进 2 列的非空 continuation line（tab 按 4 列）必须保留在同一 list block 中；不得把它降为 paragraph、插入额外段落空行或注入普通文本 overlap。无缩进的新正文仍按独立 paragraph 处理。
+
 每个 chunk 必须保存：
 
 ```text

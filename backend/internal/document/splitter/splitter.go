@@ -462,6 +462,8 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 		if markdown {
 			if _, ok := tableLines[i]; ok {
 				lineType = "table"
+			} else if pendingType == "list" && isIndentedListContinuation(raw) {
+				lineType = "list"
 			} else if structuralLine, ok := markdownBlockLine(raw); ok {
 				lineType = structureTypeForLine(structuralLine)
 			} else if pendingType == "list" && isListLine(trimmed) {
@@ -650,6 +652,21 @@ func isListLine(line string) bool {
 		}
 	}
 	return true
+}
+
+func isIndentedListContinuation(line string) bool {
+	indent := 0
+	for _, r := range line {
+		switch r {
+		case ' ':
+			indent++
+		case '\t':
+			indent += 4
+		default:
+			return indent >= 2
+		}
+	}
+	return false
 }
 
 func splitOversizeListBlock(item block, budget int) []block {

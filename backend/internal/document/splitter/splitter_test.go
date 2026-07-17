@@ -536,6 +536,18 @@ func TestSplitPreservesNestedMarkdownListIndentation(t *testing.T) {
 	}
 }
 
+func TestSplitMarkdownListKeepsIndentedContinuationInListBlock(t *testing.T) {
+	text := "- first line\n  continuation text"
+	chunks := New(100, 10).Split(text)
+
+	if len(chunks) != 1 {
+		t.Fatalf("expected one list chunk, got %#v", chunks)
+	}
+	if chunks[0].Metadata["structureType"] != "list" || chunks[0].Content != text {
+		t.Fatalf("expected indented continuation to remain list content, got %#v", chunks[0])
+	}
+}
+
 func TestSplitRepeatsIndentedMarkerForOversizeNestedMarkdownListItem(t *testing.T) {
 	body := "alpha beta gamma delta epsilon zeta eta theta"
 	chunks := New(6, 0).Split("- parent\n  - " + body)
