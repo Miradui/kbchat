@@ -1,9 +1,11 @@
 import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { StrictMode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getCurrentUser, logout } from '../api/resources';
+import { currentUserStore } from '../store/currentUserStore';
 import { tokenStore } from '../store/tokenStore';
 import { renderWithRouter } from '../test/render';
 import { AppShell, completeLogout } from './AppShell';
@@ -46,6 +48,7 @@ function LocationProbe() {
 }
 
 beforeEach(() => {
+  currentUserStore.clear();
   mockedGetCurrentUser.mockReset().mockResolvedValue({ id: 'user-1', username: 'admin', displayName: '管理员' });
   mockedLogout.mockReset().mockResolvedValue(undefined);
 });
@@ -64,6 +67,47 @@ describe('AppShell', () => {
     });
 
     renderWithRouter(<AppShell active="home" currentUserRequest={currentUserRequest}><p>内容</p></AppShell>);
+
+    expect(await screen.findByText('管理员')).toBeInTheDocument();
+    expect(currentUserRequest).toHaveBeenCalledOnce();
+  });
+
+  it('deduplicates the current-user request under StrictMode', async () => {
+    stubMatchMedia(false);
+    const currentUserRequest = vi.fn().mockResolvedValue({
+      id: 'user-1',
+      username: 'admin',
+      displayName: '管理员',
+    });
+
+    renderWithRouter(
+      <StrictMode>
+        <AppShell active="home" currentUserRequest={currentUserRequest}><p>内容</p></AppShell>
+      </StrictMode>,
+    );
+
+    expect(await screen.findByText('管理员')).toBeInTheDocument();
+    expect(currentUserRequest).toHaveBeenCalledOnce();
+  });
+
+  it('reuses the current user when protected pages remount', async () => {
+    stubMatchMedia(false);
+    const currentUserRequest = vi.fn().mockResolvedValue({
+      id: 'user-1',
+      username: 'admin',
+      displayName: '管理员',
+    });
+
+    const firstPage = renderWithRouter(
+      <AppShell active="home" currentUserRequest={currentUserRequest}><p>首页</p></AppShell>,
+    );
+    expect(await screen.findByText('管理员')).toBeInTheDocument();
+    firstPage.unmount();
+
+    renderWithRouter(
+      <AppShell active="documents" currentUserRequest={currentUserRequest}><p>文档</p></AppShell>,
+      ['/documents'],
+    );
 
     expect(await screen.findByText('管理员')).toBeInTheDocument();
     expect(currentUserRequest).toHaveBeenCalledOnce();

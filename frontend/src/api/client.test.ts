@@ -12,6 +12,7 @@ function unauthorizedResponse() {
 
 afterEach(() => {
   tokenStore.clearToken();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -41,6 +42,22 @@ describe('apiRequest unauthorized handling', () => {
 
     await expect(apiRequest('/knowledge-bases', { onUnauthorized })).rejects.toBeInstanceOf(ApiError);
     expect(tokenStore.getToken()).toBeNull();
+    expect(onUnauthorized).toHaveBeenCalledOnce();
+  });
+
+  it('handles concurrent unauthorized responses only once', async () => {
+    const onUnauthorized = vi.fn();
+    const clearToken = vi.spyOn(tokenStore, 'clearToken');
+    tokenStore.setToken('expired-token');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(unauthorizedResponse()));
+
+    const results = await Promise.allSettled([
+      apiRequest('/knowledge-bases', { onUnauthorized }),
+      apiRequest('/documents', { onUnauthorized }),
+    ]);
+
+    expect(results.every((result) => result.status === 'rejected')).toBe(true);
+    expect(clearToken).toHaveBeenCalledOnce();
     expect(onUnauthorized).toHaveBeenCalledOnce();
   });
 });

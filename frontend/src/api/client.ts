@@ -47,6 +47,7 @@ async function request(path: string, options: RequestOptions = {}): Promise<Resp
   } = options;
   const headers = new Headers(fetchOptions.headers);
   const token = tokenStore.getToken();
+  const authRevision = tokenStore.getRevision();
 
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
@@ -66,7 +67,7 @@ async function request(path: string, options: RequestOptions = {}): Promise<Resp
     body,
   });
 
-  if (response.status === 401 && redirectOnUnauthorized) {
+  if (response.status === 401 && redirectOnUnauthorized && tokenStore.getRevision() === authRevision) {
     tokenStore.clearToken();
     onUnauthorized();
   }

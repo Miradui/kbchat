@@ -7,6 +7,7 @@ import { getCurrentUser, logout } from '../api/resources';
 import { PrimaryNav } from '../components/navigation/PrimaryNav';
 import type { AppSection } from '../components/navigation/PrimaryNav';
 import { IconButton } from '../components/ui/IconButton';
+import { currentUserStore } from '../store/currentUserStore';
 import { tokenStore } from '../store/tokenStore';
 
 export type { AppSection } from '../components/navigation/PrimaryNav';
@@ -63,7 +64,7 @@ export function AppShell({ active, contextSidebar, topbarContent, currentUserReq
   useEffect(() => { if (!isMobile) setDrawerOpen(false); }, [isMobile]);
   useEffect(() => {
     let active = true;
-    void currentUserRequest()
+    void currentUserStore.load(currentUserRequest)
       .then((user) => {
         if (!active) return;
         setCurrentUserName(user.displayName.trim() || user.username);
@@ -103,7 +104,11 @@ export function AppShell({ active, contextSidebar, topbarContent, currentUserReq
   }
 
   function handleLogout() {
-    const finish = () => { tokenStore.clearToken(); navigate('/login', { replace: true }); };
+    const finish = () => {
+      tokenStore.clearToken();
+      currentUserStore.clear();
+      navigate('/login', { replace: true });
+    };
     void completeLogout(logoutRequest, finish);
   }
 
