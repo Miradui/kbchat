@@ -1,7 +1,7 @@
-import { act, fireEvent, screen } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { Route, Routes } from 'react-router-dom';
+import { Route, Routes, useNavigate } from 'react-router-dom';
 
 import { renderWithRouter } from '../../test/render';
 import { KnowledgeBaseDetailPage } from './KnowledgeBaseDetailPage';
@@ -108,6 +108,87 @@ describe('KnowledgeBaseDetailPage retrieval debug', () => {
     expect(screen.queryByText('旧结果')).not.toBeInTheDocument();
   });
 });
+
+describe('KnowledgeBaseDetailPage loading', () => {
+  it('ignores a previous knowledge base response that resolves after navigation', async () => {
+    const staleKnowledgeBase = deferred<ReturnType<typeof knowledgeBaseFixture>>();
+    api.getKnowledgeBase.mockImplementation((id: string) => (
+      id === 'kb-a' ? staleKnowledgeBase.promise : Promise.resolve(knowledgeBaseFixture('kb-b', '知识库 B'))
+    ));
+    api.listDocuments.mockImplementation((id: string) => Promise.resolve({
+      items: [documentFixture(id, id === 'kb-a' ? 'A 文档.md' : 'B 文档.md')],
+    }));
+    api.getKnowledgeBasePermissions.mockImplementation((id: string) => Promise.resolve(permissionFixture(
+      id,
+      id === 'kb-a' ? 'A Owner' : 'B Owner',
+    )));
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <>
+        <KnowledgeBaseNavigation />
+        <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>
+      </>,
+      ['/knowledge-bases/kb-a'],
+    );
+
+    await user.click(screen.getByRole('button', { name: '切换到知识库 B' }));
+    expect(await screen.findByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
+    expect(screen.getByText('B 文档.md')).toBeInTheDocument();
+    expect(screen.getByText('B Owner')).toBeInTheDocument();
+
+    await act(async () => staleKnowledgeBase.resolve(knowledgeBaseFixture('kb-a', '知识库 A')));
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: '知识库 B' })).toBeInTheDocument());
+    expect(screen.queryByRole('heading', { name: '知识库 A' })).not.toBeInTheDocument();
+    expect(screen.getByText('B 文档.md')).toBeInTheDocument();
+    expect(screen.queryByText('A 文档.md')).not.toBeInTheDocument();
+    expect(screen.getByText('B Owner')).toBeInTheDocument();
+    expect(screen.queryByText('A Owner')).not.toBeInTheDocument();
+    expect(api.recordKnowledgeBaseView).toHaveBeenCalledTimes(1);
+    expect(api.recordKnowledgeBaseView).toHaveBeenCalledWith('kb-b');
+  });
+});
+
+function KnowledgeBaseNavigation() {
+  const navigate = useNavigate();
+  return <button onClick={() => navigate('/knowledge-bases/kb-b')} type="button">切换到知识库 B</button>;
+}
+
+function knowledgeBaseFixture(id = 'kb-1', name = '员工制度') {
+  return {
+    id,
+    name,
+    description: `${name}描述`,
+    visibility: 'private' as const,
+    retrievalConfig: { vectorTopN: 30, rerankTopK: 5, scoreThreshold: 0.3, enableRerank: true },
+    createdAt: '2026-07-01T00:00:00Z',
+    updatedAt: '2026-07-01T00:00:00Z',
+  };
+}
+
+function documentFixture(knowledgeBaseId: string, filename: string) {
+  return {
+    id: `document-${knowledgeBaseId}`,
+    knowledgeBaseId,
+    filename,
+    fileType: 'md',
+    fileSize: 128,
+    status: 'completed' as const,
+    errorMessage: null,
+    createdAt: '2026-07-01T00:00:00Z',
+  };
+}
+
+function permissionFixture(knowledgeBaseId: string, ownerName: string) {
+  return {
+    knowledgeBaseId,
+    visibility: 'private' as const,
+    owner: { id: `owner-${knowledgeBaseId}`, username: ownerName, displayName: ownerName },
+    managers: [],
+    members: [],
+  };
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

@@ -50,6 +50,7 @@ export function KnowledgeBaseDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const activeKnowledgeBaseIdRef = useRef(id);
+  const pageLoadRequestIdRef = useRef(0);
   const searchRequestIdRef = useRef(0);
   activeKnowledgeBaseIdRef.current = id;
   const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeBase | null>(null);
@@ -73,28 +74,37 @@ export function KnowledgeBaseDetailPage() {
   const [memberWorkingId, setMemberWorkingId] = useState<string | null>(null);
   const [error, setError] = useState('');
 
-  const loadPage = useCallback(async () => {
+  const loadPage = useCallback(async (requestId: number) => {
     if (!id) {
-      return;
+      return false;
     }
 
-    setError('');
+    const targetKnowledgeBaseId = id;
     const [kb, docs, categoryResponse, permissionResponse, preference] = await Promise.all([
-      getKnowledgeBase(id),
-      listDocuments(id),
+      getKnowledgeBase(targetKnowledgeBaseId),
+      listDocuments(targetKnowledgeBaseId),
       listKnowledgeBaseCategories(),
-      getKnowledgeBasePermissions(id),
+      getKnowledgeBasePermissions(targetKnowledgeBaseId),
       getWorkspacePreference().catch(() => fallbackPreference),
     ]);
+    if (
+      pageLoadRequestIdRef.current !== requestId
+      || activeKnowledgeBaseIdRef.current !== targetKnowledgeBaseId
+    ) {
+      return false;
+    }
     setKnowledgeBase(kb);
     setDocuments(docs.items);
     setCategories(categoryResponse.items);
     setPermissions(permissionResponse);
     setExpandedIds(preference.expandedCategoryIds);
+    return true;
   }, [id]);
 
   useEffect(() => {
     searchRequestIdRef.current += 1;
+    const requestId = pageLoadRequestIdRef.current + 1;
+    pageLoadRequestIdRef.current = requestId;
     setSearching(false);
     setSearchResults([]);
     setSearchFallback(null);
@@ -106,18 +116,21 @@ export function KnowledgeBaseDetailPage() {
 
     let mounted = true;
     setLoading(true);
+    setError('');
 
-    loadPage()
-      .then(() => {
-        recordKnowledgeBaseView(id).catch(() => undefined);
+    loadPage(requestId)
+      .then((applied) => {
+        if (mounted && applied) {
+          recordKnowledgeBaseView(id).catch(() => undefined);
+        }
       })
       .catch((err) => {
-        if (mounted) {
+        if (mounted && pageLoadRequestIdRef.current === requestId) {
           setError(errorMessage(err, '知识库详情加载失败'));
         }
       })
       .finally(() => {
-        if (mounted) {
+        if (mounted && pageLoadRequestIdRef.current === requestId) {
           setLoading(false);
         }
       });
