@@ -736,8 +736,11 @@ func splitOversizeTableBlock(item block, budget int) []block {
 	header := item.content[lines[0].start:lines[1].end]
 	separator := item.content[lines[1].start:lines[1].end]
 	bodyBudget := budget - estimateTokens(header)
-	if !isMarkdownTableSeparator(separator) || bodyBudget < 1 {
+	if !isMarkdownTableSeparator(separator) {
 		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
+	}
+	if bodyBudget < 1 {
+		return splitMarkdownTableFallback(item, lines, budget)
 	}
 
 	result := make([]block, 0, len(lines)-2)
@@ -794,6 +797,21 @@ func splitOversizeTableBlock(item block, budget int) []block {
 	flushPending()
 	if len(result) > 0 {
 		result[0].startOffset = item.startOffset + lines[0].start
+	}
+	return result
+}
+
+func splitMarkdownTableFallback(item block, lines []textSpan, budget int) []block {
+	result := make([]block, 0, len(lines))
+	for _, line := range lines {
+		lineContent := item.content[line.start:line.end]
+		for _, part := range splitMarkdownTableCellToBudgetParts(lineContent, budget) {
+			span := textSpan{start: line.start + part.span.start, end: line.start + part.span.end}
+			partContent := part.content
+			result = append(result, blocksFromSpans(item, []textSpan{span}, func(string) string {
+				return partContent
+			})...)
+		}
 	}
 	return result
 }

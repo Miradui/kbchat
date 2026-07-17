@@ -807,6 +807,23 @@ func TestSplitKeepsEscapedPipeAtomicWhenTableRowCannotBeRebuilt(t *testing.T) {
 	}
 }
 
+func TestSplitKeepsEscapedPipeAtomicWhenTableHeaderExceedsBudget(t *testing.T) {
+	text := "a|b\n---|---\nabc\\|def | x"
+	escapedPipeOffset := strings.Index(text, "\\|") + 1
+	chunks := New(1, 0).Split(text)
+
+	for index, chunk := range chunks {
+		if chunk.TokenCount > 1 {
+			t.Fatalf("expected token budget at %d, got %#v", index, chunk)
+		}
+		start, startOK := chunk.Metadata["startOffset"].(int)
+		end, endOK := chunk.Metadata["endOffset"].(int)
+		if !startOK || !endOK || start == escapedPipeOffset || end == escapedPipeOffset {
+			t.Fatalf("expected escaped pipe to stay in one source span, got chunk %d %#v", index, chunk)
+		}
+	}
+}
+
 func TestSplitTreatsEscapedMarkdownPipesAsParagraphContent(t *testing.T) {
 	chunks := New(100, 0).Split("alpha \\| beta \\| gamma")
 
@@ -913,6 +930,23 @@ func TestSplitKeepsInlineCodePipeProtectedWhenTableRowCannotBeRebuilt(t *testing
 		}
 	}
 	if protectedBody.String() != "a|b" {
+		t.Fatalf("expected inline code pipe to remain protected and lossless, got %q from %#v", protectedBody.String(), chunks)
+	}
+}
+
+func TestSplitKeepsInlineCodePipeProtectedWhenTableHeaderExceedsBudget(t *testing.T) {
+	chunks := New(1, 0).Split("a|b\n---|---\n``x|y`` | q")
+	protectedBody := strings.Builder{}
+
+	for index, chunk := range chunks {
+		if chunk.TokenCount > 1 {
+			t.Fatalf("expected token budget at %d, got %#v", index, chunk)
+		}
+		for _, body := range matchedCodeSpanBodies(chunk.Content) {
+			protectedBody.WriteString(body)
+		}
+	}
+	if protectedBody.String() != "x|y" {
 		t.Fatalf("expected inline code pipe to remain protected and lossless, got %q from %#v", protectedBody.String(), chunks)
 	}
 }
