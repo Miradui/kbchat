@@ -304,3 +304,13 @@ Authorization: Bearer <token>
 - Markdown overlap 不跨 headingPath；超长嵌套列表重复缩进 marker；表格识别忽略转义管道和 inline code span 管道，并保持极小预算下的转义原子性。
 - 无正文的 Markdown heading 保留为 heading chunk，不会在同级切换或文档结尾静默丢失。
 - 全局文档台账展示进度、重试计划和失败原因；轮询不会清除操作错误，所有刷新入口都会捕获失败，写成功后的刷新失败使用独立提示。
+
+## Final Merge Readiness Update
+
+- 文档重处理期间继续检索当前已发布 chunks；只有新一轮解析、切片和全部 Embedding 成功后才原子替换，处理中或失败状态不会让既有索引暂时消失。
+- `backend/migrations/010_chunk_document_kb_integrity.sql` 会先按 document 修复历史 chunk 的知识库归属，再通过复合外键约束 `document_id + knowledge_base_id`；repository 写入和向量查询也执行同一隔离规则。
+- 文档上传在同一事务内创建 document、processing job 并更新知识库；事务失败会补偿删除已保存文件，文件清理失败保留在内部错误链中。
+- Markdown fenced code 在极小预算下优先保留正文并维持正文 offset；合法但没有可检索正文的空/空白 fence 不产生 chunk，也不会吞掉前置 heading。
+- 前端当前用户请求按认证世代缓存并复用 in-flight 结果；并发或迟到的旧 401 不会重复跳转，也不会清除新登录 token。
+- Chat 可以从任意历史 assistant 回答切换查看真实 citations，右栏展示 filename、pageNumber、content、vectorScore 和 rerankScore；发送、重新生成或切换会话后回到最新回答。
+- Chat 工作区在宽屏使用三栏、常见桌面宽度使用两列、`<=980px` 使用单列面板顺序；移动端可纵向访问会话、消息和引用，不依赖被裁剪的横向内容。
