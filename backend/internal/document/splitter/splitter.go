@@ -746,7 +746,7 @@ func listMarker(line string) (string, bool) {
 
 func splitOversizeCodeBlock(item block, budget int) []block {
 	lines := lineTextSpans(item.content)
-	if len(lines) < 3 {
+	if len(lines) < 2 {
 		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
 	}
 
@@ -763,11 +763,11 @@ func splitOversizeCodeBlock(item block, budget int) []block {
 	}
 	bodyEnd := strings.LastIndex(item.content[:lines[len(lines)-1].start], "\n")
 	if bodyEnd < bodyStart {
-		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
+		return nil
 	}
 	bodyContent := item.content[bodyStart:bodyEnd]
-	if bodyContent == "" {
-		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
+	if strings.TrimSpace(bodyContent) == "" {
+		return nil
 	}
 	bodyBudget := budget - estimateTokens(opening+"\n"+closing)
 	if bodyBudget < 1 {

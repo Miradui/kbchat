@@ -477,6 +477,26 @@ func TestSplitFencedCodeTinyBudgetKeepsBodyWithoutUnbalancedFences(t *testing.T)
 	}
 }
 
+func TestSplitFencedCodeTinyBudgetDropsBlocksWithoutSearchableBody(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+	}{
+		{name: "empty body", text: "```\n```"},
+		{name: "blank body", text: "```\n\n```"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chunks := New(1, 0).Split(tt.text)
+
+			if len(chunks) != 0 {
+				t.Fatalf("expected no chunks for fenced code without searchable body, got %#v", chunks)
+			}
+		})
+	}
+}
+
 func TestSplitRepeatsHeaderOnOversizeMarkdownTables(t *testing.T) {
 	lines := []string{
 		"| Name | Value |",
