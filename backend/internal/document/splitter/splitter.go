@@ -492,8 +492,18 @@ func parseHeading(line string) (int, string, bool) {
 	if level == 0 || level > 6 || level >= len(line) || !unicode.IsSpace(rune(line[level])) {
 		return 0, "", false
 	}
-	title := strings.TrimSpace(line[level:])
-	title = strings.TrimSpace(strings.TrimRight(title, "#"))
+	titleText := strings.TrimRightFunc(line[level:], unicode.IsSpace)
+	closingStart := len(titleText)
+	for closingStart > 0 && titleText[closingStart-1] == '#' {
+		closingStart--
+	}
+	if closingStart < len(titleText) && closingStart > 0 {
+		preceding, _ := utf8.DecodeLastRuneInString(titleText[:closingStart])
+		if unicode.IsSpace(preceding) {
+			titleText = titleText[:closingStart]
+		}
+	}
+	title := strings.TrimSpace(titleText)
 	if title == "" {
 		return 0, "", false
 	}

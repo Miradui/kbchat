@@ -135,6 +135,27 @@ func TestSplitPreservesNestedLeafHeadingUnderTinyBudget(t *testing.T) {
 	}
 }
 
+func TestSplitPreservesLiteralTrailingHashesInHeading(t *testing.T) {
+	text := "# foo###"
+	chunks := New(1, 0).Split(text)
+	var content strings.Builder
+
+	for index, chunk := range chunks {
+		start, startOK := chunk.Metadata["startOffset"].(int)
+		end, endOK := chunk.Metadata["endOffset"].(int)
+		if !startOK || !endOK || start < 2 || end <= start || end > len(text) {
+			t.Fatalf("expected heading source range at %d, got %#v", index, chunk.Metadata)
+		}
+		if text[start:end] != chunk.Content {
+			t.Fatalf("expected heading chunk %q to map to source %q", chunk.Content, text[start:end])
+		}
+		content.WriteString(chunk.Content)
+	}
+	if content.String() != "foo###" {
+		t.Fatalf("expected literal trailing hashes to remain searchable, got %q from %#v", content.String(), chunks)
+	}
+}
+
 func TestSplitPrefersParagraphBoundariesBeforeHardSplitting(t *testing.T) {
 	text := strings.Join([]string{
 		"# Release Notes",
