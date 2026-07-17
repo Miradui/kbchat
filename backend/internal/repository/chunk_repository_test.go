@@ -79,6 +79,38 @@ func TestChunkRepositoryReplaceByDocumentRejectsChunksForAnotherDocument(t *test
 	}
 }
 
+func TestChunkRepositoryCreateBatchRejectsMismatchedKnowledgeBase(t *testing.T) {
+	fixture := newChunkRepositoryTestFixture(t)
+	chunk := fixture.chunk(fixture.documentA, 0, "cross knowledge base")
+	chunk.KnowledgeBaseID = fixture.documentB.KnowledgeBaseID
+
+	if err := fixture.repository.CreateBatch(context.Background(), []model.DocumentChunk{chunk}); err == nil {
+		t.Fatal("expected mismatched document and knowledge base to be rejected")
+	}
+}
+
+func TestChunkRepositoryReplaceByDocumentRejectsMismatchedKnowledgeBase(t *testing.T) {
+	fixture := newChunkRepositoryTestFixture(t)
+	ctx := context.Background()
+	existing := fixture.chunk(fixture.documentA, 0, "existing")
+	if err := fixture.repository.CreateBatch(ctx, []model.DocumentChunk{existing}); err != nil {
+		t.Fatalf("seed existing chunk: %v", err)
+	}
+	replacement := fixture.chunk(fixture.documentA, 0, "cross knowledge base")
+	replacement.KnowledgeBaseID = fixture.documentB.KnowledgeBaseID
+
+	if err := fixture.repository.ReplaceByDocument(ctx, fixture.documentA.ID, []model.DocumentChunk{replacement}); err == nil {
+		t.Fatal("expected mismatched document and knowledge base to be rejected")
+	}
+	stored, err := fixture.repository.ListByDocument(ctx, fixture.documentA.ID)
+	if err != nil {
+		t.Fatalf("list chunks after rejected replacement: %v", err)
+	}
+	if len(stored) != 1 || stored[0].Content != "existing" {
+		t.Fatalf("expected existing chunk to remain, got %#v", stored)
+	}
+}
+
 func TestChunkRepositorySearchByVectorUsesPublishedChunksDuringReprocessing(t *testing.T) {
 	fixture := newChunkRepositoryTestFixture(t)
 	trace := &queryTraceLogger{Interface: logger.Default.LogMode(logger.Silent)}
@@ -97,6 +129,9 @@ func TestChunkRepositorySearchByVectorUsesPublishedChunksDuringReprocessing(t *t
 	}
 	if !strings.Contains(query, "documents.deleted_at is null") {
 		t.Fatalf("expected deleted documents to remain excluded, got %q", trace.query)
+	}
+	if !strings.Contains(query, "documents.knowledge_base_id") {
+		t.Fatalf("expected document ownership to be constrained by knowledge base, got %q", trace.query)
 	}
 }
 
@@ -141,11 +176,16 @@ func newChunkRepositoryTestFixture(t *testing.T) chunkRepositoryTestFixture {
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	knowledgeBase := model.KnowledgeBase{Name: "Chunk Repository", OwnerID: user.ID}
-	if err := db.Create(&knowledgeBase).Error; err != nil {
-		t.Fatalf("create knowledge base: %v", err)
+	createKnowledgeBase := func(name string) model.KnowledgeBase {
+		knowledgeBase := model.KnowledgeBase{Name: name, OwnerID: user.ID}
+		if err := db.Create(&knowledgeBase).Error; err != nil {
+			t.Fatalf("create knowledge base %s: %v", name, err)
+		}
+		return knowledgeBase
 	}
-	createDocument := func(filename string) model.Document {
+	knowledgeBaseA := createKnowledgeBase("Chunk Repository A")
+	knowledgeBaseB := createKnowledgeBase("Chunk Repository B")
+	createDocument := func(knowledgeBase model.KnowledgeBase, filename string) model.Document {
 		document := model.Document{
 			KnowledgeBaseID: knowledgeBase.ID,
 			UploaderID:      user.ID,
@@ -161,8 +201,8 @@ func newChunkRepositoryTestFixture(t *testing.T) chunkRepositoryTestFixture {
 	}
 	return chunkRepositoryTestFixture{
 		repository: NewChunkRepository(db),
-		documentA:  createDocument("a.txt"),
-		documentB:  createDocument("b.txt"),
+		documentA:  createDocument(knowledgeBaseA, "a.txt"),
+		documentB:  createDocument(knowledgeBaseB, "b.txt"),
 	}
 }
 

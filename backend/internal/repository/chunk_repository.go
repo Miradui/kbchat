@@ -39,7 +39,12 @@ func (r *ChunkRepository) CreateBatch(ctx context.Context, chunks []model.Docume
 	if len(chunks) == 0 {
 		return nil
 	}
-	return r.db.WithContext(ctx).CreateInBatches(chunks, 50).Error
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := validateChunkOwnership(tx, chunks); err != nil {
+			return err
+		}
+		return tx.CreateInBatches(chunks, 50).Error
+	})
 }
 
 func (r *ChunkRepository) ReplaceByDocument(ctx context.Context, documentID uuid.UUID, chunks []model.DocumentChunk) error {
@@ -49,6 +54,9 @@ func (r *ChunkRepository) ReplaceByDocument(ctx context.Context, documentID uuid
 		}
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := validateChunkOwnership(tx, chunks); err != nil {
+			return err
+		}
 		if err := tx.Where("document_id = ?", documentID).Delete(&model.DocumentChunk{}).Error; err != nil {
 			return err
 		}
@@ -57,6 +65,48 @@ func (r *ChunkRepository) ReplaceByDocument(ctx context.Context, documentID uuid
 		}
 		return tx.CreateInBatches(chunks, 50).Error
 	})
+}
+
+func validateChunkOwnership(tx *gorm.DB, chunks []model.DocumentChunk) error {
+	if len(chunks) == 0 {
+		return nil
+	}
+
+	documentIDs := make([]uuid.UUID, 0, len(chunks))
+	seen := make(map[uuid.UUID]struct{}, len(chunks))
+	for _, chunk := range chunks {
+		if _, ok := seen[chunk.DocumentID]; ok {
+			continue
+		}
+		seen[chunk.DocumentID] = struct{}{}
+		documentIDs = append(documentIDs, chunk.DocumentID)
+	}
+
+	type documentOwnership struct {
+		ID              uuid.UUID
+		KnowledgeBaseID uuid.UUID
+	}
+	var documents []documentOwnership
+	if err := tx.Model(&model.Document{}).
+		Select("id", "knowledge_base_id").
+		Where("id IN ?", documentIDs).
+		Find(&documents).Error; err != nil {
+		return err
+	}
+	owners := make(map[uuid.UUID]uuid.UUID, len(documents))
+	for _, document := range documents {
+		owners[document.ID] = document.KnowledgeBaseID
+	}
+	for index, chunk := range chunks {
+		knowledgeBaseID, ok := owners[chunk.DocumentID]
+		if !ok {
+			return fmt.Errorf("chunk %d references missing document %s", index, chunk.DocumentID)
+		}
+		if chunk.KnowledgeBaseID != knowledgeBaseID {
+			return fmt.Errorf("chunk %d knowledge base %s does not match document %s knowledge base %s", index, chunk.KnowledgeBaseID, chunk.DocumentID, knowledgeBaseID)
+		}
+	}
+	return nil
 }
 
 func (r *ChunkRepository) ListByDocument(ctx context.Context, documentID uuid.UUID) ([]model.DocumentChunk, error) {
@@ -111,6 +161,7 @@ func (r *ChunkRepository) SearchByVector(ctx context.Context, kbID uuid.UUID, ve
 		`, pgvector.NewVector(vector)).
 		Joins("JOIN documents ON documents.id = document_chunks.document_id").
 		Where("document_chunks.knowledge_base_id = ?", kbID).
+		Where("documents.knowledge_base_id = ?", kbID).
 		Where("documents.deleted_at IS NULL").
 		Order(clause.Expr{SQL: "document_chunks.embedding <=> ?", Vars: []any{pgvector.NewVector(vector)}}).
 		Limit(limit).
