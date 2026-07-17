@@ -56,7 +56,7 @@ At minimum, configure:
 
 - `DATABASE_URL`
 - `REDIS_ADDR`
-- `JWT_SECRET`（至少 32 字节，并替换 `.env.example` 中的占位值）
+- `JWT_SECRET`（使用密码学安全随机源生成至少 32 字节，并替换 `.env.example` 中的占位值）
 - `CHAT_BASE_URL`, `CHAT_API_KEY`, `CHAT_MODEL`
 - `TITLE_BASE_URL`, `TITLE_API_KEY`, `TITLE_MODEL`
 - `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`

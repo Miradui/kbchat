@@ -2,7 +2,6 @@ package config
 
 import (
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/joho/godotenv"
@@ -38,9 +37,9 @@ func TestValidateJWTSecretRejectsUnsafeValues(t *testing.T) {
 	}
 }
 
-func TestValidateJWTSecretAcceptsLongRandomValue(t *testing.T) {
-	if err := ValidateJWTSecret(strings.Repeat("a1", 24)); err != nil {
-		t.Fatalf("expected long JWT secret to be accepted: %v", err)
+func TestValidateJWTSecretAcceptsSufficientLength(t *testing.T) {
+	if err := ValidateJWTSecret("unit-test-secret-with-at-least-32-bytes"); err != nil {
+		t.Fatalf("expected sufficiently long JWT secret to be accepted: %v", err)
 	}
 }
 

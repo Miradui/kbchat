@@ -47,7 +47,7 @@ func ParseToken(cfg config.Config, tokenString string) (*Claims, error) {
 			return nil, fmt.Errorf("unexpected signing method")
 		}
 		return secret, nil
-	})
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 	if err != nil {
 		return nil, err
 	}
