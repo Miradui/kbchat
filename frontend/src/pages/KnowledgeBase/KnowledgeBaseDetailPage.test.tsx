@@ -224,6 +224,40 @@ describe('KnowledgeBaseDetailPage loading', () => {
     expect(screen.queryByRole('heading', { name: '知识库 A' })).not.toBeInTheDocument();
     expect(screen.getByText('B Owner')).toBeInTheDocument();
   });
+
+  it('does not navigate to a chat created for the previous knowledge base', async () => {
+    const staleChat = deferred<{ id: string }>();
+    api.getKnowledgeBase.mockImplementation((id: string) => Promise.resolve(knowledgeBaseFixture(
+      id,
+      id === 'kb-a' ? '知识库 A' : '知识库 B',
+    )));
+    api.getKnowledgeBasePermissions.mockImplementation((id: string) => Promise.resolve(permissionFixture(
+      id,
+      id === 'kb-a' ? 'A Owner' : 'B Owner',
+    )));
+    api.createChatSession.mockReturnValue(staleChat.promise);
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <>
+        <KnowledgeBaseNavigation />
+        <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>
+      </>,
+      ['/knowledge-bases/kb-a'],
+    );
+
+    expect(await screen.findByRole('heading', { name: '知识库 A' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '开始问答' }));
+    expect(api.createChatSession).toHaveBeenCalledWith('kb-a', '知识库 A 问答');
+
+    await user.click(screen.getByRole('button', { name: '切换到知识库 B' }));
+    expect(await screen.findByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '开始问答' })).toBeEnabled();
+
+    await act(async () => staleChat.resolve({ id: 'chat-for-kb-a' }));
+
+    expect(screen.getByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
+  });
 });
 
 function KnowledgeBaseNavigation() {

@@ -109,6 +109,7 @@ export function KnowledgeBaseDetailPage() {
     setSearchResults([]);
     setSearchFallback(null);
     setSearchDebug(null);
+    setStartingChat(false);
     setSavingVisibility(false);
     setMemberWorkingId(null);
     setMemberQuery('');
@@ -150,16 +151,24 @@ export function KnowledgeBaseDetailPage() {
       return;
     }
 
+    const targetKnowledgeBaseId = knowledgeBase.id;
     setStartingChat(true);
     setError('');
 
     try {
-      const session = await createChatSession(knowledgeBase.id, `${knowledgeBase.name} 问答`);
+      const session = await createChatSession(targetKnowledgeBaseId, `${knowledgeBase.name} 问答`);
+      if (activeKnowledgeBaseIdRef.current !== targetKnowledgeBaseId) {
+        return;
+      }
       navigate(`/chat/${session.id}`);
     } catch (err) {
-      setError(errorMessage(err, '会话创建失败'));
+      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+        setError(errorMessage(err, '会话创建失败'));
+      }
     } finally {
-      setStartingChat(false);
+      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+        setStartingChat(false);
+      }
     }
   }
 
