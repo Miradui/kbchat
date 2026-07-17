@@ -55,3 +55,28 @@ func TestCORSAlwaysVariesByOrigin(t *testing.T) {
 		})
 	}
 }
+
+func TestCORSPreservesOriginVaryOnRecoveredPanic(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(gin.Recovery())
+	router.Use(CORS([]string{"https://ui.example.test"}))
+	router.GET("/resource", func(c *gin.Context) {
+		c.Header("Vary", "Accept-Encoding")
+		panic("boom")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/resource", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	response := rec.Result()
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, response.StatusCode)
+	}
+	if vary := response.Header.Values("Vary"); !slices.Contains(vary, "Origin") {
+		t.Fatalf("expected Vary to include Origin, got %q", vary)
+	}
+}
