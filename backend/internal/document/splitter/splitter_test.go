@@ -83,16 +83,27 @@ func TestSplitPreservesEmptyHeadingBeforeSibling(t *testing.T) {
 }
 
 func TestSplitPreservesEmptyHeadingUnderTinyBudget(t *testing.T) {
-	chunks := New(1, 0).Split("# abcdefgh")
+	text := "# abcdefgh"
+	chunks := New(1, 0).Split(text)
 
 	var content strings.Builder
-	for _, chunk := range chunks {
+	previousEnd := 2
+	for index, chunk := range chunks {
 		if chunk.Content == "" || chunk.TokenCount > 1 {
 			t.Fatalf("expected non-empty heading chunks within budget, got %#v", chunks)
 		}
 		if chunk.Metadata["structureType"] != "heading" {
 			t.Fatalf("expected heading structure metadata, got %#v", chunk.Metadata)
 		}
+		start, startOK := chunk.Metadata["startOffset"].(int)
+		end, endOK := chunk.Metadata["endOffset"].(int)
+		if !startOK || !endOK || start != previousEnd || end <= start || end > len(text) {
+			t.Fatalf("expected monotonic heading source range at %d, got %#v", index, chunk.Metadata)
+		}
+		if text[start:end] != chunk.Content {
+			t.Fatalf("expected heading chunk %q to map to its source range %q", chunk.Content, text[start:end])
+		}
+		previousEnd = end
 		content.WriteString(chunk.Content)
 	}
 	if content.String() != "abcdefgh" {
@@ -101,15 +112,21 @@ func TestSplitPreservesEmptyHeadingUnderTinyBudget(t *testing.T) {
 }
 
 func TestSplitPreservesNestedLeafHeadingUnderTinyBudget(t *testing.T) {
-	chunks := New(1, 0).Split("# A\n## B")
+	text := "# A\n## B"
+	chunks := New(1, 0).Split(text)
 
 	var foundLeaf bool
 	for _, chunk := range chunks {
-		if chunk.Content != "B" {
+		path, ok := chunk.Metadata["headingPath"].([]string)
+		if !ok || strings.Join(path, " > ") != "A > B" {
 			continue
 		}
-		path, ok := chunk.Metadata["headingPath"].([]string)
-		if ok && strings.Join(path, " > ") == "A > B" {
+		start, startOK := chunk.Metadata["startOffset"].(int)
+		end, endOK := chunk.Metadata["endOffset"].(int)
+		if !startOK || !endOK || start < 0 || end <= start || end > len(text) || text[start:end] != chunk.Content {
+			t.Fatalf("expected nested leaf fragment to map to its title source, got %#v", chunk)
+		}
+		if chunk.Content == "B" {
 			foundLeaf = true
 		}
 	}

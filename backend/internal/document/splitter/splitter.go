@@ -164,18 +164,10 @@ func (s *Splitter) splitOversizeBlock(item block) []block {
 }
 
 func splitOversizeHeadingBlock(item block, budget int) []block {
-	spans := splitTextToBudgetSpans(item.content, budget)
-	result := make([]block, 0, len(spans))
-	for _, span := range spans {
-		part := item.content[span.start:span.end]
-		if strings.TrimSpace(part) == "" {
-			continue
-		}
-		partItem := item
-		partItem.content = part
-		result = append(result, partItem)
+	if len(item.headingPath) > 0 {
+		item.content = item.headingPath[len(item.headingPath)-1]
 	}
-	return result
+	return blocksFromSpans(item, splitTextToBudgetSpans(item.content, budget), nil)
 }
 
 func blocksFromSpans(item block, spans []textSpan, decorate func(string) string) []block {
@@ -426,8 +418,9 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 				}
 				headingPath = updateHeadingPath(headingPath, level, title)
 				lastHeadingLevel = level
-				lastHeadingStart = lineStart
-				lastHeadingEnd = lineEnd
+				titleSpan := headingTitleTextSpan(raw, level, title)
+				lastHeadingStart = lineStart + titleSpan.start
+				lastHeadingEnd = lineStart + titleSpan.end
 				contentAfterHeading = false
 				continue
 			}
@@ -505,6 +498,17 @@ func parseHeading(line string) (int, string, bool) {
 		return 0, "", false
 	}
 	return level, title, true
+}
+
+func headingTitleTextSpan(line string, level int, title string) textSpan {
+	markerStart := len(line) - len(strings.TrimLeftFunc(line, unicode.IsSpace))
+	searchStart := markerStart + level
+	relativeStart := strings.Index(line[searchStart:], title)
+	if relativeStart < 0 {
+		return textSpan{start: markerStart, end: len(line)}
+	}
+	start := searchStart + relativeStart
+	return textSpan{start: start, end: start + len(title)}
 }
 
 func updateHeadingPath(path []string, level int, title string) []string {
