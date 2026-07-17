@@ -52,6 +52,7 @@ export function KnowledgeBaseDetailPage() {
   const activeKnowledgeBaseIdRef = useRef(id);
   const pageLoadRequestIdRef = useRef(0);
   const searchRequestIdRef = useRef(0);
+  const userSearchRequestIdRef = useRef(0);
   activeKnowledgeBaseIdRef.current = id;
   const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeBase | null>(null);
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
@@ -103,6 +104,7 @@ export function KnowledgeBaseDetailPage() {
 
   useEffect(() => {
     searchRequestIdRef.current += 1;
+    userSearchRequestIdRef.current += 1;
     const requestId = pageLoadRequestIdRef.current + 1;
     pageLoadRequestIdRef.current = requestId;
     setSearching(false);
@@ -218,23 +220,36 @@ export function KnowledgeBaseDetailPage() {
 
   async function handleUserSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const requestId = userSearchRequestIdRef.current + 1;
+    userSearchRequestIdRef.current = requestId;
     const query = memberQuery.trim();
-    if (!query) {
+    if (!query || !knowledgeBase) {
       setUserResults([]);
       return;
     }
 
+    const targetKnowledgeBaseId = knowledgeBase.id;
+    const isCurrentRequest = () => (
+      userSearchRequestIdRef.current === requestId
+      && activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId
+    );
     setSearchingUsers(true);
     setError('');
 
     try {
       const response = await searchUsers(query);
-      setUserResults(response.items);
+      if (isCurrentRequest()) {
+        setUserResults(response.items);
+      }
     } catch (err) {
-      setError(errorMessage(err, '用户搜索失败'));
-      setUserResults([]);
+      if (isCurrentRequest()) {
+        setError(errorMessage(err, '用户搜索失败'));
+        setUserResults([]);
+      }
     } finally {
-      setSearchingUsers(false);
+      if (isCurrentRequest()) {
+        setSearchingUsers(false);
+      }
     }
   }
 

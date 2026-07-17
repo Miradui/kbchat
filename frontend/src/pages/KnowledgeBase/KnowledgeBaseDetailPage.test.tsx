@@ -258,6 +258,42 @@ describe('KnowledgeBaseDetailPage loading', () => {
 
     expect(screen.getByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
   });
+
+  it('ignores user search results from the previous knowledge base', async () => {
+    const staleUserSearch = deferred<{ items: Array<{ id: string; username: string; displayName: string }> }>();
+    api.getKnowledgeBase.mockImplementation((id: string) => Promise.resolve(knowledgeBaseFixture(
+      id,
+      id === 'kb-a' ? '知识库 A' : '知识库 B',
+    )));
+    api.getKnowledgeBasePermissions.mockImplementation((id: string) => Promise.resolve(permissionFixture(
+      id,
+      id === 'kb-a' ? 'A Owner' : 'B Owner',
+    )));
+    api.searchUsers.mockReturnValue(staleUserSearch.promise);
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <>
+        <KnowledgeBaseNavigation />
+        <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>
+      </>,
+      ['/knowledge-bases/kb-a'],
+    );
+
+    expect(await screen.findByRole('heading', { name: '知识库 A' })).toBeInTheDocument();
+    await user.type(screen.getByLabelText('搜索用户'), 'stale-member');
+    await user.click(screen.getByRole('button', { name: '搜索' }));
+
+    await user.click(screen.getByRole('button', { name: '切换到知识库 B' }));
+    expect(await screen.findByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
+
+    await act(async () => staleUserSearch.resolve({
+      items: [{ id: 'stale-user', username: 'stale-member', displayName: 'A 的搜索结果' }],
+    }));
+
+    expect(screen.queryByText('A 的搜索结果')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
+  });
 });
 
 function KnowledgeBaseNavigation() {
