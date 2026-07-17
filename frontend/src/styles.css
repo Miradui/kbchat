@@ -2793,6 +2793,31 @@ textarea {
   padding-top: 9px;
 }
 
+.citation-summary-button {
+  background: transparent;
+  border-bottom: 0;
+  border-left: 0;
+  border-radius: 0;
+  border-right: 0;
+  justify-content: flex-start;
+  line-height: 1.5;
+  min-height: 44px;
+  padding: 9px 0 0;
+  text-align: left;
+  width: 100%;
+}
+
+.citation-summary-button:hover {
+  background: transparent;
+  border-color: #9db6df;
+  color: var(--primary-strong);
+}
+
+.message-bubble.assistant.is-citation-active {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary);
+}
+
 .message-actions {
   display: flex;
   justify-content: flex-end;

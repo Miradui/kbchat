@@ -83,6 +83,67 @@ beforeEach(() => {
 });
 
 describe('ChatPage RAG actions', () => {
+  it('switches citation details between assistant messages', async () => {
+    const messagesWithCitations = [
+      messages[0],
+      {
+        ...messages[1],
+        content: '第一条回答',
+        citations: [{
+          documentId: 'document-old',
+          chunkId: 'chunk-old',
+          filename: '旧制度.md',
+          pageNumber: 2,
+          content: '旧制度正文',
+          vectorScore: 0.81,
+          rerankScore: 0.91,
+        }],
+      },
+      { ...messages[0], id: 'user-2', content: '第二个问题', createdAt: '2026-07-01T00:00:02Z' },
+      {
+        ...messages[1],
+        id: 'assistant-2',
+        content: '第二条回答',
+        createdAt: '2026-07-01T00:00:03Z',
+        citations: [{
+          documentId: 'document-new',
+          chunkId: 'chunk-new',
+          filename: '新制度.pdf',
+          pageNumber: null,
+          content: '新制度正文',
+          vectorScore: 0.72,
+          rerankScore: null,
+        }],
+      },
+    ];
+    api.listChatMessages.mockResolvedValue({ items: messagesWithCitations });
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText('第二条回答');
+    expect(screen.getByText(/新制度\.pdf/)).toBeInTheDocument();
+    expect(screen.getByText('无页码')).toBeInTheDocument();
+    expect(screen.getByText('新制度正文')).toBeInTheDocument();
+    expect(screen.getByText('vector 0.72')).toBeInTheDocument();
+    expect(screen.getByText('rerank 未精排')).toBeInTheDocument();
+    expect(screen.queryByText(/旧制度\.md/)).not.toBeInTheDocument();
+
+    const firstAnswerCitations = screen.getByRole('button', { name: '查看回答“第一条回答”的引用' });
+    await user.click(firstAnswerCitations);
+
+    expect(firstAnswerCitations).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText(/旧制度\.md/)).toBeInTheDocument();
+    expect(screen.getByText('p.2')).toBeInTheDocument();
+    expect(screen.getByText('旧制度正文')).toBeInTheDocument();
+    expect(screen.getByText('vector 0.81')).toBeInTheDocument();
+    expect(screen.getByText('rerank 0.91')).toBeInTheDocument();
+    expect(screen.queryByText(/新制度\.pdf/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '查看回答“第二条回答”的引用' }));
+    expect(screen.getByText(/新制度\.pdf/)).toBeInTheDocument();
+    expect(screen.queryByText(/旧制度\.md/)).not.toBeInTheDocument();
+  });
+
   it('shows a sanitized fallback notice after sending a message', async () => {
     api.sendChatMessage.mockResolvedValue({
       answer: '降级回答',

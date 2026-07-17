@@ -51,6 +51,7 @@ export function ChatPage() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [selectedCitationMessageId, setSelectedCitationMessageId] = useState<string | null>(null);
   const [currentSessionDetail, setCurrentSessionDetail] = useState<ChatSession | null>(null);
   const [draft, setDraft] = useState('');
   const [titleDraft, setTitleDraft] = useState('');
@@ -107,6 +108,7 @@ export function ChatPage() {
     setSending(false);
     setPendingQuestion('');
     setRegeneratingMessageId(null);
+    setSelectedCitationMessageId(null);
 
     if (!sessionId) {
       return;
@@ -162,16 +164,18 @@ export function ChatPage() {
     return sessions.filter((session) => session.knowledgeBaseId === currentKnowledgeBase.id);
   }, [currentKnowledgeBase, sessions]);
 
-  const activeCitations = useMemo(() => {
-    const lastAssistant = [...messages]
+  const latestAssistantMessage = useMemo(
+    () => [...messages]
       .reverse()
-      .find((message) => message.role === 'assistant');
-    return lastAssistant?.citations ?? [];
-  }, [messages]);
-  const latestAssistantMessageId = useMemo(
-    () => [...messages].reverse().find((message) => message.role === 'assistant')?.id ?? null,
+      .find((message) => message.role === 'assistant') ?? null,
     [messages],
   );
+  const selectedCitationMessage = messages.find(
+    (message) => message.id === selectedCitationMessageId && message.role === 'assistant',
+  );
+  const activeCitationMessage = selectedCitationMessage ?? latestAssistantMessage;
+  const activeCitations = activeCitationMessage?.citations ?? [];
+  const latestAssistantMessageId = latestAssistantMessage?.id ?? null;
 
   const questionCount = messages.filter((message) => message.role === 'user').length;
   const citationCount = messages.reduce((sum, message) => sum + message.citations.length, 0);
@@ -307,6 +311,7 @@ export function ChatPage() {
         return;
       }
       setMessages(messageResponse.items);
+      setSelectedCitationMessageId(null);
       setSessions(sessionResponse.items);
     } catch (err) {
       if (isCurrentMessageOperation(operationId, targetSessionId)) {
@@ -344,6 +349,7 @@ export function ChatPage() {
         return;
       }
       setMessages(messageResponse.items);
+      setSelectedCitationMessageId(null);
     } catch (err) {
       if (isCurrentMessageOperation(operationId, targetSessionId)) {
         setError(errorMessage(err, '重新生成回答失败'));
@@ -502,6 +508,8 @@ export function ChatPage() {
                 <MessageBubble
                   key={message.id}
                   message={message}
+                  citationsSelected={message.id === activeCitationMessage?.id}
+                  onSelectCitations={setSelectedCitationMessageId}
                   onRegenerate={message.id === latestAssistantMessageId && !archived ? handleRegenerateMessage : undefined}
                   regenerating={regeneratingMessageId === message.id}
                   regenerationDisabled={sending || regeneratingMessageId !== null}
@@ -544,7 +552,7 @@ export function ChatPage() {
             <p className="muted-text">仅展示后端返回的 citations。</p>
           </div>
 
-          <div className="citation-list">
+          <div className="citation-list" id="chat-citation-list">
             {activeCitations.length === 0 ? (
               <div className="empty-state">当前知识库中未找到足够依据。</div>
             ) : (
@@ -590,11 +598,15 @@ function mergeSession(sessions: ChatSession[], nextSession: ChatSession): ChatSe
 
 function MessageBubble({
   message,
+  citationsSelected = false,
+  onSelectCitations,
   onRegenerate,
   regenerating = false,
   regenerationDisabled = false,
 }: {
   message: ChatMessage;
+  citationsSelected?: boolean;
+  onSelectCitations?: (messageId: string) => void;
   onRegenerate?: (messageId: string) => void;
   regenerating?: boolean;
   regenerationDisabled?: boolean;
@@ -603,12 +615,28 @@ function MessageBubble({
     message.citations.length > 0
       ? `引用 ${message.citations.length} 条 · 最高 rerankScore ${formatNullableScore(highestRerankScore(message.citations))}`
       : '当前知识库中未找到足够依据。';
+  const messageClassName = [
+    'message-bubble',
+    message.role === 'assistant' ? 'assistant' : 'user',
+    message.role === 'assistant' && citationsSelected ? 'is-citation-active' : '',
+  ].filter(Boolean).join(' ');
 
   return (
-    <article className={message.role === 'assistant' ? 'message-bubble assistant' : 'message-bubble user'}>
+    <article className={messageClassName}>
       <span className="message-role">{message.role === 'assistant' ? 'Assistant' : 'User'}</span>
       <p>{message.content}</p>
-      {message.role === 'assistant' && <div className="citation-summary">{citationSummary}</div>}
+      {message.role === 'assistant' && (
+        <button
+          aria-controls="chat-citation-list"
+          aria-label={`查看回答“${citationLabel(message.content)}”的引用`}
+          aria-pressed={citationsSelected}
+          className="citation-summary citation-summary-button"
+          onClick={() => onSelectCitations?.(message.id)}
+          type="button"
+        >
+          {citationSummary}
+        </button>
+      )}
       {message.role === 'assistant' && onRegenerate && (
         <div className="message-actions">
           <button
@@ -623,6 +651,11 @@ function MessageBubble({
       )}
     </article>
   );
+}
+
+function citationLabel(content: string): string {
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  return normalized ? normalized.slice(0, 40) : '该回答';
 }
 
 function CitationCard({ citation, index }: { citation: Citation; index: number }) {
