@@ -461,6 +461,22 @@ func TestSplitOversizeFencedCodePreservesBlankLines(t *testing.T) {
 	}
 }
 
+func TestSplitFencedCodeTinyBudgetKeepsBodyWithoutUnbalancedFences(t *testing.T) {
+	text := "```\na\n```"
+	chunks := New(1, 0).Split(text)
+
+	if len(chunks) != 1 {
+		t.Fatalf("expected one body-only code chunk, got %#v", chunks)
+	}
+	chunk := chunks[0]
+	if chunk.Content != "a" || chunk.TokenCount > 1 || chunk.Metadata["structureType"] != "code" {
+		t.Fatalf("expected body-only code chunk within budget, got %#v", chunk)
+	}
+	if chunk.Metadata["startOffset"] != 4 || chunk.Metadata["endOffset"] != 5 {
+		t.Fatalf("expected body-only source offsets, got %#v", chunk.Metadata)
+	}
+}
+
 func TestSplitRepeatsHeaderOnOversizeMarkdownTables(t *testing.T) {
 	lines := []string{
 		"| Name | Value |",

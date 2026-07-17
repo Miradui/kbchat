@@ -739,9 +739,13 @@ func splitOversizeCodeBlock(item block, budget int) []block {
 		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
 	}
 	bodyContent := item.content[bodyStart:bodyEnd]
-	bodyBudget := budget - estimateTokens(opening+"\n"+closing)
-	if bodyContent == "" || bodyBudget < 1 {
+	if bodyContent == "" {
 		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
+	}
+	bodyBudget := budget - estimateTokens(opening+"\n"+closing)
+	if bodyBudget < 1 {
+		spans := offsetTextSpans(splitCodeBodyToBudgetSpans(bodyContent, budget), bodyStart)
+		return blocksFromSpans(item, spans, nil)
 	}
 
 	relativeSpans := splitCodeBodyToBudgetSpans(bodyContent, bodyBudget)
