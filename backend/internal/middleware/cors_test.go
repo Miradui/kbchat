@@ -26,8 +26,8 @@ func TestCORSAlwaysVariesByOrigin(t *testing.T) {
 			router := gin.New()
 			router.Use(CORS([]string{"https://ui.example.test"}))
 			router.GET("/resource", func(c *gin.Context) {
-				c.Writer.Header().Add("Vary", "Accept-Encoding")
-				c.Status(http.StatusNoContent)
+				c.Header("Vary", "Accept-Encoding")
+				c.String(http.StatusOK, "ok")
 			})
 
 			req := httptest.NewRequest(http.MethodGet, "/resource", nil)
@@ -38,14 +38,16 @@ func TestCORSAlwaysVariesByOrigin(t *testing.T) {
 
 			router.ServeHTTP(rec, req)
 
-			vary := rec.Header().Values("Vary")
+			response := rec.Result()
+			defer response.Body.Close()
+			vary := response.Header.Values("Vary")
 			if !slices.Contains(vary, "Origin") {
 				t.Fatalf("expected Vary to include Origin, got %q", vary)
 			}
 			if !slices.Contains(vary, "Accept-Encoding") {
 				t.Fatalf("expected Vary to preserve Accept-Encoding, got %q", vary)
 			}
-			if got := rec.Header().Get("Access-Control-Allow-Origin"); tt.expectedAllow && got != tt.origin {
+			if got := response.Header.Get("Access-Control-Allow-Origin"); tt.expectedAllow && got != tt.origin {
 				t.Fatalf("expected allowed origin %q, got %q", tt.origin, got)
 			} else if !tt.expectedAllow && got != "" {
 				t.Fatalf("expected no allowed origin, got %q", got)

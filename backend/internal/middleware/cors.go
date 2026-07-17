@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"bufio"
+	"net"
 	"net/http"
 	"strings"
 
@@ -24,10 +26,13 @@ func CORS(allowedOrigins []string) gin.HandlerFunc {
 	}
 
 	return func(c *gin.Context) {
-		c.Writer.Header().Add("Vary", "Origin")
+		writer := &varyOriginWriter{ResponseWriter: c.Writer}
+		c.Writer = writer
+		writer.ensureVaryOrigin()
 		origin := c.GetHeader("Origin")
 		if _, ok := allowed[origin]; !ok {
 			c.Next()
+			writer.ensureVaryOrigin()
 			return
 		}
 
@@ -39,5 +44,46 @@ func CORS(allowedOrigins []string) gin.HandlerFunc {
 			return
 		}
 		c.Next()
+		writer.ensureVaryOrigin()
 	}
+}
+
+type varyOriginWriter struct {
+	gin.ResponseWriter
+}
+
+func (w *varyOriginWriter) Write(data []byte) (int, error) {
+	w.ensureVaryOrigin()
+	return w.ResponseWriter.Write(data)
+}
+
+func (w *varyOriginWriter) WriteString(data string) (int, error) {
+	w.ensureVaryOrigin()
+	return w.ResponseWriter.WriteString(data)
+}
+
+func (w *varyOriginWriter) WriteHeaderNow() {
+	w.ensureVaryOrigin()
+	w.ResponseWriter.WriteHeaderNow()
+}
+
+func (w *varyOriginWriter) Flush() {
+	w.ensureVaryOrigin()
+	w.ResponseWriter.Flush()
+}
+
+func (w *varyOriginWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	w.ensureVaryOrigin()
+	return w.ResponseWriter.Hijack()
+}
+
+func (w *varyOriginWriter) ensureVaryOrigin() {
+	for _, value := range w.Header().Values("Vary") {
+		for _, field := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(field), "Origin") {
+				return
+			}
+		}
+	}
+	w.Header().Add("Vary", "Origin")
 }
