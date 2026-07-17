@@ -2,6 +2,8 @@ package config
 
 import (
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/joho/godotenv"
@@ -40,6 +42,34 @@ func TestValidateJWTSecretRejectsUnsafeValues(t *testing.T) {
 func TestValidateJWTSecretAcceptsSufficientLength(t *testing.T) {
 	if err := ValidateJWTSecret("unit-test-secret-with-at-least-32-bytes"); err != nil {
 		t.Fatalf("expected sufficiently long JWT secret to be accepted: %v", err)
+	}
+}
+
+func TestConfigValidateRejectsUnsafeMaxUploadSize(t *testing.T) {
+	tests := []struct {
+		name  string
+		value int
+	}{
+		{name: "zero", value: 0},
+		{name: "negative", value: -1},
+	}
+	if strconv.IntSize == 64 {
+		tests = append(tests, struct {
+			name  string
+			value int
+		}{name: "byte conversion overflow", value: int(^uint(0) >> 1)})
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := (Config{
+				JWTSecret:       "unit-test-secret-with-at-least-32-bytes",
+				MaxUploadSizeMB: tt.value,
+			}).Validate()
+			if err == nil || !strings.Contains(err.Error(), "MAX_UPLOAD_SIZE_MB") {
+				t.Fatalf("expected MAX_UPLOAD_SIZE_MB validation error, got %v", err)
+			}
+		})
 	}
 }
 

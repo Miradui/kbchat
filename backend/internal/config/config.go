@@ -40,6 +40,9 @@ const (
 	defaultWorkerMaxRetries   = 3
 	defaultWorkerRetryDelay   = 10 * time.Second
 	minJWTSecretBytes         = 32
+	bytesPerMiB               = int64(1024 * 1024)
+	uploadRequestOverhead     = bytesPerMiB
+	maxInt64Value             = int64(1<<63 - 1)
 )
 
 type Config struct {
@@ -121,7 +124,10 @@ func Load() Config {
 }
 
 func (c Config) Validate() error {
-	return ValidateJWTSecret(c.JWTSecret)
+	if err := ValidateJWTSecret(c.JWTSecret); err != nil {
+		return err
+	}
+	return validateMaxUploadSizeMB(c.MaxUploadSizeMB)
 }
 
 func ValidateJWTSecret(value string) error {
@@ -134,6 +140,17 @@ func ValidateJWTSecret(value string) error {
 	}
 	if len([]byte(secret)) < minJWTSecretBytes {
 		return fmt.Errorf("JWT_SECRET must be at least %d bytes", minJWTSecretBytes)
+	}
+	return nil
+}
+
+func validateMaxUploadSizeMB(value int) error {
+	if value <= 0 {
+		return fmt.Errorf("MAX_UPLOAD_SIZE_MB must be greater than zero")
+	}
+	maxSafeValue := (maxInt64Value - uploadRequestOverhead) / bytesPerMiB
+	if int64(value) > maxSafeValue {
+		return fmt.Errorf("MAX_UPLOAD_SIZE_MB is too large")
 	}
 	return nil
 }

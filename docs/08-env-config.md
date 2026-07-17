@@ -81,6 +81,7 @@ VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1
 | `RERANK_MODEL` | `rerank-model-name` | Rerank 模型 |
 | `RERANK_FAILURE_MODE` | `strict` | Rerank 失败策略：`strict` 返回 `RERANK_FAILED`；`fallback` 降级为 vector topK 并标记 `rerankFallback` |
 | `UPLOAD_DIR` | `./uploads` | 本地上传目录 |
+| `MAX_UPLOAD_SIZE_MB` | `50` | 单文件上传上限（MiB）；必须为正数，请求体另预留 1 MiB multipart 开销 |
 | `VECTOR_TOP_N` | `30` | 向量召回数量 |
 | `RERANK_TOP_K` | `5` | Rerank 后数量 |
 | `SCORE_THRESHOLD` | `0.3` | 最低相关分阈值 |
