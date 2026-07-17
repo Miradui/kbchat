@@ -19,7 +19,6 @@ import (
 	"rag/backend/internal/dto"
 	"rag/backend/internal/model"
 	"rag/backend/internal/repository"
-	"rag/backend/internal/storage"
 )
 
 const (
@@ -32,7 +31,12 @@ type DocumentService struct {
 	documents      *repository.DocumentRepository
 	chunks         *repository.ChunkRepository
 	knowledgeBases *repository.KnowledgeBaseRepository
-	storage        *storage.LocalStorage
+	storage        documentStorage
+}
+
+type documentStorage interface {
+	SaveKnowledgeBaseFile(kbID uuid.UUID, file *multipart.FileHeader) (string, error)
+	Delete(path string) error
 }
 
 func NewDocumentService(
@@ -40,7 +44,7 @@ func NewDocumentService(
 	documents *repository.DocumentRepository,
 	chunks *repository.ChunkRepository,
 	knowledgeBases *repository.KnowledgeBaseRepository,
-	storage *storage.LocalStorage,
+	storage documentStorage,
 ) *DocumentService {
 	return &DocumentService{
 		cfg:            cfg,
@@ -78,7 +82,9 @@ func (s *DocumentService) Upload(ctx context.Context, ownerID, kbID uuid.UUID, f
 		Status:  "pending",
 	}
 	if err := s.documents.CreateWithJob(ctx, document, job, ownerID); err != nil {
-		_ = s.storage.Delete(storagePath)
+		if cleanupErr := s.storage.Delete(storagePath); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("delete uploaded file: %w", cleanupErr))
+		}
 		return nil, apperror.Internal(err)
 	}
 

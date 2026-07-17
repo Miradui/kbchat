@@ -18,7 +18,7 @@
 -> status=completed
 ```
 
-上传文件先写入本地存储，再在单个数据库事务中创建 `documents`、`document_jobs` 并刷新知识库 `updatedAt/updatedBy`。任一数据库写入失败时事务必须全部回滚，并删除本次已保存的文件；API 不得在返回失败时留下可被 worker 领取的部分任务。
+上传文件先写入本地存储，再在单个数据库事务中创建 `documents`、`document_jobs` 并刷新知识库 `updatedAt/updatedBy`。任一数据库写入失败时事务必须全部回滚，并删除本次已保存的文件；API 不得在返回失败时留下可被 worker 领取的部分任务。若文件补偿删除本身失败，内部错误链必须同时保留数据库错误和清理错误，不能静默吞掉残留文件信号。
 
 失败时：
 

@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
+	"rag/backend/internal/apperror"
 	"rag/backend/internal/config"
 	"rag/backend/internal/dto"
 	"rag/backend/internal/model"
@@ -481,6 +483,47 @@ func TestKnowledgeBaseWorkspaceUploadRollsBackWhenTouchFails(t *testing.T) {
 	if len(files) != 0 {
 		t.Fatalf("expected uploaded file cleanup, got %v", files)
 	}
+}
+
+func TestKnowledgeBaseWorkspaceUploadReportsCleanupFailure(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "upload-cleanup-owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "upload-cleanup-kb", "private", time.Now())
+	if err := services.db.Exec(`
+		CREATE TRIGGER fail_upload_kb_touch
+		BEFORE UPDATE ON knowledge_bases
+		BEGIN
+			SELECT RAISE(FAIL, 'touch failed');
+		END
+	`).Error; err != nil {
+		t.Fatalf("create touch failure trigger: %v", err)
+	}
+	cleanupErr := errors.New("cleanup failed")
+	services.documents.storage = &failingCleanupStorage{
+		path:      filepath.Join(services.uploadRoot, "orphan.txt"),
+		deleteErr: cleanupErr,
+	}
+
+	file := createUploadFile(t, "cleanup.txt", "cleanup failure")
+	_, err := services.documents.Upload(ctx, owner.ID, kb.ID, file)
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || !errors.Is(appErr.Err, cleanupErr) {
+		t.Fatalf("expected cleanup failure in internal cause, got %#v", err)
+	}
+}
+
+type failingCleanupStorage struct {
+	path      string
+	deleteErr error
+}
+
+func (s *failingCleanupStorage) SaveKnowledgeBaseFile(uuid.UUID, *multipart.FileHeader) (string, error) {
+	return s.path, nil
+}
+
+func (s *failingCleanupStorage) Delete(string) error {
+	return s.deleteErr
 }
 
 func TestKnowledgeBaseMembersManageRolesAndPermissionsView(t *testing.T) {
