@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -11,6 +12,7 @@ import (
 const (
 	defaultAppEnv             = "development"
 	defaultServerPort         = "8080"
+	defaultCORSAllowedOrigins = "http://127.0.0.1:5173,http://localhost:5173"
 	defaultDatabaseURL        = "postgres://rag:rag@localhost:5432/rag?sslmode=disable"
 	defaultRedisAddr          = "localhost:6379"
 	defaultRedisDB            = 0
@@ -41,6 +43,7 @@ const (
 type Config struct {
 	AppEnv             string
 	ServerPort         string
+	CORSAllowedOrigins []string
 	DatabaseURL        string
 	RedisAddr          string
 	RedisPassword      string
@@ -80,6 +83,7 @@ func Load() Config {
 	return Config{
 		AppEnv:             getEnv("APP_ENV", defaultAppEnv),
 		ServerPort:         getEnv("SERVER_PORT", defaultServerPort),
+		CORSAllowedOrigins: splitCommaSeparated(getEnv("CORS_ALLOWED_ORIGINS", defaultCORSAllowedOrigins)),
 		DatabaseURL:        getEnv("DATABASE_URL", defaultDatabaseURL),
 		RedisAddr:          getEnv("REDIS_ADDR", defaultRedisAddr),
 		RedisPassword:      getEnv("REDIS_PASSWORD", ""),
@@ -112,6 +116,17 @@ func Load() Config {
 		WorkerMaxRetries:   getEnvInt("WORKER_MAX_RETRIES", defaultWorkerMaxRetries),
 		WorkerRetryDelay:   getEnvDuration("WORKER_RETRY_DELAY", defaultWorkerRetryDelay),
 	}
+}
+
+func splitCommaSeparated(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
 }
 
 func normalizeRerankFailureMode(value string) string {

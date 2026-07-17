@@ -105,6 +105,7 @@ If the frontend is served separately from the API, set:
 
 ```text
 VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1
+CORS_ALLOWED_ORIGINS=http://127.0.0.1:5173
 ```
 
 When using the Vite dev server with a proxy or same-origin API, the default `/api/v1` works.

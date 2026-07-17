@@ -46,6 +46,29 @@ func TestAPIHealthz(t *testing.T) {
 	}
 }
 
+func TestCORSAllowsConfiguredPreflightOrigin(t *testing.T) {
+	origin := "http://127.0.0.1:5173"
+	cfg := config.Config{AppEnv: "test", ServerPort: "0"}
+	r := New(cfg, testDB(t), logger.New(cfg))
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/auth/login", nil)
+	req.Header.Set("Origin", origin)
+	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	req.Header.Set("Access-Control-Request-Headers", "authorization,content-type")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected preflight status %d, got %d", http.StatusNoContent, rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != origin {
+		t.Fatalf("expected allowed origin %q, got %q", origin, got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Authorization, Content-Type" {
+		t.Fatalf("unexpected allowed headers %q", got)
+	}
+}
+
 func TestNewRerankProviderUsesOpenAICompatibleProviderWhenEnabled(t *testing.T) {
 	provider := newRerankProvider(config.Config{
 		RerankEnabled: true,

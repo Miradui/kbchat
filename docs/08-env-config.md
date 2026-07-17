@@ -7,6 +7,7 @@
 ```env
 APP_ENV=development
 SERVER_PORT=8080
+CORS_ALLOWED_ORIGINS=http://127.0.0.1:5173,http://localhost:5173
 
 DATABASE_URL=postgres://rag:rag@localhost:5432/rag?sslmode=disable
 REDIS_ADDR=localhost:6379
@@ -58,6 +59,7 @@ VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1
 | --- | --- | --- |
 | `APP_ENV` | `development` | 应用环境 |
 | `SERVER_PORT` | `8080` | Gin 服务端口 |
+| `CORS_ALLOWED_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173` | 允许跨域访问 API 的前端 Origin，多个值用逗号分隔 |
 | `DATABASE_URL` | 本地 PostgreSQL | 数据库连接 |
 | `REDIS_ADDR` | `localhost:6379` | Redis 地址 |
 | `JWT_SECRET` | 无 | JWT 签名密钥 |
