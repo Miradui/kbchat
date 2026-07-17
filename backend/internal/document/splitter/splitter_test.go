@@ -432,6 +432,35 @@ func TestSplitPreservesFencesOnOversizeMarkdownCodeBlocks(t *testing.T) {
 	}
 }
 
+func TestSplitOversizeFencedCodePreservesBlankLines(t *testing.T) {
+	const body = "a\n\nb"
+	text := "```\n" + body + "\n```"
+	chunks := New(3, 0).Split(text)
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected oversized code block to split, got %#v", chunks)
+	}
+	sourceParts := make([]string, 0, len(chunks))
+	for index, chunk := range chunks {
+		if chunk.Metadata["structureType"] != "code" || chunk.TokenCount > 3 {
+			t.Fatalf("unexpected code chunk %d: %#v", index, chunk)
+		}
+		start, startOK := chunk.Metadata["startOffset"].(int)
+		end, endOK := chunk.Metadata["endOffset"].(int)
+		if !startOK || !endOK || start < 0 || end <= start || end > len(text) {
+			t.Fatalf("invalid code source range at %d: %#v", index, chunk.Metadata)
+		}
+		part := text[start:end]
+		if !strings.Contains(chunk.Content, part) {
+			t.Fatalf("expected chunk %d to contain source part %q, got %q", index, part, chunk.Content)
+		}
+		sourceParts = append(sourceParts, part)
+	}
+	if got := strings.Join(sourceParts, ""); got != body {
+		t.Fatalf("expected code body %q, got %q from %#v", body, got, chunks)
+	}
+}
+
 func TestSplitRepeatsHeaderOnOversizeMarkdownTables(t *testing.T) {
 	lines := []string{
 		"| Name | Value |",

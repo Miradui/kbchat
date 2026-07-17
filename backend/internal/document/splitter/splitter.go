@@ -730,23 +730,57 @@ func splitOversizeCodeBlock(item block, budget int) []block {
 		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
 	}
 
-	bodyContent, body := trimTextSpan(item.content, lines[0].end, lines[len(lines)-1].start)
+	bodyStart := lines[0].end
+	if newline := strings.IndexByte(item.content[bodyStart:], '\n'); newline >= 0 {
+		bodyStart += newline + 1
+	}
+	bodyEnd := strings.LastIndex(item.content[:lines[len(lines)-1].start], "\n")
+	if bodyEnd < bodyStart {
+		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
+	}
+	bodyContent := item.content[bodyStart:bodyEnd]
 	bodyBudget := budget - estimateTokens(opening+"\n"+closing)
 	if bodyContent == "" || bodyBudget < 1 {
 		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
 	}
 
-	relativeSpans := splitLineAwareTextToBudgetSpans(bodyContent, bodyBudget)
+	relativeSpans := splitCodeBodyToBudgetSpans(bodyContent, bodyBudget)
 	spans := make([]textSpan, 0, len(relativeSpans))
 	for _, span := range relativeSpans {
 		spans = append(spans, textSpan{
-			start: body.start + span.start,
-			end:   body.start + span.end,
+			start: bodyStart + span.start,
+			end:   bodyStart + span.end,
 		})
 	}
 	return blocksFromSpans(item, spans, func(content string) string {
+		if strings.HasSuffix(content, "\n") {
+			return opening + "\n" + content + closing
+		}
 		return opening + "\n" + content + "\n" + closing
 	})
+}
+
+func splitCodeBodyToBudgetSpans(text string, budget int) []textSpan {
+	packed := splitLineAwareTextToBudgetSpans(text, budget)
+	if len(packed) == 0 {
+		return nil
+	}
+
+	spans := make([]textSpan, 0, len(packed))
+	start := 0
+	for index, span := range packed {
+		end := len(text)
+		if index+1 < len(packed) {
+			next := packed[index+1]
+			end = next.start
+			if newline := strings.LastIndex(text[span.end:next.start], "\n"); newline >= 0 {
+				end = span.end + newline + 1
+			}
+		}
+		spans = append(spans, textSpan{start: start, end: end})
+		start = end
+	}
+	return spans
 }
 
 func splitOversizeTableBlock(item block, budget int) []block {
