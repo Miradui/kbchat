@@ -1,6 +1,12 @@
 CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_id_kb_id
 ON documents (id, knowledge_base_id);
 
+UPDATE document_chunks AS chunks
+SET knowledge_base_id = documents.knowledge_base_id
+FROM documents
+WHERE documents.id = chunks.document_id
+  AND chunks.knowledge_base_id <> documents.knowledge_base_id;
+
 DO $$
 BEGIN
     IF NOT EXISTS (
