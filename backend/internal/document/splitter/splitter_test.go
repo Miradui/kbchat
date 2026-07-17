@@ -548,6 +548,26 @@ func TestSplitMarkdownListKeepsIndentedContinuationInListBlock(t *testing.T) {
 	}
 }
 
+func TestSplitOversizeListContinuationRepeatsIndent(t *testing.T) {
+	text := "- x\n  alpha beta gamma delta"
+	chunks := New(3, 0).Split(text)
+
+	if len(chunks) < 3 {
+		t.Fatalf("expected oversized continuation to split, got %#v", chunks)
+	}
+	for index, chunk := range chunks[1:] {
+		if chunk.Metadata["structureType"] != "list" || chunk.TokenCount > 3 {
+			t.Fatalf("unexpected continuation chunk %d: %#v", index, chunk)
+		}
+		if !strings.HasPrefix(chunk.Content, "  ") {
+			t.Fatalf("expected repeated continuation indent at %d, got %q", index, chunk.Content)
+		}
+	}
+	if chunks[1].Metadata["startOffset"] != len("- x\n") {
+		t.Fatalf("expected first continuation offset to include indentation, got %#v", chunks[1].Metadata)
+	}
+}
+
 func TestSplitRepeatsIndentedMarkerForOversizeNestedMarkdownListItem(t *testing.T) {
 	body := "alpha beta gamma delta epsilon zeta eta theta"
 	chunks := New(6, 0).Split("- parent\n  - " + body)

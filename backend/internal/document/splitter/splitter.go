@@ -655,18 +655,25 @@ func isListLine(line string) bool {
 }
 
 func isIndentedListContinuation(line string) bool {
+	_, ok := listContinuationIndent(line)
+	return ok
+}
+
+func listContinuationIndent(line string) (string, bool) {
 	indent := 0
-	for _, r := range line {
-		switch r {
+	end := 0
+	for end < len(line) {
+		switch line[end] {
 		case ' ':
 			indent++
 		case '\t':
 			indent += 4
 		default:
-			return indent >= 2
+			return line[:end], indent >= 2
 		}
+		end++
 	}
-	return false
+	return "", false
 }
 
 func splitOversizeListBlock(item block, budget int) []block {
@@ -690,6 +697,9 @@ func splitOversizeListBlock(item block, budget int) []block {
 
 		flushPending()
 		marker, ok := listMarker(content)
+		if !ok {
+			marker, ok = listContinuationIndent(content)
+		}
 		bodyContent, body := trimTextSpan(item.content, line.start+len(marker), line.end)
 		bodyBudget := budget - estimateTokens(marker)
 		if !ok || bodyContent == "" || bodyBudget < 1 {
