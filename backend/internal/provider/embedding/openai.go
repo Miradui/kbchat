@@ -93,13 +93,18 @@ func (p *OpenAICompatibleProvider) EmbedTexts(ctx context.Context, texts []strin
 	}
 
 	embeddings := make([][]float32, len(texts))
+	seen := make([]bool, len(texts))
 	for _, item := range result.Data {
 		if item.Index < 0 || item.Index >= len(embeddings) {
 			return nil, fmt.Errorf("embedding response index out of range: %d", item.Index)
 		}
+		if seen[item.Index] {
+			return nil, fmt.Errorf("embedding response contains duplicate index: %d", item.Index)
+		}
 		if len(item.Embedding) != p.dimension {
 			return nil, fmt.Errorf("embedding dimension mismatch: got %d want %d", len(item.Embedding), p.dimension)
 		}
+		seen[item.Index] = true
 		embeddings[item.Index] = item.Embedding
 	}
 
