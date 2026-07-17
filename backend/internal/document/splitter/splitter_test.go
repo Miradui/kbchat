@@ -477,21 +477,43 @@ func TestSplitFencedCodeTinyBudgetKeepsBodyWithoutUnbalancedFences(t *testing.T)
 	}
 }
 
-func TestSplitFencedCodeTinyBudgetDropsBlocksWithoutSearchableBody(t *testing.T) {
+func TestSplitFencedCodeDropsBlocksWithoutSearchableBodyAtEveryBudget(t *testing.T) {
 	tests := []struct {
 		name string
 		text string
 	}{
 		{name: "empty body", text: "```\n```"},
 		{name: "blank body", text: "```\n\n```"},
+		{name: "whitespace body with tilde info", text: "~~~text\n \t\n~~~"},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			chunks := New(1, 0).Split(tt.text)
+		for _, chunkSize := range []int{1, 2, 100} {
+			t.Run(fmt.Sprintf("%s/budget_%d", tt.name, chunkSize), func(t *testing.T) {
+				chunks := New(chunkSize, 0).Split(tt.text)
 
-			if len(chunks) != 0 {
-				t.Fatalf("expected no chunks for fenced code without searchable body, got %#v", chunks)
+				if len(chunks) != 0 {
+					t.Fatalf("expected no chunks for fenced code without searchable body, got %#v", chunks)
+				}
+			})
+		}
+	}
+}
+
+func TestSplitEmptyFencedCodeDoesNotHidePrecedingHeading(t *testing.T) {
+	text := "# H\n```\n```"
+	for _, chunkSize := range []int{1, 100} {
+		t.Run(fmt.Sprintf("budget_%d", chunkSize), func(t *testing.T) {
+			chunks := New(chunkSize, 0).Split(text)
+
+			if len(chunks) != 1 || chunks[0].Content != "H" {
+				t.Fatalf("expected the preceding heading to remain searchable, got %#v", chunks)
+			}
+			if chunks[0].Metadata["structureType"] != "heading" {
+				t.Fatalf("expected heading structure metadata, got %#v", chunks[0].Metadata)
+			}
+			if chunks[0].Metadata["startOffset"] != 2 || chunks[0].Metadata["endOffset"] != 3 {
+				t.Fatalf("expected heading source offsets, got %#v", chunks[0].Metadata)
 			}
 		})
 	}

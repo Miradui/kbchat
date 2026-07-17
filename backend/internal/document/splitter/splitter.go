@@ -443,6 +443,10 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 				}
 				content, contentSpan := trimTextSpan(text, codeStart, codeEnd)
 				if content != "" {
+					_, _, bodyContent, _, paired := fencedCodeParts(content)
+					if paired && strings.TrimSpace(bodyContent) == "" {
+						continue
+					}
 					blocks = append(blocks, block{
 						content:       content,
 						fileType:      fileType,
@@ -745,33 +749,16 @@ func listMarker(line string) (string, bool) {
 }
 
 func splitOversizeCodeBlock(item block, budget int) []block {
-	lines := lineTextSpans(item.content)
-	if len(lines) < 2 {
+	opening, closing, bodyContent, bodySpan, ok := fencedCodeParts(item.content)
+	if !ok {
 		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
 	}
-
-	opening := item.content[lines[0].start:lines[0].end]
-	fence, ok := parseFence(opening)
-	closing := item.content[lines[len(lines)-1].start:lines[len(lines)-1].end]
-	if !ok || !isClosingFence(closing, fence) {
-		return blocksFromSpans(item, splitLineAwareTextToBudgetSpans(item.content, budget), nil)
-	}
-
-	bodyStart := lines[0].end
-	if newline := strings.IndexByte(item.content[bodyStart:], '\n'); newline >= 0 {
-		bodyStart += newline + 1
-	}
-	bodyEnd := strings.LastIndex(item.content[:lines[len(lines)-1].start], "\n")
-	if bodyEnd < bodyStart {
-		return nil
-	}
-	bodyContent := item.content[bodyStart:bodyEnd]
 	if strings.TrimSpace(bodyContent) == "" {
 		return nil
 	}
 	bodyBudget := budget - estimateTokens(opening+"\n"+closing)
 	if bodyBudget < 1 {
-		spans := offsetTextSpans(splitCodeBodyToBudgetSpans(bodyContent, budget), bodyStart)
+		spans := offsetTextSpans(splitCodeBodyToBudgetSpans(bodyContent, budget), bodySpan.start)
 		return blocksFromSpans(item, spans, nil)
 	}
 
@@ -779,8 +766,8 @@ func splitOversizeCodeBlock(item block, budget int) []block {
 	spans := make([]textSpan, 0, len(relativeSpans))
 	for _, span := range relativeSpans {
 		spans = append(spans, textSpan{
-			start: bodyStart + span.start,
-			end:   bodyStart + span.end,
+			start: bodySpan.start + span.start,
+			end:   bodySpan.start + span.end,
 		})
 	}
 	return blocksFromSpans(item, spans, func(content string) string {
@@ -789,6 +776,31 @@ func splitOversizeCodeBlock(item block, budget int) []block {
 		}
 		return opening + "\n" + content + "\n" + closing
 	})
+}
+
+func fencedCodeParts(content string) (string, string, string, textSpan, bool) {
+	lines := lineTextSpans(content)
+	if len(lines) < 2 {
+		return "", "", "", textSpan{}, false
+	}
+
+	opening := content[lines[0].start:lines[0].end]
+	fence, ok := parseFence(opening)
+	closing := content[lines[len(lines)-1].start:lines[len(lines)-1].end]
+	if !ok || !isClosingFence(closing, fence) {
+		return "", "", "", textSpan{}, false
+	}
+
+	bodyStart := lines[0].end
+	if newline := strings.IndexByte(content[bodyStart:], '\n'); newline >= 0 {
+		bodyStart += newline + 1
+	}
+	bodyEnd := strings.LastIndex(content[:lines[len(lines)-1].start], "\n")
+	if bodyEnd < bodyStart {
+		bodyEnd = bodyStart
+	}
+	bodySpan := textSpan{start: bodyStart, end: bodyEnd}
+	return opening, closing, content[bodySpan.start:bodySpan.end], bodySpan, true
 }
 
 func splitCodeBodyToBudgetSpans(text string, budget int) []textSpan {
