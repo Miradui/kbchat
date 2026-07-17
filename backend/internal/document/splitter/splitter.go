@@ -761,10 +761,13 @@ func splitOversizeTableBlock(item block, budget int) []block {
 		emptyRow := formatMarkdownTableRow(make([]string, len(cells)))
 		cellBudget := bodyBudget - estimateTokens(emptyRow)
 		if len(cells) == 0 || cellBudget < 1 {
-			spans := offsetTextSpans(splitTextToBudgetSpans(rowContent, bodyBudget), row.start)
-			result = append(result, blocksFromSpans(item, spans, func(content string) string {
-				return header + "\n" + content
-			})...)
+			for _, part := range splitMarkdownTableCellToBudgetParts(rowContent, bodyBudget) {
+				span := textSpan{start: row.start + part.span.start, end: row.start + part.span.end}
+				partContent := part.content
+				result = append(result, blocksFromSpans(item, []textSpan{span}, func(string) string {
+					return header + "\n" + partContent
+				})...)
+			}
 			continue
 		}
 
