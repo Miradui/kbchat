@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"gorm.io/driver/sqlite"
@@ -47,8 +48,12 @@ func TestAPIHealthz(t *testing.T) {
 }
 
 func TestCORSAllowsConfiguredPreflightOrigin(t *testing.T) {
-	origin := "http://127.0.0.1:5173"
-	cfg := config.Config{AppEnv: "test", ServerPort: "0"}
+	origin := "https://ui.example.test"
+	cfg := config.Config{
+		AppEnv:             "test",
+		ServerPort:         "0",
+		CORSAllowedOrigins: []string{origin},
+	}
 	r := New(cfg, testDB(t), logger.New(cfg))
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/auth/login", nil)
@@ -66,6 +71,28 @@ func TestCORSAllowsConfiguredPreflightOrigin(t *testing.T) {
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Authorization, Content-Type" {
 		t.Fatalf("unexpected allowed headers %q", got)
+	}
+}
+
+func TestCORSRejectsOriginOutsideConfiguredAllowlist(t *testing.T) {
+	cfg := config.Config{
+		AppEnv:             "test",
+		ServerPort:         "0",
+		CORSAllowedOrigins: []string{"https://ui.example.test"},
+	}
+	r := New(cfg, testDB(t), logger.New(cfg))
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/auth/login", nil)
+	req.Header.Set("Origin", "http://127.0.0.1:5173")
+	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("expected no allowed origin, got %q", got)
+	}
+	if got := rec.Header().Values("Vary"); !slices.Contains(got, "Origin") {
+		t.Fatalf("expected Vary to include Origin, got %q", got)
 	}
 }
 
