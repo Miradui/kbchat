@@ -89,7 +89,7 @@ The document worker runs inside the backend server process. It is configured wit
 
 Different documents may run concurrently, but jobs for the same document are serialized. Reprocessing keeps the previous chunks until all new embeddings succeed and the replacement transaction commits.
 
-Rerank uses an OpenAI-compatible `/rerank` endpoint when `RERANK_ENABLED=true`. The backend posts `model`, `query`, and candidate chunk `documents`, then maps response `results[].index` and `relevance_score` or `score` back to chunk IDs. `RERANK_FAILURE_MODE=strict` is the default and returns `RERANK_FAILED`; `fallback` keeps vector order, leaves `rerankScore` empty, and marks `rerankFallback` in search responses.
+Rerank is enabled in `.env.example` and uses an OpenAI-compatible `/rerank` endpoint. The backend posts `model`, `query`, and candidate chunk `documents`, then maps response `results[].index` and `relevance_score` or `score` back to chunk IDs. `RERANK_FAILURE_MODE=strict` is the default and returns `RERANK_FAILED`; `fallback` keeps vector order, leaves `rerankScore` empty, and marks `rerankFallback` in search responses.
 
 ## Frontend
 
@@ -129,4 +129,4 @@ For API behavior, prefer real HTTP smoke tests against the local backend after m
 - API fields are camelCase; database fields are snake_case.
 - Knowledge-base data access must check ownership through `knowledge_bases.owner_id`.
 - Citations must come only from the final chunks included in the prompt.
-- Rerank is part of the standard RAG path when enabled; local development can set `RERANK_ENABLED=false` to use vector topK without rerank scores.
+- Rerank is part of the standard RAG path and is enabled by default; set `RERANK_ENABLED=false` only when explicitly testing the vector-only degradation path.

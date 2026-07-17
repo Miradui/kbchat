@@ -32,7 +32,7 @@ EMBEDDING_API_KEY=replace-with-embedding-api-key
 EMBEDDING_MODEL=text-embedding-3-small
 EMBEDDING_DIMENSION=1536
 
-RERANK_ENABLED=false
+RERANK_ENABLED=true
 RERANK_BASE_URL=https://api.openai.com/v1
 RERANK_API_KEY=replace-with-rerank-api-key
 RERANK_MODEL=rerank-model-name
@@ -138,6 +138,6 @@ fallback
 2. 不要提交真实 `.env`。
 3. 不要让配置默认绕过鉴权。
 4. 不要在未迁移数据库的情况下修改 embedding 维度。
-5. 程序默认 Rerank 开启；示例 `.env.example` 为方便本地启动设置为 `RERANK_ENABLED=false`，真实 RAG 验证应显式开启并配置 `RERANK_*`。
+5. 程序和 `.env.example` 默认开启 Rerank，标准 RAG 启动必须配置可用的 `RERANK_*`。仅在明确调试无 Rerank Provider 的向量降级路径时，才显式设置 `RERANK_ENABLED=false`。
 6. `CHAT_HISTORY_LIMIT` 不要设置过大，避免上下文成本失控；需要长记忆时应另行设计摘要机制。
 7. 会话标题摘要必须使用 `TITLE_*` 独立模型配置，不要复用 `CHAT_*`。
