@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
-import { logout } from '../api/resources';
+import { getCurrentUser, logout } from '../api/resources';
 import { PrimaryNav } from '../components/navigation/PrimaryNav';
 import type { AppSection } from '../components/navigation/PrimaryNav';
 import { IconButton } from '../components/ui/IconButton';
@@ -15,6 +15,7 @@ export type AppShellProps = {
   active: AppSection;
   contextSidebar?: ReactNode;
   topbarContent?: ReactNode;
+  currentUserRequest?: typeof getCurrentUser;
   logoutRequest?: () => Promise<void>;
   children: ReactNode;
 };
@@ -38,12 +39,13 @@ export async function completeLogout(request: () => Promise<void>, finish: () =>
   finally { finish(); }
 }
 
-export function AppShell({ active, contextSidebar, topbarContent, logoutRequest = logout, children }: AppShellProps) {
+export function AppShell({ active, contextSidebar, topbarContent, currentUserRequest = getCurrentUser, logoutRequest = logout, children }: AppShellProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(() => mediaMatches('(max-width: 980px)'));
   const [searchDraft, setSearchDraft] = useState('');
+  const [currentUserName, setCurrentUserName] = useState('当前用户');
   const sidebarRef = useRef<HTMLElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -59,6 +61,16 @@ export function AppShell({ active, contextSidebar, topbarContent, logoutRequest 
 
   useEffect(() => setDrawerOpen(false), [location.pathname, location.search]);
   useEffect(() => { if (!isMobile) setDrawerOpen(false); }, [isMobile]);
+  useEffect(() => {
+    let active = true;
+    void currentUserRequest()
+      .then((user) => {
+        if (!active) return;
+        setCurrentUserName(user.displayName.trim() || user.username);
+      })
+      .catch(() => { /* Authentication failures are handled by the API client. */ });
+    return () => { active = false; };
+  }, [currentUserRequest]);
   useEffect(() => {
     if (!isMobile) { drawerWasOpen.current = false; return; }
     if (drawerOpen) { drawerWasOpen.current = true; closeButtonRef.current?.focus(); }
@@ -115,7 +127,7 @@ export function AppShell({ active, contextSidebar, topbarContent, logoutRequest 
             <Search aria-hidden="true" /><label className="sr-only" htmlFor="app-global-search">全局搜索</label>
             <input id="app-global-search" placeholder="搜索知识库、文档和内容" value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} />
           </form>
-          <div className="app-account-actions" aria-label="账户操作"><span>当前用户</span><IconButton label="退出登录" onClick={handleLogout}><LogOut aria-hidden="true" /></IconButton></div>
+          <div className="app-account-actions" aria-label="账户操作"><span aria-live="polite" className="app-account-name" title={currentUserName}>{currentUserName}</span><IconButton label="退出登录" onClick={handleLogout}><LogOut aria-hidden="true" /></IconButton></div>
         </header>
         <main className="app-content" inert={(isMobile && drawerOpen) || undefined}>{children}</main>
       </div>

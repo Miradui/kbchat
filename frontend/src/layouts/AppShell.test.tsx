@@ -3,12 +3,13 @@ import userEvent from '@testing-library/user-event';
 import { useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { logout } from '../api/resources';
+import { getCurrentUser, logout } from '../api/resources';
 import { tokenStore } from '../store/tokenStore';
 import { renderWithRouter } from '../test/render';
 import { AppShell, completeLogout } from './AppShell';
 
-vi.mock('../api/resources', () => ({ logout: vi.fn() }));
+vi.mock('../api/resources', () => ({ getCurrentUser: vi.fn(), logout: vi.fn() }));
+const mockedGetCurrentUser = vi.mocked(getCurrentUser);
 const mockedLogout = vi.mocked(logout);
 
 function stubMatchMedia(initialMatches: boolean) {
@@ -44,13 +45,43 @@ function LocationProbe() {
   return <output aria-label="当前位置">{location.pathname + location.search}</output>;
 }
 
-beforeEach(() => mockedLogout.mockReset().mockResolvedValue(undefined));
+beforeEach(() => {
+  mockedGetCurrentUser.mockReset().mockResolvedValue({ id: 'user-1', username: 'admin', displayName: '管理员' });
+  mockedLogout.mockReset().mockResolvedValue(undefined);
+});
 afterEach(() => {
   document.body.style.overflow = '';
   vi.unstubAllGlobals();
 });
 
 describe('AppShell', () => {
+  it('shows the authenticated user display name', async () => {
+    stubMatchMedia(false);
+    const currentUserRequest = vi.fn().mockResolvedValue({
+      id: 'user-1',
+      username: 'admin',
+      displayName: '管理员',
+    });
+
+    renderWithRouter(<AppShell active="home" currentUserRequest={currentUserRequest}><p>内容</p></AppShell>);
+
+    expect(await screen.findByText('管理员')).toBeInTheDocument();
+    expect(currentUserRequest).toHaveBeenCalledOnce();
+  });
+
+  it('falls back to the username when display name is empty', async () => {
+    stubMatchMedia(false);
+    const currentUserRequest = vi.fn().mockResolvedValue({
+      id: 'user-1',
+      username: 'admin',
+      displayName: '   ',
+    });
+
+    renderWithRouter(<AppShell active="home" currentUserRequest={currentUserRequest}><p>内容</p></AppShell>);
+
+    expect(await screen.findByText('admin')).toBeInTheDocument();
+  });
+
   it('reacts to mobile and desktop media changes', async () => {
     const media = stubMatchMedia(false);
     renderWithRouter(<AppShell active="home"><p>内容</p></AppShell>);

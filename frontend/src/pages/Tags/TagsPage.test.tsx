@@ -16,6 +16,7 @@ import { TagsPage } from './TagsPage';
 vi.mock('../../api/resources', () => ({
   createKnowledgeBaseTag: vi.fn(),
   deleteKnowledgeBaseTag: vi.fn(),
+  getCurrentUser: vi.fn().mockResolvedValue({ id: 'user-1', username: 'admin', displayName: '管理员' }),
   listKnowledgeBaseTags: vi.fn(),
   logout: vi.fn(),
   updateKnowledgeBaseTag: vi.fn(),

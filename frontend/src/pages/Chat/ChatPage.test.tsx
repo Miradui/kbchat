@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   createChatSession: vi.fn(),
   deleteChatSession: vi.fn(),
   getChatSession: vi.fn(),
+  getCurrentUser: vi.fn(),
   getWorkspacePreference: vi.fn(),
   listChatMessages: vi.fn(),
   listChatSessions: vi.fn(),
@@ -70,6 +71,7 @@ function SessionNavigation() {
 beforeEach(() => {
   Element.prototype.scrollTo = vi.fn();
   Object.values(api).forEach((mock) => mock.mockReset());
+  api.getCurrentUser.mockResolvedValue({ id: 'user-1', username: 'admin', displayName: '管理员' });
   api.listChatSessions.mockResolvedValue({ items: [session] });
   api.listKnowledgeBases.mockResolvedValue({ items: [knowledgeBase] });
   api.listKnowledgeBaseCategories.mockResolvedValue({ items: [] });

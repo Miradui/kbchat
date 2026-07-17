@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   addKnowledgeBaseMember: vi.fn(),
   createChatSession: vi.fn(),
   deleteKnowledgeBaseMember: vi.fn(),
+  getCurrentUser: vi.fn(),
   getKnowledgeBase: vi.fn(),
   getKnowledgeBasePermissions: vi.fn(),
   getWorkspacePreference: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock('../../api/resources', () => api);
 
 beforeEach(() => {
   Object.values(api).forEach((mock) => mock.mockReset());
+  api.getCurrentUser.mockResolvedValue({ id: 'user-1', username: 'admin', displayName: '管理员' });
   api.getKnowledgeBase.mockResolvedValue({
     id: 'kb-1', name: '员工制度', description: '制度文档', visibility: 'private',
     retrievalConfig: { vectorTopN: 30, rerankTopK: 5, scoreThreshold: 0.3, enableRerank: true },

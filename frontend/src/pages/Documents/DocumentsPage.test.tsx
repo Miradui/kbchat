@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   batchDeleteDocuments: vi.fn(),
   batchReprocessDocuments: vi.fn(),
   deleteDocument: vi.fn(),
+  getCurrentUser: vi.fn(),
   getKnowledgeBase: vi.fn(),
   getWorkspacePreference: vi.fn(),
   listDocuments: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock('../../api/resources', () => api);
 
 beforeEach(() => {
   Object.values(api).forEach((mock) => mock.mockReset());
+  api.getCurrentUser.mockResolvedValue({ id: 'user-1', username: 'admin', displayName: '管理员' });
   api.getKnowledgeBase.mockImplementation((id: string) => Promise.resolve(knowledgeBase(id)));
   api.listKnowledgeBases.mockResolvedValue({ items: [knowledgeBase('kb-a'), knowledgeBase('kb-b')] });
   api.listKnowledgeBaseCategories.mockResolvedValue({ items: [] });

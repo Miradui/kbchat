@@ -16,6 +16,7 @@
 .app-global-search > svg { color: var(--color-text-muted); height: 18px; left: 12px; position: absolute; width: 18px; }
 .app-global-search input { min-height: 40px; min-width: 0; padding-left: 40px; width: 100%; }
 .app-account-actions { align-items: center; color: var(--color-text-secondary); display: flex; flex: 0 0 auto; gap: 8px; }
+.app-account-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-content { min-width: 0; padding: 24px clamp(24px, 3vw, 32px) 40px; }
 .app-drawer-backdrop { display: none; }
 .category-context__header { align-items: center; display: flex; justify-content: space-between; padding: 0 4px 8px; }

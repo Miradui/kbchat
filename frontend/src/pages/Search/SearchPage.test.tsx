@@ -9,6 +9,7 @@ import type { GlobalSearchResponse } from '../../types/api';
 import { SearchPage } from './SearchPage';
 
 vi.mock('../../api/resources', () => ({
+  getCurrentUser: vi.fn().mockResolvedValue({ id: 'user-1', username: 'admin', displayName: '管理员' }),
   globalSearch: vi.fn(),
   logout: vi.fn(),
 }));
