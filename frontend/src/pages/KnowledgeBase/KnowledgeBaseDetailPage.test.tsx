@@ -148,6 +148,82 @@ describe('KnowledgeBaseDetailPage loading', () => {
     expect(api.recordKnowledgeBaseView).toHaveBeenCalledTimes(1);
     expect(api.recordKnowledgeBaseView).toHaveBeenCalledWith('kb-b');
   });
+
+  it('ignores a visibility update for the previous knowledge base after navigation', async () => {
+    const stalePermissions = deferred<ReturnType<typeof permissionFixture>>();
+    api.getKnowledgeBase.mockImplementation((id: string) => Promise.resolve(knowledgeBaseFixture(
+      id,
+      id === 'kb-a' ? '知识库 A' : '知识库 B',
+    )));
+    api.getKnowledgeBasePermissions.mockImplementation((id: string) => Promise.resolve(permissionFixture(
+      id,
+      id === 'kb-a' ? 'A Owner' : 'B Owner',
+    )));
+    api.updateKnowledgeBasePermissions.mockReturnValue(stalePermissions.promise);
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <>
+        <KnowledgeBaseNavigation />
+        <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>
+      </>,
+      ['/knowledge-bases/kb-a'],
+    );
+
+    expect(await screen.findByRole('heading', { name: '知识库 A' })).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('可见性'), 'public');
+    expect(api.updateKnowledgeBasePermissions).toHaveBeenCalledWith('kb-a', 'public');
+
+    await user.click(screen.getByRole('button', { name: '切换到知识库 B' }));
+    expect(await screen.findByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
+
+    await act(async () => stalePermissions.resolve(permissionFixture('kb-a', 'A Owner', 'public')));
+
+    expect(screen.getByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '知识库 A' })).not.toBeInTheDocument();
+    expect(screen.getByText('B Owner')).toBeInTheDocument();
+  });
+
+  it('ignores a member update for the previous knowledge base after navigation', async () => {
+    const staleMemberAdd = deferred<void>();
+    api.getKnowledgeBase.mockImplementation((id: string) => Promise.resolve(knowledgeBaseFixture(
+      id,
+      id === 'kb-a' ? '知识库 A' : '知识库 B',
+    )));
+    api.getKnowledgeBasePermissions.mockImplementation((id: string) => Promise.resolve(permissionFixture(
+      id,
+      id === 'kb-a' ? 'A Owner' : 'B Owner',
+    )));
+    api.searchUsers.mockResolvedValue({
+      items: [{ id: 'user-2', username: 'member', displayName: '待添加成员' }],
+    });
+    api.addKnowledgeBaseMember.mockReturnValue(staleMemberAdd.promise);
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <>
+        <KnowledgeBaseNavigation />
+        <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>
+      </>,
+      ['/knowledge-bases/kb-a'],
+    );
+
+    expect(await screen.findByRole('heading', { name: '知识库 A' })).toBeInTheDocument();
+    await user.type(screen.getByLabelText('搜索用户'), 'member');
+    await user.click(screen.getByRole('button', { name: '搜索' }));
+    await user.click(await screen.findByRole('button', { name: '设为 member' }));
+    expect(api.addKnowledgeBaseMember).toHaveBeenCalledWith('kb-a', 'user-2', 'member');
+
+    await user.click(screen.getByRole('button', { name: '切换到知识库 B' }));
+    expect(await screen.findByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
+    expect(screen.queryByText('待添加成员')).not.toBeInTheDocument();
+
+    await act(async () => staleMemberAdd.resolve());
+
+    expect(screen.getByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '知识库 A' })).not.toBeInTheDocument();
+    expect(screen.getByText('B Owner')).toBeInTheDocument();
+  });
 });
 
 function KnowledgeBaseNavigation() {
@@ -180,10 +256,14 @@ function documentFixture(knowledgeBaseId: string, filename: string) {
   };
 }
 
-function permissionFixture(knowledgeBaseId: string, ownerName: string) {
+function permissionFixture(
+  knowledgeBaseId: string,
+  ownerName: string,
+  visibility: 'private' | 'public' = 'private',
+) {
   return {
     knowledgeBaseId,
-    visibility: 'private' as const,
+    visibility,
     owner: { id: `owner-${knowledgeBaseId}`, username: ownerName, displayName: ownerName },
     managers: [],
     members: [],

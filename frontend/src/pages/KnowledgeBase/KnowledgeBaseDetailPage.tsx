@@ -109,6 +109,11 @@ export function KnowledgeBaseDetailPage() {
     setSearchResults([]);
     setSearchFallback(null);
     setSearchDebug(null);
+    setSavingVisibility(false);
+    setMemberWorkingId(null);
+    setMemberQuery('');
+    setUserResults([]);
+    setSearchingUsers(false);
 
     if (!id) {
       return;
@@ -163,27 +168,43 @@ export function KnowledgeBaseDetailPage() {
       return;
     }
 
+    const targetKnowledgeBaseId = knowledgeBase.id;
     setSavingVisibility(true);
     setError('');
 
     try {
-      const nextPermissions = await updateKnowledgeBasePermissions(knowledgeBase.id, visibility);
+      const nextPermissions = await updateKnowledgeBasePermissions(targetKnowledgeBaseId, visibility);
+      if (activeKnowledgeBaseIdRef.current !== targetKnowledgeBaseId) {
+        return;
+      }
       setPermissions(nextPermissions);
-      setKnowledgeBase({ ...knowledgeBase, visibility: nextPermissions.visibility });
+      setKnowledgeBase((current) => (
+        current?.id === targetKnowledgeBaseId
+          ? { ...current, visibility: nextPermissions.visibility }
+          : current
+      ));
     } catch (err) {
-      setError(errorMessage(err, '权限展示字段更新失败'));
+      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+        setError(errorMessage(err, '权限展示字段更新失败'));
+      }
     } finally {
-      setSavingVisibility(false);
+      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+        setSavingVisibility(false);
+      }
     }
   }
 
-  async function reloadPermissions() {
-    if (!knowledgeBase) {
+  async function reloadPermissions(targetKnowledgeBaseId: string) {
+    const nextPermissions = await getKnowledgeBasePermissions(targetKnowledgeBaseId);
+    if (activeKnowledgeBaseIdRef.current !== targetKnowledgeBaseId) {
       return;
     }
-    const nextPermissions = await getKnowledgeBasePermissions(knowledgeBase.id);
     setPermissions(nextPermissions);
-    setKnowledgeBase({ ...knowledgeBase, visibility: nextPermissions.visibility });
+    setKnowledgeBase((current) => (
+      current?.id === targetKnowledgeBaseId
+        ? { ...current, visibility: nextPermissions.visibility }
+        : current
+    ));
   }
 
   async function handleUserSearch(event: FormEvent<HTMLFormElement>) {
@@ -213,16 +234,21 @@ export function KnowledgeBaseDetailPage() {
       return;
     }
 
+    const targetKnowledgeBaseId = knowledgeBase.id;
     setMemberWorkingId(user.id);
     setError('');
 
     try {
-      await addKnowledgeBaseMember(knowledgeBase.id, user.id, memberRole);
-      await reloadPermissions();
+      await addKnowledgeBaseMember(targetKnowledgeBaseId, user.id, memberRole);
+      await reloadPermissions(targetKnowledgeBaseId);
     } catch (err) {
-      setError(errorMessage(err, '成员添加失败'));
+      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+        setError(errorMessage(err, '成员添加失败'));
+      }
     } finally {
-      setMemberWorkingId(null);
+      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+        setMemberWorkingId(null);
+      }
     }
   }
 
@@ -231,16 +257,21 @@ export function KnowledgeBaseDetailPage() {
       return;
     }
 
+    const targetKnowledgeBaseId = knowledgeBase.id;
     setMemberWorkingId(member.id);
     setError('');
 
     try {
-      await updateKnowledgeBaseMember(knowledgeBase.id, member.id, role);
-      await reloadPermissions();
+      await updateKnowledgeBaseMember(targetKnowledgeBaseId, member.id, role);
+      await reloadPermissions(targetKnowledgeBaseId);
     } catch (err) {
-      setError(errorMessage(err, '成员角色更新失败'));
+      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+        setError(errorMessage(err, '成员角色更新失败'));
+      }
     } finally {
-      setMemberWorkingId(null);
+      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+        setMemberWorkingId(null);
+      }
     }
   }
 
@@ -254,16 +285,21 @@ export function KnowledgeBaseDetailPage() {
       return;
     }
 
+    const targetKnowledgeBaseId = knowledgeBase.id;
     setMemberWorkingId(member.id);
     setError('');
 
     try {
-      await deleteKnowledgeBaseMember(knowledgeBase.id, member.id);
-      await reloadPermissions();
+      await deleteKnowledgeBaseMember(targetKnowledgeBaseId, member.id);
+      await reloadPermissions(targetKnowledgeBaseId);
     } catch (err) {
-      setError(errorMessage(err, '成员移除失败'));
+      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+        setError(errorMessage(err, '成员移除失败'));
+      }
     } finally {
-      setMemberWorkingId(null);
+      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+        setMemberWorkingId(null);
+      }
     }
   }
 
