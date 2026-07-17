@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -38,6 +39,7 @@ const (
 	defaultWorkerConcurrency  = 2
 	defaultWorkerMaxRetries   = 3
 	defaultWorkerRetryDelay   = 10 * time.Second
+	minJWTSecretBytes         = 32
 )
 
 type Config struct {
@@ -116,6 +118,24 @@ func Load() Config {
 		WorkerMaxRetries:   getEnvInt("WORKER_MAX_RETRIES", defaultWorkerMaxRetries),
 		WorkerRetryDelay:   getEnvDuration("WORKER_RETRY_DELAY", defaultWorkerRetryDelay),
 	}
+}
+
+func (c Config) Validate() error {
+	return ValidateJWTSecret(c.JWTSecret)
+}
+
+func ValidateJWTSecret(value string) error {
+	secret := strings.TrimSpace(value)
+	if secret == "" {
+		return fmt.Errorf("JWT_SECRET is required")
+	}
+	if secret == "replace-with-local-secret" || secret == "change-me-to-a-long-random-secret" {
+		return fmt.Errorf("JWT_SECRET must replace the documented placeholder")
+	}
+	if len([]byte(secret)) < minJWTSecretBytes {
+		return fmt.Errorf("JWT_SECRET must be at least %d bytes", minJWTSecretBytes)
+	}
+	return nil
 }
 
 func splitCommaSeparated(value string) []string {

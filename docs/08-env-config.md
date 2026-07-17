@@ -14,7 +14,7 @@ REDIS_ADDR=localhost:6379
 REDIS_PASSWORD=
 REDIS_DB=0
 
-JWT_SECRET=replace-with-local-secret
+JWT_SECRET=change-me-to-a-long-random-secret
 JWT_EXPIRES_IN=24h
 
 MODEL_PROVIDER=openai_compatible
@@ -62,7 +62,7 @@ VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1
 | `CORS_ALLOWED_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173` | 允许跨域访问 API 的前端 Origin，多个值用逗号分隔 |
 | `DATABASE_URL` | 本地 PostgreSQL | 数据库连接 |
 | `REDIS_ADDR` | `localhost:6379` | Redis 地址 |
-| `JWT_SECRET` | 无 | JWT 签名密钥 |
+| `JWT_SECRET` | 无 | JWT 签名密钥；必填，至少 32 字节，必须替换示例占位值 |
 | `MODEL_PROVIDER` | `openai_compatible` | 模型 Provider 类型 |
 | `CHAT_BASE_URL` | `https://api.openai.com/v1` | Chat OpenAI-compatible 地址 |
 | `CHAT_API_KEY` | 无 | Chat API Key |

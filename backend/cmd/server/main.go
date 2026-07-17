@@ -24,6 +24,9 @@ func main() {
 	cfg := config.Load()
 	log := logger.New(cfg)
 	defer func() { _ = log.Sync() }()
+	if err := cfg.Validate(); err != nil {
+		log.Fatal("invalid configuration", zap.Error(err))
+	}
 
 	db, err := database.Open(cfg)
 	if err != nil {

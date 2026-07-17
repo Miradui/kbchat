@@ -2,6 +2,7 @@ package config
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/joho/godotenv"
@@ -13,6 +14,33 @@ func TestSplitCommaSeparatedTrimsAndSkipsEmptyValues(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("expected origins %q, got %q", want, got)
+	}
+}
+
+func TestValidateJWTSecretRejectsUnsafeValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		secret string
+	}{
+		{name: "empty", secret: ""},
+		{name: "whitespace", secret: "   "},
+		{name: "legacy fallback", secret: "replace-with-local-secret"},
+		{name: "example placeholder", secret: "change-me-to-a-long-random-secret"},
+		{name: "too short", secret: "short-secret"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateJWTSecret(tt.secret); err == nil {
+				t.Fatalf("expected JWT secret %q to be rejected", tt.secret)
+			}
+		})
+	}
+}
+
+func TestValidateJWTSecretAcceptsLongRandomValue(t *testing.T) {
+	if err := ValidateJWTSecret(strings.Repeat("a1", 24)); err != nil {
+		t.Fatalf("expected long JWT secret to be accepted: %v", err)
 	}
 }
 

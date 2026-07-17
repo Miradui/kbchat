@@ -38,7 +38,7 @@ func TestAuthServiceLoginAndMeExposeAvatarURL(t *testing.T) {
 	}
 
 	service := NewAuthService(config.Config{
-		JWTSecret:    "test-secret",
+		JWTSecret:    "this-is-a-long-auth-service-test-secret",
 		JWTExpiresIn: "24h",
 	}, repository.NewUserRepository(db))
 

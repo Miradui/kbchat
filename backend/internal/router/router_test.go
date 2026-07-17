@@ -118,7 +118,7 @@ func TestNewRerankProviderUsesDisabledProviderWhenDisabled(t *testing.T) {
 }
 
 func TestArchiveChatSessionReturnsArchivedSession(t *testing.T) {
-	cfg := config.Config{AppEnv: "test", ServerPort: "0", JWTSecret: "router-test-secret", JWTExpiresIn: "1h"}
+	cfg := config.Config{AppEnv: "test", ServerPort: "0", JWTSecret: "this-is-a-long-router-test-secret-1234", JWTExpiresIn: "1h"}
 	db := testDB(t)
 	if err := db.AutoMigrate(&model.User{}, &model.KnowledgeBase{}, &model.ChatSession{}); err != nil {
 		t.Fatalf("migrate archive test tables: %v", err)
