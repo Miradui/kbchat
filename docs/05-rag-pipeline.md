@@ -80,7 +80,7 @@ chunkOverlap=120 tokens
 
 普通文本 overlap 必须能从单个超长 field 中按 token 预算取尾部；连续 CJK、Emoji、URL/hash 或无空格 ASCII 不得因 `strings.Fields` 粒度而静默丢失 overlap。主来源分片应为有效 overlap 预留预算，注入后的 chunk 仍必须不超过 chunkSize。
 
-Markdown 单个列表项超过预算时，每个分片重复原列表 marker；嵌套列表还必须重复原缩进。单个表格行超过预算时，按 cell 内容拆分并重建相同列数的行，同时重复 header/separator。转义管道 `\|` 和 inline code span 内的管道不作为列分隔符，极小预算 fallback 也不得把 `\|` 从中间拆开。标题前缀或重复结构包装不得挤掉 chunk 的主来源正文。
+Markdown 单个列表项超过预算时，每个分片重复原列表 marker；嵌套列表还必须重复原缩进。单个表格行超过预算时，只要预算能容纳表格包装，就按 cell 内容拆分并重建相同列数的行，同时重复 header/separator。若 `chunkSize` 连完整 header/separator 或等列空行包装都无法容纳，则降级为 `structureType=table` 的来源片段，保留单调 source offset，并允许省略无法容纳的重复包装；转义管道 `\|` 和 inline code span 内的管道仍作为不可拆分单元。标题前缀或重复结构包装不得挤掉 chunk 的主来源正文。
 
 GFM 表格只能由相邻的 header + 合法 delimiter row 启动，两行的列数必须一致且至少两列；不得因单行普通文本包含多个 pipe 就标记为 table。无 outer pipes 的两列表格也必须识别，并在 oversize 分片中重复完整 header/delimiter。
 
