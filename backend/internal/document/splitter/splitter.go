@@ -411,7 +411,8 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 		}
 
 		if markdown {
-			if level, title, ok := parseHeading(trimmed); ok {
+			structuralLine, structural := markdownBlockLine(raw)
+			if level, title, ok := parseHeading(structuralLine); structural && ok {
 				flush()
 				if level <= lastHeadingLevel {
 					appendPendingHeading()
@@ -461,8 +462,10 @@ func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) [
 		if markdown {
 			if _, ok := tableLines[i]; ok {
 				lineType = "table"
-			} else {
-				lineType = structureTypeForLine(trimmed)
+			} else if structuralLine, ok := markdownBlockLine(raw); ok {
+				lineType = structureTypeForLine(structuralLine)
+			} else if pendingType == "list" && isListLine(trimmed) {
+				lineType = "list"
 			}
 		}
 		if pendingType != "" && pendingType != lineType {
@@ -533,7 +536,7 @@ func updateHeadingPath(path []string, level int, title string) []string {
 }
 
 func parseFence(line string) (string, bool) {
-	line, ok := markdownFenceLine(line)
+	line, ok := markdownBlockLine(line)
 	if !ok || line == "" || (line[0] != '`' && line[0] != '~') {
 		return "", false
 	}
@@ -551,7 +554,7 @@ func parseFence(line string) (string, bool) {
 }
 
 func isClosingFence(line string, fence string) bool {
-	line, ok := markdownFenceLine(line)
+	line, ok := markdownBlockLine(line)
 	if !ok || len(line) < len(fence) || fence == "" {
 		return false
 	}
@@ -562,7 +565,7 @@ func isClosingFence(line string, fence string) bool {
 	return length >= len(fence) && strings.Trim(line[length:], " \t") == ""
 }
 
-func markdownFenceLine(line string) (string, bool) {
+func markdownBlockLine(line string) (string, bool) {
 	indent := 0
 	for indent < len(line) && line[indent] == ' ' {
 		indent++
@@ -586,8 +589,13 @@ func structureTypeForLine(line string) string {
 func markdownTableLineIndexes(lines []string) map[int]struct{} {
 	result := make(map[int]struct{})
 	for index := 0; index+1 < len(lines); index++ {
-		header := strings.TrimSpace(strings.TrimSuffix(lines[index], "\n"))
-		separator := strings.TrimSpace(strings.TrimSuffix(lines[index+1], "\n"))
+		header, headerOK := markdownBlockLine(strings.TrimSuffix(lines[index], "\n"))
+		separator, separatorOK := markdownBlockLine(strings.TrimSuffix(lines[index+1], "\n"))
+		if !headerOK || !separatorOK {
+			continue
+		}
+		header = strings.TrimSpace(header)
+		separator = strings.TrimSpace(separator)
 		headerColumns := markdownTableColumnCount(header)
 		if headerColumns < 2 || headerColumns != markdownTableColumnCount(separator) || !isMarkdownTableSeparator(separator) {
 			continue
@@ -597,7 +605,11 @@ func markdownTableLineIndexes(lines []string) map[int]struct{} {
 		result[index+1] = struct{}{}
 		next := index + 2
 		for ; next < len(lines); next++ {
-			row := strings.TrimSpace(strings.TrimSuffix(lines[next], "\n"))
+			row, ok := markdownBlockLine(strings.TrimSuffix(lines[next], "\n"))
+			if !ok {
+				break
+			}
+			row = strings.TrimSpace(row)
 			if row == "" || len(markdownTableDelimiterIndexes(row, 0, len(row))) == 0 {
 				break
 			}

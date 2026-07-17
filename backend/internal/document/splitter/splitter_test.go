@@ -621,6 +621,54 @@ func TestSplitLimitsFenceIndentToThreeSpaces(t *testing.T) {
 	}
 }
 
+func TestSplitLimitsHeadingIndentToThreeSpaces(t *testing.T) {
+	valid := New(20, 0).Split("   # visible")
+	if len(valid) != 1 || valid[0].Metadata["structureType"] != "heading" || valid[0].Content != "visible" {
+		t.Fatalf("expected three-space heading to remain structured, got %#v", valid)
+	}
+
+	text := "    # hidden"
+	invalid := New(20, 0).Split(text)
+	if len(invalid) != 1 || invalid[0].Metadata["structureType"] != "paragraph" || invalid[0].Content != text {
+		t.Fatalf("expected four-space heading syntax to remain literal, got %#v", invalid)
+	}
+	if invalid[0].Metadata["startOffset"] != 0 || invalid[0].Metadata["endOffset"] != len(text) {
+		t.Fatalf("expected literal heading offsets, got %#v", invalid[0].Metadata)
+	}
+}
+
+func TestSplitLimitsTopLevelListIndentAndPreservesNestedIndent(t *testing.T) {
+	valid := New(20, 0).Split("   - visible")
+	if len(valid) != 1 || valid[0].Metadata["structureType"] != "list" || valid[0].Content != "   - visible" {
+		t.Fatalf("expected three-space list to remain structured, got %#v", valid)
+	}
+
+	literal := "    - hidden"
+	invalid := New(20, 0).Split(literal)
+	if len(invalid) != 1 || invalid[0].Metadata["structureType"] != "paragraph" || invalid[0].Content != literal {
+		t.Fatalf("expected standalone four-space list syntax to remain literal, got %#v", invalid)
+	}
+
+	nested := New(20, 0).Split("- parent\n    - child")
+	if len(nested) != 1 || nested[0].Metadata["structureType"] != "list" || nested[0].Content != "- parent\n    - child" {
+		t.Fatalf("expected nested list indentation to remain structured, got %#v", nested)
+	}
+}
+
+func TestSplitLimitsTableIndentToThreeSpaces(t *testing.T) {
+	validText := "   a|b\n   ---|---\n   x|y"
+	valid := New(30, 0).Split(validText)
+	if len(valid) != 1 || valid[0].Metadata["structureType"] != "table" || valid[0].Content != validText {
+		t.Fatalf("expected three-space table to remain structured, got %#v", valid)
+	}
+
+	literal := "    a|b\n    ---|---\n    x|y"
+	invalid := New(30, 0).Split(literal)
+	if len(invalid) != 1 || invalid[0].Metadata["structureType"] != "paragraph" || invalid[0].Content != literal {
+		t.Fatalf("expected four-space table syntax to remain literal, got %#v", invalid)
+	}
+}
+
 func TestSplitPreservesLeadingIndentationBeforeFenceParsing(t *testing.T) {
 	text := "    ```\ntext\n    ```"
 	chunks := New(20, 0).Split(text)

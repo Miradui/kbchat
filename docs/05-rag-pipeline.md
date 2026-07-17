@@ -88,6 +88,8 @@ GFM 表格只能由相邻的 header + 合法 delimiter row 启动，两行的列
 
 Markdown fenced code opening/closing 最多允许 3 个前导空格，4 个及以上不得被误判为 fence。Backtick fence 的 info string 不得包含 backtick；tilde fence 的 info string 可以包含 backtick。Closing fence 只允许同类 marker、不短于 opening，且 marker 后只能有空格或 tab。
 
+Markdown 顶级 ATX heading、列表 marker 和 GFM table 最多允许 3 个前导空格；独立出现且缩进 4 个及以上空格的语法按字面正文保留，不提升为对应结构。已经进入列表 block 后，更深缩进的列表 marker 仍按嵌套列表处理并保留原缩进。
+
 每个 chunk 必须保存：
 
 ```text
