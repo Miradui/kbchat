@@ -225,6 +225,108 @@ describe('KnowledgeBaseDetailPage loading', () => {
     expect(screen.getByText('B Owner')).toBeInTheDocument();
   });
 
+  it('ignores a visibility update from an earlier visit after returning to the same knowledge base', async () => {
+    const stalePermissions = deferred<ReturnType<typeof permissionFixture>>();
+    api.getKnowledgeBase.mockImplementation((id: string) => Promise.resolve(knowledgeBaseFixture(
+      id,
+      id === 'kb-a' ? '知识库 A' : '知识库 B',
+    )));
+    api.getKnowledgeBasePermissions.mockImplementation((id: string) => Promise.resolve(permissionFixture(
+      id,
+      id === 'kb-a' ? 'A Owner' : 'B Owner',
+    )));
+    api.updateKnowledgeBasePermissions.mockReturnValue(stalePermissions.promise);
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <>
+        <KnowledgeBaseRoundTripNavigation />
+        <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>
+      </>,
+      ['/knowledge-bases/kb-a'],
+    );
+
+    expect(await screen.findByRole('heading', { name: '知识库 A' })).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('可见性'), 'public');
+    await user.click(screen.getByRole('button', { name: '切换到知识库 B' }));
+    expect(await screen.findByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '返回知识库 A' }));
+    expect(await screen.findByRole('heading', { name: '知识库 A' })).toBeInTheDocument();
+    expect(screen.getByLabelText('可见性')).toHaveValue('private');
+
+    await act(async () => stalePermissions.resolve(permissionFixture('kb-a', 'A Owner', 'public')));
+
+    expect(screen.getByLabelText('可见性')).toHaveValue('private');
+  });
+
+  it('disables all permission mutation controls while a member update is pending', async () => {
+    api.getKnowledgeBasePermissions.mockResolvedValue(permissionWithMembersFixture());
+    api.updateKnowledgeBaseMember.mockReturnValue(new Promise(() => undefined));
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>,
+      ['/knowledge-bases/kb-1'],
+    );
+
+    expect(await screen.findByRole('heading', { name: '员工制度' })).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('修改 成员一 的角色'), 'manager');
+
+    expect(api.updateKnowledgeBaseMember).toHaveBeenCalledWith('kb-1', 'member-1', 'manager');
+    expect(screen.getByLabelText('修改 成员一 的角色')).toBeDisabled();
+    expect(screen.getByLabelText('修改 成员二 的角色')).toBeDisabled();
+    expect(screen.getByLabelText('可见性')).toBeDisabled();
+  });
+
+  it('ignores a member update from an earlier visit after returning to the same knowledge base', async () => {
+    const staleMemberAdd = deferred<void>();
+    let knowledgeBaseAPermissionLoads = 0;
+    api.getKnowledgeBase.mockImplementation((id: string) => Promise.resolve(knowledgeBaseFixture(
+      id,
+      id === 'kb-a' ? '知识库 A' : '知识库 B',
+    )));
+    api.getKnowledgeBasePermissions.mockImplementation((id: string) => {
+      if (id === 'kb-b') {
+        return Promise.resolve(permissionFixture(id, 'B Owner'));
+      }
+      knowledgeBaseAPermissionLoads += 1;
+      const ownerName = knowledgeBaseAPermissionLoads === 1
+        ? 'A Initial Owner'
+        : knowledgeBaseAPermissionLoads === 2
+          ? 'A Current Owner'
+          : 'A Stale Owner';
+      return Promise.resolve(permissionFixture(id, ownerName));
+    });
+    api.searchUsers.mockResolvedValue({
+      items: [{ id: 'user-2', username: 'member', displayName: '待添加成员' }],
+    });
+    api.addKnowledgeBaseMember.mockReturnValue(staleMemberAdd.promise);
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <>
+        <KnowledgeBaseRoundTripNavigation />
+        <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>
+      </>,
+      ['/knowledge-bases/kb-a'],
+    );
+
+    expect(await screen.findByText('A Initial Owner')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('搜索用户'), 'member');
+    await user.click(screen.getByRole('button', { name: '搜索' }));
+    await user.click(await screen.findByRole('button', { name: '设为 member' }));
+    await user.click(screen.getByRole('button', { name: '切换到知识库 B' }));
+    expect(await screen.findByText('B Owner')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '返回知识库 A' }));
+    expect(await screen.findByText('A Current Owner')).toBeInTheDocument();
+
+    await act(async () => staleMemberAdd.resolve());
+
+    expect(screen.getByText('A Current Owner')).toBeInTheDocument();
+    expect(screen.queryByText('A Stale Owner')).not.toBeInTheDocument();
+    expect(knowledgeBaseAPermissionLoads).toBe(2);
+  });
+
   it('does not navigate to a chat created for the previous knowledge base', async () => {
     const staleChat = deferred<{ id: string }>();
     api.getKnowledgeBase.mockImplementation((id: string) => Promise.resolve(knowledgeBaseFixture(
@@ -411,6 +513,19 @@ function permissionFixture(
     owner: { id: `owner-${knowledgeBaseId}`, username: ownerName, displayName: ownerName },
     managers: [],
     members: [],
+  };
+}
+
+function permissionWithMembersFixture() {
+  return {
+    knowledgeBaseId: 'kb-1',
+    visibility: 'private' as const,
+    owner: { id: 'owner-kb-1', username: 'owner', displayName: 'Owner' },
+    managers: [],
+    members: [
+      { id: 'member-1', username: 'member-1', displayName: '成员一', role: 'member' as const },
+      { id: 'member-2', username: 'member-2', displayName: '成员二', role: 'member' as const },
+    ],
   };
 }
 

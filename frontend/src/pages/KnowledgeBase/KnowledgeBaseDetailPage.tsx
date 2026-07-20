@@ -51,6 +51,7 @@ export function KnowledgeBaseDetailPage() {
   const navigate = useNavigate();
   const activeKnowledgeBaseIdRef = useRef(id);
   const pageLoadRequestIdRef = useRef(0);
+  const permissionMutationRequestIdRef = useRef(0);
   const searchRequestIdRef = useRef(0);
   const userSearchRequestIdRef = useRef(0);
   activeKnowledgeBaseIdRef.current = id;
@@ -74,6 +75,16 @@ export function KnowledgeBaseDetailPage() {
   const [searchingUsers, setSearchingUsers] = useState(false);
   const [memberWorkingId, setMemberWorkingId] = useState<string | null>(null);
   const [error, setError] = useState('');
+
+  function isCurrentPermissionMutation(
+    targetKnowledgeBaseId: string,
+    pageRequestId: number,
+    mutationRequestId: number,
+  ) {
+    return pageLoadRequestIdRef.current === pageRequestId
+      && permissionMutationRequestIdRef.current === mutationRequestId
+      && activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId;
+  }
 
   const loadPage = useCallback(async (requestId: number) => {
     if (!id) {
@@ -148,6 +159,7 @@ export function KnowledgeBaseDetailPage() {
       if (pageLoadRequestIdRef.current === requestId) {
         pageLoadRequestIdRef.current += 1;
       }
+      permissionMutationRequestIdRef.current += 1;
     };
   }, [id, loadPage]);
 
@@ -183,17 +195,30 @@ export function KnowledgeBaseDetailPage() {
   }
 
   async function handleVisibilityChange(visibility: 'private' | 'public') {
-    if (!knowledgeBase || visibility === (permissions?.visibility ?? knowledgeBase.visibility)) {
+    if (
+      !knowledgeBase
+      || savingVisibility
+      || memberWorkingId !== null
+      || visibility === (permissions?.visibility ?? knowledgeBase.visibility)
+    ) {
       return;
     }
 
     const targetKnowledgeBaseId = knowledgeBase.id;
+    const pageRequestId = pageLoadRequestIdRef.current;
+    const mutationRequestId = permissionMutationRequestIdRef.current + 1;
+    permissionMutationRequestIdRef.current = mutationRequestId;
+    const isCurrentRequest = () => isCurrentPermissionMutation(
+      targetKnowledgeBaseId,
+      pageRequestId,
+      mutationRequestId,
+    );
     setSavingVisibility(true);
     setError('');
 
     try {
       const nextPermissions = await updateKnowledgeBasePermissions(targetKnowledgeBaseId, visibility);
-      if (activeKnowledgeBaseIdRef.current !== targetKnowledgeBaseId) {
+      if (!isCurrentRequest()) {
         return;
       }
       setPermissions(nextPermissions);
@@ -203,19 +228,26 @@ export function KnowledgeBaseDetailPage() {
           : current
       ));
     } catch (err) {
-      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+      if (isCurrentRequest()) {
         setError(errorMessage(err, '权限展示字段更新失败'));
       }
     } finally {
-      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+      if (isCurrentRequest()) {
         setSavingVisibility(false);
       }
     }
   }
 
-  async function reloadPermissions(targetKnowledgeBaseId: string) {
+  async function reloadPermissions(
+    targetKnowledgeBaseId: string,
+    pageRequestId: number,
+    mutationRequestId: number,
+  ) {
+    if (!isCurrentPermissionMutation(targetKnowledgeBaseId, pageRequestId, mutationRequestId)) {
+      return;
+    }
     const nextPermissions = await getKnowledgeBasePermissions(targetKnowledgeBaseId);
-    if (activeKnowledgeBaseIdRef.current !== targetKnowledgeBaseId) {
+    if (!isCurrentPermissionMutation(targetKnowledgeBaseId, pageRequestId, mutationRequestId)) {
       return;
     }
     setPermissions(nextPermissions);
@@ -262,53 +294,75 @@ export function KnowledgeBaseDetailPage() {
   }
 
   async function handleAddMember(user: UserSummary) {
-    if (!knowledgeBase) {
+    if (!knowledgeBase || savingVisibility || memberWorkingId !== null) {
       return;
     }
 
     const targetKnowledgeBaseId = knowledgeBase.id;
+    const pageRequestId = pageLoadRequestIdRef.current;
+    const mutationRequestId = permissionMutationRequestIdRef.current + 1;
+    permissionMutationRequestIdRef.current = mutationRequestId;
+    const isCurrentRequest = () => isCurrentPermissionMutation(
+      targetKnowledgeBaseId,
+      pageRequestId,
+      mutationRequestId,
+    );
     setMemberWorkingId(user.id);
     setError('');
 
     try {
       await addKnowledgeBaseMember(targetKnowledgeBaseId, user.id, memberRole);
-      await reloadPermissions(targetKnowledgeBaseId);
+      await reloadPermissions(targetKnowledgeBaseId, pageRequestId, mutationRequestId);
     } catch (err) {
-      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+      if (isCurrentRequest()) {
         setError(errorMessage(err, '成员添加失败'));
       }
     } finally {
-      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+      if (isCurrentRequest()) {
         setMemberWorkingId(null);
       }
     }
   }
 
   async function handleUpdateMemberRole(member: PermissionMember, role: MemberRole) {
-    if (!knowledgeBase || member.role === 'owner' || member.role === role) {
+    if (
+      !knowledgeBase
+      || savingVisibility
+      || memberWorkingId !== null
+      || member.role === 'owner'
+      || member.role === role
+    ) {
       return;
     }
 
     const targetKnowledgeBaseId = knowledgeBase.id;
+    const pageRequestId = pageLoadRequestIdRef.current;
+    const mutationRequestId = permissionMutationRequestIdRef.current + 1;
+    permissionMutationRequestIdRef.current = mutationRequestId;
+    const isCurrentRequest = () => isCurrentPermissionMutation(
+      targetKnowledgeBaseId,
+      pageRequestId,
+      mutationRequestId,
+    );
     setMemberWorkingId(member.id);
     setError('');
 
     try {
       await updateKnowledgeBaseMember(targetKnowledgeBaseId, member.id, role);
-      await reloadPermissions(targetKnowledgeBaseId);
+      await reloadPermissions(targetKnowledgeBaseId, pageRequestId, mutationRequestId);
     } catch (err) {
-      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+      if (isCurrentRequest()) {
         setError(errorMessage(err, '成员角色更新失败'));
       }
     } finally {
-      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+      if (isCurrentRequest()) {
         setMemberWorkingId(null);
       }
     }
   }
 
   async function handleDeleteMember(member: PermissionMember) {
-    if (!knowledgeBase || member.role === 'owner') {
+    if (!knowledgeBase || savingVisibility || memberWorkingId !== null || member.role === 'owner') {
       return;
     }
 
@@ -318,18 +372,26 @@ export function KnowledgeBaseDetailPage() {
     }
 
     const targetKnowledgeBaseId = knowledgeBase.id;
+    const pageRequestId = pageLoadRequestIdRef.current;
+    const mutationRequestId = permissionMutationRequestIdRef.current + 1;
+    permissionMutationRequestIdRef.current = mutationRequestId;
+    const isCurrentRequest = () => isCurrentPermissionMutation(
+      targetKnowledgeBaseId,
+      pageRequestId,
+      mutationRequestId,
+    );
     setMemberWorkingId(member.id);
     setError('');
 
     try {
       await deleteKnowledgeBaseMember(targetKnowledgeBaseId, member.id);
-      await reloadPermissions(targetKnowledgeBaseId);
+      await reloadPermissions(targetKnowledgeBaseId, pageRequestId, mutationRequestId);
     } catch (err) {
-      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+      if (isCurrentRequest()) {
         setError(errorMessage(err, '成员移除失败'));
       }
     } finally {
-      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+      if (isCurrentRequest()) {
         setMemberWorkingId(null);
       }
     }
@@ -414,6 +476,7 @@ export function KnowledgeBaseDetailPage() {
   const processingCount = documents.filter((document) => !terminalStatuses.includes(document.status)).length;
   const visibility = permissions?.visibility ?? knowledgeBase.visibility ?? 'private';
   const managers = (permissions?.managers ?? []).filter((member) => member.role !== 'owner');
+  const permissionMutationBusy = savingVisibility || memberWorkingId !== null;
 
   return (
     <WorkspaceShell active="knowledge-bases" categories={categories} expandedIds={expandedIds}>
@@ -493,7 +556,7 @@ export function KnowledgeBaseDetailPage() {
                 <select
                   value={visibility}
                   onChange={(event) => void handleVisibilityChange(event.target.value as 'private' | 'public')}
-                  disabled={savingVisibility}
+                  disabled={permissionMutationBusy}
                 >
                   <option value="private">私有</option>
                   <option value="public">公开</option>
@@ -530,7 +593,7 @@ export function KnowledgeBaseDetailPage() {
                         className="secondary-button"
                         type="button"
                         onClick={() => void handleAddMember(user)}
-                        disabled={memberWorkingId === user.id || user.id === permissions?.owner.id}
+                        disabled={permissionMutationBusy || user.id === permissions?.owner.id}
                       >
                         {memberWorkingId === user.id ? '添加中...' : `设为 ${memberRole}`}
                       </button>
@@ -542,6 +605,7 @@ export function KnowledgeBaseDetailPage() {
                 title="Managers"
                 members={managers}
                 workingId={memberWorkingId}
+                disabled={permissionMutationBusy}
                 onDelete={handleDeleteMember}
                 onRoleChange={handleUpdateMemberRole}
               />
@@ -550,6 +614,7 @@ export function KnowledgeBaseDetailPage() {
                 members={permissions?.members ?? []}
                 emptyText="暂无成员。"
                 workingId={memberWorkingId}
+                disabled={permissionMutationBusy}
                 onDelete={handleDeleteMember}
                 onRoleChange={handleUpdateMemberRole}
               />
@@ -771,6 +836,7 @@ function PermissionList({
   members,
   emptyText = '暂无成员',
   workingId,
+  disabled = false,
   onDelete,
   onRoleChange,
 }: {
@@ -778,6 +844,7 @@ function PermissionList({
   members: PermissionMember[];
   emptyText?: string;
   workingId?: string | null;
+  disabled?: boolean;
   onDelete?: (member: PermissionMember) => void;
   onRoleChange?: (member: PermissionMember, role: MemberRole) => void;
 }) {
@@ -790,7 +857,7 @@ function PermissionList({
         members.map((member) => (
           <PermissionMemberCard
             member={member}
-            working={workingId === member.id}
+            working={disabled || workingId === member.id}
             key={`${title}-${member.id}-${member.role}`}
             onDelete={onDelete}
             onRoleChange={onRoleChange}
