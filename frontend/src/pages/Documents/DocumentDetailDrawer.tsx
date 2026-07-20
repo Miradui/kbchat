@@ -12,6 +12,7 @@ import {
 } from '../../api/resources';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
+import { useDialogModal } from '../../components/ui/Dialog';
 import type { DocumentChunk, DocumentItem, DocumentPreviewResponse, DocumentStatus } from '../../types/api';
 import { DocumentProgress } from './DocumentProgress';
 
@@ -46,6 +47,7 @@ export function DocumentDetailDrawer({
   const [error, setError] = useState('');
   const [previewError, setPreviewError] = useState('');
   const [chunkError, setChunkError] = useState('');
+  const panelRef = useDialogModal<HTMLElement>(true, submitting ? () => undefined : onClose);
 
   useEffect(() => {
     let mounted = true;
@@ -256,7 +258,14 @@ export function DocumentDetailDrawer({
   return (
     <>
       <aside className="drawer-backdrop" role="presentation">
-        <section className="drawer-panel document-detail-drawer" role="dialog" aria-modal="true" aria-labelledby="document-detail-title">
+        <section
+          aria-labelledby="document-detail-title"
+          aria-modal="true"
+          className="drawer-panel document-detail-drawer"
+          ref={panelRef}
+          role="dialog"
+          tabIndex={-1}
+        >
           <header>
             <div>
               <h2 id="document-detail-title">文档详情</h2>

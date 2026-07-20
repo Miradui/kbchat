@@ -1,6 +1,6 @@
 import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '../../api/client';
 import { renderWithRouter } from '../../test/render';
@@ -20,7 +20,35 @@ beforeEach(() => {
   Object.values(api).forEach((mock) => mock.mockReset());
 });
 
+afterEach(() => {
+  document.body.style.overflow = '';
+  document.getElementById('recycle-drawer-opener')?.remove();
+});
+
 describe('DocumentRecycleBinDrawer', () => {
+  it('uses modal focus, Escape, scroll lock, and focus restoration', async () => {
+    api.listDocumentRecycleBin.mockResolvedValue(recycleResponse([]));
+    const opener = document.createElement('button');
+    opener.id = 'recycle-drawer-opener';
+    document.body.append(opener);
+    opener.focus();
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+
+    const rendered = renderWithRouter(
+      <DocumentRecycleBinDrawer onChanged={vi.fn()} onClose={onClose} />,
+    );
+
+    expect(screen.getByRole('button', { name: '关闭' })).toHaveFocus();
+    expect(document.body.style.overflow).toBe('hidden');
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    rendered.unmount();
+    expect(document.body.style.overflow).toBe('');
+    expect(opener).toHaveFocus();
+  });
+
   it('distinguishes a successful restore from a following refresh failure', async () => {
     api.listDocumentRecycleBin
       .mockResolvedValueOnce({ items: [recycledDocument], total: 1, page: 1, pageSize: 20 })

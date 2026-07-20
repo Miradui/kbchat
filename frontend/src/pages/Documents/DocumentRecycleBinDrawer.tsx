@@ -10,6 +10,7 @@ import {
 } from '../../api/resources';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
+import { useDialogModal } from '../../components/ui/Dialog';
 import type { RecycleBinItem } from '../../types/api';
 
 type DocumentRecycleBinDrawerProps = {
@@ -36,6 +37,8 @@ export function DocumentRecycleBinDrawer({
   const [deleteTarget, setDeleteTarget] = useState<RecycleBinItem | null>(null);
   const [confirmEmpty, setConfirmEmpty] = useState(false);
   const [error, setError] = useState('');
+  const mutationBusy = workingId !== null || submitting;
+  const panelRef = useDialogModal<HTMLElement>(true, mutationBusy ? () => undefined : onClose);
 
   const loadPage = useCallback(async () => {
     const requestId = requestIdRef.current + 1;
@@ -242,12 +245,17 @@ export function DocumentRecycleBinDrawer({
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const mutationBusy = workingId !== null || submitting;
-
   return (
     <>
     <aside className="drawer-backdrop" role="presentation">
-      <section className="drawer-panel document-recycle-drawer" role="dialog" aria-modal="true" aria-labelledby="document-recycle-title">
+      <section
+        aria-labelledby="document-recycle-title"
+        aria-modal="true"
+        className="drawer-panel document-recycle-drawer"
+        ref={panelRef}
+        role="dialog"
+        tabIndex={-1}
+      >
         <header>
           <div>
             <h2 id="document-recycle-title">文档回收站</h2>

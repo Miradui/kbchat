@@ -1,6 +1,6 @@
 import { act, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithRouter } from '../../test/render';
 import { DocumentDetailDrawer } from './DocumentDetailDrawer';
@@ -30,7 +30,32 @@ beforeEach(() => {
   vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:preview'), revokeObjectURL: vi.fn() });
 });
 
+afterEach(() => {
+  document.body.style.overflow = '';
+  document.getElementById('document-drawer-opener')?.remove();
+});
+
 describe('DocumentDetailDrawer progress', () => {
+  it('uses modal focus, Escape, scroll lock, and focus restoration', async () => {
+    const opener = document.createElement('button');
+    opener.id = 'document-drawer-opener';
+    document.body.append(opener);
+    opener.focus();
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+
+    const rendered = renderWithRouter(<DocumentDetailDrawer documentId="doc-1" onClose={onClose} />);
+
+    expect(screen.getByRole('button', { name: '关闭' })).toHaveFocus();
+    expect(document.body.style.overflow).toBe('hidden');
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    rendered.unmount();
+    expect(document.body.style.overflow).toBe('');
+    expect(opener).toHaveFocus();
+  });
+
   it('shows processing progress, stage, retry budget, and next retry time', async () => {
     renderWithRouter(<DocumentDetailDrawer documentId="doc-1" onClose={vi.fn()} />);
 
