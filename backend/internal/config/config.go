@@ -112,7 +112,7 @@ func Load() Config {
 		RerankModel:        getEnv("RERANK_MODEL", defaultRerankModel),
 		RerankFailureMode:  normalizeRerankFailureMode(getEnv("RERANK_FAILURE_MODE", defaultRerankFailureMode)),
 		UploadDir:          getEnv("UPLOAD_DIR", defaultUploadDir),
-		MaxUploadSizeMB:    getEnvInt("MAX_UPLOAD_SIZE_MB", defaultMaxUploadSizeMB),
+		MaxUploadSizeMB:    getEnvUploadSizeMB(defaultMaxUploadSizeMB),
 		VectorTopN:         getEnvInt("VECTOR_TOP_N", defaultVectorTopN),
 		RerankTopK:         getEnvInt("RERANK_TOP_K", defaultRerankTopK),
 		ScoreThreshold:     getEnvFloat("SCORE_THRESHOLD", defaultScoreThreshold),
@@ -205,6 +205,19 @@ func getEnvInt(key string, fallback int) int {
 	parsed, err := strconv.Atoi(value)
 	if err != nil {
 		return fallback
+	}
+	return parsed
+}
+
+func getEnvUploadSizeMB(fallback int) int {
+	value, ok := os.LookupEnv("MAX_UPLOAD_SIZE_MB")
+	if !ok || value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0
 	}
 	return parsed
 }

@@ -73,6 +73,20 @@ func TestConfigValidateRejectsUnsafeMaxUploadSize(t *testing.T) {
 	}
 }
 
+func TestLoadPreservesInvalidMaxUploadSizeForValidation(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("JWT_SECRET", "unit-test-secret-with-at-least-32-bytes")
+	t.Setenv("MAX_UPLOAD_SIZE_MB", "50MB")
+
+	cfg := Load()
+	if cfg.MaxUploadSizeMB == defaultMaxUploadSizeMB {
+		t.Fatalf("expected invalid MAX_UPLOAD_SIZE_MB to avoid the default, got %d", cfg.MaxUploadSizeMB)
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "MAX_UPLOAD_SIZE_MB") {
+		t.Fatalf("expected MAX_UPLOAD_SIZE_MB validation error, got %v", err)
+	}
+}
+
 func TestExampleEnvironmentEnablesRerank(t *testing.T) {
 	values, err := godotenv.Read("../../../.env.example")
 	if err != nil {
