@@ -67,6 +67,7 @@ const defaultPreference: KnowledgeBaseWorkspacePreference = {
 };
 
 const pageSizeOptions = [10, 20, 50];
+const mutationRefreshError = '操作已成功，但页面数据刷新失败。无需重复提交，请刷新页面查看最新结果。';
 
 type FormState = {
   id?: string;
@@ -152,7 +153,7 @@ export function KnowledgeBaseListPage() {
     return response.items;
   }, []);
 
-  const loadWorkspace = useCallback(async () => {
+  const loadWorkspace = useCallback(async (reportError = true) => {
     setLoading(true);
     setError('');
 
@@ -172,8 +173,12 @@ export function KnowledgeBaseListPage() {
       setSelectedIds((current) =>
         current.filter((id) => response.items.some((item) => item.id === id)),
       );
+      return true;
     } catch (err) {
-      setError(errorMessage(err, '知识库加载失败'));
+      if (reportError) {
+        setError(errorMessage(err, '知识库加载失败'));
+      }
+      return false;
     } finally {
       setLoading(false);
     }
@@ -415,16 +420,26 @@ export function KnowledgeBaseListPage() {
   }
 
   async function refreshAfterMutation() {
-    const [statsResponse, recycleResponse] = await Promise.all([
-      getKnowledgeBaseStats('month').catch(() => stats),
-      listKnowledgeBaseRecycleBin(1, 20).catch(() => ({ items: recycleItems, total: recycleCount, page: 1, pageSize: 20 })),
+    const [statsRefreshed, recycleRefreshed, workspaceRefreshed] = await Promise.all([
+      getKnowledgeBaseStats('month')
+        .then((response) => {
+          setStats(response);
+          return true;
+        })
+        .catch(() => false),
+      listKnowledgeBaseRecycleBin(1, 20)
+        .then((response) => {
+          setRecycleItems(response.items);
+          setRecycleCount(response.total);
+          return true;
+        })
+        .catch(() => false),
+      loadWorkspace(false),
     ]);
-    if (statsResponse) {
-      setStats(statsResponse);
+
+    if (!statsRefreshed || !recycleRefreshed || !workspaceRefreshed) {
+      setError(mutationRefreshError);
     }
-    setRecycleItems(recycleResponse.items);
-    setRecycleCount(recycleResponse.total);
-    await loadWorkspace();
   }
 
   async function handleRestoreRecycleItem(item: RecycleBinItem) {
