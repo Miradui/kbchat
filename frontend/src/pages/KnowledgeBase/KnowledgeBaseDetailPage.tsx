@@ -145,6 +145,9 @@ export function KnowledgeBaseDetailPage() {
 
     return () => {
       mounted = false;
+      if (pageLoadRequestIdRef.current === requestId) {
+        pageLoadRequestIdRef.current += 1;
+      }
     };
   }, [id, loadPage]);
 
@@ -154,21 +157,26 @@ export function KnowledgeBaseDetailPage() {
     }
 
     const targetKnowledgeBaseId = knowledgeBase.id;
+    const pageRequestId = pageLoadRequestIdRef.current;
+    const isCurrentRequest = () => (
+      pageLoadRequestIdRef.current === pageRequestId
+      && activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId
+    );
     setStartingChat(true);
     setError('');
 
     try {
       const session = await createChatSession(targetKnowledgeBaseId, `${knowledgeBase.name} 问答`);
-      if (activeKnowledgeBaseIdRef.current !== targetKnowledgeBaseId) {
+      if (!isCurrentRequest()) {
         return;
       }
       navigate(`/chat/${session.id}`);
     } catch (err) {
-      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+      if (isCurrentRequest()) {
         setError(errorMessage(err, '会话创建失败'));
       }
     } finally {
-      if (activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId) {
+      if (isCurrentRequest()) {
         setStartingChat(false);
       }
     }
