@@ -78,7 +78,7 @@ func (h *KnowledgeBaseCategoryHandler) Reorder(c *gin.Context) {
 	}
 	var req dto.KnowledgeBaseCategoryReorderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		RespondError(c, apperror.Validation(map[string]any{"body": "璇锋眰鍙傛暟涓嶅悎娉�"}))
+		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
 	res, err := h.categories.Reorder(c.Request.Context(), userID, req)

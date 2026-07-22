@@ -144,7 +144,7 @@ func (h *DocumentHandler) BatchDelete(c *gin.Context) {
 	}
 	var req dto.DocumentBatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		RespondError(c, apperror.Validation(map[string]any{"body": "璇锋眰鍙傛暟涓嶅悎娉�"}))
+		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
 	res, err := h.documents.BatchDelete(c.Request.Context(), userID, req)
@@ -162,7 +162,7 @@ func (h *DocumentHandler) BatchRestore(c *gin.Context) {
 	}
 	var req dto.DocumentBatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		RespondError(c, apperror.Validation(map[string]any{"body": "璇锋眰鍙傛暟涓嶅悎娉�"}))
+		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
 	res, err := h.documents.BatchRestore(c.Request.Context(), userID, req)
@@ -180,7 +180,7 @@ func (h *DocumentHandler) BatchReprocess(c *gin.Context) {
 	}
 	var req dto.DocumentBatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		RespondError(c, apperror.Validation(map[string]any{"body": "璇锋眰鍙傛暟涓嶅悎娉�"}))
+		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
 	res, err := h.documents.BatchReprocess(c.Request.Context(), userID, req)

@@ -98,7 +98,7 @@ func (s *KnowledgeBaseService) Create(ctx context.Context, ownerID uuid.UUID, re
 		return nil, apperror.Internal(err)
 	}
 	if created == nil {
-		return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "鐭ヨ瘑搴撲笉瀛樺湪")
+		return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
 	}
 
 	tags, err := s.repo.ListTags(ctx, created.ID)
@@ -270,7 +270,7 @@ func (s *KnowledgeBaseService) Update(ctx context.Context, ownerID, id uuid.UUID
 		return nil, apperror.Internal(err)
 	}
 	if updated == nil {
-		return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "鐭ヨ瘑搴撲笉瀛樺湪")
+		return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
 	}
 
 	tags, err := s.repo.ListTags(ctx, updated.ID)
@@ -343,7 +343,7 @@ func (s *KnowledgeBaseService) SetFavorite(ctx context.Context, ownerID, id uuid
 func (s *KnowledgeBaseService) BatchSetFavorite(ctx context.Context, ownerID uuid.UUID, req dto.KnowledgeBaseBatchFavoriteRequest) (*dto.KnowledgeBaseBatchResultResponse, error) {
 	ids := normalizeUUIDs(req.KnowledgeBaseIDs)
 	if len(ids) == 0 {
-		return nil, apperror.Validation(map[string]any{"knowledgeBaseIds": "鐭ヨ瘑搴?ID 涓嶈兘涓虹┖"})
+		return nil, apperror.Validation(map[string]any{"knowledgeBaseIds": "知识库 ID 不能为空"})
 	}
 	if err := s.ensureKnowledgeBasesOwner(ctx, ownerID, ids, false); err != nil {
 		return nil, err
@@ -359,7 +359,7 @@ func (s *KnowledgeBaseService) BatchSetFavorite(ctx context.Context, ownerID uui
 func (s *KnowledgeBaseService) BatchMoveCategory(ctx context.Context, ownerID uuid.UUID, req dto.KnowledgeBaseBatchMoveCategoryRequest) (*dto.KnowledgeBaseBatchResultResponse, error) {
 	ids := normalizeUUIDs(req.KnowledgeBaseIDs)
 	if len(ids) == 0 {
-		return nil, apperror.Validation(map[string]any{"knowledgeBaseIds": "鐭ヨ瘑搴?ID 涓嶈兘涓虹┖"})
+		return nil, apperror.Validation(map[string]any{"knowledgeBaseIds": "知识库 ID 不能为空"})
 	}
 	if err := s.ensureKnowledgeBasesOwner(ctx, ownerID, ids, false); err != nil {
 		return nil, err
@@ -373,7 +373,7 @@ func (s *KnowledgeBaseService) BatchMoveCategory(ctx context.Context, ownerID uu
 			return nil, apperror.Internal(err)
 		}
 		if kb == nil {
-			return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "鐭ヨ瘑搴撲笉瀛樺湪")
+			return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
 		}
 		kb.CategoryID = req.CategoryID
 		kb.UpdatedByID = &ownerID
@@ -387,7 +387,7 @@ func (s *KnowledgeBaseService) BatchMoveCategory(ctx context.Context, ownerID uu
 func (s *KnowledgeBaseService) BatchDelete(ctx context.Context, ownerID uuid.UUID, req dto.KnowledgeBaseBatchRequest) (*dto.KnowledgeBaseBatchResultResponse, error) {
 	ids := normalizeUUIDs(req.KnowledgeBaseIDs)
 	if len(ids) == 0 {
-		return nil, apperror.Validation(map[string]any{"knowledgeBaseIds": "鐭ヨ瘑搴?ID 涓嶈兘涓虹┖"})
+		return nil, apperror.Validation(map[string]any{"knowledgeBaseIds": "知识库 ID 不能为空"})
 	}
 	if err := s.ensureKnowledgeBasesOwner(ctx, ownerID, ids, false); err != nil {
 		return nil, err
@@ -398,7 +398,7 @@ func (s *KnowledgeBaseService) BatchDelete(ctx context.Context, ownerID uuid.UUI
 			return nil, apperror.Internal(err)
 		}
 		if kb == nil {
-			return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "鐭ヨ瘑搴撲笉瀛樺湪")
+			return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
 		}
 		if err := s.repo.Delete(ctx, kb); err != nil {
 			return nil, apperror.Internal(err)
@@ -410,7 +410,7 @@ func (s *KnowledgeBaseService) BatchDelete(ctx context.Context, ownerID uuid.UUI
 func (s *KnowledgeBaseService) BatchRestore(ctx context.Context, ownerID uuid.UUID, req dto.KnowledgeBaseBatchRequest) (*dto.KnowledgeBaseBatchResultResponse, error) {
 	ids := normalizeUUIDs(req.KnowledgeBaseIDs)
 	if len(ids) == 0 {
-		return nil, apperror.Validation(map[string]any{"knowledgeBaseIds": "鐭ヨ瘑搴?ID 涓嶈兘涓虹┖"})
+		return nil, apperror.Validation(map[string]any{"knowledgeBaseIds": "知识库 ID 不能为空"})
 	}
 	if err := s.ensureKnowledgeBasesOwner(ctx, ownerID, ids, true); err != nil {
 		return nil, err
@@ -469,7 +469,7 @@ func (s *KnowledgeBaseService) UpdatePermissions(ctx context.Context, ownerID, i
 		return nil, apperror.Internal(err)
 	}
 	if updated == nil {
-		return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "鐭ヨ瘑搴撲笉瀛樺湪")
+		return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
 	}
 
 	members, err := s.members.ListByKnowledgeBase(ctx, updated.ID)
@@ -656,7 +656,7 @@ func (s *KnowledgeBaseService) ensureKnowledgeBasesOwner(ctx context.Context, ow
 			return apperror.Internal(err)
 		}
 		if kb == nil {
-			return apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "鐭ヨ瘑搴撲笉瀛樺湪")
+			return apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
 		}
 	}
 	return nil

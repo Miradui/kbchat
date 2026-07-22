@@ -100,7 +100,7 @@ func (h *KnowledgeBaseHandler) BatchFavorite(c *gin.Context) {
 	}
 	var req dto.KnowledgeBaseBatchFavoriteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		RespondError(c, apperror.Validation(map[string]any{"body": "璇锋眰鍙傛暟涓嶅悎娉�"}))
+		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
 	res, err := h.knowledgeBases.BatchSetFavorite(c.Request.Context(), userID, req)
@@ -118,7 +118,7 @@ func (h *KnowledgeBaseHandler) BatchMoveCategory(c *gin.Context) {
 	}
 	var req dto.KnowledgeBaseBatchMoveCategoryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		RespondError(c, apperror.Validation(map[string]any{"body": "璇锋眰鍙傛暟涓嶅悎娉�"}))
+		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
 	res, err := h.knowledgeBases.BatchMoveCategory(c.Request.Context(), userID, req)
@@ -136,7 +136,7 @@ func (h *KnowledgeBaseHandler) BatchDelete(c *gin.Context) {
 	}
 	var req dto.KnowledgeBaseBatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		RespondError(c, apperror.Validation(map[string]any{"body": "璇锋眰鍙傛暟涓嶅悎娉�"}))
+		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
 	res, err := h.knowledgeBases.BatchDelete(c.Request.Context(), userID, req)
@@ -154,7 +154,7 @@ func (h *KnowledgeBaseHandler) BatchRestore(c *gin.Context) {
 	}
 	var req dto.KnowledgeBaseBatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		RespondError(c, apperror.Validation(map[string]any{"body": "璇锋眰鍙傛暟涓嶅悎娉�"}))
+		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
 	res, err := h.knowledgeBases.BatchRestore(c.Request.Context(), userID, req)
@@ -269,7 +269,7 @@ func (h *KnowledgeBaseHandler) UpdatePermissions(c *gin.Context) {
 
 	var req dto.KnowledgeBasePermissionUpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		RespondError(c, apperror.Validation(map[string]any{"body": "璇锋眰鍙傛暟涓嶅悎娉�"}))
+		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
 

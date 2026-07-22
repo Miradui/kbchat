@@ -723,11 +723,16 @@ func TestKnowledgeBaseBatchOperationsRejectForeignIDsWithoutPartialMutation(t *t
 	ownKB := createWorkspaceKB(t, services.db, owner.ID, sourceCategory.ID, "product-a", "private", time.Now())
 	foreignKB := createWorkspaceKB(t, services.db, other.ID, uuid.Nil, "foreign-kb", "private", time.Now())
 
-	if _, err := services.kbs.BatchSetFavorite(ctx, owner.ID, dto.KnowledgeBaseBatchFavoriteRequest{
+	_, favoriteErr := services.kbs.BatchSetFavorite(ctx, owner.ID, dto.KnowledgeBaseBatchFavoriteRequest{
 		KnowledgeBaseIDs: []uuid.UUID{ownKB.ID, foreignKB.ID},
 		Favorite:         true,
-	}); err == nil {
+	})
+	if favoriteErr == nil {
 		t.Fatalf("expected batch favorite with foreign knowledge base to fail")
+	}
+	var appErr *apperror.Error
+	if !errors.As(favoriteErr, &appErr) || appErr.Message != "知识库不存在" {
+		t.Fatalf("expected readable knowledge base not found error, got %v", favoriteErr)
 	}
 
 	favorites, err := services.kbs.ListWorkspace(ctx, owner.ID, dto.KnowledgeBaseListQuery{
