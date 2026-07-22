@@ -646,16 +646,8 @@ func isListLine(line string) bool {
 	if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") || strings.HasPrefix(line, "+ ") {
 		return true
 	}
-	dot := strings.Index(line, ". ")
-	if dot <= 0 {
-		return false
-	}
-	for _, r := range line[:dot] {
-		if !unicode.IsDigit(r) {
-			return false
-		}
-	}
-	return true
+	_, ok := orderedListMarker(line)
+	return ok
 }
 
 func isIndentedListContinuation(line string) bool {
@@ -736,16 +728,26 @@ func listMarker(line string) (string, bool) {
 	if strings.HasPrefix(content, "- ") || strings.HasPrefix(content, "* ") || strings.HasPrefix(content, "+ ") {
 		return line[:contentStart+2], true
 	}
-	dot := strings.Index(content, ". ")
-	if dot <= 0 {
+	marker, ok := orderedListMarker(content)
+	if !ok {
 		return "", false
 	}
-	for _, r := range content[:dot] {
-		if !unicode.IsDigit(r) {
-			return "", false
+	return line[:contentStart+len(marker)], true
+}
+
+func orderedListMarker(line string) (string, bool) {
+	for markerEnd := 1; markerEnd+1 < len(line); markerEnd++ {
+		if (line[markerEnd] != '.' && line[markerEnd] != ')') || line[markerEnd+1] != ' ' {
+			continue
 		}
+		for _, r := range line[:markerEnd] {
+			if !unicode.IsDigit(r) {
+				return "", false
+			}
+		}
+		return line[:markerEnd+2], true
 	}
-	return line[:contentStart+dot+2], true
+	return "", false
 }
 
 func splitOversizeCodeBlock(item block, budget int) []block {

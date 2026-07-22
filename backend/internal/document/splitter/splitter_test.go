@@ -590,6 +590,27 @@ func TestSplitMarkdownListKeepsIndentedContinuationInListBlock(t *testing.T) {
 	}
 }
 
+func TestSplitRecognizesParenthesizedOrderedMarkdownList(t *testing.T) {
+	text := "1) alpha\n2) beta"
+	chunks := New(100, 0).Split(text)
+
+	if len(chunks) != 1 {
+		t.Fatalf("expected one ordered list chunk, got %#v", chunks)
+	}
+	if chunks[0].Metadata["structureType"] != "list" || chunks[0].Content != text {
+		t.Fatalf("expected parenthesized markers to remain list content, got %#v", chunks[0])
+	}
+}
+
+func TestSplitDoesNotRecognizeParenthesizedOrderedTextWithoutSpaceAsList(t *testing.T) {
+	text := "1)item"
+	chunks := New(100, 0).Split(text)
+
+	if len(chunks) != 1 || chunks[0].Metadata["structureType"] != "paragraph" || chunks[0].Content != text {
+		t.Fatalf("expected missing marker space to remain paragraph content, got %#v", chunks)
+	}
+}
+
 func TestSplitOversizeListContinuationRepeatsIndent(t *testing.T) {
 	text := "- x\n  alpha beta gamma delta"
 	chunks := New(3, 0).Split(text)
@@ -869,6 +890,7 @@ func TestSplitRepeatsMarkerForSingleOversizeMarkdownListItem(t *testing.T) {
 	}{
 		{name: "unordered", marker: "- "},
 		{name: "ordered", marker: "1. "},
+		{name: "ordered parenthesized", marker: "12) "},
 	}
 	body := "alpha beta gamma delta epsilon zeta eta theta"
 
@@ -892,6 +914,31 @@ func TestSplitRepeatsMarkerForSingleOversizeMarkdownListItem(t *testing.T) {
 				t.Fatalf("expected list body order to remain %q, got %#v", body, chunks)
 			}
 		})
+	}
+}
+
+func TestSplitRepeatsParenthesizedMarkerWithoutExpandingSourceOffsets(t *testing.T) {
+	marker := "12) "
+	body := "alpha beta gamma delta epsilon zeta eta theta"
+	chunks := New(6, 0).Split(marker + body)
+	if len(chunks) < 2 {
+		t.Fatalf("expected oversized parenthesized list item to split, got %#v", chunks)
+	}
+
+	previousEnd := 0
+	for index, chunk := range chunks {
+		if chunk.Index != index || chunk.TokenCount > 6 || chunk.Metadata["structureType"] != "list" {
+			t.Fatalf("unexpected parenthesized list chunk %d: %#v", index, chunk)
+		}
+		if !strings.HasPrefix(chunk.Content, marker) {
+			t.Fatalf("expected marker %q on chunk %d, got %q", marker, index, chunk.Content)
+		}
+		start, startOK := chunk.Metadata["startOffset"].(int)
+		end, endOK := chunk.Metadata["endOffset"].(int)
+		if !startOK || !endOK || start < previousEnd || end <= start {
+			t.Fatalf("expected monotonic source offsets on chunk %d, got %#v", index, chunk.Metadata)
+		}
+		previousEnd = end
 	}
 }
 
