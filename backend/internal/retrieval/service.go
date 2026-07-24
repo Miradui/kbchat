@@ -77,10 +77,10 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 
 	embeddings, err := s.embedder.EmbedTexts(ctx, []string{req.Query})
 	if err != nil {
-		return nil, apperror.Wrap(500, "EMBEDDING_FAILED", "embedding failed", err)
+		return nil, apperror.Wrap(500, "EMBEDDING_FAILED", "知识检索暂时不可用，请稍后重试", err)
 	}
 	if len(embeddings) != 1 {
-		return nil, apperror.New(500, "EMBEDDING_FAILED", "embedding failed")
+		return nil, apperror.New(500, "EMBEDDING_FAILED", "知识检索暂时不可用，请稍后重试")
 	}
 
 	candidates, err := s.chunks.SearchByVector(ctx, kbID, embeddings[0], vectorTopN)
@@ -103,7 +103,7 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 					Reason: fmt.Sprintf("rerank failed: %v", err),
 				}
 			} else {
-				return nil, apperror.Wrap(500, "RERANK_FAILED", "retrieval rerank failed", err)
+				return nil, apperror.Wrap(500, "RERANK_FAILED", "知识检索排序暂时不可用，请稍后重试", err)
 			}
 		} else {
 			rerankStageStatus = "completed"

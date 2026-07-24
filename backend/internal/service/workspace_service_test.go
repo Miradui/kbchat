@@ -734,6 +734,18 @@ func TestKnowledgeBaseStatsUseOwnerDataOnly(t *testing.T) {
 	}
 }
 
+func TestMetricHasNoChangeRatioWithoutPreviousBaseline(t *testing.T) {
+	metricWithNewData := metric(3, 0)
+	if metricWithNewData.ChangeRatio != nil {
+		t.Fatalf("expected no comparable ratio for new data, got %v", *metricWithNewData.ChangeRatio)
+	}
+
+	metricWithoutData := metric(0, 0)
+	if metricWithoutData.ChangeRatio != nil {
+		t.Fatalf("expected no comparable ratio without data, got %v", *metricWithoutData.ChangeRatio)
+	}
+}
+
 func TestGlobalDocumentListAndKeywordSearchUseOwnerScope(t *testing.T) {
 	ctx := context.Background()
 	services := newWorkspaceTestServices(t)
@@ -1380,6 +1392,28 @@ func TestDocumentResponsesExposeLatestJobProgress(t *testing.T) {
 	}
 	if len(globalList.Items) != 1 || globalList.Items[0].JobStatus != "running" || globalList.Items[0].Progress != 75 {
 		t.Fatalf("expected progress fields on global document list, got %#v", globalList.Items)
+	}
+}
+
+func TestFailedDocumentProgressIsNotComplete(t *testing.T) {
+	progress := documentProgress("failed", nil, 3)
+	if progress.JobStatus != "failed" || progress.Stage != "failed" {
+		t.Fatalf("expected failed state to remain explicit, got %#v", progress)
+	}
+	if progress.Progress != 0 {
+		t.Fatalf("expected failed progress to avoid completed 100%%, got %d", progress.Progress)
+	}
+}
+
+func TestDocumentResponseHidesTechnicalProcessingErrors(t *testing.T) {
+	configurationMessage := publicDocumentErrorMessage("EMBEDDING_API_KEY is required")
+	if configurationMessage != "文档处理服务尚未配置完成，请联系管理员完成配置后再重处理。" {
+		t.Fatalf("unexpected configuration message: %q", configurationMessage)
+	}
+
+	processingMessage := publicDocumentErrorMessage("dial tcp 127.0.0.1: connection refused")
+	if processingMessage != "文档处理失败，请检查文件内容或稍后重处理。" {
+		t.Fatalf("unexpected processing message: %q", processingMessage)
 	}
 }
 

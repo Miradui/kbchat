@@ -127,7 +127,7 @@ export type KnowledgeBaseTagListResponse = {
 
 export type WorkspaceMetric = {
   value: number;
-  changeRatio: number;
+  changeRatio: number | null;
 };
 
 export type KnowledgeBaseStatsResponse = {
@@ -200,6 +200,12 @@ export type DocumentItem = {
   fileSize: number;
   status: DocumentStatus;
   errorMessage: string | null;
+  jobStatus?: 'pending' | 'running' | 'failed' | 'completed';
+  progress?: number;
+  stage?: DocumentStatus;
+  retryCount?: number;
+  maxRetries?: number;
+  nextRetryAt?: string | null;
   createdAt: string;
   updatedAt?: string;
 };

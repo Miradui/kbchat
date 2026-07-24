@@ -111,8 +111,8 @@ type KnowledgeBaseTagListResponse struct {
 }
 
 type WorkspaceMetric struct {
-	Value       int64   `json:"value"`
-	ChangeRatio float64 `json:"changeRatio"`
+	Value       int64    `json:"value"`
+	ChangeRatio *float64 `json:"changeRatio"`
 }
 
 type RecycleBinItemResponse struct {

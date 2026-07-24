@@ -36,6 +36,25 @@ beforeEach(() => {
 });
 
 describe('TagsPage', () => {
+  it('shows a first-use empty state when no tags exist', async () => {
+    vi.mocked(listKnowledgeBaseTags).mockResolvedValue({ items: [] });
+    renderWithRouter(<TagsPage />);
+
+    expect(await screen.findByText('尚未创建标签')).toBeInTheDocument();
+    expect(screen.queryByText('没有匹配的标签')).not.toBeInTheDocument();
+  });
+
+  it('shows a filtered empty state when the search has no matches', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<TagsPage />);
+    expect(await screen.findByText('制度')).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('搜索标签'), '产品');
+
+    expect(screen.getByText('没有匹配的标签')).toBeInTheDocument();
+    expect(screen.queryByText('尚未创建标签')).not.toBeInTheDocument();
+  });
+
   it('creates locally without refetching', async () => {
     const user = userEvent.setup();
     renderWithRouter(<TagsPage />);

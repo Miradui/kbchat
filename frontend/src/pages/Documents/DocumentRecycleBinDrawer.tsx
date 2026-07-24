@@ -124,7 +124,7 @@ export function DocumentRecycleBinDrawer({
       await loadPage();
       onChanged();
     } catch (err) {
-      setError(errorMessage(err, '清空失败，后端按 all-or-nothing 语义未执行部分删除。'));
+      setError(errorMessage(err, '清空失败，未删除任何文档。'));
     } finally {
       setSubmitting(false);
     }
@@ -225,7 +225,7 @@ export function DocumentRecycleBinDrawer({
     {confirmEmpty && (
       <ConfirmDialog
         title="清空文档回收站"
-        description="确认清空文档回收站？后端按 all-or-nothing 语义执行，失败时不会产生部分删除。"
+        description="确认清空文档回收站？操作失败时不会删除其中任何文档。"
         confirmLabel="清空"
         busy={submitting}
         onCancel={() => setConfirmEmpty(false)}

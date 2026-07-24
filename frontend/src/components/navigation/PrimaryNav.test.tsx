@@ -11,7 +11,8 @@ describe('PrimaryNav', () => {
     const user = userEvent.setup();
     renderWithRouter(<PrimaryNav active="documents" onNavigate={onNavigate} />);
 
-    expect(screen.getAllByRole('link')).toHaveLength(6);
+    expect(screen.getAllByRole('link')).toHaveLength(7);
+    expect(screen.getByRole('link', { name: '发起新问答' })).toHaveAttribute('href', '/chat/new');
     expect(screen.getByRole('link', { name: '文档管理' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getAllByRole('link').filter((link) => link.hasAttribute('aria-current'))).toHaveLength(1);
     expect(screen.queryByText('权限管理')).not.toBeInTheDocument();

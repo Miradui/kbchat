@@ -1,10 +1,8 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
-import { ApiError } from '../../api/client';
 import {
   addKnowledgeBaseMember,
-  createChatSession,
   deleteKnowledgeBaseMember,
   getKnowledgeBase,
   getKnowledgeBasePermissions,
@@ -33,6 +31,7 @@ import type {
   RetrievalConfig,
   UserSummary,
 } from '../../types/api';
+import { getErrorMessage } from '../../utils/errors';
 
 const terminalStatuses: DocumentStatus[] = ['completed', 'failed'];
 
@@ -55,7 +54,6 @@ export function KnowledgeBaseDetailPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<KnowledgeBaseSearchResult[]>([]);
   const [loading, setLoading] = useState(true);
-  const [startingChat, setStartingChat] = useState(false);
   const [searching, setSearching] = useState(false);
   const [savingVisibility, setSavingVisibility] = useState(false);
   const [memberQuery, setMemberQuery] = useState('');
@@ -114,22 +112,11 @@ export function KnowledgeBaseDetailPage() {
     };
   }, [id, loadPage]);
 
-  async function handleStartChat() {
+  function handleStartChat() {
     if (!knowledgeBase) {
       return;
     }
-
-    setStartingChat(true);
-    setError('');
-
-    try {
-      const session = await createChatSession(knowledgeBase.id, `${knowledgeBase.name} 问答`);
-      navigate(`/chat/${session.id}`);
-    } catch (err) {
-      setError(errorMessage(err, '会话创建失败'));
-    } finally {
-      setStartingChat(false);
-    }
+    navigate(`/chat/new?knowledgeBaseId=${encodeURIComponent(knowledgeBase.id)}`);
   }
 
   async function handleVisibilityChange(visibility: 'private' | 'public') {
@@ -326,9 +313,7 @@ export function KnowledgeBaseDetailPage() {
             <Link className="secondary-link" to={`/knowledge-bases/${knowledgeBase.id}/documents`}>
               文档管理
             </Link>
-            <button type="button" onClick={handleStartChat} disabled={startingChat}>
-              {startingChat ? '创建会话中...' : '开始问答'}
-            </button>
+            <button type="button" onClick={handleStartChat}>开始问答</button>
           </div>
         </header>
 
@@ -345,7 +330,7 @@ export function KnowledgeBaseDetailPage() {
           <section className="panel detail-main-panel">
             <div className="panel-header">
               <h2>基础信息</h2>
-              <span className="muted-text">来自知识库详情接口</span>
+              <span className="muted-text">知识库概览</span>
             </div>
             <div className="detail-info-grid">
               <InfoItem label="分类" value={categoryName} />
@@ -374,7 +359,7 @@ export function KnowledgeBaseDetailPage() {
           <section className="panel">
             <div className="panel-header">
               <h2>成员权限</h2>
-              <span className="muted-text">owner、manager、member</span>
+              <span className="muted-text">管理成员及其角色</span>
             </div>
             <div className="permission-panel-body">
               <label>
@@ -389,7 +374,7 @@ export function KnowledgeBaseDetailPage() {
                 </select>
               </label>
               {permissions?.owner && (
-                <PermissionMemberCard member={{ ...permissions.owner, role: 'owner' }} title="Owner" />
+                <PermissionMemberCard member={{ ...permissions.owner, role: 'owner' }} title="所有者" />
               )}
               <form className="member-search-form" onSubmit={handleUserSearch}>
                 <input
@@ -403,8 +388,8 @@ export function KnowledgeBaseDetailPage() {
                   value={memberRole}
                   onChange={(event) => setMemberRole(event.target.value as MemberRole)}
                 >
-                  <option value="member">member</option>
-                  <option value="manager">manager</option>
+                  <option value="member">成员</option>
+                  <option value="manager">管理员</option>
                 </select>
                 <button type="submit" disabled={searchingUsers || !memberQuery.trim()}>
                   {searchingUsers ? '搜索中...' : '搜索'}
@@ -421,21 +406,21 @@ export function KnowledgeBaseDetailPage() {
                         onClick={() => void handleAddMember(user)}
                         disabled={memberWorkingId === user.id || user.id === permissions?.owner.id}
                       >
-                        {memberWorkingId === user.id ? '添加中...' : `设为 ${memberRole}`}
+                        {memberWorkingId === user.id ? '添加中...' : `设为${roleLabel(memberRole)}`}
                       </button>
                     </article>
                   ))}
                 </div>
               )}
               <PermissionList
-                title="Managers"
+                title="管理员"
                 members={managers}
                 workingId={memberWorkingId}
                 onDelete={handleDeleteMember}
                 onRoleChange={handleUpdateMemberRole}
               />
               <PermissionList
-                title="Members"
+                title="成员"
                 members={permissions?.members ?? []}
                 emptyText="暂无成员。"
                 workingId={memberWorkingId}
@@ -448,7 +433,7 @@ export function KnowledgeBaseDetailPage() {
           <section className="panel detail-main-panel">
             <div className="panel-header">
               <h2>检索配置</h2>
-              <span className="muted-text">RAG 默认路径包含 rerank</span>
+              <span className="muted-text">控制召回范围与结果排序</span>
             </div>
             <RetrievalConfigGrid config={knowledgeBase.retrievalConfig} />
           </section>
@@ -456,7 +441,7 @@ export function KnowledgeBaseDetailPage() {
           <section className="panel detail-main-panel semantic-search-panel">
             <div className="panel-header">
               <h2>检索测试</h2>
-              <span className="muted-text">调用知识库内语义检索接口</span>
+              <span className="muted-text">验证当前知识库能否找到相关内容</span>
             </div>
             <div className="semantic-search-body">
               <form className="semantic-search-form" onSubmit={handleSemanticSearch}>
@@ -473,10 +458,9 @@ export function KnowledgeBaseDetailPage() {
 
               {searchFallback?.used && (
                 <div className="semantic-fallback-notice" role="status">
-                  <strong>Rerank 已降级</strong>
+                  <strong>结果排序已降级</strong>
                   <span>
-                    本次检索未完成精排，结果按向量召回顺序展示。
-                    {searchFallback.reason ? `原因：${searchFallback.reason}` : ''}
+                    排序服务暂时不可用，本次结果已按相关度展示。
                   </span>
                 </div>
               )}
@@ -490,10 +474,10 @@ export function KnowledgeBaseDetailPage() {
                       <header>
                         <strong>{result.filename}</strong>
                         <span>
-                          vector {formatScore(result.vectorScore)}
+                          相关度 {formatScore(result.vectorScore)}
                           {result.rerankScore !== null && result.rerankScore !== undefined
-                            ? ` · rerank ${formatScore(result.rerankScore)}`
-                            : ' · rerank 未精排'}
+                            ? ` · 排序分 ${formatScore(result.rerankScore)}`
+                            : ' · 未精排'}
                         </span>
                       </header>
                       <p>{result.content}</p>
@@ -523,7 +507,7 @@ export function KnowledgeBaseDetailPage() {
                       <span>{formatBytes(document.fileSize)} · {document.fileType}</span>
                     </div>
                     <span className={`status-pill status-${statusClass(document.status)}`}>
-                      {document.status}
+                      {documentStatusLabel(document.status)}
                     </span>
                   </article>
                 ))
@@ -558,19 +542,19 @@ function RetrievalConfigGrid({ config }: { config: RetrievalConfig }) {
   return (
     <div className="config-grid detail-config-grid">
       <div className="stat-card">
-        <span>vectorTopN</span>
+        <span>向量召回数量</span>
         <strong>{config.vectorTopN}</strong>
       </div>
       <div className="stat-card">
-        <span>rerankTopK</span>
+        <span>精排候选数量</span>
         <strong>{config.rerankTopK}</strong>
       </div>
       <div className="stat-card">
-        <span>scoreThreshold</span>
+        <span>最低相关度</span>
         <strong>{config.scoreThreshold}</strong>
       </div>
       <div className="stat-card">
-        <span>enableRerank</span>
+        <span>启用精排</span>
         <small>{config.enableRerank ? '开启' : '关闭'}</small>
       </div>
     </div>
@@ -633,7 +617,7 @@ function PermissionMemberCard({
       <div>
         {title && <em>{title}</em>}
         <strong>{name}</strong>
-        <small>{member.username} · {member.role}</small>
+        <small>{member.username} · {roleLabel(member.role)}</small>
       </div>
       {mutable && (
         <div className="permission-member-actions">
@@ -643,8 +627,8 @@ function PermissionMemberCard({
             disabled={working}
             onChange={(event) => onRoleChange?.(member, event.target.value as MemberRole)}
           >
-            <option value="manager">manager</option>
-            <option value="member">member</option>
+            <option value="manager">管理员</option>
+            <option value="member">成员</option>
           </select>
           <button
             className="link-button"
@@ -693,6 +677,27 @@ function statusClass(status: DocumentStatus): string {
   return 'processing';
 }
 
+function documentStatusLabel(status: DocumentStatus): string {
+  const labels: Record<DocumentStatus, string> = {
+    uploaded: '已上传',
+    parsing: '解析中',
+    chunking: '切分中',
+    embedding: '向量化',
+    completed: '已完成',
+    failed: '失败',
+  };
+  return labels[status];
+}
+
+function roleLabel(role: PermissionMember['role'] | MemberRole): string {
+  const labels = {
+    owner: '所有者',
+    manager: '管理员',
+    member: '成员',
+  } as const;
+  return labels[role];
+}
+
 function formatBytes(value: number): string {
   if (value < 1024) {
     return `${value} B`;
@@ -718,8 +723,5 @@ function formatDateTime(value: string): string {
 }
 
 function errorMessage(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    return err.message;
-  }
-  return fallback;
+  return getErrorMessage(err, fallback);
 }

@@ -48,8 +48,8 @@ export function LoginPage({ loginRequest = login }: LoginPageProps) {
   return (
     <section className="auth-page">
       <aside className="auth-context" aria-label="产品说明">
-        <div><p className="eyebrow">RAG Console</p><h2>让企业知识可检索、可问答、可追溯</h2><p>统一管理知识库与文档处理流程，并通过真实 citations 追踪答案依据。</p></div>
-        <ul><li>知识库与文档集中管理</li><li>检索、Rerank 与问答链路清晰可见</li><li>答案引用只来自实际进入 Prompt 的内容</li></ul>
+        <div><p className="eyebrow">RAG Console</p><h2>让企业知识可检索、可问答、可追溯</h2><p>统一管理知识库与文档处理流程，让每个回答都有清晰依据。</p></div>
+        <ul><li>知识库与文档集中管理</li><li>检索与问答过程清晰可见</li><li>回答依据可查看、可追溯</li></ul>
       </aside>
 
       <form className="auth-panel" onSubmit={handleSubmit}>

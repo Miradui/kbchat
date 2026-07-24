@@ -247,7 +247,7 @@ updatedBy
 period=month|day
 ```
 
-返回知识库数、文档数、浏览量和问答数，以及相对上一周期变化比例。
+返回知识库数、文档数、浏览量和问答数，以及相对上一周期变化比例。上一周期值为 0 时 `changeRatio` 返回 `null`，前端应展示“本月新增”或“暂无可比数据”，不得显示为 100%。
 
 ### POST /knowledge-bases/:id/favorite
 
@@ -449,7 +449,9 @@ pageSize
 }
 ```
 
-`nextRetryAt` 无重试计划时为 `null`。稳定进度映射为 `uploaded=0`、`parsing=25`、`chunking=50`、`embedding=75`、`completed=100`、`failed=100`。
+`nextRetryAt` 无重试计划时为 `null`。稳定进度映射为 `uploaded=0`、`parsing=25`、`chunking=50`、`embedding=75`、`completed=100`、`failed=0`。失败状态以 `status=failed` 和 `stage=failed` 单独表达，不得伪装为已完成进度。
+
+`errorMessage` 只返回用户可读的业务提示。模型配置、网络、文件系统等原始技术错误保留在服务端日志和内部任务记录中，不得通过公开 DTO 返回。
 
 ### POST /documents/batch-delete
 

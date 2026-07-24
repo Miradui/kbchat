@@ -4,7 +4,7 @@
 .tags-toolbar input { max-width: 360px; min-height: 44px; width: 100%; }
 .tags-toolbar span { color: var(--color-text-muted); white-space: nowrap; }
 .field-error { color: var(--color-danger); margin: 0; }
-.tags-table-wrap { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow-x: auto; }
+.tags-table-wrap { background: var(--color-surface); border: 1px solid rgb(255 255 255 / 76%); border-radius: var(--radius-md); box-shadow: var(--shadow-raised); overflow-x: auto; -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)); backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)); }
 .tags-table { border-collapse: collapse; min-width: 620px; width: 100%; }
 .tags-table th,
 .tags-table td { border-bottom: 1px solid var(--color-border); padding: 14px 16px; text-align: left; }

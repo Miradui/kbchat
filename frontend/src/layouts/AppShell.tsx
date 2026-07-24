@@ -1,4 +1,4 @@
-import { LogOut, Menu, Search, X } from 'lucide-react';
+import { Command, LogOut, Menu, Search, UserRound, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -100,7 +100,10 @@ export function AppShell({ active, contextSidebar, topbarContent, logoutRequest 
     <section className="app-layout" data-active={active}>
       <aside aria-hidden={drawerHidden || undefined} className={drawerOpen ? 'app-sidebar is-open' : 'app-sidebar'} inert={drawerHidden || undefined} ref={sidebarRef}>
         <div className="app-sidebar__brand-row">
-          <Link aria-label="RAG Console" className="app-brand" to="/home" onClick={() => setDrawerOpen(false)}>RAG Console</Link>
+          <Link aria-label="RAG Console" className="app-brand" to="/home" onClick={() => setDrawerOpen(false)}>
+            <span className="app-brand__mark" aria-hidden="true"><Command /></span>
+            <span className="app-brand__copy"><strong>RAG Console</strong><small>Knowledge workspace</small></span>
+          </Link>
           {isMobile && <IconButton ref={closeButtonRef} className="app-drawer-close" label="关闭主导航" onClick={() => setDrawerOpen(false)}><X aria-hidden="true" /></IconButton>}
         </div>
         <PrimaryNav active={active} onNavigate={() => setDrawerOpen(false)} />
@@ -115,7 +118,7 @@ export function AppShell({ active, contextSidebar, topbarContent, logoutRequest 
             <Search aria-hidden="true" /><label className="sr-only" htmlFor="app-global-search">全局搜索</label>
             <input id="app-global-search" placeholder="搜索知识库、文档和内容" value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} />
           </form>
-          <div className="app-account-actions" aria-label="账户操作"><span>当前用户</span><IconButton label="退出登录" onClick={handleLogout}><LogOut aria-hidden="true" /></IconButton></div>
+          <div className="app-account-actions" aria-label="账户操作"><span className="app-user-badge" aria-hidden="true"><UserRound /></span><span>当前用户</span><IconButton label="退出登录" onClick={handleLogout}><LogOut aria-hidden="true" /></IconButton></div>
         </header>
         <main className="app-content" inert={(isMobile && drawerOpen) || undefined}>{children}</main>
       </div>

@@ -1,7 +1,6 @@
 import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { ApiError } from '../../api/client';
 import {
   batchDeleteDocuments,
   batchReprocessDocuments,
@@ -24,6 +23,7 @@ import type {
   KnowledgeBaseCategory,
   KnowledgeBaseWorkspacePreference,
 } from '../../types/api';
+import { getErrorMessage } from '../../utils/errors';
 
 const statusOptions: Array<DocumentStatus | ''> = [
   '',
@@ -560,8 +560,5 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
 }
 
 function errorMessage(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    return err.message;
-  }
-  return fallback;
+  return getErrorMessage(err, fallback);
 }

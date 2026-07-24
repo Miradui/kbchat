@@ -1,5 +1,46 @@
 import { ApiError } from '../api/client';
 
 export function getErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? error.message : fallback;
+  if (!(error instanceof ApiError)) {
+    return fallback;
+  }
+
+  const messages: Record<string, string> = {
+    CHAT_COMPLETION_FAILED: '回答生成失败，请稍后重试。',
+    EMBEDDING_FAILED: '知识检索暂时不可用，请稍后重试。',
+    RERANK_FAILED: '知识检索排序暂时不可用，请稍后重试。',
+    DOCUMENT_PROCESS_FAILED: '文档处理失败，请检查文件内容或稍后重处理。',
+    INTERNAL_ERROR: fallback,
+  };
+  if (messages[error.code]) {
+    return messages[error.code];
+  }
+
+  if (isTechnicalError(error.message)) {
+    return fallback;
+  }
+  return error.message;
+}
+
+function isTechnicalError(message: string): boolean {
+  return [
+    /(?:api[_ ]?key|base[_ ]?url|model)\s+is required/i,
+    /\b(?:chat completion|embedding|rerank|retrieval)\s+failed\b/i,
+    /\b(?:dial tcp|connection refused|connect\s+econn|timeout)\b/i,
+  ].some((pattern) => pattern.test(message));
+}
+
+export function getDocumentProcessingErrorMessage(errorMessage: string | null | undefined): string {
+  const normalized = errorMessage?.trim().toLowerCase() ?? '';
+  if (
+    normalized.includes('尚未配置完成') ||
+    normalized.includes('api_key is required') ||
+    normalized.includes('api key is required') ||
+    normalized.includes('base_url is required') ||
+    normalized.includes('base url is required') ||
+    normalized.includes('model is required')
+  ) {
+    return '文档处理服务尚未配置完成，请联系管理员完成配置后再重处理。';
+  }
+  return '文档处理失败，请检查文件内容或稍后重处理。';
 }

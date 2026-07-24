@@ -108,6 +108,8 @@ export function TagsPage() {
           <LoadingSkeleton announce rows={5} columns={3} />
         ) : loadError ? (
           <ErrorState title="标签加载失败" description={loadError} onRetry={() => setReloadKey((value) => value + 1)} />
+        ) : tags.length === 0 ? (
+          <EmptyState title="尚未创建标签" description="创建标签后，可用于整理和筛选知识库。" />
         ) : visibleTags.length === 0 ? (
           <EmptyState title="没有匹配的标签" description="调整关键词，或创建一个新标签。" />
         ) : (
@@ -144,7 +146,7 @@ export function TagsPage() {
           <ConfirmDialog
             busy={deleting}
             confirmLabel="删除"
-            description={`确认删除“${deleteTarget.name}”？如果仍被知识库引用，后端会拒绝删除。`}
+            description={`确认删除“${deleteTarget.name}”？正在被知识库使用的标签无法删除。`}
             error={deleteError}
             onCancel={() => { setDeleteError(''); setDeleteTarget(null); }}
             onConfirm={() => void deleteTag()}

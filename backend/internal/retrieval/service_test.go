@@ -120,6 +120,9 @@ func TestSearchStrictRerankFailureReturnsRerankFailed(t *testing.T) {
 	if appErr.Code != "RERANK_FAILED" {
 		t.Fatalf("expected RERANK_FAILED, got %s", appErr.Code)
 	}
+	if appErr.Message != "知识检索排序暂时不可用，请稍后重试" {
+		t.Fatalf("expected user-facing rerank message, got %q", appErr.Message)
+	}
 }
 
 func TestSearchFallbackRerankFailureKeepsVectorOrderWithoutRerankScores(t *testing.T) {

@@ -271,3 +271,12 @@ Authorization: Bearer <token>
 - 新增 `POST /api/v1/chat/sessions/:id/messages/:messageId/regenerate`，只能重新生成 assistant 消息，会基于其前一条 user 消息重新执行意图分类、检索、Rerank、Prompt 和 Chat Provider，并追加新 assistant 消息。
 - `GET /api/v1/documents`、`GET /api/v1/knowledge-bases/:id/documents`、`GET /api/v1/documents/:id` 返回 `jobStatus`、`progress`、`stage`、`retryCount`、`maxRetries`、`nextRetryAt`。
 - 本次未新增数据库字段或 migration；document progress 来自已有 `documents.status` 和最新 `document_jobs`。
+
+## UX Recovery Fixes
+
+- 新问答入口先进入 `/chat/new?knowledgeBaseId=...` 草稿页，首次提交问题时才创建会话，避免仅浏览入口就产生空会话。
+- 聊天发送失败会保留原问题并提供重试；网络中断等发送结果未知时先检查消息列表，只有用户明确确认后才重新发送；发送成功但列表刷新失败会单独提示，不会误报为发送失败。
+- Chat、Embedding、Rerank 的公开错误消息改为中文业务提示，原始 Provider 错误保留在服务端错误链中。
+- 文档公开 DTO 不再返回原始处理错误；配置缺失与一般处理失败分别返回可恢复的中文提示。
+- 文档 `failed` 的稳定进度从 `100` 改为 `0`，失败状态由 `status/stage=failed` 单独表达。
+- 工作台统计上一周期为 0 时返回 `changeRatio=null`，前端展示“本月新增”或“暂无可比数据”。
