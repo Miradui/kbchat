@@ -1,4 +1,4 @@
-import { FileText, Home, Library, MessageSquareText, Search, Tags } from 'lucide-react';
+import { FileText, Home, Library, MessageSquareText, Search, Sparkles, Tags } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -16,18 +16,25 @@ const items: Array<{ to: string; label: string; section: AppSection; icon: Lucid
 export function PrimaryNav({ active, onNavigate }: { active: AppSection; onNavigate: () => void }) {
   return (
     <nav className="primary-nav" aria-label="主导航">
-      {items.map(({ to, label, section, icon: Icon }) => (
-        <Link
-          aria-current={active === section ? 'page' : undefined}
-          className={active === section ? 'primary-nav__item is-active' : 'primary-nav__item'}
-          key={to}
-          onClick={onNavigate}
-          to={to}
-        >
-          <Icon aria-hidden="true" />
-          <span>{label}</span>
-        </Link>
-      ))}
+      <Link className="primary-nav__cta" onClick={onNavigate} to="/chat/new">
+        <Sparkles aria-hidden="true" />
+        <span>发起新问答</span>
+      </Link>
+      <p className="primary-nav__label">工作空间</p>
+      <div className="primary-nav__items">
+        {items.map(({ to, label, section, icon: Icon }) => (
+          <Link
+            aria-current={active === section ? 'page' : undefined}
+            className={active === section ? 'primary-nav__item is-active' : 'primary-nav__item'}
+            key={to}
+            onClick={onNavigate}
+            to={to}
+          >
+            <Icon aria-hidden="true" />
+            <span>{label}</span>
+          </Link>
+        ))}
+      </div>
     </nav>
   );
 }

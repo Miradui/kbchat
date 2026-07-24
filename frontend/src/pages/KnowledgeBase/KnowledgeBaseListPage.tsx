@@ -50,6 +50,7 @@ import type {
   WorkspaceViewMode,
   WorkspaceVisibility,
 } from '../../types/api';
+import { formatMetricComparison } from './statsFormatting';
 
 const defaultConfig: RetrievalConfig = {
   vectorTopN: 30,
@@ -503,7 +504,7 @@ export function KnowledgeBaseListPage() {
       setConfirmEmptyRecycleBin(false);
       await refreshAfterMutation();
     } catch (err) {
-      setError(errorMessage(err, '清空失败，后端按 all-or-nothing 语义未执行部分删除。'));
+      setError(errorMessage(err, '清空失败，未删除任何知识库。'));
     } finally {
       setSubmitting(false);
     }
@@ -980,7 +981,7 @@ export function KnowledgeBaseListPage() {
       {categoryDeleteTarget && (
         <ConfirmDialog
           title="删除分类"
-          description={`确认删除“${categoryDeleteTarget.name}”？后端只允许删除空分类。`}
+          description={`确认删除“${categoryDeleteTarget.name}”？包含子分类或知识库的分类无法删除。`}
           confirmLabel="删除"
           busy={submitting}
           onCancel={() => setCategoryDeleteTarget(null)}
@@ -1006,7 +1007,7 @@ export function KnowledgeBaseListPage() {
       {permanentDeleteTarget && (
         <ConfirmDialog
           title="永久删除知识库"
-          description={`确认永久删除“${permanentDeleteTarget.name}”？关联文档、chunks、会话和成员等数据会被清理，且不可恢复。`}
+          description={`确认永久删除“${permanentDeleteTarget.name}”？关联文档、内容片段、会话和成员等数据会被清理，且不可恢复。`}
           confirmLabel="永久删除"
           busy={submitting}
           onCancel={() => setPermanentDeleteTarget(null)}
@@ -1017,7 +1018,7 @@ export function KnowledgeBaseListPage() {
       {confirmEmptyRecycleBin && (
         <ConfirmDialog
           title="清空知识库回收站"
-          description="确认清空知识库回收站？后端按 all-or-nothing 语义执行，失败时不会产生部分删除。"
+          description="确认清空知识库回收站？操作失败时不会删除其中任何知识库。"
           confirmLabel="清空"
           busy={submitting}
           onCancel={() => setConfirmEmptyRecycleBin(false)}
@@ -1061,7 +1062,7 @@ function KnowledgeBaseFormDrawer({
         <header>
           <div>
             <h2 id="kb-form-title">{form.id ? '编辑知识库' : '新建知识库'}</h2>
-            <p className="muted-text">分类、可见性和标签会直接提交到后端知识库接口。</p>
+            <p className="muted-text">保存后，分类、可见性和标签将立即更新。</p>
           </div>
           <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>
             关闭
@@ -1256,7 +1257,11 @@ function StatsGrid({ stats, fallbackTotal }: { stats: KnowledgeBaseStatsResponse
               {formatNumber(card.metric?.value ?? card.fallback)}
               <small>{card.unit}</small>
             </strong>
-            <em>较上月 {formatChange(card.metric?.changeRatio ?? 0)}</em>
+            <em>
+              {card.metric
+                ? formatMetricComparison(card.metric, stats?.period ?? 'month')
+                : '暂无可比数据'}
+            </em>
           </div>
         </article>
       ))}
@@ -1615,11 +1620,6 @@ function paginationItems(page: number, totalPages: number): number[] {
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat('zh-CN').format(value);
-}
-
-function formatChange(value: number): string {
-  const percentage = Math.round(value * 100);
-  return `${percentage >= 0 ? '↑' : '↓'} ${Math.abs(percentage)}%`;
 }
 
 function formatDateTime(value: string): string {

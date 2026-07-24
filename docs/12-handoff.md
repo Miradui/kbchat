@@ -314,3 +314,12 @@ Authorization: Bearer <token>
 - 前端当前用户请求按认证世代缓存并复用 in-flight 结果；并发或迟到的旧 401 不会重复跳转，也不会清除新登录 token。
 - Chat 可以从任意历史 assistant 回答切换查看真实 citations，右栏展示 filename、pageNumber、content、vectorScore 和 rerankScore；发送、重新生成或切换会话后回到最新回答。
 - Chat 工作区在宽屏使用三栏、常见桌面宽度使用两列、`<=980px` 使用单列面板顺序；移动端可纵向访问会话、消息和引用，不依赖被裁剪的横向内容。
+
+## UX Recovery Fixes
+
+- 新问答入口先进入 `/chat/new?knowledgeBaseId=...` 草稿页，首次提交问题时才创建会话，避免仅浏览入口就产生空会话。
+- 聊天发送失败会保留原问题并提供重试；网络中断等发送结果未知时先检查消息列表，只有用户明确确认后才重新发送；发送成功但列表刷新失败会单独提示，不会误报为发送失败。
+- Chat、Embedding、Rerank 的公开错误消息改为中文业务提示，原始 Provider 错误保留在服务端错误链中。
+- 文档公开 DTO 不再返回原始处理错误；配置缺失与一般处理失败分别返回可恢复的中文提示。
+- 文档 `failed` 的稳定进度从 `100` 改为 `0`，失败状态由 `status/stage=failed` 单独表达。
+- 工作台统计上一周期为 0 时返回 `changeRatio=null`，前端展示“本月新增”或“暂无可比数据”。

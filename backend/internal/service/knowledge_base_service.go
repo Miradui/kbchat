@@ -1001,11 +1001,10 @@ func previousPeriodStart(start time.Time, period string) time.Time {
 }
 
 func metric(current, previous int64) dto.WorkspaceMetric {
-	change := 0.0
+	var change *float64
 	if previous > 0 {
-		change = float64(current-previous) / float64(previous)
-	} else if current > 0 {
-		change = 1
+		value := float64(current-previous) / float64(previous)
+		change = &value
 	}
 	return dto.WorkspaceMetric{
 		Value:       current,

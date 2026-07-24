@@ -8,4 +8,3 @@ CREATE TABLE IF NOT EXISTS knowledge_base_workspace_preferences (
     created_at TIMESTAMP NOT NULL DEFAULT now(),
     updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
-

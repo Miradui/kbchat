@@ -1,4 +1,4 @@
-import { act, screen, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -93,7 +93,7 @@ describe('DocumentsLandingPage loading', () => {
     renderWithRouter(<DocumentsLandingPage />, ['/documents']);
 
     expect(await screen.findByText('processing.pdf')).toBeInTheDocument();
-    expect(window.setInterval).toHaveBeenCalledWith(expect.any(Function), 3000);
+    await waitFor(() => expect(window.setInterval).toHaveBeenCalledWith(expect.any(Function), 3000));
     if (!poll) throw new Error('poll callback was not registered');
 
     await act(async () => poll?.());

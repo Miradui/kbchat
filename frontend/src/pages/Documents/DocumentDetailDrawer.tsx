@@ -15,6 +15,7 @@ import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { useDialogModal } from '../../components/ui/Dialog';
 import type { DocumentChunk, DocumentItem, DocumentPreviewResponse, DocumentStatus } from '../../types/api';
 import { DocumentProgress } from './DocumentProgress';
+import { getDocumentProcessingErrorMessage, getErrorMessage } from '../../utils/errors';
 
 type DocumentDetailDrawerProps = {
   documentId: string;
@@ -269,7 +270,7 @@ export function DocumentDetailDrawer({
           <header>
             <div>
               <h2 id="document-detail-title">文档详情</h2>
-              <p className="muted-text">查看后端文档状态和切分后的 chunks。</p>
+              <p className="muted-text">查看文档状态、预览内容和内容片段。</p>
             </div>
             <button className="secondary-button" type="button" onClick={onClose} disabled={submitting}>
               关闭
@@ -318,7 +319,9 @@ export function DocumentDetailDrawer({
                   </dl>
 
                   {document.errorMessage && (
-                    <p className="document-alert error-text">{document.errorMessage}</p>
+                    <p className="document-alert error-text" role="alert">
+                      {getDocumentProcessingErrorMessage(document.errorMessage)}
+                    </p>
                   )}
 
                   <div className="document-detail-actions">
@@ -332,8 +335,8 @@ export function DocumentDetailDrawer({
                           event.preventDefault();
                         }
                       }}
-                    >
-                      进入处理队列
+                      >
+                      打开处理详情
                     </Link>
                     <button className="secondary-button" type="button" onClick={() => void handleDownload()} disabled={submitting}>
                       下载
@@ -378,13 +381,13 @@ export function DocumentDetailDrawer({
                   <section className="document-chunk-section">
                     <header>
                       <div>
-                        <h3>Chunks</h3>
+                        <h3>内容片段</h3>
                         <p className="muted-text">共 {chunkTotal} 个切片。</p>
                       </div>
                       <form className="chunk-search-form" onSubmit={handleChunkSearch}>
                         <input
-                          aria-label="搜索 chunk 内容"
-                          placeholder="搜索 chunk"
+                          aria-label="搜索内容片段"
+                          placeholder="搜索内容片段"
                           value={chunkQueryDraft}
                           onChange={(event) => setChunkQueryDraft(event.target.value)}
                         />
@@ -399,7 +402,7 @@ export function DocumentDetailDrawer({
                     ) : chunksLoading ? (
                       <LoadingSkeleton rows={4} columns={1} compact />
                     ) : chunks.length === 0 ? (
-                      <div className="empty-state">当前文档还没有 chunks。处理中或失败的文档可能为空。</div>
+                      <div className="empty-state">当前还没有内容片段。文档完成处理后可在这里查看。</div>
                     ) : (
                       <>
                         <div className="document-chunk-list">
@@ -408,7 +411,7 @@ export function DocumentDetailDrawer({
                               <header>
                                 <strong>#{chunk.chunkIndex}</strong>
                                 <span>
-                                  {chunk.tokenCount} tokens
+                                  {chunk.tokenCount} 词元
                                   {chunk.pageNumber ? ` · p.${chunk.pageNumber}` : ''}
                                 </span>
                               </header>
@@ -516,7 +519,7 @@ function errorMessage(err: unknown, fallback: string): string {
     if (err.code === 'FILE_TOO_LARGE_FOR_PREVIEW') {
       return '文件过大，无法在线预览，请下载后查看。';
     }
-    return err.message;
+    return getErrorMessage(err, fallback);
   }
-  return fallback;
+  return getErrorMessage(err, fallback);
 }

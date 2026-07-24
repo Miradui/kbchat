@@ -32,10 +32,11 @@ Start with these docs when changing behavior:
 - `docs/05-rag-pipeline.md` for retrieval and citation rules.
 - `docs/08-env-config.md` for environment configuration.
 - `docs/12-handoff.md` for current implementation status.
+- `docs/13-deployment.md` for production deployment and operations.
 
 ## Prerequisites
 
-- Go 1.24+
+- Go 1.25, matching `backend/go.mod`
 - Node.js 20+
 - PostgreSQL with pgvector
 - Redis
@@ -75,6 +76,8 @@ go run ./cmd/server
 ```
 
 Default seeded account:
+
+Use this account only for local development. Production deployments must set a strong password through `SEED_PASSWORD`:
 
 ```text
 username: admin

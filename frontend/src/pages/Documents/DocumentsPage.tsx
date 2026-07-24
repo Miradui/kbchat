@@ -1,7 +1,6 @@
 import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
-import { ApiError } from '../../api/client';
 import {
   batchDeleteDocuments,
   batchReprocessDocuments,
@@ -27,6 +26,7 @@ import type {
   KnowledgeBaseCategory,
   KnowledgeBaseWorkspacePreference,
 } from '../../types/api';
+import { getDocumentProcessingErrorMessage, getErrorMessage } from '../../utils/errors';
 
 const terminalStatuses: DocumentStatus[] = ['completed', 'failed'];
 const statusOptions: Array<DocumentStatus | 'all'> = [
@@ -465,7 +465,7 @@ export function DocumentsPage() {
                   <th>类型</th>
                   <th>大小</th>
                   <th>状态</th>
-                  <th>错误信息</th>
+                  <th>处理提示</th>
                   <th>更新时间</th>
                   <th>操作</th>
                 </tr>
@@ -495,7 +495,11 @@ export function DocumentsPage() {
                       </span>
                       <DocumentProgress compact document={document} />
                     </td>
-                    <td data-label="错误信息">{document.errorMessage || '-'}</td>
+                    <td data-label="处理提示">
+                      {document.status === 'failed'
+                        ? getDocumentProcessingErrorMessage(document.errorMessage)
+                        : '-'}
+                    </td>
                     <td data-label="更新时间">{formatDateTime(document.updatedAt || document.createdAt)}</td>
                     <td data-label="操作">
                       <div className="table-actions">
@@ -616,8 +620,5 @@ function formatDateTime(value: string): string {
 }
 
 function errorMessage(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    return err.message;
-  }
-  return fallback;
+  return getErrorMessage(err, fallback);
 }

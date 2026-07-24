@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { ArrowUpRight, Library, MessageSquareText, Upload } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
-import { ApiError } from '../../api/client';
 import { EmptyState } from '../../components/feedback/EmptyState';
 import { ErrorState } from '../../components/feedback/ErrorState';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
@@ -15,6 +16,7 @@ import type {
 } from '../../types/api';
 import { createHomeLoaders } from './homeData';
 import type { HomeSources } from './homeData';
+import { getDocumentProcessingErrorMessage, getErrorMessage } from '../../utils/errors';
 
 type RegionState<T> = {
   data: T;
@@ -50,15 +52,15 @@ export function HomePage({ sources }: HomePageProps) {
         <header className="page-header workspace-heading">
           <div>
             <p className="eyebrow">工作概览</p>
-            <h1>工作台首页</h1>
-            <p className="page-description">查看知识资产、处理任务和最近问答，不让单个接口故障阻塞整个页面。</p>
+            <h1>企业知识工作台</h1>
+            <p className="page-description">知识资产、处理任务与问答进展，一处掌握。</p>
           </div>
         </header>
 
         <section className="home-quick-actions" aria-label="快捷入口">
-          <QuickAction title="新建知识库" description="进入知识库工作台创建并配置检索。" to="/knowledge-bases" />
-          <QuickAction title="导入文档" description="选择目标知识库并上传资料。" to="/documents" />
-          <QuickAction title="开始问答" description="选择知识库继续或创建会话。" to="/chat" />
+          <QuickAction icon={Library} title="新建知识库" description="创建新的知识空间" to="/knowledge-bases" />
+          <QuickAction icon={Upload} title="导入文档" description="上传并处理企业资料" to="/documents" />
+          <QuickAction icon={MessageSquareText} title="开始问答" description="基于可信来源生成回答" to="/chat" />
         </section>
 
         <DashboardRegion
@@ -134,7 +136,7 @@ export function HomePage({ sources }: HomePageProps) {
             ) : failedDocuments.map((document) => (
               <Link className="home-list-row" key={document.id} to={`/knowledge-bases/${document.knowledgeBaseId}/documents`}>
                 <strong>{document.filename}</strong>
-                <small>{document.errorMessage || '处理失败，请进入文档管理查看详情'}</small>
+                <small>{getDocumentProcessingErrorMessage(document.errorMessage)}</small>
               </Link>
             ))}
           </section>
@@ -181,8 +183,14 @@ function useRegion<T>(loader: () => Promise<T>, initialData: T, failure: string)
   return { ...state, reload };
 }
 
-function QuickAction({ title, description, to }: { title: string; description: string; to: string }) {
-  return <Link className="home-quick-action" to={to}><strong>{title}</strong><span>{description}</span></Link>;
+function QuickAction({ title, description, to, icon: Icon }: { title: string; description: string; to: string; icon: LucideIcon }) {
+  return (
+    <Link className="home-quick-action" to={to}>
+      <span className="home-quick-action__icon" aria-hidden="true"><Icon /></span>
+      <span className="home-quick-action__copy"><strong>{title}</strong><small>{description}</small></span>
+      <ArrowUpRight className="home-quick-action__arrow" aria-hidden="true" />
+    </Link>
+  );
 }
 
 function StatCard({ label, value }: { label: string; value: number | string }) {
@@ -240,5 +248,5 @@ function formatDateTime(value: string): string {
 }
 
 function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? error.message : fallback;
+  return getErrorMessage(error, fallback);
 }

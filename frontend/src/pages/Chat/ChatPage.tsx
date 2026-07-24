@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import { ApiError } from '../../api/client';
 import {
@@ -29,6 +29,7 @@ import type {
   KnowledgeBaseRerankFallback,
   KnowledgeBaseWorkspacePreference,
 } from '../../types/api';
+import { getErrorMessage } from '../../utils/errors';
 
 const fallbackPreference: KnowledgeBaseWorkspacePreference = {
   viewMode: 'table',
@@ -40,9 +41,11 @@ const fallbackPreference: KnowledgeBaseWorkspacePreference = {
 
 export function ChatPage() {
   const { sessionId } = useParams();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const activeSessionIdRef = useRef(sessionId);
+  const expectedSessionTransitionRef = useRef<string | null>(null);
   const messageOperationIdRef = useRef(0);
   const messageOperationInFlightRef = useRef(false);
   activeSessionIdRef.current = sessionId;
@@ -56,16 +59,24 @@ export function ChatPage() {
   const [draft, setDraft] = useState('');
   const [titleDraft, setTitleDraft] = useState('');
   const [pendingQuestion, setPendingQuestion] = useState('');
+  const [failedQuestion, setFailedQuestion] = useState('');
   const [loading, setLoading] = useState(true);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  const [checkingSendResult, setCheckingSendResult] = useState(false);
   const [regeneratingMessageId, setRegeneratingMessageId] = useState<string | null>(null);
   const [rerankFallback, setRerankFallback] = useState<KnowledgeBaseRerankFallback | null>(null);
-  const [creatingSession, setCreatingSession] = useState(false);
   const [updatingSession, setUpdatingSession] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState('');
+  const [uncertainSend, setUncertainSend] = useState<{
+    sessionId: string;
+    question: string;
+    previousMessageCount: number;
+  } | null>(null);
+  const isDraftSession = sessionId === 'new';
+  const draftKnowledgeBaseId = searchParams.get('knowledgeBaseId');
 
   useEffect(() => {
     let mounted = true;
@@ -103,21 +114,34 @@ export function ChatPage() {
   }, []);
 
   useEffect(() => {
-    messageOperationIdRef.current += 1;
-    messageOperationInFlightRef.current = false;
-    setSending(false);
-    setPendingQuestion('');
-    setRegeneratingMessageId(null);
+    const preservesMessageOperation = expectedSessionTransitionRef.current === sessionId;
+    expectedSessionTransitionRef.current = null;
+
+    if (!preservesMessageOperation) {
+      messageOperationIdRef.current += 1;
+      messageOperationInFlightRef.current = false;
+      setSending(false);
+      setPendingQuestion('');
+      setFailedQuestion('');
+      setCheckingSendResult(false);
+      setRegeneratingMessageId(null);
+      setUncertainSend(null);
+      setError('');
+      setRerankFallback(null);
+    }
+
     setSelectedCitationMessageId(null);
 
-    if (!sessionId) {
+    if (!sessionId || isDraftSession) {
+      setCurrentSessionDetail(null);
+      setTitleDraft('');
+      setMessages([]);
+      setMessagesLoading(false);
       return;
     }
 
     let mounted = true;
-    setError('');
     setMessagesLoading(true);
-    setRerankFallback(null);
 
     Promise.all([getChatSession(sessionId), listChatMessages(sessionId)])
       .then(([sessionResponse, messageResponse]) => {
@@ -144,7 +168,7 @@ export function ChatPage() {
     return () => {
       mounted = false;
     };
-  }, [sessionId]);
+  }, [draftKnowledgeBaseId, isDraftSession, sessionId]);
 
   useEffect(() => {
     messagesRef.current?.scrollTo({
@@ -153,9 +177,11 @@ export function ChatPage() {
     });
   }, [messages, pendingQuestion]);
 
-  const currentSession = currentSessionDetail ?? sessions.find((session) => session.id === sessionId) ?? null;
+  const currentSession = isDraftSession
+    ? null
+    : currentSessionDetail ?? sessions.find((session) => session.id === sessionId) ?? null;
   const currentKnowledgeBase = knowledgeBases.find(
-    (kb) => kb.id === currentSession?.knowledgeBaseId,
+    (kb) => kb.id === (currentSession?.knowledgeBaseId ?? draftKnowledgeBaseId),
   );
   const sessionsForCurrentKnowledgeBase = useMemo(() => {
     if (!currentKnowledgeBase) {
@@ -180,6 +206,7 @@ export function ChatPage() {
   const questionCount = messages.filter((message) => message.role === 'user').length;
   const citationCount = messages.reduce((sum, message) => sum + message.citations.length, 0);
   const archived = Boolean(currentSession?.archivedAt);
+  const canSend = !archived && Boolean(currentKnowledgeBase) && Boolean(sessionId);
 
   async function reloadSessions() {
     const response = await listChatSessions();
@@ -246,7 +273,7 @@ export function ChatPage() {
     }
   }
 
-  async function handleCreateSession(knowledgeBaseId = currentKnowledgeBase?.id) {
+  function handleCreateSession(knowledgeBaseId = currentKnowledgeBase?.id) {
     const targetKnowledgeBase =
       knowledgeBases.find((knowledgeBase) => knowledgeBase.id === knowledgeBaseId) ?? knowledgeBases[0];
     if (!targetKnowledgeBase) {
@@ -254,21 +281,11 @@ export function ChatPage() {
       return;
     }
 
-    setCreatingSession(true);
     setError('');
-
-    try {
-      const session = await createChatSession(targetKnowledgeBase.id, `${targetKnowledgeBase.name} 问答`);
-      await reloadSessions();
-      navigate(`/chat/${session.id}`);
-    } catch (err) {
-      setError(errorMessage(err, '新建会话失败'));
-    } finally {
-      setCreatingSession(false);
-    }
+    navigate(`/chat/new?knowledgeBaseId=${encodeURIComponent(targetKnowledgeBase.id)}`);
   }
 
-  async function handleKnowledgeBaseChange(knowledgeBaseId: string) {
+  function handleKnowledgeBaseChange(knowledgeBaseId: string) {
     const targetSessions = sessions
       .filter((session) => session.knowledgeBaseId === knowledgeBaseId)
       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
@@ -277,45 +294,95 @@ export function ChatPage() {
       return;
     }
 
-    await handleCreateSession(knowledgeBaseId);
+    handleCreateSession(knowledgeBaseId);
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!sessionId || !draft.trim() || archived || messageOperationInFlightRef.current) {
+  async function submitQuestion(question: string, confirmedResend = false) {
+    if (
+      !question
+      || !sessionId
+      || !canSend
+      || messageOperationInFlightRef.current
+      || (uncertainSend && !confirmedResend)
+    ) {
       return;
     }
 
-    const targetSessionId = sessionId;
+    const routeSessionId = sessionId;
     const operationId = messageOperationIdRef.current + 1;
     messageOperationIdRef.current = operationId;
     messageOperationInFlightRef.current = true;
     setSending(true);
     setError('');
     setRerankFallback(null);
-    const question = draft.trim();
-    setDraft('');
+    setFailedQuestion('');
+    setUncertainSend(null);
     setPendingQuestion(question);
 
+    let targetSessionId = routeSessionId;
+    let messageRequestStarted = false;
     try {
+      if (isDraftSession) {
+        if (!currentKnowledgeBase) {
+          throw new Error('知识库不存在');
+        }
+
+        const session = await createChatSession(currentKnowledgeBase.id, '');
+        if (!isCurrentMessageOperation(operationId, routeSessionId)) {
+          return;
+        }
+
+        targetSessionId = session.id;
+        expectedSessionTransitionRef.current = targetSessionId;
+        activeSessionIdRef.current = targetSessionId;
+        setCurrentSessionDetail(session);
+        setSessions((current) => mergeSession(current, session));
+        navigate(`/chat/${session.id}`, { replace: true });
+      }
+
+      messageRequestStarted = true;
       const response = await sendChatMessage(targetSessionId, question);
       if (!isCurrentMessageOperation(operationId, targetSessionId)) {
         return;
       }
+
       setRerankFallback(response.rerankFallback?.used ? response.rerankFallback : null);
-      const [messageResponse, sessionResponse] = await Promise.all([
-        listChatMessages(targetSessionId),
-        listChatSessions(),
-      ]);
-      if (!isCurrentMessageOperation(operationId, targetSessionId)) {
-        return;
+      setDraft('');
+      setFailedQuestion('');
+      setUncertainSend(null);
+
+      try {
+        const [messageResponse, sessionResponse] = await Promise.all([
+          listChatMessages(targetSessionId),
+          listChatSessions(),
+        ]);
+        if (!isCurrentMessageOperation(operationId, targetSessionId)) {
+          return;
+        }
+        setMessages(messageResponse.items);
+        setSelectedCitationMessageId(null);
+        setSessions(sessionResponse.items);
+      } catch {
+        if (isCurrentMessageOperation(operationId, targetSessionId)) {
+          setError('问题已发送，但消息列表刷新失败，请刷新页面查看。');
+        }
       }
-      setMessages(messageResponse.items);
-      setSelectedCitationMessageId(null);
-      setSessions(sessionResponse.items);
     } catch (err) {
       if (isCurrentMessageOperation(operationId, targetSessionId)) {
-        setError(errorMessage(err, '消息发送失败'));
+        setDraft(question);
+        if (err instanceof ApiError) {
+          setError(errorMessage(err, '消息发送失败，请稍后重试。'));
+          setFailedQuestion(question);
+        } else if (messageRequestStarted) {
+          setError('发送结果暂时无法确认。请先再次检查；如仍未显示，再确认是否重新发送。');
+          setUncertainSend({
+            sessionId: targetSessionId,
+            question,
+            previousMessageCount: messages.length,
+          });
+        } else {
+          setError('会话创建结果暂时无法确认，请刷新会话列表后再试。');
+        }
       }
     } finally {
       if (isCurrentMessageOperation(operationId, targetSessionId)) {
@@ -326,8 +393,55 @@ export function ChatPage() {
     }
   }
 
+  async function handleCheckSendResult() {
+    if (!uncertainSend || messageOperationInFlightRef.current) {
+      return;
+    }
+
+    const reconciliation = uncertainSend;
+    const operationId = messageOperationIdRef.current + 1;
+    messageOperationIdRef.current = operationId;
+    messageOperationInFlightRef.current = true;
+    setCheckingSendResult(true);
+
+    try {
+      const response = await listChatMessages(reconciliation.sessionId);
+      if (!isCurrentMessageOperation(operationId, reconciliation.sessionId)) {
+        return;
+      }
+
+      setMessages(response.items);
+      setSelectedCitationMessageId(null);
+      const submittedMessageExists = response.items
+        .slice(reconciliation.previousMessageCount)
+        .some((message) => message.role === 'user' && message.content === reconciliation.question);
+      if (submittedMessageExists) {
+        setDraft('');
+        setError('');
+        setUncertainSend(null);
+        void reloadSessions().catch(() => undefined);
+      } else {
+        setError('暂未发现这条问题。你可以稍后再次检查，或确认重新发送。');
+      }
+    } catch {
+      if (isCurrentMessageOperation(operationId, reconciliation.sessionId)) {
+        setError('暂时无法检查发送结果，请稍后再次检查。');
+      }
+    } finally {
+      if (isCurrentMessageOperation(operationId, reconciliation.sessionId)) {
+        messageOperationInFlightRef.current = false;
+        setCheckingSendResult(false);
+      }
+    }
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void submitQuestion(draft.trim());
+  }
+
   async function handleRegenerateMessage(messageId: string) {
-    if (!sessionId || messageOperationInFlightRef.current) {
+    if (!sessionId || isDraftSession || uncertainSend || messageOperationInFlightRef.current) {
       return;
     }
 
@@ -381,13 +495,47 @@ export function ChatPage() {
               返回知识库
             </Link>
           )}
-          <button type="button" onClick={() => void handleCreateSession()} disabled={creatingSession}>
-            {creatingSession ? '创建中...' : '新建会话'}
+          <button type="button" onClick={() => handleCreateSession()}>
+            新建会话
           </button>
         </div>
       </header>
 
-      {error && <p className="error-text">{error}</p>}
+      {error && (
+        <div className="error-text" role="alert">
+          <span>{error}</span>
+          {failedQuestion && (
+            <button
+              className="link-button"
+              type="button"
+              onClick={() => void submitQuestion(draft.trim())}
+              disabled={sending || checkingSendResult || regeneratingMessageId !== null || !draft.trim()}
+            >
+              重试发送
+            </button>
+          )}
+          {uncertainSend && (
+            <>
+              <button
+                className="link-button"
+                type="button"
+                onClick={() => void handleCheckSendResult()}
+                disabled={checkingSendResult || sending || regeneratingMessageId !== null}
+              >
+                {checkingSendResult ? '检查中...' : '再次检查'}
+              </button>
+              <button
+                className="link-button"
+                type="button"
+                onClick={() => void submitQuestion(draft.trim(), true)}
+                disabled={checkingSendResult || sending || regeneratingMessageId !== null || !draft.trim()}
+              >
+                确认重新发送
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       <div className="chat-shell">
         <aside className="chat-sidebar-panel">
@@ -395,8 +543,8 @@ export function ChatPage() {
             当前知识库
             <select
               value={currentKnowledgeBase?.id ?? ''}
-              disabled={creatingSession || knowledgeBases.length === 0}
-              onChange={(event) => void handleKnowledgeBaseChange(event.target.value)}
+              disabled={knowledgeBases.length === 0}
+              onChange={(event) => handleKnowledgeBaseChange(event.target.value)}
             >
               {!currentKnowledgeBase && <option value="">请选择知识库</option>}
               {knowledgeBases.map((knowledgeBase) => (
@@ -415,8 +563,8 @@ export function ChatPage() {
             </div>
           </div>
 
-          <button type="button" onClick={() => void handleCreateSession()} disabled={creatingSession}>
-            {creatingSession ? '创建中...' : '新建当前知识库会话'}
+          <button type="button" onClick={() => handleCreateSession()}>
+            新建当前知识库会话
           </button>
 
           <div className="session-section-title">
@@ -512,7 +660,12 @@ export function ChatPage() {
                   onSelectCitations={setSelectedCitationMessageId}
                   onRegenerate={message.id === latestAssistantMessageId && !archived ? handleRegenerateMessage : undefined}
                   regenerating={regeneratingMessageId === message.id}
-                  regenerationDisabled={sending || regeneratingMessageId !== null}
+                  regenerationDisabled={
+                    sending
+                    || checkingSendResult
+                    || Boolean(uncertainSend)
+                    || regeneratingMessageId !== null
+                  }
                 />
               ))
             )}
@@ -537,10 +690,20 @@ export function ChatPage() {
               placeholder="继续追问当前知识库..."
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              disabled={sending || regeneratingMessageId !== null || !sessionId || archived}
+              disabled={sending || regeneratingMessageId !== null || !canSend}
               rows={2}
             />
-            <button type="submit" disabled={sending || regeneratingMessageId !== null || !draft.trim() || !sessionId || archived}>
+            <button
+              type="submit"
+              disabled={
+                sending
+                || checkingSendResult
+                || regeneratingMessageId !== null
+                || !draft.trim()
+                || !canSend
+                || Boolean(uncertainSend)
+              }
+            >
               {sending ? '发送中...' : '发送'}
             </button>
           </form>
@@ -702,8 +865,5 @@ function formatDateTime(value: string): string {
 }
 
 function errorMessage(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    return err.message;
-  }
-  return fallback;
+  return getErrorMessage(err, fallback);
 }

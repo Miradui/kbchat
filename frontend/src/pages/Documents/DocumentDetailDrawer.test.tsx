@@ -87,8 +87,8 @@ describe('DocumentDetailDrawer progress', () => {
     expect(await screen.findByText('manual.pdf')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '重处理' }));
 
-    expect(screen.getByRole('link', { name: '进入处理队列' })).toHaveAttribute('aria-disabled', 'true');
-    expect(screen.getByRole('link', { name: '进入处理队列' })).toHaveAttribute('tabindex', '-1');
+    expect(screen.getByRole('link', { name: '打开处理详情' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('link', { name: '打开处理详情' })).toHaveAttribute('tabindex', '-1');
   });
 
   it('does not notify after a pending reprocess unmounts', async () => {

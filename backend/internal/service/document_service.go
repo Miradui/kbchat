@@ -489,7 +489,8 @@ type documentProgressInfo struct {
 func toDocumentResponse(document *model.Document, job *model.DocumentJob, maxRetries int) dto.DocumentResponse {
 	var errorMessage *string
 	if document.ErrorMessage != "" {
-		errorMessage = &document.ErrorMessage
+		message := publicDocumentErrorMessage(document.ErrorMessage)
+		errorMessage = &message
 	}
 	progress := documentProgress(document.Status, job, maxRetries)
 
@@ -535,7 +536,8 @@ func toGlobalDocumentRepoQuery(query dto.GlobalDocumentListQuery) (repository.Gl
 func toGlobalDocumentResponse(document *repository.GlobalDocumentListItem, job *model.DocumentJob, maxRetries int) dto.GlobalDocumentResponse {
 	var errorMessage *string
 	if document.ErrorMessage != "" {
-		errorMessage = &document.ErrorMessage
+		message := publicDocumentErrorMessage(document.ErrorMessage)
+		errorMessage = &message
 	}
 	progress := documentProgress(document.Status, job, maxRetries)
 	return dto.GlobalDocumentResponse{
@@ -607,11 +609,25 @@ func progressForStage(stage string) int {
 		return 50
 	case "embedding":
 		return 75
-	case "completed", "failed":
+	case "completed":
 		return 100
+	case "failed":
+		return 0
 	default:
 		return 0
 	}
+}
+
+func publicDocumentErrorMessage(raw string) string {
+	normalized := strings.ToLower(strings.TrimSpace(raw))
+	if strings.Contains(normalized, "api_key is required") ||
+		strings.Contains(normalized, "api key is required") ||
+		strings.Contains(normalized, "base_url is required") ||
+		strings.Contains(normalized, "base url is required") ||
+		strings.Contains(normalized, "model is required") {
+		return "文档处理服务尚未配置完成，请联系管理员完成配置后再重处理。"
+	}
+	return "文档处理失败，请检查文件内容或稍后重处理。"
 }
 
 func normalizedPage(page, pageSize int) (int, int) {

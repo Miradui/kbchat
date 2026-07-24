@@ -1,8 +1,9 @@
 import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { Route, Routes, useNavigate } from 'react-router-dom';
+import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 
+import { ApiError } from '../../api/client';
 import { renderWithRouter } from '../../test/render';
 import { ChatPage } from './ChatPage';
 
@@ -41,6 +42,11 @@ const knowledgeBase = {
   createdAt: '2026-07-01T00:00:00Z',
   updatedAt: '2026-07-01T00:00:00Z',
 };
+const secondKnowledgeBase = {
+  ...knowledgeBase,
+  id: 'kb-2',
+  name: '产品资料',
+};
 const messages = [
   { id: 'user-1', sessionId: 'session-1', role: 'user', content: '原问题', citations: [], createdAt: '2026-07-01T00:00:00Z' },
   { id: 'assistant-1', sessionId: 'session-1', role: 'assistant', content: '原回答', citations: [], createdAt: '2026-07-01T00:00:01Z' },
@@ -68,6 +74,11 @@ function SessionNavigation() {
   return <button onClick={() => navigate('/chat/session-2')} type="button">切换测试会话</button>;
 }
 
+function LocationProbe() {
+  const location = useLocation();
+  return <output aria-label="当前位置">{location.pathname}{location.search}</output>;
+}
+
 beforeEach(() => {
   Element.prototype.scrollTo = vi.fn();
   Object.values(api).forEach((mock) => mock.mockReset());
@@ -80,6 +91,210 @@ beforeEach(() => {
   });
   api.getChatSession.mockResolvedValue(session);
   api.listChatMessages.mockResolvedValue({ items: messages });
+});
+
+describe('ChatPage draft and recovery flows', () => {
+  it('opens a draft instead of creating an empty session', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(
+      <>
+        <Routes>
+          <Route element={<ChatPage />} path="/chat/:sessionId" />
+        </Routes>
+        <LocationProbe />
+      </>,
+      ['/chat/session-1'],
+    );
+
+    await screen.findByText('原回答');
+    await user.click(screen.getByRole('button', { name: '新建会话' }));
+
+    expect(api.createChatSession).not.toHaveBeenCalled();
+    expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent(
+      '/chat/new?knowledgeBaseId=kb-1',
+    );
+  });
+
+  it('opens a draft when switching to a knowledge base without sessions', async () => {
+    api.listKnowledgeBases.mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
+    const user = userEvent.setup();
+    renderWithRouter(
+      <>
+        <Routes>
+          <Route element={<ChatPage />} path="/chat/:sessionId" />
+        </Routes>
+        <LocationProbe />
+      </>,
+      ['/chat/session-1'],
+    );
+
+    await user.selectOptions(await screen.findByLabelText('当前知识库'), 'kb-2');
+
+    expect(api.createChatSession).not.toHaveBeenCalled();
+    expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent(
+      '/chat/new?knowledgeBaseId=kb-2',
+    );
+  });
+
+  it('creates the first draft session on submit and keeps the send operation active across navigation', async () => {
+    const createdSession = { ...session, title: '' };
+    const submittedMessages = [
+      ...messages,
+      { ...messages[0], id: 'user-2', content: '第一次提问', createdAt: '2026-07-01T00:01:00Z' },
+      { ...messages[1], id: 'assistant-2', content: '第一次回答', createdAt: '2026-07-01T00:01:01Z' },
+    ];
+    api.createChatSession.mockResolvedValue(createdSession);
+    api.getChatSession.mockResolvedValue(createdSession);
+    api.sendChatMessage.mockResolvedValue({ answer: '第一次回答', citations: [], rerankFallback: null });
+    api.listChatMessages.mockResolvedValue({ items: submittedMessages });
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <>
+        <Routes>
+          <Route element={<ChatPage />} path="/chat/:sessionId" />
+        </Routes>
+        <LocationProbe />
+      </>,
+      ['/chat/new?knowledgeBaseId=kb-1'],
+    );
+
+    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    expect(api.createChatSession).not.toHaveBeenCalled();
+
+    await user.type(input, '第一次提问');
+    await user.click(screen.getByRole('button', { name: '发送' }));
+
+    await waitFor(() => expect(api.createChatSession).toHaveBeenCalledWith('kb-1', ''));
+    expect(api.sendChatMessage).toHaveBeenCalledWith('session-1', '第一次提问');
+    await waitFor(() => expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat/session-1'));
+    expect(await screen.findByText('第一次回答')).toBeInTheDocument();
+  });
+
+  it('keeps a definite failed question editable and provides a retry action', async () => {
+    api.sendChatMessage
+      .mockRejectedValueOnce(new ApiError(500, {
+        code: 'CHAT_COMPLETION_FAILED',
+        message: 'chat completion failed',
+      }))
+      .mockResolvedValueOnce({ answer: '回答', citations: [], rerankFallback: null });
+    const user = userEvent.setup();
+    renderPage();
+
+    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    await user.type(input, '如何报销？');
+    await user.click(screen.getByRole('button', { name: '发送' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('回答生成失败，请稍后重试。');
+    expect(input).toHaveValue('如何报销？');
+
+    await user.clear(input);
+    await user.type(input, '修改后的问题');
+    await user.click(screen.getByRole('button', { name: '重试发送' }));
+
+    await waitFor(() => expect(api.sendChatMessage).toHaveBeenCalledTimes(2));
+    expect(api.sendChatMessage).toHaveBeenNthCalledWith(2, 'session-1', '修改后的问题');
+  });
+
+  it('requires reconciliation before retrying an unknown network outcome', async () => {
+    api.sendChatMessage.mockRejectedValue(new Error('network disconnected'));
+    const user = userEvent.setup();
+    renderPage();
+
+    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    await user.type(input, '网络中断的问题');
+    await user.click(screen.getByRole('button', { name: '发送' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('发送结果暂时无法确认');
+    expect(screen.queryByRole('button', { name: '重试发送' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '再次检查' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '确认重新发送' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
+    expect(input).toBeEnabled();
+    expect(input).toHaveValue('网络中断的问题');
+  });
+
+  it('clears an uncertain draft after reconciliation finds the submitted message', async () => {
+    const submittedMessage = {
+      ...messages[0],
+      id: 'user-submitted',
+      content: '已被服务端接收的问题',
+      createdAt: '2026-07-01T00:01:00Z',
+    };
+    api.listChatMessages
+      .mockResolvedValueOnce({ items: messages })
+      .mockResolvedValueOnce({ items: [...messages, submittedMessage] });
+    api.sendChatMessage.mockRejectedValueOnce(new Error('network disconnected'));
+    const user = userEvent.setup();
+    renderPage();
+
+    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    await user.type(input, '已被服务端接收的问题');
+    await user.click(screen.getByRole('button', { name: '发送' }));
+    await user.click(await screen.findByRole('button', { name: '再次检查' }));
+
+    await waitFor(() => expect(input).toHaveValue(''));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('resends an uncertain question only after explicit confirmation', async () => {
+    api.sendChatMessage
+      .mockRejectedValueOnce(new Error('network disconnected'))
+      .mockResolvedValueOnce({ answer: '回答', citations: [], rerankFallback: null });
+    const user = userEvent.setup();
+    renderPage();
+
+    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    await user.type(input, '需要确认重发的问题');
+    await user.click(screen.getByRole('button', { name: '发送' }));
+    await user.click(await screen.findByRole('button', { name: '确认重新发送' }));
+
+    await waitFor(() => expect(api.sendChatMessage).toHaveBeenCalledTimes(2));
+    expect(api.sendChatMessage).toHaveBeenNthCalledWith(2, 'session-1', '需要确认重发的问题');
+  });
+
+  it('does not let a late reconciliation overwrite a newly selected session', async () => {
+    const pendingCheck = deferred<{ items: Array<Record<string, unknown> & { role: string; content: string }> }>();
+    const sessionTwo = { ...session, id: 'session-2', title: '第二个会话' };
+    const sessionTwoMessages = [
+      { ...messages[1], id: 'assistant-session-2', sessionId: 'session-2', content: '第二个会话回答' },
+    ];
+    let firstSessionListCount = 0;
+    api.sendChatMessage.mockRejectedValueOnce(new Error('network disconnected'));
+    api.getChatSession.mockImplementation((id: string) => Promise.resolve(id === 'session-2' ? sessionTwo : session));
+    api.listChatMessages.mockImplementation((id: string) => {
+      if (id === 'session-2') {
+        return Promise.resolve({ items: sessionTwoMessages });
+      }
+      firstSessionListCount += 1;
+      return firstSessionListCount === 1
+        ? Promise.resolve({ items: messages })
+        : pendingCheck.promise;
+    });
+    const user = userEvent.setup();
+    renderWithRouter(
+      <>
+        <SessionNavigation />
+        <Routes><Route element={<ChatPage />} path="/chat/:sessionId" /></Routes>
+      </>,
+      ['/chat/session-1'],
+    );
+
+    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    await user.type(input, '待核查的问题');
+    await user.click(screen.getByRole('button', { name: '发送' }));
+    await user.click(await screen.findByRole('button', { name: '再次检查' }));
+    await user.click(screen.getByRole('button', { name: '切换测试会话' }));
+    expect(await screen.findByText('第二个会话回答')).toBeInTheDocument();
+
+    await act(async () => pendingCheck.resolve({
+      items: [...messages, { ...messages[0], id: 'late-user', content: '待核查的问题' }],
+    }));
+
+    await waitFor(() => expect(screen.getByText('第二个会话回答')).toBeInTheDocument());
+    expect(screen.queryByText('原回答')).not.toBeInTheDocument();
+  });
 });
 
 describe('ChatPage RAG actions', () => {

@@ -1,0 +1,230 @@
+/* Shared visual layer for legacy workspace pages that still use styles.css. */
+input,
+textarea,
+select {
+  background: rgb(255 255 255 / 62%);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 76%);
+  color: var(--color-text);
+  transition: background var(--motion-fast), border-color var(--motion-fast), box-shadow var(--motion-fast);
+}
+
+input:hover,
+textarea:hover,
+select:hover { background: rgb(255 255 255 / 78%); }
+
+input:focus,
+textarea:focus,
+select:focus {
+  background: rgb(255 255 255 / 92%);
+  border-color: rgb(8 124 240 / 52%);
+}
+
+button,
+.button-link,
+.secondary-link {
+  border-radius: var(--radius-sm);
+  min-height: 40px;
+}
+
+button,
+.button-link {
+  box-shadow: 0 4px 12px rgb(8 124 240 / 18%);
+}
+
+.ghost-button,
+.secondary-button,
+.secondary-link {
+  background: rgb(255 255 255 / 58%);
+  border-color: var(--color-border);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 76%);
+}
+
+.ghost-button:hover,
+.secondary-button:hover,
+.secondary-link:hover { background: rgb(255 255 255 / 88%); }
+
+.page-header h1,
+.workspace-heading h1,
+.document-command-main h1 { font-weight: 700; letter-spacing: 0; }
+
+.panel,
+.workspace-list-panel,
+.workspace-stat-card,
+.kb-card,
+.detail-hero,
+.detail-main-panel,
+.document-command-band,
+.document-pipeline-panel,
+.document-status-tile,
+.document-list-panel,
+.chat-sidebar-panel,
+.chat-main-panel,
+.chat-citation-panel,
+.chat-kb-card,
+.stat-card {
+  background: var(--color-surface);
+  border-color: rgb(255 255 255 / 76%);
+  box-shadow: var(--shadow-raised);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+.panel:hover,
+.workspace-list-panel:hover,
+.workspace-stat-card:hover,
+.kb-card:hover { border-color: rgb(100 116 139 / 24%); }
+
+.workspace-topbar,
+.workspace-controls,
+.document-filter-bar,
+.chat-thread-head,
+.chat-composer {
+  background: rgb(255 255 255 / 50%);
+  border-color: rgb(255 255 255 / 72%);
+  -webkit-backdrop-filter: blur(16px) saturate(var(--glass-saturate));
+  backdrop-filter: blur(16px) saturate(var(--glass-saturate));
+}
+
+.workspace-tabs,
+.segmented-control {
+  background: rgb(255 255 255 / 44%);
+  border: 1px solid rgb(255 255 255 / 72%);
+  border-radius: var(--radius-sm);
+  gap: 4px;
+  padding: 4px;
+  width: fit-content;
+}
+
+.workspace-tab,
+.segmented-control button {
+  border-radius: 7px;
+  min-height: 36px;
+}
+
+.workspace-tab.active,
+.segmented-control button.active,
+.segmented-control button[aria-pressed="true"] {
+  background: rgb(255 255 255 / 86%);
+  border-color: rgb(255 255 255 / 96%);
+  box-shadow: 0 3px 10px rgb(31 41 55 / 8%);
+  color: var(--color-primary);
+}
+
+.workspace-tab.active::after { display: none; }
+
+.bulk-bar,
+.document-selection-bar {
+  background: rgb(8 124 240 / 8%);
+  border-color: rgb(8 124 240 / 18%);
+  border-radius: var(--radius-sm);
+}
+
+.data-table th,
+.workspace-table th,
+.document-table th { background: rgb(248 250 252 / 58%); }
+
+.data-table tbody tr,
+.workspace-table tbody tr,
+.document-table tbody tr { transition: background var(--motion-fast); }
+
+.data-table tbody tr:hover,
+.workspace-table tbody tr:hover,
+.document-table tbody tr:hover { background: rgb(255 255 255 / 48%); }
+
+.tag-pill,
+.visibility-pill,
+.status-pill,
+.chat-thread-stats span {
+  border: 1px solid rgb(100 116 139 / 16%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 64%);
+}
+
+.stat-icon,
+.kb-icon,
+.kb-icon.public,
+.kb-icon.private {
+  background: rgb(8 124 240 / 10%);
+  color: var(--color-primary);
+}
+
+.drawer-backdrop,
+.dialog-backdrop {
+  background: var(--color-scrim);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.drawer-panel,
+.dialog-panel {
+  background: rgb(250 251 253 / 88%);
+  border-color: rgb(255 255 255 / 86%);
+  box-shadow: var(--shadow-overlay);
+  -webkit-backdrop-filter: blur(30px) saturate(var(--glass-saturate));
+  backdrop-filter: blur(30px) saturate(var(--glass-saturate));
+}
+
+.document-meta-grid div,
+.document-preview-section,
+.document-chunk-section,
+.document-chunk-card,
+.semantic-result-item,
+.document-status-item,
+.permission-member-card,
+.citation-card,
+.enhanced-citation-card,
+.session-card,
+.kb-launch-row,
+.recent-session-row {
+  background: rgb(255 255 255 / 52%);
+  border-color: rgb(100 116 139 / 16%);
+}
+
+.session-card:hover,
+.kb-launch-row:hover,
+.recent-session-row:hover { background: rgb(255 255 255 / 82%); }
+
+.session-card.active {
+  background: var(--color-primary-soft);
+  border-color: rgb(8 124 240 / 24%);
+}
+
+.chat-thread { background: rgb(241 244 248 / 52%); }
+
+.message-bubble.user {
+  background: var(--color-primary);
+  box-shadow: 0 6px 18px rgb(8 124 240 / 16%);
+}
+
+.message-bubble.assistant {
+  background: rgb(255 255 255 / 72%);
+  border-color: rgb(255 255 255 / 88%);
+  box-shadow: 0 5px 18px rgb(31 41 55 / 7%);
+}
+
+.skeleton-line {
+  background: rgb(100 116 139 / 12%);
+  background-image: none;
+}
+
+@media (max-width: 680px) {
+  .workspace-tabs,
+  .segmented-control { width: 100%; }
+
+  .workspace-tab,
+  .segmented-control button { flex: 1 1 auto; min-height: 44px; }
+}
+
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .app-sidebar,
+  .app-topbar,
+  .panel,
+  .workspace-list-panel,
+  .workspace-stat-card,
+  .kb-card,
+  .drawer-panel,
+  .dialog-panel,
+  .ui-dialog,
+  .ui-toast { background: rgb(255 255 255 / 96%); }
+}

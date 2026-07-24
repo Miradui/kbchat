@@ -127,7 +127,7 @@ export type KnowledgeBaseTagListResponse = {
 
 export type WorkspaceMetric = {
   value: number;
-  changeRatio: number;
+  changeRatio: number | null;
 };
 
 export type KnowledgeBaseStatsResponse = {

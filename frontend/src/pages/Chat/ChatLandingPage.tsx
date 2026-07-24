@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
-import { ApiError } from '../../api/client';
 import {
-  createChatSession,
   getWorkspacePreference,
   listChatSessions,
   listKnowledgeBaseCategories,
@@ -17,6 +15,7 @@ import type {
   KnowledgeBaseCategory,
   KnowledgeBaseWorkspacePreference,
 } from '../../types/api';
+import { getErrorMessage } from '../../utils/errors';
 
 const fallbackPreference: KnowledgeBaseWorkspacePreference = {
   viewMode: 'table',
@@ -32,7 +31,6 @@ export function ChatLandingPage() {
   const [expandedIds, setExpandedIds] = useState<string[]>([]);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [busyKnowledgeBaseId, setBusyKnowledgeBaseId] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -85,24 +83,13 @@ export function ChatLandingPage() {
     [sessions],
   );
 
-  async function enterKnowledgeBase(knowledgeBase: KnowledgeBase) {
+  function enterKnowledgeBase(knowledgeBase: KnowledgeBase) {
     const existingSession = latestSessionByKnowledgeBase.get(knowledgeBase.id);
     if (existingSession) {
       navigate(`/chat/${existingSession.id}`);
       return;
     }
-
-    setBusyKnowledgeBaseId(knowledgeBase.id);
-    setError('');
-
-    try {
-      const session = await createChatSession(knowledgeBase.id, `${knowledgeBase.name} 问答`);
-      navigate(`/chat/${session.id}`);
-    } catch (err) {
-      setError(errorMessage(err, '会话创建失败'));
-    } finally {
-      setBusyKnowledgeBaseId('');
-    }
+    navigate(`/chat/new?knowledgeBaseId=${encodeURIComponent(knowledgeBase.id)}`);
   }
 
   return (
@@ -112,7 +99,7 @@ export function ChatLandingPage() {
         <div>
           <p className="breadcrumb">首页 / 聊天问答</p>
           <h1>聊天问答</h1>
-          <p className="page-description">选择知识库进入最近会话；没有会话时会创建一个新会话。</p>
+          <p className="page-description">选择知识库继续已有问答，或开始一次新问答。</p>
         </div>
         <Link className="button-link" to="/knowledge-bases">
           新建知识库
@@ -138,7 +125,7 @@ export function ChatLandingPage() {
           <section className="panel">
             <div className="panel-header">
               <h2>按知识库开始</h2>
-              <span className="muted-text">真实创建或进入最近会话</span>
+              <span className="muted-text">继续最近问答或开始新问答</span>
             </div>
             <div className="kb-launch-list">
               {knowledgeBases.map((knowledgeBase) => {
@@ -146,10 +133,9 @@ export function ChatLandingPage() {
                 return (
                   <button
                     className="kb-launch-row"
-                    disabled={busyKnowledgeBaseId === knowledgeBase.id}
                     key={knowledgeBase.id}
                     type="button"
-                    onClick={() => void enterKnowledgeBase(knowledgeBase)}
+                    onClick={() => enterKnowledgeBase(knowledgeBase)}
                   >
                     <span className={`kb-icon ${knowledgeBase.visibility === 'public' ? 'public' : 'private'}`} aria-hidden="true" />
                     <span>
@@ -157,11 +143,7 @@ export function ChatLandingPage() {
                       <small>{knowledgeBase.description || '未填写描述'}</small>
                     </span>
                     <em>
-                      {busyKnowledgeBaseId === knowledgeBase.id
-                        ? '创建中...'
-                        : existingSession
-                          ? '进入最近会话'
-                          : '新建会话'}
+                      {existingSession ? '进入最近会话' : '开始新问答'}
                     </em>
                   </button>
                 );
@@ -216,8 +198,5 @@ function formatDateTime(value: string): string {
 }
 
 function errorMessage(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    return err.message;
-  }
-  return fallback;
+  return getErrorMessage(err, fallback);
 }

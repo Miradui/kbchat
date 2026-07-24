@@ -293,13 +293,13 @@ type generatedChatAnswer struct {
 func (s *ChatService) generateAnswer(ctx context.Context, userID uuid.UUID, session *model.ChatSession, question string, history []model.ChatMessage) (generatedChatAnswer, error) {
 	intent, err := classifyChatIntent(ctx, s.chatProvider, question, history, s.cfg.ChatHistoryLimit)
 	if err != nil {
-		return generatedChatAnswer{}, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "chat completion failed", err)
+		return generatedChatAnswer{}, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "回答生成失败，请稍后重试", err)
 	}
 
 	if intent.Intent == chatIntentConversation {
 		answer, err := s.chatProvider.Chat(ctx, buildConversationAnswerMessages(question, history, s.cfg.ChatHistoryLimit))
 		if err != nil {
-			return generatedChatAnswer{}, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "chat completion failed", err)
+			return generatedChatAnswer{}, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "回答生成失败，请稍后重试", err)
 		}
 		citationJSON, err := json.Marshal([]dto.CitationResponse{})
 		if err != nil {
@@ -333,7 +333,7 @@ func (s *ChatService) generateAnswer(ctx context.Context, userID uuid.UUID, sess
 	if len(searchRes.Items) > 0 {
 		answer, err = s.chatProvider.Chat(ctx, buildAnswerMessages(question, searchRes.Items, history, s.cfg.ChatHistoryLimit))
 		if err != nil {
-			return generatedChatAnswer{}, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "chat completion failed", err)
+			return generatedChatAnswer{}, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "回答生成失败，请稍后重试", err)
 		}
 	}
 

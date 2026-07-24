@@ -1,14 +1,13 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { Route, Routes, useNavigate } from 'react-router-dom';
+import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 
 import { renderWithRouter } from '../../test/render';
 import { KnowledgeBaseDetailPage } from './KnowledgeBaseDetailPage';
 
 const api = vi.hoisted(() => ({
   addKnowledgeBaseMember: vi.fn(),
-  createChatSession: vi.fn(),
   deleteKnowledgeBaseMember: vi.fn(),
   getCurrentUser: vi.fn(),
   getKnowledgeBase: vi.fn(),
@@ -44,6 +43,24 @@ beforeEach(() => {
 });
 
 describe('KnowledgeBaseDetailPage retrieval debug', () => {
+  it('opens a draft chat without creating an empty session', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(
+      <>
+        <Routes>
+          <Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" />
+          <Route element={<div>问答页</div>} path="/chat/:sessionId" />
+        </Routes>
+        <LocationProbe />
+      </>,
+      ['/knowledge-bases/kb-1'],
+    );
+
+    await user.click(await screen.findByRole('button', { name: '开始问答' }));
+
+    expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat/new?knowledgeBaseId=kb-1');
+  });
+
   it('requests and progressively displays vector, rerank, and final stages', async () => {
     api.searchKnowledgeBase.mockResolvedValue({
       items: [],
@@ -211,7 +228,7 @@ describe('KnowledgeBaseDetailPage loading', () => {
     expect(await screen.findByRole('heading', { name: '知识库 A' })).toBeInTheDocument();
     await user.type(screen.getByLabelText('搜索用户'), 'member');
     await user.click(screen.getByRole('button', { name: '搜索' }));
-    await user.click(await screen.findByRole('button', { name: '设为 member' }));
+    await user.click(await screen.findByRole('button', { name: '设为成员' }));
     expect(api.addKnowledgeBaseMember).toHaveBeenCalledWith('kb-a', 'user-2', 'member');
 
     await user.click(screen.getByRole('button', { name: '切换到知识库 B' }));
@@ -314,7 +331,7 @@ describe('KnowledgeBaseDetailPage loading', () => {
     expect(await screen.findByText('A Initial Owner')).toBeInTheDocument();
     await user.type(screen.getByLabelText('搜索用户'), 'member');
     await user.click(screen.getByRole('button', { name: '搜索' }));
-    await user.click(await screen.findByRole('button', { name: '设为 member' }));
+    await user.click(await screen.findByRole('button', { name: '设为成员' }));
     await user.click(screen.getByRole('button', { name: '切换到知识库 B' }));
     expect(await screen.findByText('B Owner')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '返回知识库 A' }));
@@ -325,40 +342,6 @@ describe('KnowledgeBaseDetailPage loading', () => {
     expect(screen.getByText('A Current Owner')).toBeInTheDocument();
     expect(screen.queryByText('A Stale Owner')).not.toBeInTheDocument();
     expect(knowledgeBaseAPermissionLoads).toBe(2);
-  });
-
-  it('does not navigate to a chat created for the previous knowledge base', async () => {
-    const staleChat = deferred<{ id: string }>();
-    api.getKnowledgeBase.mockImplementation((id: string) => Promise.resolve(knowledgeBaseFixture(
-      id,
-      id === 'kb-a' ? '知识库 A' : '知识库 B',
-    )));
-    api.getKnowledgeBasePermissions.mockImplementation((id: string) => Promise.resolve(permissionFixture(
-      id,
-      id === 'kb-a' ? 'A Owner' : 'B Owner',
-    )));
-    api.createChatSession.mockReturnValue(staleChat.promise);
-    const user = userEvent.setup();
-
-    renderWithRouter(
-      <>
-        <KnowledgeBaseNavigation />
-        <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>
-      </>,
-      ['/knowledge-bases/kb-a'],
-    );
-
-    expect(await screen.findByRole('heading', { name: '知识库 A' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '开始问答' }));
-    expect(api.createChatSession).toHaveBeenCalledWith('kb-a', '知识库 A 问答');
-
-    await user.click(screen.getByRole('button', { name: '切换到知识库 B' }));
-    expect(await screen.findByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '开始问答' })).toBeEnabled();
-
-    await act(async () => staleChat.resolve({ id: 'chat-for-kb-a' }));
-
-    expect(screen.getByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
   });
 
   it('ignores user search results from the previous knowledge base', async () => {
@@ -397,65 +380,12 @@ describe('KnowledgeBaseDetailPage loading', () => {
     expect(screen.getByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
   });
 
-  it('does not navigate after the detail page unmounts during chat creation', async () => {
-    const staleChat = deferred<{ id: string }>();
-    api.createChatSession.mockReturnValue(staleChat.promise);
-    const user = userEvent.setup();
-
-    renderWithRouter(
-      <>
-        <DetailExitNavigation />
-        <Routes>
-          <Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" />
-          <Route element={<div>知识库列表页</div>} path="/knowledge-bases" />
-        </Routes>
-      </>,
-      ['/knowledge-bases/kb-1'],
-    );
-
-    expect(await screen.findByRole('heading', { name: '员工制度' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '开始问答' }));
-    await user.click(screen.getByRole('button', { name: '离开详情' }));
-    expect(screen.getByText('知识库列表页')).toBeInTheDocument();
-
-    await act(async () => staleChat.resolve({ id: 'chat-after-unmount' }));
-
-    expect(screen.getByText('知识库列表页')).toBeInTheDocument();
-  });
-
-  it('does not accept a previous chat request after returning to the same knowledge base', async () => {
-    const staleChat = deferred<{ id: string }>();
-    api.getKnowledgeBase.mockImplementation((id: string) => Promise.resolve(knowledgeBaseFixture(
-      id,
-      id === 'kb-a' ? '知识库 A' : '知识库 B',
-    )));
-    api.getKnowledgeBasePermissions.mockImplementation((id: string) => Promise.resolve(permissionFixture(
-      id,
-      id === 'kb-a' ? 'A Owner' : 'B Owner',
-    )));
-    api.createChatSession.mockReturnValue(staleChat.promise);
-    const user = userEvent.setup();
-
-    renderWithRouter(
-      <>
-        <KnowledgeBaseRoundTripNavigation />
-        <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>
-      </>,
-      ['/knowledge-bases/kb-a'],
-    );
-
-    expect(await screen.findByRole('heading', { name: '知识库 A' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '开始问答' }));
-    await user.click(screen.getByRole('button', { name: '切换到知识库 B' }));
-    expect(await screen.findByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '返回知识库 A' }));
-    expect(await screen.findByRole('heading', { name: '知识库 A' })).toBeInTheDocument();
-
-    await act(async () => staleChat.resolve({ id: 'chat-for-old-a' }));
-
-    expect(screen.getByRole('heading', { name: '知识库 A' })).toBeInTheDocument();
-  });
 });
+
+function LocationProbe() {
+  const location = useLocation();
+  return <output aria-label="当前位置">{location.pathname}{location.search}</output>;
+}
 
 function KnowledgeBaseNavigation() {
   const navigate = useNavigate();
@@ -470,11 +400,6 @@ function KnowledgeBaseRoundTripNavigation() {
       <button onClick={() => navigate('/knowledge-bases/kb-a')} type="button">返回知识库 A</button>
     </>
   );
-}
-
-function DetailExitNavigation() {
-  const navigate = useNavigate();
-  return <button onClick={() => navigate('/knowledge-bases')} type="button">离开详情</button>;
 }
 
 function knowledgeBaseFixture(id = 'kb-1', name = '员工制度') {
