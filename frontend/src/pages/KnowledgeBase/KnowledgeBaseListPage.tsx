@@ -50,6 +50,8 @@ import type {
   WorkspaceVisibility,
 } from '../../types/api';
 import { formatMetricComparison } from './statsFormatting';
+import { CategoryDialog } from './CategoryDialog';
+import type { CategoryDialogValue } from './CategoryDialog';
 import {
   KnowledgeBaseFormDrawer,
   KnowledgeBaseRecycleBinDrawer,
@@ -80,13 +82,6 @@ type DeleteTarget =
   | { kind: 'single'; item: KnowledgeBase }
   | { kind: 'batch'; ids: string[] };
 
-type CategoryFormState = {
-  id?: string;
-  name: string;
-  parentId: string;
-  sortOrder: number;
-};
-
 const emptyForm: FormState = {
   name: '',
   description: '',
@@ -114,7 +109,8 @@ export function KnowledgeBaseListPage() {
   const [bulkCategoryId, setBulkCategoryId] = useState('');
   const [form, setForm] = useState<FormState | null>(null);
   const [formError, setFormError] = useState('');
-  const [categoryForm, setCategoryForm] = useState<CategoryFormState | null>(null);
+  const [categoryForm, setCategoryForm] = useState<CategoryDialogValue | null>(null);
+  const [categoryFormError, setCategoryFormError] = useState('');
   const [categoryDeleteTarget, setCategoryDeleteTarget] = useState<KnowledgeBaseCategory | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [permanentDeleteTarget, setPermanentDeleteTarget] = useState<RecycleBinItem | null>(null);
@@ -443,6 +439,7 @@ export function KnowledgeBaseListPage() {
     if (workspaceMutationRef.current) {
       return;
     }
+    setCategoryFormError('');
     setCategoryForm({
       name: '',
       parentId,
@@ -454,6 +451,7 @@ export function KnowledgeBaseListPage() {
     if (workspaceMutationRef.current) {
       return;
     }
+    setCategoryFormError('');
     setCategoryForm({
       id: category.id,
       name: category.name,
@@ -471,7 +469,7 @@ export function KnowledgeBaseListPage() {
     const operation = Symbol('save-knowledge-base-category');
     workspaceMutationRef.current = operation;
     setSubmitting(true);
-    setFormError('');
+    setCategoryFormError('');
 
     const input: KnowledgeBaseCategoryInput = {
       name: categoryForm.name.trim(),
@@ -486,12 +484,13 @@ export function KnowledgeBaseListPage() {
         await createKnowledgeBaseCategory(input);
       }
       if (workspaceMutationRef.current === operation) {
+        setCategoryFormError('');
         setCategoryForm(null);
         await reloadCategories();
       }
     } catch (err) {
       if (workspaceMutationRef.current === operation) {
-        setError(errorMessage(err, '分类保存失败'));
+        setCategoryFormError(errorMessage(err, '分类保存失败'));
       }
     } finally {
       if (workspaceMutationRef.current === operation) {
@@ -499,6 +498,14 @@ export function KnowledgeBaseListPage() {
         setSubmitting(false);
       }
     }
+  }
+
+  function closeCategoryDialog() {
+    if (workspaceMutationRef.current) {
+      return;
+    }
+    setCategoryFormError('');
+    setCategoryForm(null);
   }
 
   async function handleCategoryDelete() {
@@ -944,6 +951,7 @@ export function KnowledgeBaseListPage() {
   const listRefreshing = loading && !bootstrapping && items.length > 0;
 
   return (
+    <>
     <WorkspaceShell
       active="knowledge-bases"
       categories={categories}
@@ -1141,59 +1149,6 @@ export function KnowledgeBaseListPage() {
             </div>
           )}
 
-          {categoryForm && (
-            <form className="form-panel workspace-form category-form-panel" onSubmit={handleCategorySubmit}>
-              <div>
-                <h2>{categoryForm.id ? '编辑分类' : '新建分类'}</h2>
-                <p className="page-description">分类用于工作台左侧树和知识库筛选；删除分类要求分类为空。</p>
-              </div>
-              <div className="form-grid">
-                <label>
-                  名称
-                  <input
-                    value={categoryForm.name}
-                    onChange={(event) => setCategoryForm({ ...categoryForm, name: event.target.value })}
-                    required
-                  />
-                </label>
-                <label>
-                  父分类
-                  <select
-                    value={categoryForm.parentId}
-                    onChange={(event) => {
-                      const parentId = event.target.value;
-                      setCategoryForm({
-                        ...categoryForm,
-                        parentId,
-                        sortOrder: nextCategorySortOrder(categories, parentId || null),
-                      });
-                    }}
-                  >
-                    <option value="">根分类</option>
-                    {categoryParentOptions.map((category) => (
-                      <option key={category.id} value={category.id}>
-                        {category.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <div className="form-actions">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => setCategoryForm(null)}
-                  disabled={submitting}
-                >
-                  取消
-                </button>
-                <button type="submit" disabled={submitting}>
-                  {submitting ? '保存中...' : '保存分类'}
-                </button>
-              </div>
-            </form>
-          )}
-
           {error && <p className="error-text" role="alert">{error}</p>}
           {preferenceError && <p className="error-text" role="alert">{preferenceError}</p>}
           {bootstrapError && items.length > 0 && (
@@ -1379,7 +1334,25 @@ export function KnowledgeBaseListPage() {
           onConfirm={handleEmptyKnowledgeBaseRecycleBin}
         />
       )}
-    </WorkspaceShell>
+      </WorkspaceShell>
+      <CategoryDialog
+        error={categoryFormError}
+        onChange={setCategoryForm}
+        onClose={closeCategoryDialog}
+        onParentChange={(parentId) => {
+          if (!categoryForm) return;
+          setCategoryForm({
+            ...categoryForm,
+            parentId,
+            sortOrder: nextCategorySortOrder(categories, parentId || null),
+          });
+        }}
+        onSubmit={handleCategorySubmit}
+        parentOptions={categoryParentOptions}
+        submitting={submitting}
+        value={categoryForm}
+      />
+    </>
   );
 }
 

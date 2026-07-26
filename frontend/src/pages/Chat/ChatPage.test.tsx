@@ -743,6 +743,7 @@ describe('ChatPage', () => {
 
     const titleInput = await screen.findByRole('textbox', { name: '会话标题' });
     const composer = screen.getByRole('textbox', { name: '继续追问当前知识库' });
+    await waitFor(() => expect(titleInput).toBeEnabled());
     await user.clear(titleInput);
     await user.type(titleInput, '新标题');
     await user.type(composer, '不要和改名并发');
@@ -911,6 +912,30 @@ describe('ChatPage', () => {
     expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat/new?knowledgeBaseId=kb2');
   });
 
+  it('keeps a draft blank when switching to a knowledge base with existing sessions', async () => {
+    vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
+    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, secondSession] });
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <>
+        <Routes>
+          <Route path="/chat/new" element={<ChatPage draftSession />} />
+          <Route path="/chat/:sessionId" element={<ChatPage />} />
+        </Routes>
+        <LocationProbe />
+      </>,
+      ['/chat/new?knowledgeBaseId=kb1'],
+    );
+
+    await user.selectOptions(await screen.findByLabelText('当前知识库'), secondKnowledgeBase.id);
+
+    expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat/new?knowledgeBaseId=kb2');
+    expect(screen.getByRole('textbox', { name: '继续追问当前知识库' })).toHaveValue('');
+    expect(createChatSession).not.toHaveBeenCalled();
+    expect(listChatMessages).not.toHaveBeenCalled();
+  });
+
   it('creates a session only when the first draft question is submitted', async () => {
     vi.mocked(createChatSession).mockResolvedValue(session);
     vi.mocked(sendChatMessage).mockResolvedValue({ answer: '回答', citations: [], rerankFallback: null });
@@ -959,6 +984,20 @@ describe('ChatPage', () => {
       content: '静态路由首问',
       clientRequestId: expect.any(String),
     }));
+  });
+
+  it('keeps draft sessions focused on asking instead of disabled session management', async () => {
+    renderWithRouter(
+      <Routes>
+        <Route path="/chat/new" element={<ChatPage draftSession />} />
+      </Routes>,
+      ['/chat/new?knowledgeBaseId=kb1'],
+    );
+
+    await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    expect(screen.queryByRole('textbox', { name: '会话标题' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '归档' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '删除' })).not.toBeInTheDocument();
   });
 
   it('synchronously locks a draft against duplicate submit events', async () => {
@@ -1123,12 +1162,17 @@ describe('ChatPage', () => {
     await user.type(input, '如何报销？');
     await user.click(screen.getByRole('button', { name: '发送' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('回答生成失败，请稍后重试。');
+    const conversation = screen.getByRole('region', { name: '问答会话' });
+    expect(await within(conversation).findByRole('alert', undefined, { timeout: 3000 }))
+      .toHaveTextContent('回答生成失败，请稍后重试。');
+    expect(within(conversation).getAllByText('如何报销？')).toHaveLength(2);
+    expect(within(conversation).getByRole('button', { name: '重新生成' })).toBeInTheDocument();
+    expect(within(conversation).getByRole('button', { name: '修改问题' })).toBeInTheDocument();
     expect(input).toHaveValue('如何报销？');
 
     await user.clear(input);
     await user.type(input, '修改后的问题');
-    await user.click(screen.getByRole('button', { name: '重试发送' }));
+    await user.click(within(conversation).getByRole('button', { name: '重新生成' }));
     await waitFor(() => expect(sendChatMessage).toHaveBeenCalledTimes(2));
     expect(sendChatMessage).toHaveBeenNthCalledWith(2, 's1', expect.objectContaining({
       content: '修改后的问题',
@@ -1151,12 +1195,43 @@ describe('ChatPage', () => {
     await user.type(input, '网络中断的问题');
     await user.click(screen.getByRole('button', { name: '发送' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('发送结果暂时无法确认');
+    const conversation = screen.getByRole('region', { name: '问答会话' });
+    expect(await within(conversation).findByRole('alert')).toHaveTextContent('发送结果暂时无法确认');
+    expect(within(conversation).getAllByText('网络中断的问题')).toHaveLength(2);
     expect(screen.queryByRole('button', { name: '重试发送' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '再次检查' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '确认重新发送' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
     expect(input).toHaveValue('网络中断的问题');
+  });
+
+  it('opens the session and citation drawers with accessible controls', async () => {
+    vi.mocked(listChatMessages).mockResolvedValue({ items: historicalAnswers });
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
+      </Routes>,
+      ['/chat/s1'],
+    );
+
+    const sessionTrigger = await screen.findByRole('button', { name: '打开会话列表' });
+    await user.click(sessionTrigger);
+    const sessionDrawer = screen.getByRole('dialog', { name: '会话列表' });
+    expect(sessionDrawer).toBeInTheDocument();
+    expect(sessionDrawer.closest('.chat-aux')?.parentElement).toBe(document.body);
+    await user.click(within(sessionDrawer).getByRole('button', { name: '关闭会话列表' }));
+    expect(screen.queryByRole('dialog', { name: '会话列表' })).not.toBeInTheDocument();
+    expect(sessionTrigger).toHaveFocus();
+
+    const citationTrigger = screen.getByRole('button', { name: '打开引用来源' });
+    await user.click(citationTrigger);
+    const citationDrawer = screen.getByRole('dialog', { name: '引用来源' });
+    expect(citationDrawer.closest('.chat-aux')?.parentElement).toBe(document.body);
+    expect(within(citationDrawer).getByText(/新制度\.pdf/)).toBeInTheDocument();
+    await user.click(within(citationDrawer).getByRole('button', { name: '关闭引用来源' }));
+    expect(citationTrigger).toHaveFocus();
   });
 
   it('reconciles an uncertain draft only by its client request id', async () => {

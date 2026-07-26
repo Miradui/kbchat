@@ -7,7 +7,9 @@ const legacyStyles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf
 const layoutStyles = readFileSync(resolve(process.cwd(), 'src/styles/layouts.css'), 'utf8').replace(/\s+/g, ' ');
 const premiumStyles = readFileSync(resolve(process.cwd(), 'src/styles/premium.css'), 'utf8').replace(/\s+/g, ' ');
 const componentStyles = readFileSync(resolve(process.cwd(), 'src/styles/components.css'), 'utf8').replace(/\s+/g, ' ');
+const chatStyles = readFileSync(resolve(process.cwd(), 'src/styles/pages/chat.css'), 'utf8').replace(/\s+/g, ' ');
 const tagStyles = readFileSync(resolve(process.cwd(), 'src/styles/pages/tags.css'), 'utf8').replace(/\s+/g, ' ');
+const styleIndex = readFileSync(resolve(process.cwd(), 'src/styles/index.css'), 'utf8').replace(/\s+/g, ' ');
 
 function zIndex(styles: string, selector: string): number {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -61,7 +63,7 @@ describe('action layout styles', () => {
     expect(legacyStyles).toMatch(/\.kb-launch-actions[^}]*gap:\s*(?:8|10|12)px/);
   });
 
-  it.each(['.chat-shell', '.overview-grid'])(
+  it.each(['.overview-grid'])(
     'stacks %s at the mobile breakpoint',
     (selector) => {
       expect(legacyStyles).toMatch(new RegExp(
@@ -70,14 +72,31 @@ describe('action layout styles', () => {
     },
   );
 
+  it('keeps responsive chat structure in one page stylesheet', () => {
+    expect(styleIndex).toContain("@import './pages/chat.css'");
+    expect(legacyStyles).not.toMatch(/\.chat-shell\s*\{[^}]*(?:grid-template-columns|grid-template-areas)/);
+    expect(premiumStyles).not.toMatch(/\.chat-shell\s*\{[^}]*(?:grid-template-columns|grid-template-areas)/);
+  });
+
+  it('separates category dialog fields with a stable form rhythm', () => {
+    expect(componentStyles).toMatch(/\.category-dialog-form[^}]*display:\s*grid/);
+    expect(componentStyles).toMatch(/\.category-dialog-form[^}]*gap:\s*(?:8|12|16)px/);
+  });
+
   it('keeps fixed overlays viewport-anchored after the page entrance animation', () => {
     const entranceKeyframes = premiumStyles.match(/@keyframes premium-enter\s*{.*?}\s*}/)?.[0] ?? '';
     expect(entranceKeyframes).not.toContain('transform:');
   });
 
-  it('caps the chat main panel for low-height viewports', () => {
-    expect(premiumStyles).toMatch(
+  it('keeps responsive chat panel sizing in the page stylesheet', () => {
+    expect(chatStyles).toMatch(
       /@media \(max-height: 640px\).*?\.chat-main-panel[^}]*min-height:\s*clamp\(/,
+    );
+    expect(premiumStyles).not.toMatch(
+      /@media \(max-height: 640px\).*?\.chat-main-panel[^}]*min-height/,
+    );
+    expect(premiumStyles).not.toMatch(
+      /@media \(max-width: 680px\).*?\.chat-main-panel[^}]*min-height/,
     );
   });
 

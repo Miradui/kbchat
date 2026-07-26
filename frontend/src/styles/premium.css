@@ -220,7 +220,6 @@ button,
 .semantic-result-item,
 .document-status-item { background: var(--color-surface-subtle); border-color: var(--color-border); }
 
-.chat-shell { gap: 12px; grid-template-columns: 276px minmax(0, 1fr) 340px; height: clamp(620px, calc(100dvh - 170px), 840px); }
 .chat-sidebar-panel,
 .chat-main-panel,
 .chat-citation-panel { border: 1px solid var(--color-border); border-radius: var(--radius-md); }
@@ -267,12 +266,6 @@ button,
   to { opacity: 1; }
 }
 
-@media (max-width: 1240px) {
-  .chat-shell { grid-template-columns: 260px minmax(0, 1fr); height: auto; }
-  .chat-main-panel { min-height: 680px; }
-  .chat-citation-panel { grid-column: 1 / -1; max-height: 420px; }
-}
-
 @media (max-width: 1100px) {
   .workspace-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .workspace-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -291,13 +284,6 @@ button,
   .button-link,
   .secondary-link { min-height: 44px; }
   .workspace-content { padding-left: 0; padding-right: 0; }
-  .chat-shell { grid-template-columns: 1fr; }
-  .chat-sidebar-panel,
-  .chat-main-panel,
-  .chat-citation-panel { grid-column: auto; }
-  .chat-sidebar-panel { max-height: 360px; }
-  .chat-main-panel { min-height: 620px; }
-  .chat-citation-panel { max-height: 420px; }
   .member-search-form { grid-template-columns: minmax(0, 1fr) 118px; }
   .member-search-form > button { grid-column: 1 / -1; }
   .workspace-tabs { max-width: 100%; overflow-x: auto; width: 100%; }
@@ -338,26 +324,8 @@ button,
   .permission-member-actions select { flex: 1 1 auto; min-width: 0; }
   .member-search-form { grid-template-columns: 1fr; }
   .member-search-form > button { grid-column: auto; }
-  .chat-workspace-header { margin-bottom: 12px; }
-  .chat-sidebar-panel { max-height: 320px; }
-  .chat-main-panel { min-height: 560px; }
-  .chat-thread-head { align-items: stretch; display: grid; gap: 12px; }
-  .chat-thread-actions { justify-content: stretch; }
-  .chat-thread-actions > *,
-  .chat-title-form,
-  .chat-title-form > * { width: 100%; }
-  .chat-title-form { grid-template-columns: 1fr; }
-  .chat-composer { grid-template-columns: 1fr; }
-  .chat-composer > button { width: 100%; }
-  .chat-thread { padding: 14px; }
-  .citation-score-grid { grid-template-columns: 1fr; }
   .search-results { padding: 16px; }
   .tags-table tr { border-radius: var(--radius-md); box-shadow: var(--shadow-raised); }
-}
-
-@media (max-height: 640px) {
-  .chat-shell { height: auto; }
-  .chat-main-panel { min-height: clamp(320px, calc(100dvh - 120px), 520px); }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,4 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import { BookOpen, PanelLeft, X } from 'lucide-react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import { ApiError } from '../../api/client';
@@ -18,6 +21,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { WorkspaceShell } from '../../components/WorkspaceShell';
 import { RerankFallbackNotice } from '../../components/feedback/RerankFallbackNotice';
+import { useModalFocus } from '../../components/ui/useModalFocus';
 import type {
   ChatMessage,
   ChatSession,
@@ -39,6 +43,7 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const messagesRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const activeSessionIdRef = useRef<string | undefined>(sessionId);
   const mountedRef = useRef(false);
   const draftSendSessionIdRef = useRef<string | null>(null);
@@ -75,6 +80,10 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
   const [messageLoadError, setMessageLoadError] = useState('');
   const [activeCitationMessageId, setActiveCitationMessageId] = useState<string | null>(null);
   const [uncertainSend, setUncertainSend] = useState<PendingChatRequest | null>(null);
+  const [auxiliaryPanel, setAuxiliaryPanel] = useState<'sessions' | 'citations' | null>(null);
+  const isCompact = useMediaQuery('(max-width: 1439px)');
+  const sessionsPanelRef = useModalFocus<HTMLElement>(auxiliaryPanel === 'sessions', () => setAuxiliaryPanel(null));
+  const citationsPanelRef = useModalFocus<HTMLElement>(auxiliaryPanel === 'citations', () => setAuxiliaryPanel(null));
   const isDraftSession = sessionId === 'new';
   const draftKnowledgeBaseId = searchParams.get('knowledgeBaseId');
 
@@ -232,6 +241,12 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
     setError('');
     void loadSessionMessages(sessionId);
   }, [draftKnowledgeBaseId, isDraftSession, loadSessionMessages, sessionId]);
+
+  useEffect(() => {
+    if (!isCompact) {
+      setAuxiliaryPanel(null);
+    }
+  }, [isCompact]);
 
   useEffect(() => {
     messagesRef.current?.scrollTo({
@@ -420,6 +435,10 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
 
   function handleKnowledgeBaseChange(knowledgeBaseId: string) {
     if (sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
+      return;
+    }
+    if (isDraftSession) {
+      navigate(`/chat/new?knowledgeBaseId=${encodeURIComponent(knowledgeBaseId)}`, { replace: true });
       return;
     }
     const targetSessions = sessions
@@ -736,44 +755,34 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
         </div>
       </header>
 
-      {error && (
+      {error && !failedQuestion && !uncertainSend && (
         <div className="error-text" role="alert">
           <span>{error}</span>
-          {failedQuestion && (
-            <button
-              className="link-button"
-              type="button"
-              onClick={() => void submitQuestion(draft.trim())}
-              disabled={chatMutationBusy || !draft.trim()}
-            >
-              重试发送
-            </button>
-          )}
-          {uncertainSend && (
-            <>
-              <button
-                className="link-button"
-                type="button"
-                onClick={() => void handleCheckSendResult()}
-                disabled={checkingSendResult}
-              >
-                {checkingSendResult ? '检查中...' : '再次检查'}
-              </button>
-              <button
-                className="link-button"
-                type="button"
-                onClick={() => void submitQuestion(uncertainSend.question, true)}
-                disabled={chatMutationBusy || checkingSendResult || !uncertainSend.question}
-              >
-                确认重新发送
-              </button>
-            </>
-          )}
         </div>
       )}
 
       <div className="chat-shell">
-        <aside className="chat-sidebar-panel">
+        <PortalWhenOpen active={auxiliaryPanel === 'sessions'}>
+        <div
+          className={`chat-aux chat-sessions-aux${auxiliaryPanel === 'sessions' ? ' is-open' : ''}`}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setAuxiliaryPanel(null);
+          }}
+        >
+        <aside
+          aria-label={auxiliaryPanel === 'sessions' ? '会话列表' : undefined}
+          aria-modal={auxiliaryPanel === 'sessions' ? 'true' : undefined}
+          className="chat-sidebar-panel"
+          ref={sessionsPanelRef}
+          role={auxiliaryPanel === 'sessions' ? 'dialog' : undefined}
+          tabIndex={auxiliaryPanel === 'sessions' ? -1 : undefined}
+        >
+          <div className="chat-aux__header">
+            <strong>会话列表</strong>
+            <button aria-label="关闭会话列表" className="chat-aux__close" type="button" onClick={() => setAuxiliaryPanel(null)}>
+              <X aria-hidden="true" size={18} />
+            </button>
+          </div>
           {knowledgeBaseListError && (
             <div className="empty-state" role="alert">
               <p>{knowledgeBaseListError}</p>
@@ -807,7 +816,7 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
           </div>
 
           <button type="button" onClick={() => handleCreateSession()} disabled={chatMutationBusy}>
-            新建当前知识库会话
+            基于此知识库提问
           </button>
 
           <div className="session-section-title">
@@ -839,7 +848,9 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
                   onClick={(event) => {
                     if (sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
                       event.preventDefault();
+                      return;
                     }
+                    setAuxiliaryPanel(null);
                   }}
                 >
                   <strong>{session.title || '未命名会话'}</strong>
@@ -849,6 +860,8 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
             )}
           </div>
         </aside>
+        </div>
+        </PortalWhenOpen>
 
         <section className="chat-main-panel" aria-label="问答会话">
           <header className="chat-thread-head">
@@ -861,51 +874,75 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
               </p>
             </div>
             <div className="chat-thread-actions">
-              <form className="chat-title-form" onSubmit={handleUpdateTitle}>
-                <input
-                  aria-label="会话标题"
-                  value={titleDraft}
-                  onChange={(event) => setTitleDraft(event.target.value)}
-                  disabled={!sessionDetailsReady || chatMutationBusy}
-                />
-                <button className="secondary-button" type="submit" disabled={!sessionDetailsReady || chatMutationBusy || !titleDraft.trim()}>
-                  改名
-                </button>
-              </form>
-              <div className="chat-thread-stats" aria-label="会话统计">
-                <span>{messageStatsKnown ? questionCount : '--'} 问</span>
-                <span>{messageStatsKnown ? citationCount : '--'} 引用</span>
-              </div>
-              <div className="table-actions">
+              <div className="chat-panel-controls">
                 <button
-                  className="secondary-button"
+                  aria-label="打开会话列表"
+                  className="secondary-button chat-drawer-trigger chat-sessions-trigger"
                   type="button"
-                  onClick={() => {
-                    if (sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
-                      return;
-                    }
-                    setSessionConfirmError('');
-                    setConfirmArchive(true);
-                  }}
-                  disabled={!sessionDetailsReady || chatMutationBusy || archived}
+                  onClick={() => setAuxiliaryPanel('sessions')}
                 >
-                  归档
+                  <PanelLeft aria-hidden="true" size={18} />
+                  <span>会话</span>
                 </button>
                 <button
-                  className="danger-button"
+                  aria-label="打开引用来源"
+                  className="secondary-button chat-drawer-trigger chat-citations-trigger"
                   type="button"
-                  onClick={() => {
-                    if (sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
-                      return;
-                    }
-                    setSessionConfirmError('');
-                    setConfirmDelete(true);
-                  }}
-                  disabled={!sessionDetailsReady || chatMutationBusy}
+                  onClick={() => setAuxiliaryPanel('citations')}
                 >
-                  删除
+                  <BookOpen aria-hidden="true" size={18} />
+                  <span>引用</span>
                 </button>
               </div>
+              {!isDraftSession && (
+                <>
+                  <form className="chat-title-form" onSubmit={handleUpdateTitle}>
+                    <input
+                      aria-label="会话标题"
+                      value={titleDraft}
+                      onChange={(event) => setTitleDraft(event.target.value)}
+                      disabled={!sessionDetailsReady || chatMutationBusy}
+                    />
+                    <button className="secondary-button" type="submit" disabled={!sessionDetailsReady || chatMutationBusy || !titleDraft.trim()}>
+                      改名
+                    </button>
+                  </form>
+                  <div className="chat-thread-stats" aria-label="会话统计">
+                    <span>{messageStatsKnown ? questionCount : '--'} 问</span>
+                    <span>{messageStatsKnown ? citationCount : '--'} 引用</span>
+                  </div>
+                  <div className="table-actions">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => {
+                        if (sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
+                          return;
+                        }
+                        setSessionConfirmError('');
+                        setConfirmArchive(true);
+                      }}
+                      disabled={!sessionDetailsReady || chatMutationBusy || archived}
+                    >
+                      归档
+                    </button>
+                    <button
+                      className="danger-button"
+                      type="button"
+                      onClick={() => {
+                        if (sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
+                          return;
+                        }
+                        setSessionConfirmError('');
+                        setConfirmDelete(true);
+                      }}
+                      disabled={!sessionDetailsReady || chatMutationBusy}
+                    >
+                      删除
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </header>
 
@@ -924,7 +961,7 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
                   重试消息
                 </button>
               </div>
-            ) : messages.length === 0 && !pendingQuestion ? (
+            ) : messages.length === 0 && !pendingQuestion && !failedQuestion && !uncertainSend ? (
               <div className="chat-empty-state">
                 <strong>开始提问</strong>
                 <p>围绕当前知识库提问，回答会在右侧展示可追踪引用。</p>
@@ -935,7 +972,10 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
                   activeCitations={message.id === activeCitationMessageId}
                   message={message}
                   key={message.id}
-                  onSelectCitations={() => setActiveCitationMessageId(message.id)}
+                  onSelectCitations={() => {
+                    setActiveCitationMessageId(message.id);
+                    if (isCompact) setAuxiliaryPanel('citations');
+                  }}
                   onRegenerate={message.id === latestAssistantMessageId && !archived ? handleRegenerateMessage : undefined}
                   regenerating={regeneratingMessageId === message.id}
                   regenerationDisabled={chatMutationBusy}
@@ -955,10 +995,68 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
                 </article>
               </>
             )}
+            {failedQuestion && (
+              <>
+                <article className="message-bubble user">
+                  <span className="message-role">用户</span>
+                  <p>{failedQuestion}</p>
+                </article>
+                <article className="message-bubble assistant chat-recovery-card" role="alert">
+                  <span className="message-role">助手</span>
+                  <strong>回答生成失败</strong>
+                  <p>{error}</p>
+                  <div className="message-actions chat-recovery-actions">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => void submitQuestion(draft.trim())}
+                      disabled={chatMutationBusy || !draft.trim()}
+                    >
+                      重新生成
+                    </button>
+                    <button className="link-button" type="button" onClick={() => composerRef.current?.focus()}>
+                      修改问题
+                    </button>
+                  </div>
+                </article>
+              </>
+            )}
+            {uncertainSend && (
+              <>
+                <article className="message-bubble user">
+                  <span className="message-role">用户</span>
+                  <p>{uncertainSend.question}</p>
+                </article>
+                <article className="message-bubble assistant chat-recovery-card" role="alert">
+                  <span className="message-role">助手</span>
+                  <strong>发送结果待确认</strong>
+                  <p>{error}</p>
+                  <div className="message-actions chat-recovery-actions">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => void handleCheckSendResult()}
+                      disabled={checkingSendResult}
+                    >
+                      {checkingSendResult ? '检查中...' : '再次检查'}
+                    </button>
+                    <button
+                      className="link-button"
+                      type="button"
+                      onClick={() => void submitQuestion(uncertainSend.question, true)}
+                      disabled={chatMutationBusy || checkingSendResult || !uncertainSend.question}
+                    >
+                      确认重新发送
+                    </button>
+                  </div>
+                </article>
+              </>
+            )}
           </div>
 
           <form className="composer chat-composer" onSubmit={handleSubmit}>
             <textarea
+              ref={composerRef}
               aria-label="继续追问当前知识库"
               placeholder="继续追问当前知识库..."
               value={draft}
@@ -972,7 +1070,27 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
           </form>
         </section>
 
-        <aside aria-label="引用来源" className="citation-panel chat-citation-panel">
+        <PortalWhenOpen active={auxiliaryPanel === 'citations'}>
+        <div
+          className={`chat-aux chat-citations-aux${auxiliaryPanel === 'citations' ? ' is-open' : ''}`}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setAuxiliaryPanel(null);
+          }}
+        >
+        <aside
+          aria-label="引用来源"
+          aria-modal={auxiliaryPanel === 'citations' ? 'true' : undefined}
+          className="citation-panel chat-citation-panel"
+          ref={citationsPanelRef}
+          role={auxiliaryPanel === 'citations' ? 'dialog' : undefined}
+          tabIndex={auxiliaryPanel === 'citations' ? -1 : undefined}
+        >
+          <div className="chat-aux__header">
+            <strong>引用来源</strong>
+            <button aria-label="关闭引用来源" className="chat-aux__close" type="button" onClick={() => setAuxiliaryPanel(null)}>
+              <X aria-hidden="true" size={18} />
+            </button>
+          </div>
           <div>
             <h2>引用来源</h2>
             <p className="muted-text">回答有依据时会在这里列出来源。</p>
@@ -1001,6 +1119,8 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
             )}
           </div>
         </aside>
+        </div>
+        </PortalWhenOpen>
       </div>
       </div>
       {confirmArchive && currentSession && (
@@ -1033,6 +1153,27 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
       )}
     </WorkspaceShell>
   );
+}
+
+function PortalWhenOpen({ active, children }: { active: boolean; children: ReactNode }) {
+  return active ? createPortal(children, document.body) : children;
+}
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(
+    () => typeof window.matchMedia === 'function' && window.matchMedia(query).matches,
+  );
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const media = window.matchMedia(query);
+    const update = () => setMatches(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, [query]);
+
+  return matches;
 }
 
 function mergeSession(sessions: ChatSession[], nextSession: ChatSession): ChatSession[] {

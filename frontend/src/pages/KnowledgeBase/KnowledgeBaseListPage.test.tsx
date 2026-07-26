@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ApiError } from '../../api/client';
 import {
   batchFavoriteKnowledgeBases,
   createKnowledgeBase,
@@ -220,9 +221,12 @@ describe('KnowledgeBaseListPage', () => {
     const alert = await screen.findByRole('alert');
     await user.click(within(alert).getByRole('button', { name: '重试初始化' }));
     await user.click(screen.getByRole('button', { name: '新增根分类' }));
-    await user.type(screen.getByRole('textbox', { name: '名称' }), '最新分类');
-    await user.click(screen.getByRole('button', { name: '保存分类' }));
+    const dialog = screen.getByRole('dialog', { name: '新建分类' });
+    expect(dialog).toBeInTheDocument();
+    await user.type(within(dialog).getByRole('textbox', { name: '分类名称' }), '最新分类');
+    await user.click(within(dialog).getByRole('button', { name: '保存分类' }));
     await waitFor(() => expect(listKnowledgeBaseCategories).toHaveBeenCalledTimes(3));
+    expect(screen.queryByRole('dialog', { name: '新建分类' })).not.toBeInTheDocument();
 
     await act(async () => mutationReload.resolve({ items: latestCategories }));
     expect(await screen.findByRole('button', { name: '最新分类' })).toBeInTheDocument();
@@ -230,6 +234,25 @@ describe('KnowledgeBaseListPage', () => {
     await act(async () => bootstrapRetry.resolve({ items: categories }));
     expect(screen.getByRole('button', { name: '最新分类' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '制度分类' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the category dialog open with its input after saving fails', async () => {
+    vi.mocked(createKnowledgeBaseCategory).mockRejectedValueOnce(new ApiError(409, {
+      code: 'CATEGORY_EXISTS',
+      message: '分类名称已存在',
+    }));
+    const user = userEvent.setup();
+    renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
+
+    await user.click(await screen.findByRole('button', { name: '新增根分类' }));
+    const dialog = screen.getByRole('dialog', { name: '新建分类' });
+    const input = within(dialog).getByRole('textbox', { name: '分类名称' });
+    await user.type(input, '制度分类');
+    await user.click(within(dialog).getByRole('button', { name: '保存分类' }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('分类名称已存在');
+    expect(input).toHaveValue('制度分类');
+    expect(screen.getByRole('dialog', { name: '新建分类' })).toBeInTheDocument();
   });
 
   it('keeps the recycle-bin count unknown when its initial request fails', async () => {

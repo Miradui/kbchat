@@ -136,6 +136,20 @@ button.ui-icon-button--danger:disabled { background: transparent; border-color: 
   justify-content: flex-end;
   margin-top: var(--space-5);
 }
+
+.category-dialog-form {
+  display: grid;
+  gap: 8px;
+  margin-top: var(--space-5);
+}
+
+.category-dialog-form > label {
+  font-weight: 650;
+}
+
+.category-dialog-form > .ui-dialog__actions {
+  margin-top: var(--space-3);
+}
 @media (max-width: 680px) {
   .ui-dialog { max-height: calc(100dvh - 32px); padding: var(--space-4); }
   .ui-dialog__actions { flex-direction: column-reverse; }

@@ -2263,13 +2263,6 @@ button.citation-summary-button[aria-pressed="true"] {
   margin-bottom: 14px;
 }
 
-.chat-shell {
-  display: grid;
-  grid-template-columns: 280px minmax(0, 1fr) 360px;
-  height: clamp(620px, calc(100dvh - 150px), 860px);
-  min-height: 0;
-}
-
 .chat-sidebar-panel,
 .chat-main-panel,
 .chat-citation-panel {
@@ -3138,37 +3131,6 @@ button.citation-summary-button[aria-pressed="true"] {
   }
 }
 
-@media (max-width: 1500px) {
-  .chat-shell {
-    grid-template-areas:
-      "sessions conversation"
-      "sessions citations";
-    grid-template-columns: 240px minmax(0, 1fr);
-    height: auto;
-  }
-
-  .chat-sidebar-panel {
-    grid-area: sessions;
-  }
-
-  .chat-main-panel {
-    grid-area: conversation;
-    height: clamp(620px, calc(100dvh - 150px), 860px);
-  }
-
-  .chat-citation-panel {
-    border: 1px solid var(--border);
-    border-left: 0;
-    border-radius: 0 0 8px 0;
-    border-top: 0;
-    grid-area: citations;
-  }
-
-  .chat-citation-panel .citation-list {
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  }
-}
-
 @media (max-width: 980px) {
   .star-button,
   button.citation-summary-button,
@@ -3209,37 +3171,8 @@ button.citation-summary-button[aria-pressed="true"] {
     height: auto;
   }
 
-  .chat-shell {
-    gap: 12px;
-    grid-template-columns: 1fr;
-    height: auto;
-  }
-
   .overview-grid {
     grid-template-columns: 1fr;
-  }
-
-  .chat-sidebar-panel,
-  .chat-main-panel,
-  .chat-citation-panel {
-    border: 1px solid var(--border);
-    border-radius: 8px;
-  }
-
-  .chat-sidebar-panel {
-    grid-template-rows: auto;
-  }
-
-  .chat-session-list {
-    max-height: 320px;
-  }
-
-  .chat-main-panel {
-    min-height: 620px;
-  }
-
-  .chat-citation-panel {
-    min-height: 280px;
   }
 
   .chat-sessions,
