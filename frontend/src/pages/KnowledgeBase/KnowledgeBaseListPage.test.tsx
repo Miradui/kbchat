@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../api/client';
 import {
   batchFavoriteKnowledgeBases,
+  batchMoveKnowledgeBases,
   createKnowledgeBase,
   createKnowledgeBaseCategory,
   deleteKnowledgeBase,
@@ -25,9 +26,22 @@ import { renderWithRouter } from '../../test/render';
 import type { KnowledgeBase } from '../../types/api';
 import { KnowledgeBaseListPage } from './KnowledgeBaseListPage';
 
+async function chooseKnowledgeBaseAction(
+  user: ReturnType<typeof userEvent.setup>,
+  container: HTMLElement,
+  knowledgeBaseName: string,
+  action: '编辑' | '移动到分类' | '删除',
+) {
+  await user.click(within(container).getByRole('button', {
+    name: `${knowledgeBaseName}的更多操作`,
+  }));
+  await user.click(screen.getByRole('menuitem', { name: action }));
+}
+
 vi.mock('../../api/resources', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../api/resources')>(),
   batchFavoriteKnowledgeBases: vi.fn(),
+  batchMoveKnowledgeBases: vi.fn(),
   createKnowledgeBase: vi.fn(),
   createKnowledgeBaseCategory: vi.fn(),
   deleteKnowledgeBase: vi.fn(),
@@ -131,6 +145,7 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.mocked(batchFavoriteKnowledgeBases).mockReset().mockResolvedValue({ processedCount: 0 });
+  vi.mocked(batchMoveKnowledgeBases).mockReset().mockResolvedValue({ processedCount: 1 });
   vi.mocked(deleteKnowledgeBase).mockReset().mockResolvedValue(undefined);
   vi.mocked(favoriteKnowledgeBase).mockReset();
   vi.mocked(createKnowledgeBase).mockReset().mockResolvedValue(createdKnowledgeBase);
@@ -323,11 +338,9 @@ describe('KnowledgeBaseListPage', () => {
     const secondRow = screen.getByRole('row', { name: /最新筛选结果/ });
     await user.click(within(firstRow).getByRole('checkbox', { name: '选择 新知识库' }));
     await user.click(within(firstRow).getByRole('button', { name: '收藏' }));
-    expect(within(firstRow).getByRole('button', { name: '编辑' })).toBeDisabled();
-    expect(within(firstRow).getByRole('button', { name: '删除' })).toBeDisabled();
+    expect(within(firstRow).getByRole('button', { name: '新知识库的更多操作' })).toBeDisabled();
     expect(within(secondRow).getByRole('button', { name: '收藏' })).toBeDisabled();
-    expect(within(secondRow).getByRole('button', { name: '编辑' })).toBeDisabled();
-    expect(within(secondRow).getByRole('button', { name: '删除' })).toBeDisabled();
+    expect(within(secondRow).getByRole('button', { name: '最新筛选结果的更多操作' })).toBeDisabled();
     expect(screen.getByRole('button', { name: '批量收藏' })).toBeDisabled();
     expect(screen.getByRole('button', { name: '取消收藏' })).toBeDisabled();
     expect(screen.getByRole('button', { name: '新增根分类' })).toBeDisabled();
@@ -354,8 +367,7 @@ describe('KnowledgeBaseListPage', () => {
     await user.click(screen.getByRole('button', { name: '批量收藏' }));
 
     expect(within(row).getByRole('button', { name: '收藏' })).toBeDisabled();
-    expect(within(row).getByRole('button', { name: '编辑' })).toBeDisabled();
-    expect(within(row).getByRole('button', { name: '删除' })).toBeDisabled();
+    expect(within(row).getByRole('button', { name: '新知识库的更多操作' })).toBeDisabled();
 
     favoriteResult.resolve({ processedCount: 1 });
     await waitFor(() => expect(within(row).getByRole('button', { name: '收藏' })).toBeEnabled());
@@ -580,7 +592,7 @@ describe('KnowledgeBaseListPage', () => {
     renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
 
     const row = (await screen.findByRole('link', { name: /新知识库/ })).closest('tr')!;
-    await user.click(within(row).getByRole('button', { name: '编辑' }));
+    await chooseKnowledgeBaseAction(user, row, '新知识库', '编辑');
 
     const dialog = screen.getByRole('dialog', { name: '编辑知识库' });
     const advanced = within(dialog).getByText('更多设置').closest('details');
@@ -668,7 +680,7 @@ describe('KnowledgeBaseListPage', () => {
     renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
 
     const row = (await screen.findByRole('link', { name: /新知识库/ })).closest('tr')!;
-    await user.click(within(row).getByRole('button', { name: '编辑' }));
+    await chooseKnowledgeBaseAction(user, row, '新知识库', '编辑');
     const dialog = screen.getByRole('dialog', { name: '编辑知识库' });
     expect(within(dialog).getByRole('checkbox', { name: '制度' })).toBeChecked();
     expect(within(dialog).getByRole('checkbox', { name: '人事' })).toBeChecked();
@@ -706,6 +718,131 @@ describe('KnowledgeBaseListPage', () => {
       await screen.findByRole('dialog', { name: '放弃未保存的更改' }),
     ).getByRole('button', { name: '放弃更改' }));
     expect(screen.queryByRole('dialog', { name: '新建知识库' })).not.toBeInTheDocument();
+  });
+
+  it('prioritizes document readiness, visibility, and update time in cards', async () => {
+    vi.mocked(getWorkspacePreference).mockResolvedValue({
+      viewMode: 'card',
+      scope: 'all',
+      sort: 'updatedAt_desc',
+      visibility: 'all',
+      expandedCategoryIds: [],
+    });
+    vi.mocked(listKnowledgeBases).mockResolvedValue({
+      items: [
+        {
+          ...createdKnowledgeBase,
+          id: 'kb-failed',
+          name: '异常知识库',
+          visibility: 'public',
+          documentCount: 3,
+          completedDocumentCount: 1,
+          processingDocumentCount: 1,
+          failedDocumentCount: 1,
+          viewCount: 12,
+          questionCount: 4,
+        },
+        {
+          ...createdKnowledgeBase,
+          id: 'kb-processing',
+          name: '处理中知识库',
+          documentCount: 2,
+          completedDocumentCount: 1,
+          processingDocumentCount: 1,
+          failedDocumentCount: 0,
+        },
+        {
+          ...createdKnowledgeBase,
+          id: 'kb-ready',
+          name: '可用知识库',
+          documentCount: 1,
+          completedDocumentCount: 1,
+          processingDocumentCount: 0,
+          failedDocumentCount: 0,
+        },
+        {
+          ...createdKnowledgeBase,
+          id: 'kb-empty',
+          name: '空知识库',
+          documentCount: 0,
+          completedDocumentCount: 0,
+          processingDocumentCount: 0,
+          failedDocumentCount: 0,
+        },
+      ],
+      total: 4,
+      page: 1,
+      pageSize: 10,
+    });
+
+    renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
+
+    const failedCard = (await screen.findByRole('link', { name: /异常知识库/ })).closest('article')!;
+    expect(within(failedCard).getByText('存在失败')).toBeInTheDocument();
+    expect(within(failedCard).getByText('公开')).toBeInTheDocument();
+    expect(within(failedCard).getByText(/更新于/)).toBeInTheDocument();
+    const readiness = within(failedCard).getByText('存在失败');
+    const views = within(failedCard).getByText('12 浏览');
+    expect(readiness.compareDocumentPosition(views) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    expect(within((screen.getByRole('link', { name: /处理中知识库/ })).closest('article')!).getByText('处理中')).toBeInTheDocument();
+    expect(within((screen.getByRole('link', { name: /可用知识库/ })).closest('article')!).getByText('可问答')).toBeInTheDocument();
+    expect(within((screen.getByRole('link', { name: /空知识库/ })).closest('article')!).getByText('暂无文档')).toBeInTheDocument();
+  });
+
+  it('moves a knowledge base from the overflow menu', async () => {
+    vi.mocked(listKnowledgeBaseCategories).mockResolvedValue({ items: categories });
+    vi.mocked(listKnowledgeBases).mockResolvedValue({
+      items: [createdKnowledgeBase],
+      total: 1,
+      page: 1,
+      pageSize: 10,
+    });
+    const user = userEvent.setup();
+    renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
+
+    const row = (await screen.findByRole('link', { name: /新知识库/ })).closest('tr')!;
+    expect(within(row).queryByRole('button', { name: '编辑' })).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: '删除' })).not.toBeInTheDocument();
+    await user.click(within(row).getByRole('button', { name: '新知识库的更多操作' }));
+
+    const menu = screen.getByRole('menu', { name: '新知识库的更多操作' });
+    expect(within(menu).getByRole('menuitem', { name: '编辑' })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', { name: '删除' })).toBeInTheDocument();
+    await user.click(within(menu).getByRole('menuitem', { name: '移动到分类' }));
+
+    const dialog = screen.getByRole('dialog', { name: '移动知识库' });
+    await user.selectOptions(within(dialog).getByRole('combobox', { name: '目标分类' }), 'category-b');
+    await user.click(within(dialog).getByRole('button', { name: '移动' }));
+
+    await waitFor(() => expect(batchMoveKnowledgeBases).toHaveBeenCalledWith(['kb-new'], 'category-b'));
+  });
+
+  it('keeps the move dialog and selection when moving a knowledge base fails', async () => {
+    vi.mocked(listKnowledgeBaseCategories).mockResolvedValue({ items: categories });
+    vi.mocked(listKnowledgeBases).mockResolvedValue({
+      items: [createdKnowledgeBase],
+      total: 1,
+      page: 1,
+      pageSize: 10,
+    });
+    vi.mocked(batchMoveKnowledgeBases).mockRejectedValueOnce(new ApiError(409, {
+      code: 'CATEGORY_UNAVAILABLE',
+      message: '目标分类不可用',
+    }));
+    const user = userEvent.setup();
+    renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
+
+    const row = (await screen.findByRole('link', { name: /新知识库/ })).closest('tr')!;
+    await chooseKnowledgeBaseAction(user, row, '新知识库', '移动到分类');
+    const dialog = screen.getByRole('dialog', { name: '移动知识库' });
+    const category = within(dialog).getByRole('combobox', { name: '目标分类' });
+    await user.selectOptions(category, 'category-b');
+    await user.click(within(dialog).getByRole('button', { name: '移动' }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('目标分类不可用');
+    expect(category).toHaveValue('category-b');
+    expect(within(dialog).getByRole('button', { name: '移动' })).toBeEnabled();
   });
 
   it('exposes the selected view mode to assistive technology', async () => {
@@ -996,7 +1133,8 @@ describe('KnowledgeBaseListPage', () => {
     const user = userEvent.setup();
     renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
 
-    await user.click(await screen.findByRole('button', { name: '删除' }));
+    const row = (await screen.findByRole('link', { name: /新知识库/ })).closest('tr')!;
+    await chooseKnowledgeBaseAction(user, row, '新知识库', '删除');
     const confirmation = screen.getByRole('dialog', { name: '删除知识库' });
     await user.click(within(confirmation).getByRole('button', { name: '删除' }));
 

@@ -981,7 +981,7 @@ textarea {
 }
 
 .workspace-table {
-  min-width: 1050px;
+  min-width: 1160px;
 }
 
 .workspace-table th:first-child,
@@ -1043,6 +1043,36 @@ textarea {
 .visibility-pill.private {
   background: #e6edff;
   color: #315faa;
+}
+
+.readiness-pill {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 750;
+  min-height: 28px;
+  padding: 4px 10px;
+}
+
+.readiness-pill.success {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.readiness-pill.warning {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+.readiness-pill.danger {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.readiness-pill.neutral {
+  background: var(--color-surface-subtle);
+  color: var(--color-text-muted);
 }
 
 .user-cell {
@@ -1120,14 +1150,33 @@ textarea {
   margin: 7px 0 0;
 }
 
-.kb-card-meta,
+.kb-card-status,
+.kb-card-secondary,
 .tag-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.kb-card-meta span,
+.kb-card-status {
+  align-items: center;
+}
+
+.kb-card-updated {
+  color: var(--color-text-muted);
+  font-size: 13px;
+  margin: -4px 0 0;
+}
+
+.kb-card-secondary {
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  gap: 12px;
+  padding-top: 12px;
+}
+
+.kb-card-secondary span,
 .tag-pill {
   background: #f3f6fb;
   border-radius: 999px;
@@ -1135,6 +1184,21 @@ textarea {
   font-size: 12px;
   font-weight: 650;
   padding: 5px 9px;
+}
+
+.kb-card-secondary span {
+  background: transparent;
+  padding: 0;
+}
+
+.kb-move-dialog-form {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+
+.kb-move-dialog-form > label {
+  font-weight: 650;
 }
 
 .workspace-pagination {

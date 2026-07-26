@@ -34,6 +34,9 @@ export type KnowledgeBase = {
   createdAt: string;
   updatedAt: string;
   documentCount?: number;
+  completedDocumentCount?: number;
+  processingDocumentCount?: number;
+  failedDocumentCount?: number;
   viewCount?: number;
   questionCount?: number;
   isFavorite?: boolean;

@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"mime/multipart"
@@ -858,6 +859,102 @@ func TestKnowledgeBaseCountsExcludeSoftDeletedDocumentsAndSessions(t *testing.T)
 	}
 	if stats.Documents.Value != 0 || stats.Questions.Value != 0 {
 		t.Fatalf("expected deleted resources excluded from stats, got %#v", stats)
+	}
+}
+
+func TestKnowledgeBaseWorkspaceReturnsDocumentReadinessCounts(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "company-policy", "private", time.Now())
+	createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "ready.pdf", "completed")
+	createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "queued.pdf", "uploaded")
+	createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "parsing.pdf", "parsing")
+	createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "failed.pdf", "failed")
+	deleted := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "deleted.pdf", "completed")
+	if err := services.db.Delete(&deleted).Error; err != nil {
+		t.Fatalf("soft delete document: %v", err)
+	}
+	createWorkspaceQuestion(t, services.db, kb.ID, owner.ID, "what is the policy?")
+	if err := services.kbs.RecordView(ctx, owner.ID, kb.ID); err != nil {
+		t.Fatalf("record knowledge base view: %v", err)
+	}
+
+	workspace, err := services.kbs.ListWorkspace(ctx, owner.ID, dto.KnowledgeBaseListQuery{Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatalf("list workspace: %v", err)
+	}
+	if len(workspace.Items) != 1 || workspace.Items[0].DocumentCount != 4 {
+		t.Fatalf("expected four active documents, got %#v", workspace.Items)
+	}
+	payload, err := json.Marshal(workspace.Items[0])
+	if err != nil {
+		t.Fatalf("marshal workspace item: %v", err)
+	}
+	var item map[string]any
+	if err := json.Unmarshal(payload, &item); err != nil {
+		t.Fatalf("unmarshal workspace item: %v", err)
+	}
+	for field, expected := range map[string]float64{
+		"completedDocumentCount":  1,
+		"processingDocumentCount": 2,
+		"failedDocumentCount":     1,
+	} {
+		if item[field] != expected {
+			t.Fatalf("expected %s=%v, got %#v", field, expected, item[field])
+		}
+	}
+}
+
+func TestKnowledgeBaseMutationAndDetailResponsesOmitListOnlyDocumentReadinessCounts(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	created, err := services.kbs.Create(ctx, owner.ID, dto.KnowledgeBaseRequest{
+		Name:       "company-policy",
+		Visibility: "private",
+	})
+	if err != nil {
+		t.Fatalf("create knowledge base: %v", err)
+	}
+	kbID := mustParseUUID(t, created.ID)
+	createWorkspaceDocument(t, services.db, kbID, owner.ID, "ready.pdf", "completed")
+
+	updated, err := services.kbs.Update(ctx, owner.ID, kbID, dto.KnowledgeBaseRequest{
+		Name:        "company-handbook",
+		Description: "updated",
+		Visibility:  "private",
+	})
+	if err != nil {
+		t.Fatalf("update knowledge base: %v", err)
+	}
+	detail, err := services.kbs.Get(ctx, owner.ID, kbID)
+	if err != nil {
+		t.Fatalf("get knowledge base detail: %v", err)
+	}
+
+	for responseName, response := range map[string]*dto.KnowledgeBaseResponse{
+		"create": created,
+		"update": updated,
+		"detail": detail,
+	} {
+		payload, err := json.Marshal(response)
+		if err != nil {
+			t.Fatalf("marshal %s response: %v", responseName, err)
+		}
+		var item map[string]any
+		if err := json.Unmarshal(payload, &item); err != nil {
+			t.Fatalf("unmarshal %s response: %v", responseName, err)
+		}
+		for _, field := range []string{
+			"completedDocumentCount",
+			"processingDocumentCount",
+			"failedDocumentCount",
+		} {
+			if _, exists := item[field]; exists {
+				t.Fatalf("expected list-only field %s omitted from %s response, got %#v", field, responseName, item)
+			}
+		}
 	}
 }
 

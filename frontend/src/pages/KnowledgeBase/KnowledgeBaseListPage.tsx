@@ -1,5 +1,5 @@
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Grid2X2, List, Plus, Star } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FolderInput, Grid2X2, List, Pencil, Plus, Star, Trash2 } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { ApiError } from '../../api/client';
@@ -33,6 +33,8 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { WorkspaceShell } from '../../components/WorkspaceShell';
 import { Button } from '../../components/ui/Button';
+import { IconButton } from '../../components/ui/IconButton';
+import { OverflowMenu } from '../../components/ui/OverflowMenu';
 import type {
   KnowledgeBase,
   KnowledgeBaseCategory,
@@ -57,6 +59,8 @@ import {
   KnowledgeBaseRecycleBinDrawer,
 } from './KnowledgeBaseDrawers';
 import type { KnowledgeBaseFormState } from './KnowledgeBaseDrawers';
+import { KnowledgeBaseMoveDialog } from './KnowledgeBaseMoveDialog';
+import { getKnowledgeBaseReadiness } from './knowledgeBaseReadiness';
 
 const defaultConfig: RetrievalConfig = {
   vectorTopN: 30,
@@ -111,6 +115,9 @@ export function KnowledgeBaseListPage() {
   const [formInitial, setFormInitial] = useState<FormState | null>(null);
   const [formError, setFormError] = useState('');
   const [confirmDiscardForm, setConfirmDiscardForm] = useState(false);
+  const [moveTarget, setMoveTarget] = useState<KnowledgeBase | null>(null);
+  const [moveCategoryId, setMoveCategoryId] = useState('');
+  const [moveError, setMoveError] = useState('');
   const [categoryForm, setCategoryForm] = useState<CategoryDialogValue | null>(null);
   const [categoryFormError, setCategoryFormError] = useState('');
   const [categoryDeleteTarget, setCategoryDeleteTarget] = useState<KnowledgeBaseCategory | null>(null);
@@ -895,6 +902,52 @@ export function KnowledgeBaseListPage() {
     setForm(nextForm);
   }
 
+  function openMoveKnowledgeBase(item: KnowledgeBase) {
+    if (workspaceMutationRef.current) {
+      return;
+    }
+    setMoveError('');
+    setMoveCategoryId(item.categoryId ?? '');
+    setMoveTarget(item);
+  }
+
+  function closeMoveKnowledgeBase() {
+    if (workspaceMutationRef.current) {
+      return;
+    }
+    setMoveTarget(null);
+    setMoveCategoryId('');
+    setMoveError('');
+  }
+
+  async function handleMoveKnowledgeBase(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!moveTarget || workspaceMutationRef.current) {
+      return;
+    }
+    const operation = Symbol('move-knowledge-base');
+    workspaceMutationRef.current = operation;
+    setWorkingId(moveTarget.id);
+    setMoveError('');
+    try {
+      await batchMoveKnowledgeBases([moveTarget.id], moveCategoryId || null);
+      if (workspaceMutationRef.current === operation) {
+        setMoveTarget(null);
+        setMoveCategoryId('');
+        await refreshAfterMutation();
+      }
+    } catch (err) {
+      if (workspaceMutationRef.current === operation) {
+        setMoveError(errorMessage(err, '知识库移动失败'));
+      }
+    } finally {
+      if (workspaceMutationRef.current === operation) {
+        workspaceMutationRef.current = null;
+        setWorkingId(null);
+      }
+    }
+  }
+
   function closeKnowledgeBaseForm() {
     setForm(null);
     setFormInitial(null);
@@ -1213,6 +1266,7 @@ export function KnowledgeBaseListPage() {
                 onDelete={(item) => openKnowledgeBaseDelete({ kind: 'single', item })}
                 onEdit={openEditForm}
                 onFavorite={toggleFavorite}
+                onMove={openMoveKnowledgeBase}
                 onOpen={handleOpenKnowledgeBase}
                 onToggleSelected={toggleSelected}
               />
@@ -1225,6 +1279,7 @@ export function KnowledgeBaseListPage() {
                 onDelete={(item) => openKnowledgeBaseDelete({ kind: 'single', item })}
                 onEdit={openEditForm}
                 onFavorite={toggleFavorite}
+                onMove={openMoveKnowledgeBase}
                 onOpen={handleOpenKnowledgeBase}
                 onToggleAll={toggleAllVisible}
                 onToggleSelected={toggleSelected}
@@ -1299,6 +1354,19 @@ export function KnowledgeBaseListPage() {
           }}
           onClose={requestCloseKnowledgeBaseForm}
           onSubmit={handleSubmit}
+        />
+      )}
+
+      {moveTarget && (
+        <KnowledgeBaseMoveDialog
+          busy={workingId === moveTarget.id}
+          categories={flatCategories}
+          error={moveError}
+          knowledgeBaseName={moveTarget.name}
+          targetCategoryId={moveCategoryId}
+          onChange={setMoveCategoryId}
+          onClose={closeMoveKnowledgeBase}
+          onSubmit={handleMoveKnowledgeBase}
         />
       )}
 
@@ -1452,6 +1520,7 @@ function KnowledgeBaseTable({
   onDelete,
   onEdit,
   onFavorite,
+  onMove,
   onOpen,
   onToggleAll,
   onToggleSelected,
@@ -1463,6 +1532,7 @@ function KnowledgeBaseTable({
   onDelete: (item: KnowledgeBase) => void;
   onEdit: (item: KnowledgeBase) => void;
   onFavorite: (item: KnowledgeBase) => void;
+  onMove: (item: KnowledgeBase) => void;
   onOpen: (item: KnowledgeBase) => boolean;
   onToggleAll: () => void;
   onToggleSelected: (id: string) => void;
@@ -1481,7 +1551,8 @@ function KnowledgeBaseTable({
               />
             </th>
             <th>名称</th>
-            <th>类型</th>
+            <th>状态</th>
+            <th>可见性</th>
             <th>文档数</th>
             <th>更新人</th>
             <th>更新时间</th>
@@ -1489,56 +1560,69 @@ function KnowledgeBaseTable({
           </tr>
         </thead>
         <tbody>
-          {items.map((item) => (
-            <tr key={item.id}>
-              <td data-label="选择">
-                <input
-                  aria-label={`选择 ${item.name}`}
-                  checked={selectedSet.has(item.id)}
-                  type="checkbox"
-                  onChange={() => onToggleSelected(item.id)}
-                />
-              </td>
-              <td className="table-title" data-label="名称">
-                <Link
-                  aria-disabled={working || undefined}
-                  className="kb-name-cell"
-                  tabIndex={working ? -1 : undefined}
-                  to={`/knowledge-bases/${item.id}`}
-                  onClick={(event) => {
-                    if (!onOpen(item)) {
-                      event.preventDefault();
-                    }
-                  }}
-                >
-                  <span className={`kb-icon ${item.visibility === 'public' ? 'public' : 'private'}`} aria-hidden="true" />
-                  <span>
-                    <strong>{item.name}</strong>
-                    <small>{item.description || '未填写描述'}</small>
+          {items.map((item) => {
+            const readiness = getKnowledgeBaseReadiness(item);
+            return (
+              <tr key={item.id}>
+                <td data-label="选择">
+                  <input
+                    aria-label={`选择 ${item.name}`}
+                    checked={selectedSet.has(item.id)}
+                    type="checkbox"
+                    onChange={() => onToggleSelected(item.id)}
+                  />
+                </td>
+                <td className="table-title" data-label="名称">
+                  <Link
+                    aria-disabled={working || undefined}
+                    className="kb-name-cell"
+                    tabIndex={working ? -1 : undefined}
+                    to={`/knowledge-bases/${item.id}`}
+                    onClick={(event) => {
+                      if (!onOpen(item)) {
+                        event.preventDefault();
+                      }
+                    }}
+                  >
+                    <span className={`kb-icon ${item.visibility === 'public' ? 'public' : 'private'}`} aria-hidden="true" />
+                    <span>
+                      <strong>{item.name}</strong>
+                      <small>{item.description || '未填写描述'}</small>
+                    </span>
+                  </Link>
+                </td>
+                <td data-label="状态">
+                  <span
+                    aria-label={readiness.detail}
+                    className={`readiness-pill ${readiness.tone}`}
+                    title={readiness.detail}
+                  >
+                    {readiness.label}
                   </span>
-                </Link>
-              </td>
-              <td data-label="类型">
-                <span className={item.visibility === 'public' ? 'visibility-pill public' : 'visibility-pill private'}>
-                  {item.visibility === 'public' ? '公开' : '私有'}
-                </span>
-              </td>
-              <td data-label="文档数">{formatOptionalCount(item.documentCount)}</td>
-              <td data-label="更新人">
-                <UserCell user={item.updatedBy} />
-              </td>
-              <td data-label="更新时间">{formatDateTime(item.updatedAt || item.createdAt)}</td>
-              <td data-label="操作">
-                <RowActions
-                  item={item}
-                  working={working}
-                  onDelete={onDelete}
-                  onEdit={onEdit}
-                  onFavorite={onFavorite}
-                />
-              </td>
-            </tr>
-          ))}
+                </td>
+                <td data-label="可见性">
+                  <span className={item.visibility === 'public' ? 'visibility-pill public' : 'visibility-pill private'}>
+                    {item.visibility === 'public' ? '公开' : '私有'}
+                  </span>
+                </td>
+                <td data-label="文档数">{formatOptionalCount(item.documentCount)}</td>
+                <td data-label="更新人">
+                  <UserCell user={item.updatedBy} />
+                </td>
+                <td data-label="更新时间">{formatDateTime(item.updatedAt || item.createdAt)}</td>
+                <td data-label="操作">
+                  <RowActions
+                    item={item}
+                    working={working}
+                    onDelete={onDelete}
+                    onEdit={onEdit}
+                    onFavorite={onFavorite}
+                    onMove={onMove}
+                  />
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -1552,6 +1636,7 @@ function KnowledgeBaseCards({
   onDelete,
   onEdit,
   onFavorite,
+  onMove,
   onOpen,
   onToggleSelected,
 }: {
@@ -1561,54 +1646,72 @@ function KnowledgeBaseCards({
   onDelete: (item: KnowledgeBase) => void;
   onEdit: (item: KnowledgeBase) => void;
   onFavorite: (item: KnowledgeBase) => void;
+  onMove: (item: KnowledgeBase) => void;
   onOpen: (item: KnowledgeBase) => boolean;
   onToggleSelected: (id: string) => void;
 }) {
   return (
     <div className="kb-card-grid">
-      {items.map((item) => (
-        <article className="kb-card" key={item.id}>
-          <header>
-            <input
-              aria-label={`选择 ${item.name}`}
-              checked={selectedSet.has(item.id)}
-              type="checkbox"
-              onChange={() => onToggleSelected(item.id)}
-            />
-            <span className={`kb-icon ${item.visibility === 'public' ? 'public' : 'private'}`} aria-hidden="true" />
-            <RowActions
-              item={item}
-              working={working}
-              onDelete={onDelete}
-              onEdit={onEdit}
-              onFavorite={onFavorite}
-            />
-          </header>
-          <Link
-            aria-disabled={working || undefined}
-            tabIndex={working ? -1 : undefined}
-            to={`/knowledge-bases/${item.id}`}
-            onClick={(event) => {
-              if (!onOpen(item)) {
-                event.preventDefault();
-              }
-            }}
-          >
-            <strong>{item.name}</strong>
-            <p>{item.description || '未填写描述'}</p>
-          </Link>
-          <div className="kb-card-meta">
-            <span>{formatOptionalCount(item.documentCount)} 文档</span>
-            <span>{formatOptionalCount(item.viewCount)} 浏览</span>
-            <span>{formatOptionalCount(item.questionCount)} 问答</span>
-          </div>
-          <div className="tag-row">
-            {(item.tags ?? []).slice(0, 3).map((tag) => (
-              <span className="tag-pill" key={tag.id}>{tag.name}</span>
-            ))}
-          </div>
-        </article>
-      ))}
+      {items.map((item) => {
+        const readiness = getKnowledgeBaseReadiness(item);
+        return (
+          <article className="kb-card" key={item.id}>
+            <header>
+              <input
+                aria-label={`选择 ${item.name}`}
+                checked={selectedSet.has(item.id)}
+                type="checkbox"
+                onChange={() => onToggleSelected(item.id)}
+              />
+              <span className={`kb-icon ${item.visibility === 'public' ? 'public' : 'private'}`} aria-hidden="true" />
+              <RowActions
+                item={item}
+                working={working}
+                onDelete={onDelete}
+                onEdit={onEdit}
+                onFavorite={onFavorite}
+                onMove={onMove}
+              />
+            </header>
+            <Link
+              aria-disabled={working || undefined}
+              tabIndex={working ? -1 : undefined}
+              to={`/knowledge-bases/${item.id}`}
+              onClick={(event) => {
+                if (!onOpen(item)) {
+                  event.preventDefault();
+                }
+              }}
+            >
+              <strong>{item.name}</strong>
+              <p>{item.description || '未填写描述'}</p>
+            </Link>
+            <div className="kb-card-status">
+              <span
+                aria-label={readiness.detail}
+                className={`readiness-pill ${readiness.tone}`}
+                title={readiness.detail}
+              >
+                {readiness.label}
+              </span>
+              <span className={item.visibility === 'public' ? 'visibility-pill public' : 'visibility-pill private'}>
+                {item.visibility === 'public' ? '公开' : '私有'}
+              </span>
+            </div>
+            <p className="kb-card-updated">更新于 {formatDateTime(item.updatedAt || item.createdAt)}</p>
+            <div className="kb-card-secondary">
+              <span>{formatOptionalCount(item.documentCount)} 文档</span>
+              <span>{formatOptionalCount(item.viewCount)} 浏览</span>
+              <span>{formatOptionalCount(item.questionCount)} 问答</span>
+            </div>
+            <div className="tag-row">
+              {(item.tags ?? []).slice(0, 3).map((tag) => (
+                <span className="tag-pill" key={tag.id}>{tag.name}</span>
+              ))}
+            </div>
+          </article>
+        );
+      })}
     </div>
   );
 }
@@ -1619,30 +1722,34 @@ function RowActions({
   onDelete,
   onEdit,
   onFavorite,
+  onMove,
 }: {
   item: KnowledgeBase;
   working: boolean;
   onDelete: (item: KnowledgeBase) => void;
   onEdit: (item: KnowledgeBase) => void;
   onFavorite: (item: KnowledgeBase) => void;
+  onMove: (item: KnowledgeBase) => void;
 }) {
   return (
     <div className="table-actions row-actions">
-      <button
+      <IconButton
         className={item.isFavorite ? 'star-button active' : 'star-button'}
-        type="button"
-        aria-label={item.isFavorite ? '取消收藏' : '收藏'}
+        label={item.isFavorite ? '取消收藏' : '收藏'}
         disabled={working}
         onClick={() => void onFavorite(item)}
       >
         <Star aria-hidden="true" fill={item.isFavorite ? 'currentColor' : 'none'} />
-      </button>
-      <button className="link-button" type="button" disabled={working} onClick={() => onEdit(item)}>
-        编辑
-      </button>
-      <button className="link-button" type="button" disabled={working} onClick={() => onDelete(item)}>
-        删除
-      </button>
+      </IconButton>
+      <OverflowMenu
+        disabled={working}
+        label={`${item.name}的更多操作`}
+        items={[
+          { label: '编辑', icon: <Pencil aria-hidden="true" />, onSelect: () => onEdit(item) },
+          { label: '移动到分类', icon: <FolderInput aria-hidden="true" />, onSelect: () => onMove(item) },
+          { label: '删除', icon: <Trash2 aria-hidden="true" />, tone: 'danger', onSelect: () => onDelete(item) },
+        ]}
+      />
     </div>
   );
 }

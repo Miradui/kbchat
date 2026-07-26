@@ -23,21 +23,24 @@ type KnowledgeBaseRequest struct {
 }
 
 type KnowledgeBaseResponse struct {
-	ID              string                     `json:"id"`
-	Name            string                     `json:"name"`
-	Description     string                     `json:"description"`
-	CategoryID      *string                    `json:"categoryId"`
-	Visibility      string                     `json:"visibility"`
-	RetrievalConfig RetrievalConfig            `json:"retrievalConfig"`
-	CreatedAt       time.Time                  `json:"createdAt"`
-	UpdatedAt       time.Time                  `json:"updatedAt"`
-	DocumentCount   int64                      `json:"documentCount,omitempty"`
-	ViewCount       int64                      `json:"viewCount,omitempty"`
-	QuestionCount   int64                      `json:"questionCount,omitempty"`
-	IsFavorite      bool                       `json:"isFavorite"`
-	LastViewedAt    *time.Time                 `json:"lastViewedAt,omitempty"`
-	UpdatedBy       *UserSummary               `json:"updatedBy,omitempty"`
-	Tags            []KnowledgeBaseTagResponse `json:"tags,omitempty"`
+	ID                      string                     `json:"id"`
+	Name                    string                     `json:"name"`
+	Description             string                     `json:"description"`
+	CategoryID              *string                    `json:"categoryId"`
+	Visibility              string                     `json:"visibility"`
+	RetrievalConfig         RetrievalConfig            `json:"retrievalConfig"`
+	CreatedAt               time.Time                  `json:"createdAt"`
+	UpdatedAt               time.Time                  `json:"updatedAt"`
+	DocumentCount           int64                      `json:"documentCount,omitempty"`
+	CompletedDocumentCount  *int64                     `json:"completedDocumentCount,omitempty"`
+	ProcessingDocumentCount *int64                     `json:"processingDocumentCount,omitempty"`
+	FailedDocumentCount     *int64                     `json:"failedDocumentCount,omitempty"`
+	ViewCount               int64                      `json:"viewCount,omitempty"`
+	QuestionCount           int64                      `json:"questionCount,omitempty"`
+	IsFavorite              bool                       `json:"isFavorite"`
+	LastViewedAt            *time.Time                 `json:"lastViewedAt,omitempty"`
+	UpdatedBy               *UserSummary               `json:"updatedBy,omitempty"`
+	Tags                    []KnowledgeBaseTagResponse `json:"tags,omitempty"`
 }
 
 type KnowledgeBaseListResponse struct {

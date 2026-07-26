@@ -202,12 +202,23 @@ pageSize
 
 ```text
 documentCount
+completedDocumentCount
+processingDocumentCount
+failedDocumentCount
 viewCount
 questionCount
 isFavorite
 lastViewedAt
 updatedBy
 ```
+
+三个文档状态计数字段只出现在列表项中，并且只统计未软删除文档：
+
+- `completedDocumentCount`：状态为 `completed` 的文档数。
+- `processingDocumentCount`：状态为 `uploaded`、`parsing`、`chunking` 或 `embedding` 的文档数。
+- `failedDocumentCount`：状态为 `failed` 的文档数。
+
+知识库创建、详情和更新响应不返回上述列表聚合字段。
 
 当前阶段 `created` 和 `managed` 都等价于当前用户拥有的知识库；`visibility` 只用于展示，不改变 owner 权限。
 

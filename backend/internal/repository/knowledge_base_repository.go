@@ -36,27 +36,30 @@ func (r *KnowledgeBaseRepository) ListByOwner(ctx context.Context, ownerID uuid.
 }
 
 type KnowledgeBaseListItem struct {
-	ID                   uuid.UUID
-	Name                 string
-	Description          string
-	OwnerID              uuid.UUID
-	OwnerUsername        string
-	OwnerDisplayName     string
-	OwnerAvatarURL       string
-	UpdatedByID          *uuid.UUID
-	UpdatedByUsername    *string
-	UpdatedByDisplayName *string
-	UpdatedByAvatarURL   *string
-	CategoryID           *uuid.UUID
-	Visibility           string
-	RetrievalConfig      []byte
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
-	DocumentCount        int64
-	ViewCount            int64
-	QuestionCount        int64
-	IsFavorite           bool
-	LastViewedAt         *string
+	ID                      uuid.UUID
+	Name                    string
+	Description             string
+	OwnerID                 uuid.UUID
+	OwnerUsername           string
+	OwnerDisplayName        string
+	OwnerAvatarURL          string
+	UpdatedByID             *uuid.UUID
+	UpdatedByUsername       *string
+	UpdatedByDisplayName    *string
+	UpdatedByAvatarURL      *string
+	CategoryID              *uuid.UUID
+	Visibility              string
+	RetrievalConfig         []byte
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
+	DocumentCount           int64
+	CompletedDocumentCount  int64
+	ProcessingDocumentCount int64
+	FailedDocumentCount     int64
+	ViewCount               int64
+	QuestionCount           int64
+	IsFavorite              bool
+	LastViewedAt            *string
 }
 
 func (r *KnowledgeBaseRepository) ListWorkspace(ctx context.Context, ownerID uuid.UUID, query dto.KnowledgeBaseListQuery) ([]KnowledgeBaseListItem, int64, error) {
@@ -88,6 +91,9 @@ func (r *KnowledgeBaseRepository) ListWorkspace(ctx context.Context, ownerID uui
 			knowledge_bases.created_at AS created_at,
 			knowledge_bases.updated_at AS updated_at,
 			COUNT(DISTINCT documents.id) AS document_count,
+			COUNT(DISTINCT CASE WHEN documents.status = 'completed' THEN documents.id END) AS completed_document_count,
+			COUNT(DISTINCT CASE WHEN documents.status IN ('uploaded', 'parsing', 'chunking', 'embedding') THEN documents.id END) AS processing_document_count,
+			COUNT(DISTINCT CASE WHEN documents.status = 'failed' THEN documents.id END) AS failed_document_count,
 			COUNT(DISTINCT knowledge_base_view_events.id) AS view_count,
 			COUNT(DISTINCT chat_messages.id) AS question_count,
 			CASE WHEN knowledge_base_favorites.user_id IS NULL THEN false ELSE true END AS is_favorite,
