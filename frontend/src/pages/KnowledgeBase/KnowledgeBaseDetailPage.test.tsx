@@ -74,9 +74,9 @@ function LocationProbe() {
   return <output aria-label="当前位置">{location.pathname}{location.search}</output>;
 }
 
-function RouteControl() {
+function RouteControl({ target = '/knowledge-bases/kb2' }: { target?: string }) {
   const navigate = useNavigate();
-  return <button type="button" onClick={() => navigate('/knowledge-bases/kb2')}>切换知识库</button>;
+  return <button type="button" onClick={() => navigate(target)}>切换知识库</button>;
 }
 
 function LeaveDetailButton() {
@@ -107,6 +107,49 @@ beforeEach(() => {
 });
 
 describe('KnowledgeBaseDetailPage', () => {
+  it('keeps overview focused and loads permissions only after entering settings', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    await screen.findByRole('heading', { name: '制度库' });
+    expect(screen.getByRole('link', { name: '概览' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: '文档' })).toHaveAttribute(
+      'href',
+      '/knowledge-bases/kb1/documents',
+    );
+    expect(screen.getByRole('link', { name: 'AI 问答' })).toHaveAttribute(
+      'href',
+      '/knowledge-bases/kb1?tab=qa',
+    );
+    expect(getKnowledgeBasePermissions).not.toHaveBeenCalled();
+    expect(screen.queryByRole('heading', { name: '成员权限' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('link', { name: '设置' }));
+
+    expect(await screen.findByRole('heading', { name: '成员权限' })).toBeInTheDocument();
+    expect(getKnowledgeBasePermissions).toHaveBeenCalledOnce();
+    expect(screen.getByRole('link', { name: '设置' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.queryByText('文档总数')).not.toBeInTheDocument();
+  });
+
+  it('shows a single primary action in the AI question section', async () => {
+    vi.mocked(listDocuments).mockResolvedValue({ items: [completedDocument] });
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1?tab=qa'],
+    );
+
+    expect(await screen.findByRole('heading', { name: 'AI 问答' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: '基于此知识库提问' })).toHaveLength(1);
+  });
+
   it('opens a draft chat without creating an empty session', async () => {
     vi.mocked(listDocuments).mockResolvedValue({ items: [completedDocument] });
     const user = userEvent.setup();
@@ -121,7 +164,7 @@ describe('KnowledgeBaseDetailPage', () => {
       ['/knowledge-bases/kb1'],
     );
 
-    await user.click(await screen.findByRole('button', { name: '开始问答' }));
+    await user.click(await screen.findByRole('button', { name: '基于此知识库提问' }));
 
     expect(createChatSession).not.toHaveBeenCalled();
     expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat/new?knowledgeBaseId=kb1');
@@ -139,7 +182,7 @@ describe('KnowledgeBaseDetailPage', () => {
       'href',
       '/knowledge-bases/kb1/documents?intent=upload',
     );
-    expect(screen.queryByRole('button', { name: '开始问答' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '基于此知识库提问' })).not.toBeInTheDocument();
   });
 
   it('shows optional detail counters as unknown when the API omits them', async () => {
@@ -197,6 +240,7 @@ describe('KnowledgeBaseDetailPage', () => {
     vi.mocked(getKnowledgeBasePermissions).mockRejectedValue(new Error('permissions unavailable'));
     vi.mocked(listKnowledgeBaseCategories).mockRejectedValue(new Error('categories unavailable'));
 
+    const user = userEvent.setup();
     renderWithRouter(
       <Routes>
         <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
@@ -206,8 +250,11 @@ describe('KnowledgeBaseDetailPage', () => {
 
     expect(await screen.findByRole('heading', { name: '制度库' })).toBeInTheDocument();
     expect(screen.getByText('handbook.pdf')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '开始问答' })).toBeEnabled();
-    expect(screen.getAllByRole('alert').map((node) => node.textContent).join(' ')).toContain('成员权限加载失败');
+    expect(screen.getByRole('button', { name: '基于此知识库提问' })).toBeEnabled();
+    expect(getKnowledgeBasePermissions).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('link', { name: '设置' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('成员权限加载失败');
   });
 
   it('does not let a slow previous route overwrite the current knowledge base', async () => {
@@ -294,9 +341,9 @@ describe('KnowledgeBaseDetailPage', () => {
         <Routes>
           <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
         </Routes>
-        <RouteControl />
+        <RouteControl target="/knowledge-bases/kb2?tab=settings" />
       </>,
-      ['/knowledge-bases/kb1'],
+      ['/knowledge-bases/kb1?tab=settings'],
     );
 
     await user.selectOptions(await screen.findByRole('combobox', { name: '可见性' }), 'public');
@@ -320,7 +367,7 @@ describe('KnowledgeBaseDetailPage', () => {
     expect(screen.queryByRole('heading', { name: '制度库' })).not.toBeInTheDocument();
   });
 
-  it('does not let an initial permission read overwrite a completed visibility save', async () => {
+  it('does not expose permission controls before the initial permission read completes', async () => {
     const initialPermissions = deferred<Awaited<ReturnType<typeof getKnowledgeBasePermissions>>>();
     vi.mocked(getKnowledgeBasePermissions).mockReturnValue(initialPermissions.promise);
     vi.mocked(updateKnowledgeBasePermissions).mockResolvedValue({
@@ -335,12 +382,12 @@ describe('KnowledgeBaseDetailPage', () => {
       <Routes>
         <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
       </Routes>,
-      ['/knowledge-bases/kb1'],
+      ['/knowledge-bases/kb1?tab=settings'],
     );
 
-    const visibility = await screen.findByRole('combobox', { name: '可见性' });
-    await user.selectOptions(visibility, 'public');
-    await waitFor(() => expect(visibility).toHaveValue('public'));
+    await screen.findByRole('heading', { name: '成员权限' });
+    expect(screen.queryByRole('combobox', { name: '可见性' })).not.toBeInTheDocument();
+    expect(updateKnowledgeBasePermissions).not.toHaveBeenCalled();
 
     await act(async () => {
       initialPermissions.resolve({
@@ -353,6 +400,10 @@ describe('KnowledgeBaseDetailPage', () => {
       await Promise.resolve();
     });
 
+    const visibility = await screen.findByRole('combobox', { name: '可见性' });
+    expect(visibility).toHaveValue('private');
+    await user.selectOptions(visibility, 'public');
+    await waitFor(() => expect(updateKnowledgeBasePermissions).toHaveBeenCalledWith('kb1', 'public'));
     expect(visibility).toHaveValue('public');
   });
 
@@ -382,9 +433,9 @@ describe('KnowledgeBaseDetailPage', () => {
         <Routes>
           <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
         </Routes>
-        <RouteControl />
+        <RouteControl target="/knowledge-bases/kb2?tab=settings" />
       </>,
-      ['/knowledge-bases/kb1'],
+      ['/knowledge-bases/kb1?tab=settings'],
     );
 
     const searchInput = await screen.findByRole('textbox', { name: '搜索用户' });
@@ -423,7 +474,7 @@ describe('KnowledgeBaseDetailPage', () => {
       <Routes>
         <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
       </Routes>,
-      ['/knowledge-bases/kb1'],
+      ['/knowledge-bases/kb1?tab=settings'],
     );
 
     const searchInput = await screen.findByRole('textbox', { name: '搜索用户' });
@@ -451,7 +502,7 @@ describe('KnowledgeBaseDetailPage', () => {
       <Routes>
         <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
       </Routes>,
-      ['/knowledge-bases/kb1'],
+      ['/knowledge-bases/kb1?tab=settings'],
     );
 
     const visibility = await screen.findByRole('combobox', { name: '可见性' });
@@ -484,7 +535,7 @@ describe('KnowledgeBaseDetailPage', () => {
       <Routes>
         <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
       </Routes>,
-      ['/knowledge-bases/kb1'],
+      ['/knowledge-bases/kb1?tab=settings'],
     );
 
     const input = await screen.findByRole('textbox', { name: '搜索用户' });
@@ -521,7 +572,7 @@ describe('KnowledgeBaseDetailPage', () => {
       <Routes>
         <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
       </Routes>,
-      ['/knowledge-bases/kb1'],
+      ['/knowledge-bases/kb1?tab=settings'],
     );
 
     const input = await screen.findByRole('textbox', { name: '知识库内检索问题' });
@@ -557,5 +608,33 @@ describe('KnowledgeBaseDetailPage', () => {
     expect(screen.getByText('新结果')).toBeInTheDocument();
     expect(screen.queryByText('旧结果')).not.toBeInTheDocument();
     await waitFor(() => expect(within(form).getByRole('button', { name: '检索' })).toBeEnabled());
+  });
+
+  it('renders retrieval debug data returned by the settings diagnostic', async () => {
+    vi.mocked(searchKnowledgeBase).mockResolvedValue({
+      items: [],
+      rerankFallback: null,
+      debug: {
+        query: '制度',
+        rewrittenQuery: '公司制度',
+        vectorStage: { status: 'completed', items: [] },
+        rerankStage: { status: 'completed', input: [], output: [] },
+        finalStage: { items: [] },
+        rerankFallback: null,
+      },
+    });
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1?tab=settings'],
+    );
+
+    await user.click(await screen.findByRole('checkbox', { name: '显示检索调试信息' }));
+    await user.type(screen.getByRole('textbox', { name: '知识库内检索问题' }), '制度');
+    await user.click(screen.getByRole('button', { name: '检索' }));
+
+    expect(await screen.findByRole('region', { name: '检索调试信息' })).toHaveTextContent('公司制度');
   });
 });

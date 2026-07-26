@@ -14,6 +14,7 @@ import {
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { WorkspaceShell } from '../../components/WorkspaceShell';
+import { KnowledgeBaseSectionNav } from '../KnowledgeBase/KnowledgeBaseSectionNav';
 import { DocumentDetailDrawer } from './DocumentDetailDrawer';
 import { DocumentProgress } from './DocumentProgress';
 import { DocumentRecycleBinDrawer } from './DocumentRecycleBinDrawer';
@@ -487,11 +488,6 @@ export function DocumentsPage() {
               </select>
             </label>
             <div className="document-command-actions">
-              {id && (
-                <Link className="secondary-link" to={`/knowledge-bases/${id}`}>
-                  返回详情
-                </Link>
-              )}
               <button
                 ref={uploadButtonRef}
                 type="button"
@@ -510,6 +506,8 @@ export function DocumentsPage() {
             />
           </div>
         </section>
+
+        {id && <KnowledgeBaseSectionNav active="documents" knowledgeBaseId={id} />}
 
         {uploadFlowActive && (
           <section

@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import {
   addKnowledgeBaseMember,
@@ -34,6 +34,7 @@ import type {
   UserSummary,
 } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
+import { KnowledgeBaseSectionNav, type KnowledgeBaseSection } from './KnowledgeBaseSectionNav';
 
 const terminalStatuses: DocumentStatus[] = ['completed', 'failed'];
 
@@ -48,6 +49,8 @@ const fallbackPreference: KnowledgeBaseWorkspacePreference = {
 export function KnowledgeBaseDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const activeTab = normalizeDetailTab(searchParams.get('tab'));
   const activeKnowledgeBaseIdRef = useRef(id);
   const knowledgeBaseRequestRef = useRef(0);
   const documentRequestRef = useRef(0);
@@ -68,6 +71,9 @@ export function KnowledgeBaseDetailPage() {
   const [searchDebug, setSearchDebug] = useState<KnowledgeBaseSearchDebug | null>(null);
   const [loading, setLoading] = useState(true);
   const [documentsLoading, setDocumentsLoading] = useState(true);
+  const [documentSummaryLoaded, setDocumentSummaryLoaded] = useState(false);
+  const [permissionsLoading, setPermissionsLoading] = useState(false);
+  const [permissionsLoaded, setPermissionsLoaded] = useState(false);
   const [searching, setSearching] = useState(false);
   const [savingVisibility, setSavingVisibility] = useState(false);
   const [memberQuery, setMemberQuery] = useState('');
@@ -130,6 +136,7 @@ export function KnowledgeBaseDetailPage() {
     } finally {
       if (activeKnowledgeBaseIdRef.current === requestedId && documentRequestRef.current === request) {
         setDocumentsLoading(false);
+        setDocumentSummaryLoaded(true);
       }
     }
   }, [id]);
@@ -141,6 +148,7 @@ export function KnowledgeBaseDetailPage() {
 
     const requestedId = id;
     const request = ++permissionRequestRef.current;
+    setPermissionsLoading(true);
     setPermissionError('');
     try {
       const response = await getKnowledgeBasePermissions(requestedId);
@@ -155,6 +163,11 @@ export function KnowledgeBaseDetailPage() {
         setPermissions(null);
         setPermissionError(errorMessage(err, '成员权限加载失败'));
       }
+    } finally {
+      if (activeKnowledgeBaseIdRef.current === requestedId && permissionRequestRef.current === request) {
+        setPermissionsLoading(false);
+        setPermissionsLoaded(true);
+      }
     }
   }, [id]);
 
@@ -162,7 +175,11 @@ export function KnowledgeBaseDetailPage() {
     activeKnowledgeBaseIdRef.current = id;
     setKnowledgeBase(null);
     setDocuments([]);
+    setDocumentSummaryLoaded(false);
     setPermissions(null);
+    setPermissionsLoaded(false);
+    setPermissionsLoading(false);
+    setPermissionError('');
     setSearchResults([]);
     setUserResults([]);
     visibilityRequestRef.current += 1;
@@ -173,8 +190,6 @@ export function KnowledgeBaseDetailPage() {
     setSavingVisibility(false);
     setMemberWorkingId(null);
     void loadKnowledgeBase();
-    void loadDocumentSummary();
-    void loadPermissions();
 
     return () => {
       if (activeKnowledgeBaseIdRef.current === id) {
@@ -189,7 +204,28 @@ export function KnowledgeBaseDetailPage() {
       memberMutationRef.current = null;
       visibilityMutationRef.current = null;
     };
-  }, [loadDocumentSummary, loadKnowledgeBase, loadPermissions]);
+  }, [loadKnowledgeBase]);
+
+  useEffect(() => {
+    if (activeTab === 'settings' || documentSummaryLoaded) {
+      return;
+    }
+    void loadDocumentSummary();
+  }, [activeTab, documentSummaryLoaded, loadDocumentSummary]);
+
+  useEffect(() => {
+    if (activeTab === 'settings') {
+      if (!permissionsLoaded && !permissionsLoading) {
+        void loadPermissions();
+      }
+      return;
+    }
+
+    permissionRequestRef.current += 1;
+    userSearchRequestRef.current += 1;
+    setPermissionsLoading(false);
+    setSearchingUsers(false);
+  }, [activeTab, loadPermissions, permissionsLoaded, permissionsLoading]);
 
   useEffect(() => {
     let mounted = true;
@@ -455,6 +491,7 @@ export function KnowledgeBaseDetailPage() {
       ) {
         setSearchResults(response.items);
         setSearchFallback(response.rerankFallback?.used ? response.rerankFallback : null);
+        setSearchDebug(response.debug ?? null);
       }
     } catch (err) {
       if (
@@ -541,41 +578,44 @@ export function KnowledgeBaseDetailPage() {
             <Link className="secondary-link" to="/knowledge-bases">
               返回列表
             </Link>
-            <Link className="secondary-link" to={`/knowledge-bases/${knowledgeBase.id}/documents`}>
-              文档管理
-            </Link>
-            {completedCount > 0 ? (
-              <button type="button" onClick={handleStartChat}>开始问答</button>
-            ) : documentsLoading ? (
-              <button type="button" disabled>检查文档中...</button>
-            ) : documentError ? (
-              <button type="button" onClick={() => void loadDocumentSummary()}>重试文档摘要</button>
-            ) : documents.length === 0 ? (
-              <Link className="button-link" to={`/knowledge-bases/${knowledgeBase.id}/documents?intent=upload`}>
-                上传文档
-              </Link>
-            ) : processingCount > 0 ? (
-              <Link className="button-link" to={`/knowledge-bases/${knowledgeBase.id}/documents`}>
-                查看处理进度
-              </Link>
-            ) : (
-              <Link className="button-link" to={`/knowledge-bases/${knowledgeBase.id}/documents`}>
-                处理失败文档
-              </Link>
+            {activeTab === 'overview' && (
+              completedCount > 0 ? (
+                <button type="button" onClick={handleStartChat}>基于此知识库提问</button>
+              ) : documentsLoading ? (
+                <button type="button" disabled>检查文档中...</button>
+              ) : documentError ? (
+                <button type="button" onClick={() => void loadDocumentSummary()}>重试文档摘要</button>
+              ) : documents.length === 0 ? (
+                <Link className="button-link" to={`/knowledge-bases/${knowledgeBase.id}/documents?intent=upload`}>
+                  上传文档
+                </Link>
+              ) : processingCount > 0 ? (
+                <Link className="button-link" to={`/knowledge-bases/${knowledgeBase.id}/documents`}>
+                  查看处理进度
+                </Link>
+              ) : (
+                <Link className="button-link" to={`/knowledge-bases/${knowledgeBase.id}/documents`}>
+                  处理失败文档
+                </Link>
+              )
             )}
           </div>
         </header>
 
+        <KnowledgeBaseSectionNav active={activeTab} knowledgeBaseId={knowledgeBase.id} />
+
         {error && <p className="error-text" role="alert">{error}</p>}
 
-        <div className="summary-grid detail-summary">
-          <MetricCard label="文档总数" value={documentMetricsKnown ? documents.length : '--'} />
-          <MetricCard label="已完成" value={documentMetricsKnown ? completedCount : '--'} />
-          <MetricCard label="处理中" value={documentMetricsKnown ? processingCount : '--'} />
-          <MetricCard label="失败文档" value={documentMetricsKnown ? failedCount : '--'} tone="danger" />
-        </div>
+        {activeTab === 'overview' && (
+          <>
+            <div className="summary-grid detail-summary">
+              <MetricCard label="文档总数" value={documentMetricsKnown ? documents.length : '--'} />
+              <MetricCard label="已完成" value={documentMetricsKnown ? completedCount : '--'} />
+              <MetricCard label="处理中" value={documentMetricsKnown ? processingCount : '--'} />
+              <MetricCard label="失败文档" value={documentMetricsKnown ? failedCount : '--'} tone="danger" />
+            </div>
 
-        <div className="detail-grid">
+            <div className="detail-grid">
           <section className="panel detail-main-panel">
             <div className="panel-header">
               <h2>基础信息</h2>
@@ -605,93 +645,165 @@ export function KnowledgeBaseDetailPage() {
             </div>
           </section>
 
+              <section className="panel">
+                <div className="panel-header">
+                  <h2>最近文档</h2>
+                  <Link className="secondary-link" to={`/knowledge-bases/${knowledgeBase.id}/documents`}>
+                    查看全部
+                  </Link>
+                </div>
+                <div className="document-status-list">
+                  {documentsLoading ? (
+                    <LoadingSkeleton rows={3} columns={2} compact announce />
+                  ) : documentError ? (
+                    <div className="empty-state" role="alert">
+                      <p>{documentError}</p>
+                    </div>
+                  ) : documents.length === 0 ? (
+                    <div className="empty-state">还没有文档。</div>
+                  ) : (
+                    documents.slice(0, 6).map((document) => (
+                      <article className="document-status-item" key={document.id}>
+                        <div>
+                          <strong>{document.filename}</strong>
+                          <span>{formatBytes(document.fileSize)} · {document.fileType}</span>
+                        </div>
+                        <span className={`status-pill status-${statusClass(document.status)}`}>
+                          {documentStatusLabel(document.status)}
+                        </span>
+                      </article>
+                    ))
+                  )}
+                </div>
+              </section>
+            </div>
+          </>
+        )}
+
+        {activeTab === 'qa' && (
+          <section className="panel kb-qa-panel">
+            <div className="panel-header">
+              <h2>AI 问答</h2>
+              <span className="muted-text">{completedCount} 个文档可用</span>
+            </div>
+            <div className="kb-qa-panel__body">
+              {documentsLoading ? (
+                <LoadingSkeleton rows={3} columns={2} announce />
+              ) : documentError ? (
+                <div className="empty-state" role="alert">
+                  <p>{documentError}</p>
+                  <button className="secondary-button" type="button" onClick={() => void loadDocumentSummary()}>
+                    重试文档摘要
+                  </button>
+                </div>
+              ) : completedCount > 0 ? (
+                <button type="button" onClick={handleStartChat}>基于此知识库提问</button>
+              ) : documents.length === 0 ? (
+                <Link className="button-link" to={`/knowledge-bases/${knowledgeBase.id}/documents?intent=upload`}>
+                  先导入文档
+                </Link>
+              ) : (
+                <Link className="button-link" to={`/knowledge-bases/${knowledgeBase.id}/documents`}>
+                  查看文档处理状态
+                </Link>
+              )}
+            </div>
+          </section>
+        )}
+
+        {activeTab === 'settings' && (
+          <div className="detail-grid kb-settings-grid">
+
           <section className="panel">
             <div className="panel-header">
               <h2>成员权限</h2>
               <span className="muted-text">管理成员及其角色</span>
             </div>
             <div className="permission-panel-body">
-              {permissionError && (
+              {permissionsLoading ? (
+                <LoadingSkeleton rows={4} columns={2} compact announce />
+              ) : permissionError ? (
                 <div className="empty-state" role="alert">
                   <p>{permissionError}</p>
                   <button className="secondary-button" type="button" onClick={() => void loadPermissions()}>
                     重试成员权限
                   </button>
                 </div>
-              )}
-              <label>
-                可见性
-                <select
-                  value={visibility}
-                  onChange={(event) => void handleVisibilityChange(event.target.value as 'private' | 'public')}
-                  disabled={savingVisibility || Boolean(memberWorkingId) || Boolean(permissionError)}
-                >
-                  <option value="private">私有</option>
-                  <option value="public">公开</option>
-                </select>
-              </label>
-              {permissions?.owner && (
-                <PermissionMemberCard member={{ ...permissions.owner, role: 'owner' }} title="所有者" />
-              )}
-              <form className="member-search-form" onSubmit={handleUserSearch}>
-                <input
-                  aria-label="搜索用户"
-                  placeholder="按用户名或显示名搜索"
-                  value={memberQuery}
-                  onChange={(event) => setMemberQuery(event.target.value)}
-                  disabled={savingVisibility || Boolean(memberWorkingId) || Boolean(permissionError)}
-                />
-                <select
-                  aria-label="新增成员角色"
-                  value={memberRole}
-                  onChange={(event) => setMemberRole(event.target.value as MemberRole)}
-                  disabled={savingVisibility || Boolean(memberWorkingId) || Boolean(permissionError)}
-                >
-                  <option value="member">成员</option>
-                  <option value="manager">管理员</option>
-                </select>
-                <button
-                  aria-label="搜索"
-                  type="submit"
-                  disabled={savingVisibility || Boolean(memberWorkingId) || !memberQuery.trim() || Boolean(permissionError)}
-                >
-                  {searchingUsers ? '搜索中...' : '搜索'}
-                </button>
-              </form>
-              {userResults.length > 0 && (
-                <div className="member-search-results">
-                  {userResults.map((user) => (
-                    <article className="member-search-result" key={user.id}>
-                      <UserInline user={user} />
-                      <button
-                        className="secondary-button"
-                        type="button"
-                        onClick={() => void handleAddMember(user)}
-                        disabled={savingVisibility || Boolean(memberWorkingId) || user.id === permissions?.owner.id}
-                      >
-                        {memberWorkingId === user.id ? '添加中...' : `设为${roleLabel(memberRole)}`}
-                      </button>
-                    </article>
-                  ))}
-                </div>
-              )}
-              <PermissionList
-                title="管理员"
-                members={managers}
-                workingId={memberWorkingId}
-                disabled={permissionMutationBusy}
-                onDelete={handleDeleteMember}
-                onRoleChange={handleUpdateMemberRole}
-              />
-              <PermissionList
-                title="成员"
-                members={permissions?.members ?? []}
-                emptyText="暂无成员。"
-                workingId={memberWorkingId}
-                disabled={permissionMutationBusy}
-                onDelete={handleDeleteMember}
-                onRoleChange={handleUpdateMemberRole}
-              />
+              ) : permissions ? (
+                <>
+                  <label>
+                    可见性
+                    <select
+                      value={visibility}
+                      onChange={(event) => void handleVisibilityChange(event.target.value as 'private' | 'public')}
+                      disabled={savingVisibility || Boolean(memberWorkingId)}
+                    >
+                      <option value="private">私有</option>
+                      <option value="public">公开</option>
+                    </select>
+                  </label>
+                  <PermissionMemberCard member={{ ...permissions.owner, role: 'owner' }} title="所有者" />
+                  <form className="member-search-form" onSubmit={handleUserSearch}>
+                    <input
+                      aria-label="搜索用户"
+                      placeholder="按用户名或显示名搜索"
+                      value={memberQuery}
+                      onChange={(event) => setMemberQuery(event.target.value)}
+                      disabled={savingVisibility || Boolean(memberWorkingId)}
+                    />
+                    <select
+                      aria-label="新增成员角色"
+                      value={memberRole}
+                      onChange={(event) => setMemberRole(event.target.value as MemberRole)}
+                      disabled={savingVisibility || Boolean(memberWorkingId)}
+                    >
+                      <option value="member">成员</option>
+                      <option value="manager">管理员</option>
+                    </select>
+                    <button
+                      aria-label="搜索"
+                      type="submit"
+                      disabled={savingVisibility || Boolean(memberWorkingId) || !memberQuery.trim()}
+                    >
+                      {searchingUsers ? '搜索中...' : '搜索'}
+                    </button>
+                  </form>
+                  {userResults.length > 0 && (
+                    <div className="member-search-results">
+                      {userResults.map((user) => (
+                        <article className="member-search-result" key={user.id}>
+                          <UserInline user={user} />
+                          <button
+                            className="secondary-button"
+                            type="button"
+                            onClick={() => void handleAddMember(user)}
+                            disabled={savingVisibility || Boolean(memberWorkingId) || user.id === permissions.owner.id}
+                          >
+                            {memberWorkingId === user.id ? '添加中...' : `设为${roleLabel(memberRole)}`}
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                  <PermissionList
+                    title="管理员"
+                    members={managers}
+                    workingId={memberWorkingId}
+                    disabled={permissionMutationBusy}
+                    onDelete={handleDeleteMember}
+                    onRoleChange={handleUpdateMemberRole}
+                  />
+                  <PermissionList
+                    title="成员"
+                    members={permissions.members}
+                    emptyText="暂无成员。"
+                    workingId={memberWorkingId}
+                    disabled={permissionMutationBusy}
+                    onDelete={handleDeleteMember}
+                    onRoleChange={handleUpdateMemberRole}
+                  />
+                </>
+              ) : null}
             </div>
           </section>
 
@@ -757,38 +869,8 @@ export function KnowledgeBaseDetailPage() {
             </div>
           </section>
 
-          <section className="panel">
-            <div className="panel-header">
-              <h2>文档状态</h2>
-              <Link className="secondary-link" to={`/knowledge-bases/${knowledgeBase.id}/documents`}>
-                查看文档
-              </Link>
-            </div>
-            <div className="document-status-list">
-              {documentsLoading ? (
-                <LoadingSkeleton rows={3} columns={2} compact announce />
-              ) : documentError ? (
-                <div className="empty-state" role="alert">
-                  <p>{documentError}</p>
-                </div>
-              ) : documents.length === 0 ? (
-                <div className="empty-state">还没有文档。进入文档管理上传 txt、md 或 pdf。</div>
-              ) : (
-                documents.slice(0, 6).map((document) => (
-                  <article className="document-status-item" key={document.id}>
-                    <div>
-                      <strong>{document.filename}</strong>
-                      <span>{formatBytes(document.fileSize)} · {document.fileType}</span>
-                    </div>
-                    <span className={`status-pill status-${statusClass(document.status)}`}>
-                      {documentStatusLabel(document.status)}
-                    </span>
-                  </article>
-                ))
-              )}
-            </div>
-          </section>
-        </div>
+          </div>
+        )}
       </div>
     </WorkspaceShell>
   );
@@ -1080,4 +1162,11 @@ function formatDateTime(value: string): string {
 
 function errorMessage(err: unknown, fallback: string): string {
   return getErrorMessage(err, fallback);
+}
+
+function normalizeDetailTab(value: string | null): Exclude<KnowledgeBaseSection, 'documents'> {
+  if (value === 'qa' || value === 'settings') {
+    return value;
+  }
+  return 'overview';
 }

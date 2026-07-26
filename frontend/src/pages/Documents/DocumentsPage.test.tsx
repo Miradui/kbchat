@@ -150,6 +150,11 @@ describe('DocumentsPage', () => {
     renderPage();
     await screen.findByRole('heading', { name: '制度库' });
 
+    expect(screen.getByRole('link', { name: '概览' })).toHaveAttribute('href', '/knowledge-bases/kb1?tab=overview');
+    expect(screen.getByRole('link', { name: '文档' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: 'AI 问答' })).toHaveAttribute('href', '/knowledge-bases/kb1?tab=qa');
+    expect(screen.getByRole('link', { name: '设置' })).toHaveAttribute('href', '/knowledge-bases/kb1?tab=settings');
+    expect(screen.queryByRole('link', { name: '返回详情' })).not.toBeInTheDocument();
     expect(listKnowledgeBaseCategories).not.toHaveBeenCalled();
     expect(getWorkspacePreference).not.toHaveBeenCalled();
   });

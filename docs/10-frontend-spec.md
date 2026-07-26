@@ -65,9 +65,12 @@
 
 ## 知识库详情页
 
-1. 展示知识库名称、描述和 `retrievalConfig`。
-2. 提供文档管理与聊天问答入口。
-3. 第一阶段仅保持路由和应用外壳兼容；详情内部在后续切片优化。
+1. 知识库上下文统一提供“概览、文档、AI 问答、设置”四个入口，当前入口必须使用 `aria-current="page"` 标识。
+2. 概览使用 `/knowledge-bases/:id?tab=overview`，缺少或无法识别的 `tab` 按概览处理；展示文档摘要、基础信息、标签和最近文档。
+3. 文档继续使用 `/knowledge-bases/:id/documents`，保留 `intent=upload`、`documentId` 和 `chunkId` 深链合同，并在页面中复用同一组知识库导航。
+4. AI 问答使用 `/knowledge-bases/:id?tab=qa`，只展示当前知识库的问答就绪状态和用户目标入口；实际提问继续进入 `/chat/new?knowledgeBaseId=:id`，不得提前创建空会话。
+5. 设置使用 `/knowledge-bases/:id?tab=settings`，承载成员权限、检索配置和检索诊断。成员权限仅在首次进入设置时加载，加载完成前不得展示可写控件；离开设置后应使未完成的权限搜索请求失效。
+6. 检索诊断只在用户提交问题时请求；开启调试信息后展示后端返回的真实 debug 数据，不得由前端推测或伪造。
 
 默认 `retrievalConfig`：
 
