@@ -18,6 +18,7 @@ import {
   listKnowledgeBaseTags,
   reorderKnowledgeBaseCategories,
   restoreKnowledgeBase,
+  updateKnowledgeBase,
   updateWorkspacePreference,
 } from '../../api/resources';
 import { renderWithRouter } from '../../test/render';
@@ -39,6 +40,7 @@ vi.mock('../../api/resources', async (importOriginal) => ({
   listKnowledgeBaseTags: vi.fn(),
   reorderKnowledgeBaseCategories: vi.fn(),
   restoreKnowledgeBase: vi.fn(),
+  updateKnowledgeBase: vi.fn(),
   updateWorkspacePreference: vi.fn(),
 }));
 
@@ -62,6 +64,27 @@ const secondKnowledgeBase = {
   id: 'kb-second',
   name: '最新筛选结果',
 } satisfies KnowledgeBase;
+
+const knowledgeBaseTags = [
+  {
+    id: 'tag-a',
+    name: '制度',
+    createdAt: '2026-07-01T00:00:00Z',
+    updatedAt: '2026-07-01T00:00:00Z',
+  },
+  {
+    id: 'tag-b',
+    name: '人事',
+    createdAt: '2026-07-01T00:00:00Z',
+    updatedAt: '2026-07-01T00:00:00Z',
+  },
+  {
+    id: 'tag-c',
+    name: '财务',
+    createdAt: '2026-07-01T00:00:00Z',
+    updatedAt: '2026-07-01T00:00:00Z',
+  },
+];
 
 const categories = [
   {
@@ -142,6 +165,12 @@ beforeEach(() => {
     pageSize: 10,
   });
   vi.mocked(restoreKnowledgeBase).mockReset().mockResolvedValue(undefined);
+  vi.mocked(updateKnowledgeBase).mockReset().mockImplementation(async (_, input) => ({
+    ...createdKnowledgeBase,
+    name: input.name,
+    description: input.description,
+    tags: knowledgeBaseTags.filter((tag) => input.tagIds?.includes(tag.id)),
+  }));
   vi.mocked(updateWorkspacePreference).mockReset().mockImplementation(async (preference) => preference);
 });
 
@@ -503,7 +532,7 @@ describe('KnowledgeBaseListPage', () => {
     expect(screen.getByRole('status', { name: '正在加载' })).toBeInTheDocument();
   });
 
-  it('opens the create drawer from the URL intent', async () => {
+  it('opens the create modal from the URL intent', async () => {
     renderWithRouter(
       <Routes>
         <Route path="/knowledge-bases" element={<KnowledgeBaseListPage />} />
@@ -511,7 +540,52 @@ describe('KnowledgeBaseListPage', () => {
       ['/knowledge-bases?intent=create'],
     );
 
-    expect(await screen.findByRole('dialog', { name: '新建知识库' })).toBeInTheDocument();
+    const dialog = await screen.findByRole('dialog', { name: '新建知识库' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(screen.getByTestId('dialog-backdrop')).toContainElement(dialog);
+  });
+
+  it('prioritizes basic fields and keeps optional settings collapsed by default', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases" element={<KnowledgeBaseListPage />} />
+      </Routes>,
+      ['/knowledge-bases?intent=create'],
+    );
+
+    const dialog = await screen.findByRole('dialog', { name: '新建知识库' });
+    const name = within(dialog).getByRole('textbox', { name: '名称' });
+    const description = within(dialog).getByRole('textbox', { name: '描述' });
+    expect(name.compareDocumentPosition(description) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(name).toHaveValue('');
+    expect(description).toHaveValue('');
+
+    const advanced = within(dialog).getByText('更多设置').closest('details');
+    expect(advanced).not.toHaveAttribute('open');
+    await user.click(within(dialog).getByText('更多设置'));
+    expect(within(dialog).getByRole('combobox', { name: '分类' })).toHaveValue('');
+    expect(within(dialog).getByRole('group', { name: '标签' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('combobox', { name: '访问权限' })).toHaveValue('private');
+  });
+
+  it('keeps optional settings expanded when editing a knowledge base', async () => {
+    vi.mocked(listKnowledgeBases).mockResolvedValue({
+      items: [createdKnowledgeBase],
+      total: 1,
+      page: 1,
+      pageSize: 10,
+    });
+    const user = userEvent.setup();
+    renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
+
+    const row = (await screen.findByRole('link', { name: /新知识库/ })).closest('tr')!;
+    await user.click(within(row).getByRole('button', { name: '编辑' }));
+
+    const dialog = screen.getByRole('dialog', { name: '编辑知识库' });
+    const advanced = within(dialog).getByText('更多设置').closest('details');
+    expect(advanced).toHaveAttribute('open');
+    expect(within(dialog).getByRole('combobox', { name: '分类' })).toBeVisible();
   });
 
   it('continues to document upload after creating a knowledge base', async () => {
@@ -528,7 +602,7 @@ describe('KnowledgeBaseListPage', () => {
     );
 
     await user.type(await screen.findByRole('textbox', { name: '名称' }), '新知识库');
-    await user.click(screen.getByRole('button', { name: '保存' }));
+    await user.click(screen.getByRole('button', { name: '创建并导入文档' }));
 
     await waitFor(() => expect(createKnowledgeBase).toHaveBeenCalledOnce());
     expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent(
@@ -536,7 +610,7 @@ describe('KnowledgeBaseListPage', () => {
     );
   });
 
-  it('constrains focus in the create drawer and closes it with Escape', async () => {
+  it('constrains focus in the create modal and closes a pristine form with Escape', async () => {
     const user = userEvent.setup();
     renderWithRouter(
       <Routes>
@@ -551,9 +625,10 @@ describe('KnowledgeBaseListPage', () => {
     expect(screen.queryByRole('dialog', { name: '新建知识库' })).not.toBeInTheDocument();
   });
 
-  it('keeps the create drawer open when Escape is pressed during save', async () => {
+  it('keeps the create modal open when Escape is pressed during save', async () => {
     const createResult = deferred<KnowledgeBase>();
     vi.mocked(createKnowledgeBase).mockReturnValue(createResult.promise);
+    vi.mocked(listKnowledgeBaseTags).mockResolvedValue({ items: knowledgeBaseTags.slice(0, 1) });
     const user = userEvent.setup();
     renderWithRouter(
       <Routes>
@@ -563,15 +638,74 @@ describe('KnowledgeBaseListPage', () => {
       ['/knowledge-bases?intent=create'],
     );
 
+    await user.click(await screen.findByText('更多设置'));
+    const tag = await screen.findByRole('checkbox', { name: '制度' });
     await user.type(await screen.findByRole('textbox', { name: '名称' }), '新知识库');
-    await user.click(screen.getByRole('button', { name: '保存' }));
+    await user.click(screen.getByRole('button', { name: '创建并导入文档' }));
     await waitFor(() => expect(createKnowledgeBase).toHaveBeenCalledOnce());
-    expect(screen.getByRole('button', { name: '关闭' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '取消' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: '名称' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: '描述' })).toBeDisabled();
+    expect(screen.getByRole('combobox', { name: '分类' })).toBeDisabled();
+    expect(tag).toBeDisabled();
+    expect(screen.getByRole('combobox', { name: '访问权限' })).toBeDisabled();
     await user.keyboard('{Escape}');
     expect(screen.getByRole('dialog', { name: '新建知识库' })).toBeInTheDocument();
 
     createResult.resolve(createdKnowledgeBase);
     expect(await screen.findByText('文档页')).toBeInTheDocument();
+  });
+
+  it('preserves the complete tag set when editing multiple tags', async () => {
+    vi.mocked(listKnowledgeBaseTags).mockResolvedValue({ items: knowledgeBaseTags });
+    vi.mocked(listKnowledgeBases).mockResolvedValue({
+      items: [{ ...createdKnowledgeBase, tags: knowledgeBaseTags.slice(0, 2) }],
+      total: 1,
+      page: 1,
+      pageSize: 10,
+    });
+    const user = userEvent.setup();
+    renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
+
+    const row = (await screen.findByRole('link', { name: /新知识库/ })).closest('tr')!;
+    await user.click(within(row).getByRole('button', { name: '编辑' }));
+    const dialog = screen.getByRole('dialog', { name: '编辑知识库' });
+    expect(within(dialog).getByRole('checkbox', { name: '制度' })).toBeChecked();
+    expect(within(dialog).getByRole('checkbox', { name: '人事' })).toBeChecked();
+
+    await user.click(within(dialog).getByRole('checkbox', { name: '人事' }));
+    await user.click(within(dialog).getByRole('checkbox', { name: '财务' }));
+    await user.click(within(dialog).getByRole('button', { name: '保存修改' }));
+
+    await waitFor(() => expect(updateKnowledgeBase).toHaveBeenCalledOnce());
+    const payload = vi.mocked(updateKnowledgeBase).mock.calls[0]?.[1];
+    expect(payload?.tagIds).toHaveLength(2);
+    expect(payload?.tagIds).toEqual(expect.arrayContaining(['tag-a', 'tag-c']));
+    expect(payload?.tagIds).not.toContain('tag-b');
+  });
+
+  it('asks before discarding a dirty knowledge-base form', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases" element={<KnowledgeBaseListPage />} />
+      </Routes>,
+      ['/knowledge-bases?intent=create'],
+    );
+
+    const name = await screen.findByRole('textbox', { name: '名称' });
+    await user.type(name, '尚未保存的知识库');
+    await user.keyboard('{Escape}');
+
+    const confirmation = await screen.findByRole('dialog', { name: '放弃未保存的更改' });
+    await user.click(within(confirmation).getByRole('button', { name: '继续编辑' }));
+    expect(screen.getByRole('textbox', { name: '名称' })).toHaveValue('尚未保存的知识库');
+
+    await user.keyboard('{Escape}');
+    await user.click(within(
+      await screen.findByRole('dialog', { name: '放弃未保存的更改' }),
+    ).getByRole('button', { name: '放弃更改' }));
+    expect(screen.queryByRole('dialog', { name: '新建知识库' })).not.toBeInTheDocument();
   });
 
   it('exposes the selected view mode to assistive technology', async () => {

@@ -53,7 +53,7 @@ import { formatMetricComparison } from './statsFormatting';
 import { CategoryDialog } from './CategoryDialog';
 import type { CategoryDialogValue } from './CategoryDialog';
 import {
-  KnowledgeBaseFormDrawer,
+  KnowledgeBaseFormOverlay,
   KnowledgeBaseRecycleBinDrawer,
 } from './KnowledgeBaseDrawers';
 import type { KnowledgeBaseFormState } from './KnowledgeBaseDrawers';
@@ -108,7 +108,9 @@ export function KnowledgeBaseListPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkCategoryId, setBulkCategoryId] = useState('');
   const [form, setForm] = useState<FormState | null>(null);
+  const [formInitial, setFormInitial] = useState<FormState | null>(null);
   const [formError, setFormError] = useState('');
+  const [confirmDiscardForm, setConfirmDiscardForm] = useState(false);
   const [categoryForm, setCategoryForm] = useState<CategoryDialogValue | null>(null);
   const [categoryFormError, setCategoryFormError] = useState('');
   const [categoryDeleteTarget, setCategoryDeleteTarget] = useState<KnowledgeBaseCategory | null>(null);
@@ -596,15 +598,13 @@ export function KnowledgeBaseListPage() {
       if (form.id) {
         await updateKnowledgeBase(form.id, input);
         if (workspaceMutationRef.current === operation) {
-          setForm(null);
-          setFormError('');
+          closeKnowledgeBaseForm();
           await refreshAfterMutation();
         }
       } else {
         const created = await createKnowledgeBase(input);
         if (workspaceMutationRef.current === operation) {
-          setForm(null);
-          setFormError('');
+          closeKnowledgeBaseForm();
           navigate(`/knowledge-bases/${encodeURIComponent(created.id)}/documents?intent=upload`);
         }
       }
@@ -871,7 +871,10 @@ export function KnowledgeBaseListPage() {
       return;
     }
     setFormError('');
-    setForm(emptyForm);
+    setConfirmDiscardForm(false);
+    const nextForm = { ...emptyForm, tagIds: [] };
+    setFormInitial(nextForm);
+    setForm(nextForm);
   }
 
   function openEditForm(item: KnowledgeBase) {
@@ -879,19 +882,35 @@ export function KnowledgeBaseListPage() {
       return;
     }
     setFormError('');
-    setForm({
+    setConfirmDiscardForm(false);
+    const nextForm = {
       id: item.id,
       name: item.name,
       description: item.description,
       categoryId: item.categoryId ?? '',
       visibility: item.visibility ?? 'private',
       tagIds: item.tags?.map((tag) => tag.id) ?? [],
-    });
+    } satisfies FormState;
+    setFormInitial(nextForm);
+    setForm(nextForm);
   }
 
   function closeKnowledgeBaseForm() {
     setForm(null);
+    setFormInitial(null);
     setFormError('');
+    setConfirmDiscardForm(false);
+  }
+
+  function requestCloseKnowledgeBaseForm() {
+    if (workspaceMutationBusy) {
+      return;
+    }
+    if (form && formInitial && !knowledgeBaseFormsEqual(form, formInitial)) {
+      setConfirmDiscardForm(true);
+      return;
+    }
+    closeKnowledgeBaseForm();
   }
 
   function applySearch(event: FormEvent<HTMLFormElement>) {
@@ -1266,7 +1285,7 @@ export function KnowledgeBaseListPage() {
       )}
 
       {form && (
-        <KnowledgeBaseFormDrawer
+        <KnowledgeBaseFormOverlay
           busy={workspaceMutationBusy}
           categories={flatCategories}
           error={formError}
@@ -1278,8 +1297,19 @@ export function KnowledgeBaseListPage() {
               setFormError('');
             }
           }}
-          onClose={closeKnowledgeBaseForm}
+          onClose={requestCloseKnowledgeBaseForm}
           onSubmit={handleSubmit}
+        />
+      )}
+
+      {confirmDiscardForm && (
+        <ConfirmDialog
+          title="放弃未保存的更改"
+          description="当前修改尚未保存，关闭后将丢失。"
+          confirmLabel="放弃更改"
+          cancelLabel="继续编辑"
+          onCancel={() => setConfirmDiscardForm(false)}
+          onConfirm={closeKnowledgeBaseForm}
         />
       )}
 
@@ -1640,6 +1670,15 @@ function flattenCategories(categories: KnowledgeBaseCategory[], level = 0): { id
     { id: category.id, label: `${'　'.repeat(level)}${category.name}` },
     ...flattenCategories(category.children ?? [], level + 1),
   ]);
+}
+
+function knowledgeBaseFormsEqual(left: FormState, right: FormState): boolean {
+  return left.id === right.id
+    && left.name === right.name
+    && left.description === right.description
+    && left.categoryId === right.categoryId
+    && left.visibility === right.visibility
+    && [...left.tagIds].sort().join(',') === [...right.tagIds].sort().join(',');
 }
 
 function descendantCategoryIds(categories: KnowledgeBaseCategory[], categoryId: string): string[] {

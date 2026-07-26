@@ -1,6 +1,8 @@
-import { useCallback, type FormEvent } from 'react';
+import { useCallback, useState, type FormEvent } from 'react';
 import { X } from 'lucide-react';
 
+import { Button } from '../../components/ui/Button';
+import { Dialog } from '../../components/ui/Dialog';
 import { IconButton } from '../../components/ui/IconButton';
 import { useModalFocus } from '../../components/ui/useModalFocus';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
@@ -15,7 +17,7 @@ export type KnowledgeBaseFormState = {
   tagIds: string[];
 };
 
-type KnowledgeBaseFormDrawerProps = {
+type KnowledgeBaseFormOverlayProps = {
   busy: boolean;
   categories: { id: string; label: string }[];
   error: string;
@@ -26,7 +28,7 @@ type KnowledgeBaseFormDrawerProps = {
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 };
 
-export function KnowledgeBaseFormDrawer({
+export function KnowledgeBaseFormOverlay({
   busy,
   categories,
   error,
@@ -35,13 +37,38 @@ export function KnowledgeBaseFormDrawer({
   onChange,
   onClose,
   onSubmit,
-}: KnowledgeBaseFormDrawerProps) {
+}: KnowledgeBaseFormOverlayProps) {
   const requestClose = useCallback(() => {
     if (!busy) {
       onClose();
     }
   }, [busy, onClose]);
-  const panelRef = useModalFocus<HTMLElement>(true, requestClose);
+  const panelRef = useModalFocus<HTMLElement>(Boolean(form.id), requestClose);
+  const fields = (
+    <KnowledgeBaseFormFields
+      busy={busy}
+      categories={categories}
+      error={error}
+      form={form}
+      tags={tags}
+      onChange={onChange}
+      onClose={requestClose}
+      onSubmit={onSubmit}
+    />
+  );
+
+  if (!form.id) {
+    return (
+      <Dialog
+        open
+        title="新建知识库"
+        description="仅名称必填，创建后可直接导入文档。"
+        onClose={requestClose}
+      >
+        {fields}
+      </Dialog>
+    );
+  }
 
   return (
     <aside className="drawer-backdrop" role="presentation">
@@ -55,28 +82,74 @@ export function KnowledgeBaseFormDrawer({
       >
         <header>
           <div>
-            <h2 id="kb-form-title">{form.id ? '编辑知识库' : '新建知识库'}</h2>
-            <p className="muted-text">保存后，分类、可见性和标签将立即更新。</p>
+            <h2 id="kb-form-title">编辑知识库</h2>
+            <p className="muted-text">更新基础信息、分类、标签和访问权限。</p>
           </div>
           <IconButton disabled={busy} label="关闭" onClick={requestClose}>
             <X aria-hidden="true" />
           </IconButton>
         </header>
 
-        <form className="drawer-form" onSubmit={onSubmit}>
-          <div className="form-grid drawer-form-grid">
-            <label>
-              名称
-              <input
-                data-autofocus
-                value={form.name}
-                onChange={(event) => onChange({ ...form, name: event.target.value })}
-                required
-              />
-            </label>
+        {fields}
+      </section>
+    </aside>
+  );
+}
+
+function KnowledgeBaseFormFields({
+  busy,
+  categories,
+  error,
+  form,
+  tags,
+  onChange,
+  onClose,
+  onSubmit,
+}: KnowledgeBaseFormOverlayProps) {
+  const editing = Boolean(form.id);
+  const [advancedOpen, setAdvancedOpen] = useState(editing);
+
+  function toggleTag(tagId: string) {
+    const tagIds = form.tagIds.includes(tagId)
+      ? form.tagIds.filter((id) => id !== tagId)
+      : [...form.tagIds, tagId];
+    onChange({ ...form, tagIds });
+  }
+
+  return (
+    <form className={editing ? 'kb-form drawer-form' : 'kb-form kb-form-dialog'} onSubmit={onSubmit}>
+      <div className="kb-form-fields">
+        <label>
+          名称
+          <input
+            data-autofocus
+            disabled={busy}
+            value={form.name}
+            onChange={(event) => onChange({ ...form, name: event.target.value })}
+            required
+          />
+        </label>
+        <label>
+          描述
+          <textarea
+            disabled={busy}
+            value={form.description}
+            onChange={(event) => onChange({ ...form, description: event.target.value })}
+            rows={3}
+          />
+        </label>
+
+        <details
+          className="kb-form-advanced"
+          open={advancedOpen}
+          onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+        >
+          <summary>更多设置</summary>
+          <div className="kb-form-advanced-fields">
             <label>
               分类
               <select
+                disabled={busy}
                 value={form.categoryId}
                 onChange={(event) => onChange({ ...form, categoryId: event.target.value })}
               >
@@ -86,9 +159,32 @@ export function KnowledgeBaseFormDrawer({
                 ))}
               </select>
             </label>
+
+            <fieldset className="kb-tag-fieldset">
+              <legend>标签</legend>
+              {tags.length === 0 ? (
+                <p className="muted-text">暂无可用标签</p>
+              ) : (
+                <div className="kb-tag-options">
+                  {tags.map((tag) => (
+                    <label className="kb-tag-option" key={tag.id}>
+                      <input
+                        checked={form.tagIds.includes(tag.id)}
+                        disabled={busy}
+                        type="checkbox"
+                        onChange={() => toggleTag(tag.id)}
+                      />
+                      <span>{tag.name}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </fieldset>
+
             <label>
-              可见性
+              访问权限
               <select
+                disabled={busy}
                 value={form.visibility}
                 onChange={(event) => onChange({ ...form, visibility: event.target.value as 'private' | 'public' })}
               >
@@ -96,35 +192,19 @@ export function KnowledgeBaseFormDrawer({
                 <option value="public">公开</option>
               </select>
             </label>
-            <label>
-              标签
-              <select
-                value={form.tagIds[0] ?? ''}
-                onChange={(event) => onChange({ ...form, tagIds: event.target.value ? [event.target.value] : [] })}
-              >
-                <option value="">不设置标签</option>
-                {tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}
-              </select>
-            </label>
-            <label className="form-field-wide">
-              描述
-              <textarea
-                value={form.description}
-                onChange={(event) => onChange({ ...form, description: event.target.value })}
-                rows={4}
-              />
-            </label>
           </div>
+        </details>
+      </div>
 
-          {error && <p className="drawer-error-text" role="alert">{error}</p>}
+      {error && <p className={editing ? 'drawer-error-text' : 'ui-dialog__error'} role="alert">{error}</p>}
 
-          <div className="form-actions drawer-form-actions">
-            <button className="secondary-button" type="button" onClick={requestClose} disabled={busy}>取消</button>
-            <button type="submit" disabled={busy}>{busy ? '保存中...' : '保存'}</button>
-          </div>
-        </form>
-      </section>
-    </aside>
+      <div className={editing ? 'form-actions drawer-form-actions' : 'ui-dialog__actions'}>
+        <Button variant="secondary" disabled={busy} onClick={onClose}>取消</Button>
+        <Button loading={busy} loadingLabel="保存中" type="submit">
+          {editing ? '保存修改' : '创建并导入文档'}
+        </Button>
+      </div>
+    </form>
   );
 }
 

@@ -83,6 +83,11 @@ describe('action layout styles', () => {
     expect(componentStyles).toMatch(/\.category-dialog-form[^}]*gap:\s*(?:8|12|16)px/);
   });
 
+  it('keeps a visible native disclosure marker for optional knowledge-base settings', () => {
+    expect(legacyStyles).toMatch(/\.kb-form-advanced\s*>\s*summary[^}]*display:\s*list-item/);
+    expect(legacyStyles).not.toMatch(/\.kb-form-advanced\s*>\s*summary[^}]*display:\s*flex/);
+  });
+
   it('keeps fixed overlays viewport-anchored after the page entrance animation', () => {
     const entranceKeyframes = premiumStyles.match(/@keyframes premium-enter\s*{.*?}\s*}/)?.[0] ?? '';
     expect(entranceKeyframes).not.toContain('transform:');
