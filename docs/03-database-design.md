@@ -227,9 +227,13 @@ CREATE TABLE chat_messages (
     role VARCHAR(32) NOT NULL,
     content TEXT NOT NULL,
     citations JSONB,
+    client_request_id UUID,
+    rerank_fallback JSONB,
     created_at TIMESTAMP DEFAULT now()
 );
 ```
+
+`client_request_id` 和 `rerank_fallback` 对历史消息及 regenerate 消息保持 nullable。发送消息时，user/assistant 消息对共享同一个 `client_request_id`；assistant 消息保存本次 `rerank_fallback`，以便重复请求重建原响应。
 
 允许 role：
 
@@ -243,6 +247,9 @@ system
 
 ```sql
 CREATE INDEX idx_knowledge_bases_owner_id ON knowledge_bases (owner_id);
+CREATE UNIQUE INDEX idx_chat_messages_session_client_role
+    ON chat_messages (session_id, client_request_id, role)
+    WHERE client_request_id IS NOT NULL AND role IN ('user', 'assistant');
 CREATE INDEX idx_knowledge_bases_updated_by_id ON knowledge_bases (updated_by_id);
 CREATE INDEX idx_knowledge_bases_category_id ON knowledge_bases (category_id);
 CREATE INDEX idx_knowledge_bases_visibility ON knowledge_bases (visibility);

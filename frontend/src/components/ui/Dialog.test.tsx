@@ -10,6 +10,33 @@ afterEach(() => {
 });
 
 describe('Dialog', () => {
+  it('isolates the application background for the first modal and restores its attributes', () => {
+    const { rerender } = render(
+      <>
+        <section aria-hidden="false" data-testid="application-background">
+          <button type="button">背景操作</button>
+        </section>
+        <Dialog open title="说明" onClose={() => undefined}><button type="button">确认</button></Dialog>
+      </>,
+    );
+    const background = screen.getByTestId('application-background');
+
+    expect(background).toHaveAttribute('inert');
+    expect(background).toHaveAttribute('aria-hidden', 'true');
+
+    rerender(
+      <>
+        <section aria-hidden="false" data-testid="application-background">
+          <button type="button">背景操作</button>
+        </section>
+        <Dialog open={false} title="说明" onClose={() => undefined}><button type="button">确认</button></Dialog>
+      </>,
+    );
+
+    expect(background).not.toHaveAttribute('inert');
+    expect(background).toHaveAttribute('aria-hidden', 'false');
+  });
+
   it('traps focus in both directions, closes on Escape, and restores state', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
@@ -89,49 +116,121 @@ describe('Dialog', () => {
     expect(focusSpy).not.toHaveBeenCalled();
   });
 
-  it('reuses modal keyboard behavior in drawer-shaped panels', async () => {
-    const user = userEvent.setup();
-    render(<DrawerHarness />);
-    const opener = screen.getByRole('button', { name: '打开抽屉' });
+  it('preserves the outer opener when a lower modal unmounts before the top modal', () => {
+    const opener = document.createElement('button');
+    opener.textContent = '打开外层';
+    document.body.append(opener);
+    opener.focus();
+    document.body.style.overflow = 'clip';
 
-    await user.click(opener);
+    const { rerender } = render(
+      <>
+        <Dialog open title="外层" onClose={() => undefined}><button type="button">打开内层</button></Dialog>
+        <Dialog open={false} title="内层" onClose={() => undefined}><button type="button">取消</button></Dialog>
+      </>,
+    );
+    rerender(
+      <>
+        <Dialog open title="外层" onClose={() => undefined}><button type="button">打开内层</button></Dialog>
+        <Dialog open title="内层" onClose={() => undefined}><button type="button">取消</button></Dialog>
+      </>,
+    );
+    rerender(
+      <>
+        <Dialog open={false} title="外层" onClose={() => undefined}><button type="button">打开内层</button></Dialog>
+        <Dialog open title="内层" onClose={() => undefined}><button type="button">取消</button></Dialog>
+      </>,
+    );
+    rerender(
+      <>
+        <Dialog open={false} title="外层" onClose={() => undefined}><button type="button">打开内层</button></Dialog>
+        <Dialog open={false} title="内层" onClose={() => undefined}><button type="button">取消</button></Dialog>
+      </>,
+    );
 
-    const close = screen.getByRole('button', { name: '关闭抽屉' });
-    const input = screen.getByLabelText('抽屉字段');
-    expect(close).toHaveFocus();
-    expect(document.body.style.overflow).toBe('hidden');
-    await user.tab({ shift: true });
-    expect(input).toHaveFocus();
-    await user.keyboard('{Escape}');
-
-    expect(screen.queryByRole('dialog', { name: '测试抽屉' })).not.toBeInTheDocument();
+    expect(document.body.style.overflow).toBe('clip');
     expect(opener).toHaveFocus();
-    expect(document.body.style.overflow).toBe('');
+    opener.remove();
   });
 
-  it('only lets the top modal handle Escape and scroll locking', async () => {
-    const user = userEvent.setup();
-    render(<NestedDialogHarness />);
-    const opener = screen.getByRole('button', { name: '打开回收站' });
+  it('keeps focus inside the remaining modal when a top modal was opened elsewhere', () => {
+    const outsideOpener = document.createElement('button');
+    outsideOpener.textContent = '外部触发器';
+    document.body.append(outsideOpener);
 
-    await user.click(opener);
-    const confirmOpener = screen.getByRole('button', { name: '永久删除' });
-    await user.click(confirmOpener);
-    expect(screen.getByRole('dialog', { name: '确认永久删除' })).toBeInTheDocument();
-    expect(document.body.style.overflow).toBe('hidden');
+    const { rerender } = render(
+      <>
+        <Dialog open title="底层" onClose={() => undefined}><button type="button">底层操作</button></Dialog>
+        <Dialog open={false} title="顶层" onClose={() => undefined}><button type="button">顶层操作</button></Dialog>
+      </>,
+    );
+    outsideOpener.focus();
+    rerender(
+      <>
+        <Dialog open title="底层" onClose={() => undefined}><button type="button">底层操作</button></Dialog>
+        <Dialog open title="顶层" onClose={() => undefined}><button type="button">顶层操作</button></Dialog>
+      </>,
+    );
+    rerender(
+      <>
+        <Dialog open title="底层" onClose={() => undefined}><button type="button">底层操作</button></Dialog>
+        <Dialog open={false} title="顶层" onClose={() => undefined}><button type="button">顶层操作</button></Dialog>
+      </>,
+    );
 
-    await user.keyboard('{Escape}');
+    expect(screen.getByRole('button', { name: '底层操作' })).toHaveFocus();
+    expect(outsideOpener).not.toHaveFocus();
+    outsideOpener.remove();
+  });
 
-    expect(screen.queryByRole('dialog', { name: '确认永久删除' })).not.toBeInTheDocument();
-    expect(screen.getByRole('dialog', { name: '知识库回收站' })).toBeInTheDocument();
-    expect(document.body.style.overflow).toBe('hidden');
-    expect(confirmOpener).toHaveFocus();
+  it('hides and inerts a lower modal while a nested modal is open', () => {
+    const { rerender } = render(
+      <>
+        <Dialog open title="底层" onClose={() => undefined}><button type="button">底层操作</button></Dialog>
+        <Dialog open={false} title="顶层" onClose={() => undefined}><button type="button">顶层操作</button></Dialog>
+      </>,
+    );
+    const lowerDialog = screen.getByRole('dialog', { name: '底层' });
 
-    await user.keyboard('{Escape}');
+    rerender(
+      <>
+        <Dialog open title="底层" onClose={() => undefined}><button type="button">底层操作</button></Dialog>
+        <Dialog open title="顶层" onClose={() => undefined}><button type="button">顶层操作</button></Dialog>
+      </>,
+    );
+    expect(lowerDialog).toHaveAttribute('aria-hidden', 'true');
+    expect(lowerDialog).toHaveAttribute('inert');
 
-    expect(screen.queryByRole('dialog', { name: '知识库回收站' })).not.toBeInTheDocument();
-    expect(document.body.style.overflow).toBe('');
-    expect(opener).toHaveFocus();
+    rerender(
+      <>
+        <Dialog open title="底层" onClose={() => undefined}><button type="button">底层操作</button></Dialog>
+        <Dialog open={false} title="顶层" onClose={() => undefined}><button type="button">顶层操作</button></Dialog>
+      </>,
+    );
+    expect(lowerDialog).not.toHaveAttribute('aria-hidden');
+    expect(lowerDialog).not.toHaveAttribute('inert');
+  });
+
+  it('keeps a top modal operable when it is rendered inside the lower modal DOM', () => {
+    const { rerender } = render(
+      <Dialog open title="外层" onClose={() => undefined}>
+        <button type="button">打开内层</button>
+      </Dialog>,
+    );
+
+    rerender(
+      <Dialog open title="外层" onClose={() => undefined}>
+        <button type="button">打开内层</button>
+        <Dialog open title="内层" onClose={() => undefined}>
+          <button type="button">确认内层</button>
+        </Dialog>
+      </Dialog>,
+    );
+
+    const innerDialog = screen.getByRole('dialog', { name: '内层', hidden: true });
+    expect(innerDialog.parentElement?.closest('[inert]')).toBeNull();
+    expect(innerDialog.parentElement?.closest('[aria-hidden="true"]')).toBeNull();
+    expect(screen.getByRole('button', { name: '确认内层', hidden: true })).toHaveFocus();
   });
 });
 

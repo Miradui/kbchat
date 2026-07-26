@@ -118,11 +118,14 @@ func (r *ChunkRepository) ListByDocument(ctx context.Context, documentID uuid.UU
 	return chunks, err
 }
 
-func (r *ChunkRepository) ListByDocumentPaged(ctx context.Context, documentID uuid.UUID, query string, page, pageSize int) ([]model.DocumentChunk, int64, error) {
+func (r *ChunkRepository) ListByDocumentPaged(ctx context.Context, documentID uuid.UUID, chunkID *uuid.UUID, query string, page, pageSize int) ([]model.DocumentChunk, int64, error) {
 	page, pageSize = normalizePage(page, pageSize)
 	base := r.db.WithContext(ctx).
 		Model(&model.DocumentChunk{}).
 		Where("document_id = ?", documentID)
+	if chunkID != nil {
+		base = base.Where("id = ?", *chunkID)
+	}
 	if strings.TrimSpace(query) != "" {
 		like := "%" + strings.ToLower(strings.TrimSpace(query)) + "%"
 		base = base.Where("LOWER(content) LIKE ?", like)

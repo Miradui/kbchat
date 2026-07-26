@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import { ApiError } from '../../api/client';
@@ -7,10 +7,8 @@ import {
   createChatSession,
   deleteChatSession,
   getChatSession,
-  getWorkspacePreference,
   listChatMessages,
   listChatSessions,
-  listKnowledgeBaseCategories,
   listKnowledgeBases,
   regenerateChatMessage,
   sendChatMessage,
@@ -25,42 +23,43 @@ import type {
   ChatSession,
   Citation,
   KnowledgeBase,
-  KnowledgeBaseCategory,
   KnowledgeBaseRerankFallback,
-  KnowledgeBaseWorkspacePreference,
 } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
+import { pendingChatRequestStore } from './pendingChatRequestStore';
+import type { PendingChatRequest } from './pendingChatRequestStore';
 
-const fallbackPreference: KnowledgeBaseWorkspacePreference = {
-  viewMode: 'table',
-  scope: 'all',
-  sort: 'updatedAt_desc',
-  visibility: 'all',
-  expandedCategoryIds: [],
+type ChatPageProps = {
+  draftSession?: boolean;
 };
 
-export function ChatPage() {
-  const { sessionId } = useParams();
+export function ChatPage({ draftSession = false }: ChatPageProps) {
+  const { sessionId: routedSessionId } = useParams();
+  const sessionId = draftSession ? 'new' : routedSessionId;
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const messagesRef = useRef<HTMLDivElement | null>(null);
-  const activeSessionIdRef = useRef(sessionId);
-  const expectedSessionTransitionRef = useRef<string | null>(null);
-  const messageOperationIdRef = useRef(0);
-  const messageOperationInFlightRef = useRef(false);
-  activeSessionIdRef.current = sessionId;
-  const [categories, setCategories] = useState<KnowledgeBaseCategory[]>([]);
-  const [expandedIds, setExpandedIds] = useState<string[]>([]);
+  const activeSessionIdRef = useRef<string | undefined>(sessionId);
+  const mountedRef = useRef(false);
+  const draftSendSessionIdRef = useRef<string | null>(null);
+  const sendOperationRef = useRef<symbol | null>(null);
+  const sendCheckOperationRef = useRef<symbol | null>(null);
+  const sessionMutationRef = useRef<symbol | null>(null);
+  const regenerateOperationRef = useRef<symbol | null>(null);
+  const messageLoadRequestRef = useRef(0);
+  const sendCheckRequestRef = useRef(0);
+  const sessionListRequestRef = useRef(0);
+  const knowledgeBaseListRequestRef = useRef(0);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [selectedCitationMessageId, setSelectedCitationMessageId] = useState<string | null>(null);
   const [currentSessionDetail, setCurrentSessionDetail] = useState<ChatSession | null>(null);
   const [draft, setDraft] = useState('');
   const [titleDraft, setTitleDraft] = useState('');
   const [pendingQuestion, setPendingQuestion] = useState('');
   const [failedQuestion, setFailedQuestion] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [knowledgeBasesLoading, setKnowledgeBasesLoading] = useState(true);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [checkingSendResult, setCheckingSendResult] = useState(false);
@@ -69,106 +68,170 @@ export function ChatPage() {
   const [updatingSession, setUpdatingSession] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [sessionConfirmError, setSessionConfirmError] = useState('');
   const [error, setError] = useState('');
-  const [uncertainSend, setUncertainSend] = useState<{
-    sessionId: string;
-    question: string;
-    previousMessageCount: number;
-  } | null>(null);
+  const [sessionListError, setSessionListError] = useState('');
+  const [knowledgeBaseListError, setKnowledgeBaseListError] = useState('');
+  const [messageLoadError, setMessageLoadError] = useState('');
+  const [activeCitationMessageId, setActiveCitationMessageId] = useState<string | null>(null);
+  const [uncertainSend, setUncertainSend] = useState<PendingChatRequest | null>(null);
   const isDraftSession = sessionId === 'new';
   const draftKnowledgeBaseId = searchParams.get('knowledgeBaseId');
 
   useEffect(() => {
-    let mounted = true;
-    setLoading(true);
-    setError('');
-
-    Promise.all([
-      listChatSessions(),
-      listKnowledgeBases({ pageSize: 100 }),
-      listKnowledgeBaseCategories().catch(() => ({ items: [] })),
-      getWorkspacePreference().catch(() => fallbackPreference),
-    ])
-      .then(([sessionResponse, kbResponse, categoryResponse, preference]) => {
-        if (mounted) {
-          setSessions(sessionResponse.items);
-          setKnowledgeBases(kbResponse.items);
-          setCategories(categoryResponse.items);
-          setExpandedIds(preference.expandedCategoryIds);
-        }
-      })
-      .catch((err) => {
-        if (mounted) {
-          setError(errorMessage(err, '会话列表加载失败'));
-        }
-      })
-      .finally(() => {
-        if (mounted) {
-          setLoading(false);
-        }
-      });
-
+    mountedRef.current = true;
     return () => {
-      mounted = false;
+      mountedRef.current = false;
+      messageLoadRequestRef.current += 1;
+      sendCheckRequestRef.current += 1;
+      sessionListRequestRef.current += 1;
+      knowledgeBaseListRequestRef.current += 1;
+      sendOperationRef.current = null;
+      sendCheckOperationRef.current = null;
+      sessionMutationRef.current = null;
+      regenerateOperationRef.current = null;
     };
   }, []);
 
-  useEffect(() => {
-    const preservesMessageOperation = expectedSessionTransitionRef.current === sessionId;
-    expectedSessionTransitionRef.current = null;
+  const loadSessions = useCallback(async () => {
+    const request = ++sessionListRequestRef.current;
+    setSessionsLoading(true);
+    setSessionListError('');
+    try {
+      const response = await listChatSessions();
+      if (mountedRef.current && sessionListRequestRef.current === request) {
+        setSessions(response.items);
+      }
+    } catch (err) {
+      if (mountedRef.current && sessionListRequestRef.current === request) {
+        setSessionListError(errorMessage(err, '会话列表加载失败'));
+      }
+    } finally {
+      if (mountedRef.current && sessionListRequestRef.current === request) {
+        setSessionsLoading(false);
+      }
+    }
+  }, []);
 
-    if (!preservesMessageOperation) {
-      messageOperationIdRef.current += 1;
-      messageOperationInFlightRef.current = false;
-      setSending(false);
+  const loadKnowledgeBases = useCallback(async () => {
+    const request = ++knowledgeBaseListRequestRef.current;
+    setKnowledgeBasesLoading(true);
+    setKnowledgeBaseListError('');
+    try {
+      const response = await listKnowledgeBases({ pageSize: 100 });
+      if (mountedRef.current && knowledgeBaseListRequestRef.current === request) {
+        setKnowledgeBases(response.items);
+      }
+    } catch (err) {
+      if (mountedRef.current && knowledgeBaseListRequestRef.current === request) {
+        setKnowledgeBaseListError(errorMessage(err, '知识库列表加载失败'));
+      }
+    } finally {
+      if (mountedRef.current && knowledgeBaseListRequestRef.current === request) {
+        setKnowledgeBasesLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSessions();
+    void loadKnowledgeBases();
+  }, [loadKnowledgeBases, loadSessions]);
+
+  const loadSessionMessages = useCallback(async (requestedSessionId: string) => {
+    const request = ++messageLoadRequestRef.current;
+    setCurrentSessionDetail(null);
+    setTitleDraft('');
+    setMessages([]);
+    setActiveCitationMessageId(null);
+    setMessageLoadError('');
+    setMessagesLoading(true);
+
+    try {
+      const [sessionResponse, messageResponse] = await Promise.all([
+        getChatSession(requestedSessionId),
+        listChatMessages(requestedSessionId),
+      ]);
+      if (
+        mountedRef.current
+        && activeSessionIdRef.current === requestedSessionId
+        && messageLoadRequestRef.current === request
+      ) {
+        setCurrentSessionDetail(sessionResponse);
+        setTitleDraft(sessionResponse.title || '');
+        setMessages(messageResponse.items);
+        setSessions((current) => mergeSession(current, sessionResponse));
+        const persistedRequest = pendingChatRequestStore.get(requestedSessionId);
+        if (persistedRequest && !sendOperationRef.current) {
+          const requestWasAccepted = messageResponse.items.some(
+            (message) => message.clientRequestId === persistedRequest.clientRequestId,
+          );
+          if (requestWasAccepted) {
+            pendingChatRequestStore.clear(requestedSessionId, persistedRequest.clientRequestId);
+            setUncertainSend(null);
+            setDraft('');
+            setError('');
+          } else {
+            setUncertainSend(persistedRequest);
+            setDraft(persistedRequest.question);
+            setError('发送结果暂时无法确认。请先再次检查；如仍未显示，再确认是否重新发送。');
+          }
+        }
+      }
+    } catch (err) {
+      if (
+        mountedRef.current
+        && activeSessionIdRef.current === requestedSessionId
+        && messageLoadRequestRef.current === request
+      ) {
+        setMessageLoadError(errorMessage(err, '消息加载失败'));
+        setCurrentSessionDetail(null);
+        setMessages([]);
+      }
+    } finally {
+      if (
+        mountedRef.current
+        && activeSessionIdRef.current === requestedSessionId
+        && messageLoadRequestRef.current === request
+      ) {
+        setMessagesLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    activeSessionIdRef.current = sessionId;
+    sendCheckRequestRef.current += 1;
+    const continuingDraftSend = draftSendSessionIdRef.current === sessionId;
+    setConfirmArchive(false);
+    setConfirmDelete(false);
+    setSessionConfirmError('');
+    regenerateOperationRef.current = null;
+    setRegeneratingMessageId(null);
+    setRerankFallback(null);
+    if (!continuingDraftSend) {
+      sendOperationRef.current = null;
+      setDraft('');
       setPendingQuestion('');
       setFailedQuestion('');
-      setCheckingSendResult(false);
-      setRegeneratingMessageId(null);
       setUncertainSend(null);
-      setError('');
-      setRerankFallback(null);
+      setSending(false);
     }
-
-    setSelectedCitationMessageId(null);
-
     if (!sessionId || isDraftSession) {
+      messageLoadRequestRef.current += 1;
       setCurrentSessionDetail(null);
       setTitleDraft('');
       setMessages([]);
+      setFailedQuestion('');
+      setUncertainSend(null);
       setMessagesLoading(false);
+      setMessageLoadError('');
       return;
     }
 
-    let mounted = true;
-    setMessagesLoading(true);
-
-    Promise.all([getChatSession(sessionId), listChatMessages(sessionId)])
-      .then(([sessionResponse, messageResponse]) => {
-        if (mounted) {
-          setCurrentSessionDetail(sessionResponse);
-          setTitleDraft(sessionResponse.title || '');
-          setMessages(messageResponse.items);
-          setSessions((current) => mergeSession(current, sessionResponse));
-        }
-      })
-      .catch((err) => {
-        if (mounted) {
-          setError(errorMessage(err, '消息加载失败'));
-          setCurrentSessionDetail(null);
-          setMessages([]);
-        }
-      })
-      .finally(() => {
-        if (mounted) {
-          setMessagesLoading(false);
-        }
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, [draftKnowledgeBaseId, isDraftSession, sessionId]);
+    setError('');
+    void loadSessionMessages(sessionId);
+  }, [draftKnowledgeBaseId, isDraftSession, loadSessionMessages, sessionId]);
 
   useEffect(() => {
     messagesRef.current?.scrollTo({
@@ -177,9 +240,23 @@ export function ChatPage() {
     });
   }, [messages, pendingQuestion]);
 
+  useEffect(() => {
+    setActiveCitationMessageId((current) => {
+      if (current && messages.some((message) => message.id === current && message.role === 'assistant')) {
+        return current;
+      }
+      return [...messages].reverse().find((message) => message.role === 'assistant')?.id ?? null;
+    });
+  }, [messages]);
+
+  const sessionDetailsReady = !isDraftSession
+    && currentSessionDetail?.id === sessionId
+    && !messagesLoading;
   const currentSession = isDraftSession
     ? null
-    : currentSessionDetail ?? sessions.find((session) => session.id === sessionId) ?? null;
+    : sessionDetailsReady
+      ? currentSessionDetail
+      : sessions.find((session) => session.id === sessionId) ?? null;
   const currentKnowledgeBase = knowledgeBases.find(
     (kb) => kb.id === (currentSession?.knowledgeBaseId ?? draftKnowledgeBaseId),
   );
@@ -190,90 +267,146 @@ export function ChatPage() {
     return sessions.filter((session) => session.knowledgeBaseId === currentKnowledgeBase.id);
   }, [currentKnowledgeBase, sessions]);
 
-  const latestAssistantMessage = useMemo(
-    () => [...messages]
-      .reverse()
-      .find((message) => message.role === 'assistant') ?? null,
+  const activeCitations = useMemo(() => {
+    return messages.find((message) => message.id === activeCitationMessageId)?.citations ?? [];
+  }, [activeCitationMessageId, messages]);
+  const latestAssistantMessageId = useMemo(
+    () => [...messages].reverse().find((message) => message.role === 'assistant')?.id ?? null,
     [messages],
   );
-  const selectedCitationMessage = messages.find(
-    (message) => message.id === selectedCitationMessageId && message.role === 'assistant',
-  );
-  const activeCitationMessage = selectedCitationMessage ?? latestAssistantMessage;
-  const activeCitations = activeCitationMessage?.citations ?? [];
-  const latestAssistantMessageId = latestAssistantMessage?.id ?? null;
 
   const questionCount = messages.filter((message) => message.role === 'user').length;
   const citationCount = messages.reduce((sum, message) => sum + message.citations.length, 0);
+  const messageStatsKnown = isDraftSession || (sessionDetailsReady && !messageLoadError);
   const archived = Boolean(currentSession?.archivedAt);
-  const canSend = !archived && Boolean(currentKnowledgeBase) && Boolean(sessionId);
-
-  async function reloadSessions() {
-    const response = await listChatSessions();
-    setSessions(response.items);
-  }
+  const chatMutationBusy = sending || checkingSendResult || updatingSession || regeneratingMessageId !== null;
+  const canSend = !archived
+    && Boolean(currentKnowledgeBase)
+    && Boolean(sessionId)
+    && (isDraftSession || sessionDetailsReady)
+    && !messagesLoading;
 
   async function handleUpdateTitle(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!currentSession || !titleDraft.trim()) {
+    if (
+      !currentSession
+      || !sessionDetailsReady
+      || !titleDraft.trim()
+      || sendOperationRef.current
+      || sendCheckOperationRef.current
+      || sessionMutationRef.current
+      || regenerateOperationRef.current
+    ) {
       return;
     }
 
+    const targetSessionId = currentSession.id;
+    const operation = Symbol('update-session-title');
+    sessionMutationRef.current = operation;
     setUpdatingSession(true);
     setError('');
 
     try {
-      const nextSession = await updateChatSessionTitle(currentSession.id, titleDraft.trim());
-      setCurrentSessionDetail(nextSession);
-      setSessions((current) => mergeSession(current, nextSession));
+      const nextSession = await updateChatSessionTitle(targetSessionId, titleDraft.trim());
+      if (
+        mountedRef.current
+        && activeSessionIdRef.current === targetSessionId
+        && sessionMutationRef.current === operation
+      ) {
+        setSessions((current) => mergeSession(current, nextSession));
+        setCurrentSessionDetail(nextSession);
+      }
     } catch (err) {
-      setError(errorMessage(err, '会话标题更新失败'));
+      if (
+        mountedRef.current
+        && activeSessionIdRef.current === targetSessionId
+        && sessionMutationRef.current === operation
+      ) {
+        setError(errorMessage(err, '会话标题更新失败'));
+      }
     } finally {
-      setUpdatingSession(false);
+      if (
+        mountedRef.current
+        && sessionMutationRef.current === operation
+      ) {
+        sessionMutationRef.current = null;
+        setUpdatingSession(false);
+      }
     }
   }
 
   async function handleArchiveSession() {
-    if (!currentSession) {
+    if (!currentSession || !sessionDetailsReady || sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
       return;
     }
 
+    const targetSessionId = currentSession.id;
+    const operation = Symbol('archive-session');
+    sessionMutationRef.current = operation;
     setUpdatingSession(true);
     setError('');
 
     try {
-      const archivedSession = await archiveChatSession(currentSession.id);
-      setCurrentSessionDetail(archivedSession);
-      setConfirmArchive(false);
-      await reloadSessions();
+      const archivedSession = await archiveChatSession(targetSessionId);
+      if (activeSessionIdRef.current === targetSessionId && sessionMutationRef.current === operation) {
+        sessionListRequestRef.current += 1;
+        setSessionsLoading(false);
+        setSessionListError('');
+        setSessions((current) => current.filter((session) => session.id !== targetSessionId));
+        setCurrentSessionDetail(archivedSession);
+        setSessionConfirmError('');
+        setConfirmArchive(false);
+      }
     } catch (err) {
-      setError(errorMessage(err, '会话归档失败'));
+      if (activeSessionIdRef.current === targetSessionId && sessionMutationRef.current === operation) {
+        setSessionConfirmError(errorMessage(err, '会话归档失败'));
+      }
     } finally {
-      setUpdatingSession(false);
+      if (sessionMutationRef.current === operation) {
+        sessionMutationRef.current = null;
+        setUpdatingSession(false);
+      }
     }
   }
 
   async function handleDeleteSession() {
-    if (!currentSession) {
+    if (!currentSession || !sessionDetailsReady || sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
       return;
     }
 
+    const targetSessionId = currentSession.id;
+    const operation = Symbol('delete-session');
+    sessionMutationRef.current = operation;
     setUpdatingSession(true);
     setError('');
 
     try {
-      await deleteChatSession(currentSession.id);
-      setConfirmDelete(false);
-      await reloadSessions();
-      navigate('/chat', { replace: true });
+      await deleteChatSession(targetSessionId);
+      if (activeSessionIdRef.current === targetSessionId && sessionMutationRef.current === operation) {
+        sessionListRequestRef.current += 1;
+        setSessionsLoading(false);
+        setSessionListError('');
+        setSessions((current) => current.filter((session) => session.id !== targetSessionId));
+        setSessionConfirmError('');
+        setConfirmDelete(false);
+        navigate('/chat', { replace: true });
+      }
     } catch (err) {
-      setError(errorMessage(err, '会话删除失败'));
+      if (activeSessionIdRef.current === targetSessionId && sessionMutationRef.current === operation) {
+        setSessionConfirmError(errorMessage(err, '会话删除失败'));
+      }
     } finally {
-      setUpdatingSession(false);
+      if (sessionMutationRef.current === operation) {
+        sessionMutationRef.current = null;
+        setUpdatingSession(false);
+      }
     }
   }
 
   function handleCreateSession(knowledgeBaseId = currentKnowledgeBase?.id) {
+    if (sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
+      return;
+    }
     const targetKnowledgeBase =
       knowledgeBases.find((knowledgeBase) => knowledgeBase.id === knowledgeBaseId) ?? knowledgeBases[0];
     if (!targetKnowledgeBase) {
@@ -286,6 +419,9 @@ export function ChatPage() {
   }
 
   function handleKnowledgeBaseChange(knowledgeBaseId: string) {
+    if (sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
+      return;
+    }
     const targetSessions = sessions
       .filter((session) => session.knowledgeBaseId === knowledgeBaseId)
       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
@@ -298,95 +434,151 @@ export function ChatPage() {
   }
 
   async function submitQuestion(question: string, confirmedResend = false) {
+    const requestToRetry = confirmedResend ? uncertainSend : null;
     if (
       !question
-      || !sessionId
+      || sending
+      || sendOperationRef.current
+      || sendCheckOperationRef.current
+      || sessionMutationRef.current
       || !canSend
-      || messageOperationInFlightRef.current
       || (uncertainSend && !confirmedResend)
     ) {
       return;
     }
 
-    const routeSessionId = sessionId;
-    const operationId = messageOperationIdRef.current + 1;
-    messageOperationIdRef.current = operationId;
-    messageOperationInFlightRef.current = true;
+    const operation = Symbol('send-message');
+    sendOperationRef.current = operation;
     setSending(true);
     setError('');
     setRerankFallback(null);
     setFailedQuestion('');
     setUncertainSend(null);
     setPendingQuestion(question);
+    const clientRequestId = requestToRetry?.clientRequestId ?? crypto.randomUUID();
 
-    let targetSessionId = routeSessionId;
+    let activeSessionId = sessionId as string;
     let messageRequestStarted = false;
     try {
       if (isDraftSession) {
         if (!currentKnowledgeBase) {
           throw new Error('知识库不存在');
         }
-
         const session = await createChatSession(currentKnowledgeBase.id, '');
-        if (!isCurrentMessageOperation(operationId, routeSessionId)) {
+        if (
+          !mountedRef.current
+          || sendOperationRef.current !== operation
+          || activeSessionIdRef.current !== activeSessionId
+        ) {
           return;
         }
-
-        targetSessionId = session.id;
-        expectedSessionTransitionRef.current = targetSessionId;
-        activeSessionIdRef.current = targetSessionId;
+        activeSessionId = session.id;
+        activeSessionIdRef.current = session.id;
+        draftSendSessionIdRef.current = session.id;
         setCurrentSessionDetail(session);
         setSessions((current) => mergeSession(current, session));
         navigate(`/chat/${session.id}`, { replace: true });
       }
 
       messageRequestStarted = true;
-      const response = await sendChatMessage(targetSessionId, question);
-      if (!isCurrentMessageOperation(operationId, targetSessionId)) {
-        return;
-      }
-
-      setRerankFallback(response.rerankFallback?.used ? response.rerankFallback : null);
-      setDraft('');
-      setFailedQuestion('');
+      const pendingRequest: PendingChatRequest = {
+        sessionId: activeSessionId,
+        question,
+        clientRequestId,
+        createdAt: requestToRetry?.createdAt ?? new Date().toISOString(),
+      };
+      pendingChatRequestStore.set(pendingRequest);
+      const response = await sendChatMessage(activeSessionId, { content: question, clientRequestId });
+      pendingChatRequestStore.clear(activeSessionId, clientRequestId);
       setUncertainSend(null);
-
-      try {
-        const [messageResponse, sessionResponse] = await Promise.all([
-          listChatMessages(targetSessionId),
-          listChatSessions(),
-        ]);
-        if (!isCurrentMessageOperation(operationId, targetSessionId)) {
-          return;
-        }
-        setMessages(messageResponse.items);
-        setSelectedCitationMessageId(null);
-        setSessions(sessionResponse.items);
-      } catch {
-        if (isCurrentMessageOperation(operationId, targetSessionId)) {
-          setError('问题已发送，但消息列表刷新失败，请刷新页面查看。');
-        }
+      if (
+        mountedRef.current
+        && sendOperationRef.current === operation
+        && activeSessionIdRef.current === activeSessionId
+      ) {
+        setRerankFallback(response.rerankFallback?.used ? response.rerankFallback : null);
       }
     } catch (err) {
-      if (isCurrentMessageOperation(operationId, targetSessionId)) {
-        setDraft(question);
-        if (err instanceof ApiError) {
-          setError(errorMessage(err, '消息发送失败，请稍后重试。'));
-          setFailedQuestion(question);
-        } else if (messageRequestStarted) {
-          setError('发送结果暂时无法确认。请先再次检查；如仍未显示，再确认是否重新发送。');
-          setUncertainSend({
-            sessionId: targetSessionId,
-            question,
-            previousMessageCount: messages.length,
-          });
-        } else {
-          setError('会话创建结果暂时无法确认，请刷新会话列表后再试。');
-        }
+      if (
+        !mountedRef.current
+        || sendOperationRef.current !== operation
+        || activeSessionIdRef.current !== activeSessionId
+      ) {
+        return;
+      }
+      sendOperationRef.current = null;
+      if (draftSendSessionIdRef.current === activeSessionId) {
+        draftSendSessionIdRef.current = null;
+      }
+      setDraft(question);
+      if (err instanceof ApiError && isDefinitiveSendFailure(err)) {
+        pendingChatRequestStore.clear(activeSessionId, clientRequestId);
+        setError(errorMessage(err, '消息发送失败，请稍后重试。'));
+        setFailedQuestion(question);
+      } else if (messageRequestStarted) {
+        setError('发送结果暂时无法确认。请先再次检查；如仍未显示，再确认是否重新发送。');
+        setUncertainSend({
+          sessionId: activeSessionId,
+          question,
+          clientRequestId,
+          createdAt: requestToRetry?.createdAt ?? new Date().toISOString(),
+        });
+      } else {
+        setError('会话创建结果暂时无法确认，请刷新会话列表后再试。');
+      }
+      setSending(false);
+      setPendingQuestion('');
+      return;
+    }
+
+    if (
+      !mountedRef.current
+      || sendOperationRef.current !== operation
+      || activeSessionIdRef.current !== activeSessionId
+    ) {
+      if (draftSendSessionIdRef.current === activeSessionId) {
+        draftSendSessionIdRef.current = null;
+      }
+      return;
+    }
+    setDraft('');
+    setFailedQuestion('');
+    const messageRefreshRequest = ++messageLoadRequestRef.current;
+    try {
+      const [messageResponse] = await Promise.all([listChatMessages(activeSessionId), loadSessions()]);
+      if (
+        mountedRef.current
+        && activeSessionIdRef.current === activeSessionId
+        && messageLoadRequestRef.current === messageRefreshRequest
+      ) {
+        setMessages(messageResponse.items);
+        setMessageLoadError('');
+      }
+    } catch (err) {
+      if (
+        mountedRef.current
+        && activeSessionIdRef.current === activeSessionId
+        && messageLoadRequestRef.current === messageRefreshRequest
+      ) {
+        setError('问题已发送，但消息列表刷新失败，请刷新页面查看。');
       }
     } finally {
-      if (isCurrentMessageOperation(operationId, targetSessionId)) {
-        messageOperationInFlightRef.current = false;
+      if (
+        mountedRef.current
+        && activeSessionIdRef.current === activeSessionId
+        && messageLoadRequestRef.current === messageRefreshRequest
+      ) {
+        setMessagesLoading(false);
+      }
+      if (
+        mountedRef.current
+        && sendOperationRef.current === operation
+        && activeSessionIdRef.current === activeSessionId
+      ) {
+        sendOperationRef.current = null;
+        if (draftSendSessionIdRef.current === activeSessionId) {
+          draftSendSessionIdRef.current = null;
+        }
         setSending(false);
         setPendingQuestion('');
       }
@@ -394,43 +586,58 @@ export function ChatPage() {
   }
 
   async function handleCheckSendResult() {
-    if (!uncertainSend || messageOperationInFlightRef.current) {
+    if (
+      !uncertainSend
+      || checkingSendResult
+      || sendOperationRef.current
+      || sendCheckOperationRef.current
+      || sessionMutationRef.current
+      || regenerateOperationRef.current
+    ) {
       return;
     }
 
-    const reconciliation = uncertainSend;
-    const operationId = messageOperationIdRef.current + 1;
-    messageOperationIdRef.current = operationId;
-    messageOperationInFlightRef.current = true;
+    const operation = Symbol('check-send-result');
+    sendCheckOperationRef.current = operation;
     setCheckingSendResult(true);
-
+    const request = ++sendCheckRequestRef.current;
+    const messageLoadRequest = messageLoadRequestRef.current;
+    const uncertainSnapshot = uncertainSend;
+    const checkedSessionId = uncertainSnapshot.sessionId;
+    const requestIsCurrent = () => (
+      mountedRef.current
+      && activeSessionIdRef.current === checkedSessionId
+      && sendCheckOperationRef.current === operation
+      && sendCheckRequestRef.current === request
+      && messageLoadRequestRef.current === messageLoadRequest
+    );
     try {
-      const response = await listChatMessages(reconciliation.sessionId);
-      if (!isCurrentMessageOperation(operationId, reconciliation.sessionId)) {
+      const response = await listChatMessages(checkedSessionId);
+      if (!requestIsCurrent()) {
         return;
       }
-
       setMessages(response.items);
-      setSelectedCitationMessageId(null);
       const submittedMessageExists = response.items
-        .slice(reconciliation.previousMessageCount)
-        .some((message) => message.role === 'user' && message.content === reconciliation.question);
+        .some((message) => message.clientRequestId === uncertainSnapshot.clientRequestId);
       if (submittedMessageExists) {
+        pendingChatRequestStore.clear(checkedSessionId, uncertainSnapshot.clientRequestId);
         setDraft('');
         setError('');
         setUncertainSend(null);
-        void reloadSessions().catch(() => undefined);
+        void loadSessions();
       } else {
         setError('暂未发现这条问题。你可以稍后再次检查，或确认重新发送。');
       }
     } catch {
-      if (isCurrentMessageOperation(operationId, reconciliation.sessionId)) {
+      if (requestIsCurrent()) {
         setError('暂时无法检查发送结果，请稍后再次检查。');
       }
     } finally {
-      if (isCurrentMessageOperation(operationId, reconciliation.sessionId)) {
-        messageOperationInFlightRef.current = false;
-        setCheckingSendResult(false);
+      if (sendCheckOperationRef.current === operation) {
+        sendCheckOperationRef.current = null;
+        if (mountedRef.current) {
+          setCheckingSendResult(false);
+        }
       }
     }
   }
@@ -441,61 +648,89 @@ export function ChatPage() {
   }
 
   async function handleRegenerateMessage(messageId: string) {
-    if (!sessionId || isDraftSession || uncertainSend || messageOperationInFlightRef.current) {
+    if (
+      !sessionId
+      || isDraftSession
+      || !sessionDetailsReady
+      || archived
+      || sendOperationRef.current
+      || sendCheckOperationRef.current
+      || sessionMutationRef.current
+      || regenerateOperationRef.current
+    ) {
       return;
     }
 
     const targetSessionId = sessionId;
-    const operationId = messageOperationIdRef.current + 1;
-    messageOperationIdRef.current = operationId;
-    messageOperationInFlightRef.current = true;
+    const operation = Symbol('regenerate-message');
+    regenerateOperationRef.current = operation;
     setRegeneratingMessageId(messageId);
     setError('');
     setRerankFallback(null);
     try {
       const response = await regenerateChatMessage(targetSessionId, messageId);
-      if (!isCurrentMessageOperation(operationId, targetSessionId)) {
+      if (
+        !mountedRef.current
+        || activeSessionIdRef.current !== targetSessionId
+        || regenerateOperationRef.current !== operation
+      ) {
         return;
       }
       setRerankFallback(response.rerankFallback?.used ? response.rerankFallback : null);
       const messageResponse = await listChatMessages(targetSessionId);
-      if (!isCurrentMessageOperation(operationId, targetSessionId)) {
-        return;
+      if (
+        mountedRef.current
+        && activeSessionIdRef.current === targetSessionId
+        && regenerateOperationRef.current === operation
+      ) {
+        setMessages(messageResponse.items);
+        setMessageLoadError('');
+        setActiveCitationMessageId(null);
       }
-      setMessages(messageResponse.items);
-      setSelectedCitationMessageId(null);
     } catch (err) {
-      if (isCurrentMessageOperation(operationId, targetSessionId)) {
+      if (
+        mountedRef.current
+        && activeSessionIdRef.current === targetSessionId
+        && regenerateOperationRef.current === operation
+      ) {
         setError(errorMessage(err, '重新生成回答失败'));
       }
     } finally {
-      if (isCurrentMessageOperation(operationId, targetSessionId)) {
-        messageOperationInFlightRef.current = false;
-        setRegeneratingMessageId(null);
+      if (regenerateOperationRef.current === operation) {
+        regenerateOperationRef.current = null;
+        if (mountedRef.current) {
+          setRegeneratingMessageId(null);
+        }
       }
     }
   }
 
-  function isCurrentMessageOperation(operationId: number, targetSessionId: string): boolean {
-    return messageOperationIdRef.current === operationId && activeSessionIdRef.current === targetSessionId;
-  }
-
   return (
-    <WorkspaceShell active="chat" categories={categories} expandedIds={expandedIds}>
+    <WorkspaceShell active="chat">
       <div className="chat-workspace-page">
       <header className="page-header workspace-heading chat-workspace-header">
         <div>
           <p className="breadcrumb">知识库 / {currentKnowledgeBase?.name ?? '问答'} / 聊天</p>
           <h1>聊天问答</h1>
-          <p className="page-description">答案与引用全部来自真实后端消息接口；无引用时明确提示依据不足。</p>
+          <p className="page-description">围绕当前知识库提问，有依据时会在回答旁展示来源。</p>
         </div>
         <div className="toolbar">
           {currentKnowledgeBase && (
-            <Link className="secondary-link" to={`/knowledge-bases/${currentKnowledgeBase.id}`}>
+            <Link
+              aria-disabled={chatMutationBusy || undefined}
+              className="secondary-link"
+              tabIndex={chatMutationBusy ? -1 : undefined}
+              to={`/knowledge-bases/${currentKnowledgeBase.id}`}
+              onClick={(event) => {
+                if (sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
+                  event.preventDefault();
+                }
+              }}
+            >
               返回知识库
             </Link>
           )}
-          <button type="button" onClick={() => handleCreateSession()}>
+          <button type="button" onClick={() => handleCreateSession()} disabled={chatMutationBusy}>
             新建会话
           </button>
         </div>
@@ -509,7 +744,7 @@ export function ChatPage() {
               className="link-button"
               type="button"
               onClick={() => void submitQuestion(draft.trim())}
-              disabled={sending || checkingSendResult || regeneratingMessageId !== null || !draft.trim()}
+              disabled={chatMutationBusy || !draft.trim()}
             >
               重试发送
             </button>
@@ -520,15 +755,15 @@ export function ChatPage() {
                 className="link-button"
                 type="button"
                 onClick={() => void handleCheckSendResult()}
-                disabled={checkingSendResult || sending || regeneratingMessageId !== null}
+                disabled={checkingSendResult}
               >
                 {checkingSendResult ? '检查中...' : '再次检查'}
               </button>
               <button
                 className="link-button"
                 type="button"
-                onClick={() => void submitQuestion(draft.trim(), true)}
-                disabled={checkingSendResult || sending || regeneratingMessageId !== null || !draft.trim()}
+                onClick={() => void submitQuestion(uncertainSend.question, true)}
+                disabled={chatMutationBusy || checkingSendResult || !uncertainSend.question}
               >
                 确认重新发送
               </button>
@@ -539,11 +774,19 @@ export function ChatPage() {
 
       <div className="chat-shell">
         <aside className="chat-sidebar-panel">
+          {knowledgeBaseListError && (
+            <div className="empty-state" role="alert">
+              <p>{knowledgeBaseListError}</p>
+              <button className="secondary-button" type="button" onClick={() => void loadKnowledgeBases()}>
+                重试知识库列表
+              </button>
+            </div>
+          )}
           <label className="field-label">
             当前知识库
             <select
               value={currentKnowledgeBase?.id ?? ''}
-              disabled={knowledgeBases.length === 0}
+              disabled={chatMutationBusy || knowledgeBasesLoading || knowledgeBases.length === 0}
               onChange={(event) => handleKnowledgeBaseChange(event.target.value)}
             >
               {!currentKnowledgeBase && <option value="">请选择知识库</option>}
@@ -563,26 +806,41 @@ export function ChatPage() {
             </div>
           </div>
 
-          <button type="button" onClick={() => handleCreateSession()}>
+          <button type="button" onClick={() => handleCreateSession()} disabled={chatMutationBusy}>
             新建当前知识库会话
           </button>
 
           <div className="session-section-title">
             <strong>会话</strong>
-            <span>{sessionsForCurrentKnowledgeBase.length}</span>
+            <span>{sessionsLoading || sessionListError ? '--' : sessionsForCurrentKnowledgeBase.length}</span>
           </div>
 
           <div className="session-list chat-session-list">
-            {loading ? (
-              <LoadingSkeleton rows={4} columns={1} compact />
+            {sessionsLoading ? (
+              <LoadingSkeleton rows={4} columns={1} compact announce label="正在加载会话" />
+            ) : sessionListError ? (
+              <div className="empty-state" role="alert">
+                <p>{sessionListError}</p>
+                <button className="secondary-button" type="button" onClick={() => void loadSessions()}>
+                  重试会话列表
+                </button>
+              </div>
             ) : sessionsForCurrentKnowledgeBase.length === 0 ? (
               <div className="empty-state">当前知识库暂无会话。</div>
             ) : (
               sessionsForCurrentKnowledgeBase.map((session) => (
                 <Link
+                  aria-disabled={chatMutationBusy || undefined}
+                  aria-current={session.id === sessionId ? 'page' : undefined}
                   className={session.id === sessionId ? 'session-card active' : 'session-card'}
                   key={session.id}
+                  tabIndex={chatMutationBusy ? -1 : undefined}
                   to={`/chat/${session.id}`}
+                  onClick={(event) => {
+                    if (sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
+                      event.preventDefault();
+                    }
+                  }}
                 >
                   <strong>{session.title || '未命名会话'}</strong>
                   <span>{formatDateTime(session.updatedAt || session.createdAt)}</span>
@@ -599,7 +857,7 @@ export function ChatPage() {
               <p className="muted-text">
                 {archived
                   ? `已归档于 ${formatDateTime(currentSession?.archivedAt ?? '')}，详情仍可查看。`
-                  : 'Rerank 开启时，引用按后端进入回答 prompt 的结果展示。'}
+                  : '回答会根据当前知识库内容生成，并在有依据时展示来源。'}
               </p>
             </div>
             <div className="chat-thread-actions">
@@ -608,30 +866,42 @@ export function ChatPage() {
                   aria-label="会话标题"
                   value={titleDraft}
                   onChange={(event) => setTitleDraft(event.target.value)}
-                  disabled={!currentSession || updatingSession}
+                  disabled={!sessionDetailsReady || chatMutationBusy}
                 />
-                <button className="secondary-button" type="submit" disabled={!currentSession || updatingSession || !titleDraft.trim()}>
+                <button className="secondary-button" type="submit" disabled={!sessionDetailsReady || chatMutationBusy || !titleDraft.trim()}>
                   改名
                 </button>
               </form>
               <div className="chat-thread-stats" aria-label="会话统计">
-                <span>{questionCount} 问</span>
-                <span>{citationCount} 引用</span>
+                <span>{messageStatsKnown ? questionCount : '--'} 问</span>
+                <span>{messageStatsKnown ? citationCount : '--'} 引用</span>
               </div>
               <div className="table-actions">
                 <button
                   className="secondary-button"
                   type="button"
-                  onClick={() => setConfirmArchive(true)}
-                  disabled={!currentSession || updatingSession || archived}
+                  onClick={() => {
+                    if (sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
+                      return;
+                    }
+                    setSessionConfirmError('');
+                    setConfirmArchive(true);
+                  }}
+                  disabled={!sessionDetailsReady || chatMutationBusy || archived}
                 >
                   归档
                 </button>
                 <button
                   className="danger-button"
                   type="button"
-                  onClick={() => setConfirmDelete(true)}
-                  disabled={!currentSession || updatingSession}
+                  onClick={() => {
+                    if (sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
+                      return;
+                    }
+                    setSessionConfirmError('');
+                    setConfirmDelete(true);
+                  }}
+                  disabled={!sessionDetailsReady || chatMutationBusy}
                 >
                   删除
                 </button>
@@ -644,7 +914,15 @@ export function ChatPage() {
           <div ref={messagesRef} className={messagesLoading ? 'messages chat-thread is-switching' : 'messages chat-thread'}>
             {messagesLoading ? (
               <div className="message-loading-state">
-                <LoadingSkeleton rows={5} columns={1} compact />
+                <LoadingSkeleton rows={5} columns={1} compact announce label="正在加载消息" />
+              </div>
+            ) : messageLoadError ? (
+              <div className="chat-empty-state" role="alert">
+                <strong>无法显示会话消息</strong>
+                <p>{messageLoadError}</p>
+                <button className="secondary-button" type="button" onClick={() => sessionId && void loadSessionMessages(sessionId)}>
+                  重试消息
+                </button>
               </div>
             ) : messages.length === 0 && !pendingQuestion ? (
               <div className="chat-empty-state">
@@ -654,30 +932,25 @@ export function ChatPage() {
             ) : (
               messages.map((message) => (
                 <MessageBubble
-                  key={message.id}
+                  activeCitations={message.id === activeCitationMessageId}
                   message={message}
-                  citationsSelected={message.id === activeCitationMessage?.id}
-                  onSelectCitations={setSelectedCitationMessageId}
+                  key={message.id}
+                  onSelectCitations={() => setActiveCitationMessageId(message.id)}
                   onRegenerate={message.id === latestAssistantMessageId && !archived ? handleRegenerateMessage : undefined}
                   regenerating={regeneratingMessageId === message.id}
-                  regenerationDisabled={
-                    sending
-                    || checkingSendResult
-                    || Boolean(uncertainSend)
-                    || regeneratingMessageId !== null
-                  }
+                  regenerationDisabled={chatMutationBusy}
                 />
               ))
             )}
             {pendingQuestion && (
               <>
                 <article className="message-bubble user pending">
-                  <span className="message-role">User</span>
+                  <span className="message-role">用户</span>
                   <p>{pendingQuestion}</p>
                 </article>
                 <article className="message-bubble assistant pending">
-                  <span className="message-role">Assistant</span>
-                  <p>正在检索知识库并生成回答...</p>
+                  <span className="message-role">助手</span>
+                  <p role="status">正在检索知识库并生成回答...</p>
                   <LoadingSkeleton rows={2} columns={1} compact />
                 </article>
               </>
@@ -690,37 +963,40 @@ export function ChatPage() {
               placeholder="继续追问当前知识库..."
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              disabled={sending || regeneratingMessageId !== null || !canSend}
+              disabled={chatMutationBusy || !canSend || Boolean(uncertainSend)}
               rows={2}
             />
-            <button
-              type="submit"
-              disabled={
-                sending
-                || checkingSendResult
-                || regeneratingMessageId !== null
-                || !draft.trim()
-                || !canSend
-                || Boolean(uncertainSend)
-              }
-            >
+            <button type="submit" disabled={chatMutationBusy || !draft.trim() || !canSend || Boolean(uncertainSend)}>
               {sending ? '发送中...' : '发送'}
             </button>
           </form>
         </section>
 
-        <aside className="citation-panel chat-citation-panel">
+        <aside aria-label="引用来源" className="citation-panel chat-citation-panel">
           <div>
             <h2>引用来源</h2>
-            <p className="muted-text">仅展示后端返回的 citations。</p>
+            <p className="muted-text">回答有依据时会在这里列出来源。</p>
           </div>
 
           <div className="citation-list" id="chat-citation-list">
-            {activeCitations.length === 0 ? (
+            {messagesLoading ? (
+              <LoadingSkeleton rows={3} columns={1} compact />
+            ) : messageLoadError ? (
+              <div className="empty-state">消息加载失败，引用暂不可用。</div>
+            ) : pendingQuestion ? (
+              <div className="empty-state">回答生成完成后会在这里显示引用。</div>
+            ) : messages.length === 0 ? (
+              <div className="empty-state">回答产生引用后会在这里显示。</div>
+            ) : activeCitations.length === 0 ? (
               <div className="empty-state">当前知识库中未找到足够依据。</div>
             ) : (
               activeCitations.map((citation, index) => (
-                <CitationCard citation={citation} index={index + 1} key={`${citation.documentId}-${citation.chunkId}-${index}`} />
+                <CitationCard
+                  citation={citation}
+                  index={index + 1}
+                  key={`${citation.documentId}-${citation.chunkId}-${index}`}
+                  knowledgeBaseId={currentKnowledgeBase?.id}
+                />
               ))
             )}
           </div>
@@ -732,8 +1008,12 @@ export function ChatPage() {
           title="归档会话"
           description={`确认归档“${currentSession.title || '未命名会话'}”？归档后默认不再出现在会话列表中。`}
           confirmLabel="归档"
-          busy={updatingSession}
-          onCancel={() => setConfirmArchive(false)}
+          busy={chatMutationBusy}
+          error={sessionConfirmError}
+          onCancel={() => {
+            setSessionConfirmError('');
+            setConfirmArchive(false);
+          }}
           onConfirm={handleArchiveSession}
         />
       )}
@@ -742,8 +1022,12 @@ export function ChatPage() {
           title="删除会话"
           description={`确认删除“${currentSession.title || '未命名会话'}”？消息会一并删除且不可恢复。`}
           confirmLabel="删除"
-          busy={updatingSession}
-          onCancel={() => setConfirmDelete(false)}
+          busy={chatMutationBusy}
+          error={sessionConfirmError}
+          onCancel={() => {
+            setSessionConfirmError('');
+            setConfirmDelete(false);
+          }}
           onConfirm={handleDeleteSession}
         />
       )}
@@ -760,42 +1044,37 @@ function mergeSession(sessions: ChatSession[], nextSession: ChatSession): ChatSe
 }
 
 function MessageBubble({
+  activeCitations,
   message,
-  citationsSelected = false,
   onSelectCitations,
   onRegenerate,
   regenerating = false,
   regenerationDisabled = false,
 }: {
+  activeCitations: boolean;
   message: ChatMessage;
-  citationsSelected?: boolean;
-  onSelectCitations?: (messageId: string) => void;
+  onSelectCitations: () => void;
   onRegenerate?: (messageId: string) => void;
   regenerating?: boolean;
   regenerationDisabled?: boolean;
 }) {
   const citationSummary =
     message.citations.length > 0
-      ? `引用 ${message.citations.length} 条 · 最高 rerankScore ${formatNullableScore(highestRerankScore(message.citations))}`
+      ? `引用 ${message.citations.length} 条`
       : '当前知识库中未找到足够依据。';
-  const messageClassName = [
-    'message-bubble',
-    message.role === 'assistant' ? 'assistant' : 'user',
-    message.role === 'assistant' && citationsSelected ? 'is-citation-active' : '',
-  ].filter(Boolean).join(' ');
 
   return (
-    <article className={messageClassName}>
-      <span className="message-role">{message.role === 'assistant' ? 'Assistant' : 'User'}</span>
+    <article className={message.role === 'assistant' ? 'message-bubble assistant' : 'message-bubble user'}>
+      <span className="message-role">{message.role === 'assistant' ? '助手' : '用户'}</span>
       <p>{message.content}</p>
       {message.role === 'assistant' && (
         <button
           aria-controls="chat-citation-list"
           aria-label={`查看回答“${citationLabel(message.content)}”的引用`}
-          aria-pressed={citationsSelected}
+          aria-pressed={activeCitations}
           className="citation-summary citation-summary-button"
-          onClick={() => onSelectCitations?.(message.id)}
           type="button"
+          onClick={onSelectCitations}
         >
           {citationSummary}
         </button>
@@ -821,30 +1100,46 @@ function citationLabel(content: string): string {
   return normalized ? normalized.slice(0, 40) : '该回答';
 }
 
-function CitationCard({ citation, index }: { citation: Citation; index: number }) {
+function CitationCard({
+  citation,
+  index,
+  knowledgeBaseId,
+}: {
+  citation: Citation;
+  index: number;
+  knowledgeBaseId?: string;
+}) {
+  const pageLabel = citation.pageNumber ? `第 ${citation.pageNumber} 页` : '无页码';
+  const sourcePath = knowledgeBaseId
+    ? `/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents?documentId=${encodeURIComponent(citation.documentId)}&chunkId=${encodeURIComponent(citation.chunkId)}`
+    : null;
+
   return (
     <article className="citation-card enhanced-citation-card">
       <header>
-        <strong>{index}. {citation.filename}</strong>
-        <span>{citation.pageNumber ? `p.${citation.pageNumber}` : '无页码'}</span>
+        {sourcePath ? (
+          <Link
+            aria-label={`打开来源：${citation.filename}，${pageLabel}`}
+            className="citation-source-link"
+            to={sourcePath}
+          >
+            <strong>{index}. {citation.filename}</strong>
+            <span>{citation.pageNumber ? `p.${citation.pageNumber}` : '无页码'}</span>
+          </Link>
+        ) : (
+          <>
+            <strong>{index}. {citation.filename}</strong>
+            <span>{citation.pageNumber ? `p.${citation.pageNumber}` : '无页码'}</span>
+          </>
+        )}
       </header>
       <p>{citation.content}</p>
       <div className="citation-score-grid">
-        <span>vector {formatScore(citation.vectorScore)}</span>
-        <span>rerank {formatNullableScore(citation.rerankScore)}</span>
+        <span>相关度 {formatScore(citation.vectorScore)}</span>
+        <span>排序分 {formatNullableScore(citation.rerankScore)}</span>
       </div>
     </article>
   );
-}
-
-function highestRerankScore(citations: Citation[]): number | null {
-  const values = citations
-    .map((citation) => citation.rerankScore)
-    .filter((score): score is number => typeof score === 'number');
-  if (values.length === 0) {
-    return null;
-  }
-  return Math.max(...values);
 }
 
 function formatScore(value: number): string {
@@ -866,4 +1161,8 @@ function formatDateTime(value: string): string {
 
 function errorMessage(err: unknown, fallback: string): string {
   return getErrorMessage(err, fallback);
+}
+
+function isDefinitiveSendFailure(error: ApiError): boolean {
+  return error.status < 500 || error.code === 'CHAT_COMPLETION_FAILED' || error.code === 'RERANK_FAILED';
 }

@@ -19,16 +19,39 @@ func NewGlobalSearchService(search *repository.GlobalSearchRepository) *GlobalSe
 	return &GlobalSearchService{search: search}
 }
 
-func (s *GlobalSearchService) Search(ctx context.Context, ownerID uuid.UUID, query string) (*dto.GlobalSearchResponse, error) {
-	query = strings.TrimSpace(query)
+func (s *GlobalSearchService) Search(ctx context.Context, ownerID uuid.UUID, req dto.GlobalSearchRequest) (*dto.GlobalSearchResponse, error) {
+	query := strings.TrimSpace(req.Query)
 	if query == "" {
-		return &dto.GlobalSearchResponse{Items: []dto.GlobalSearchResultResponse{}}, nil
+		return nil, apperror.Validation(map[string]any{"q": "查询不能为空"})
 	}
-	items, err := s.search.Search(ctx, ownerID, query, 20)
+	resultType := strings.TrimSpace(req.Type)
+	if resultType == "" {
+		resultType = "all"
+	}
+	if resultType != "all" && resultType != "knowledgeBase" && resultType != "document" && resultType != "chunk" {
+		return nil, apperror.Validation(map[string]any{"type": "type must be one of all, knowledgeBase, document, chunk"})
+	}
+	page := req.Page
+	if page <= 0 {
+		page = 1
+	}
+	pageSize := req.PageSize
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	items, total, err := s.search.Search(ctx, ownerID, query, resultType, (page-1)*pageSize, pageSize)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
-	res := dto.GlobalSearchResponse{Items: make([]dto.GlobalSearchResultResponse, 0, len(items))}
+	res := dto.GlobalSearchResponse{
+		Items:    make([]dto.GlobalSearchResultResponse, 0, len(items)),
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}
 	for i := range items {
 		res.Items = append(res.Items, toGlobalSearchResponse(&items[i]))
 	}

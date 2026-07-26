@@ -25,7 +25,8 @@ type ChatSessionListResponse struct {
 }
 
 type SendChatMessageRequest struct {
-	Content string `json:"content" binding:"required"`
+	Content         string `json:"content" binding:"required"`
+	ClientRequestID string `json:"clientRequestId" binding:"required,uuid"`
 }
 
 type CitationResponse struct {
@@ -39,12 +40,13 @@ type CitationResponse struct {
 }
 
 type ChatMessageResponse struct {
-	ID        string             `json:"id"`
-	SessionID string             `json:"sessionId"`
-	Role      string             `json:"role"`
-	Content   string             `json:"content"`
-	Citations []CitationResponse `json:"citations"`
-	CreatedAt time.Time          `json:"createdAt"`
+	ID              string             `json:"id"`
+	SessionID       string             `json:"sessionId"`
+	ClientRequestID *string            `json:"clientRequestId"`
+	Role            string             `json:"role"`
+	Content         string             `json:"content"`
+	Citations       []CitationResponse `json:"citations"`
+	CreatedAt       time.Time          `json:"createdAt"`
 }
 
 type ChatMessageListResponse struct {
@@ -52,9 +54,12 @@ type ChatMessageListResponse struct {
 }
 
 type SendChatMessageResponse struct {
-	Answer         string                  `json:"answer"`
-	Citations      []CitationResponse      `json:"citations"`
-	RerankFallback *RerankFallbackResponse `json:"rerankFallback"`
+	ClientRequestID  string                  `json:"clientRequestId"`
+	UserMessage      ChatMessageResponse     `json:"userMessage"`
+	AssistantMessage ChatMessageResponse     `json:"assistantMessage"`
+	Answer           string                  `json:"answer"`
+	Citations        []CitationResponse      `json:"citations"`
+	RerankFallback   *RerankFallbackResponse `json:"rerankFallback"`
 }
 
 type RegenerateChatMessageResponse struct {

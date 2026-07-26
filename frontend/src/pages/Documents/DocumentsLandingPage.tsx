@@ -1,12 +1,11 @@
 import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
 
 import {
   batchDeleteDocuments,
   batchReprocessDocuments,
-  getWorkspacePreference,
   listGlobalDocuments,
-  listKnowledgeBaseCategories,
   listKnowledgeBases,
   uploadGlobalDocument,
 } from '../../api/resources';
@@ -16,42 +15,32 @@ import { WorkspaceShell } from '../../components/WorkspaceShell';
 import { DocumentDetailDrawer } from './DocumentDetailDrawer';
 import { DocumentProgress } from './DocumentProgress';
 import { DocumentRecycleBinDrawer } from './DocumentRecycleBinDrawer';
+import {
+  documentStatuses,
+  documentStatusClass,
+  documentStatusLabel,
+  formatDocumentBytes,
+  formatDocumentDateTime,
+  isTerminalDocumentStatus,
+} from './documentDisplay';
 import type {
   DocumentSort,
   DocumentStatus,
   GlobalDocumentItem,
   KnowledgeBase,
-  KnowledgeBaseCategory,
-  KnowledgeBaseWorkspacePreference,
 } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
 
 const statusOptions: Array<DocumentStatus | ''> = [
   '',
-  'uploaded',
-  'parsing',
-  'chunking',
-  'embedding',
-  'completed',
-  'failed',
+  ...documentStatuses,
 ];
 
-const fallbackPreference: KnowledgeBaseWorkspacePreference = {
-  viewMode: 'table',
-  scope: 'all',
-  sort: 'updatedAt_desc',
-  visibility: 'all',
-  expandedCategoryIds: [],
-};
-
 export function DocumentsLandingPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const documentRequestIdRef = useRef(0);
-  const documentRequestsInFlightRef = useRef(0);
-  const explicitRefreshInFlightRef = useRef(false);
-  const mountedRef = useRef(true);
-  const [categories, setCategories] = useState<KnowledgeBaseCategory[]>([]);
-  const [expandedIds, setExpandedIds] = useState<string[]>([]);
+  const documentRequestRef = useRef(0);
+  const knowledgeBaseRequestRef = useRef(0);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [documents, setDocuments] = useState<GlobalDocumentItem[]>([]);
   const [uploadKnowledgeBaseId, setUploadKnowledgeBaseId] = useState('');
@@ -67,78 +56,62 @@ export function DocumentsLandingPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [loadError, setLoadError] = useState('');
-  const [actionError, setActionError] = useState('');
-  const [detailDocumentId, setDetailDocumentId] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [uploadTargetError, setUploadTargetError] = useState('');
+  const [knowledgeBasesLoading, setKnowledgeBasesLoading] = useState(true);
   const [showRecycleBin, setShowRecycleBin] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [deleteTargetIds, setDeleteTargetIds] = useState<string[] | null>(null);
+  const [deleteError, setDeleteError] = useState('');
   const debouncedQuery = useDebouncedValue(queryDraft.trim(), 260);
+  const detailDocumentId = searchParams.get('documentId');
 
-  const loadPage = useCallback(async (options: { background?: boolean } = {}) => {
-    if (options.background && documentRequestsInFlightRef.current > 0) {
-      return;
-    }
-    documentRequestsInFlightRef.current += 1;
-    const requestId = documentRequestIdRef.current + 1;
-    documentRequestIdRef.current = requestId;
+  const loadPage = useCallback(async () => {
+    const request = ++documentRequestRef.current;
+    setLoading(true);
+    setError('');
     try {
-      const responses = await Promise.all([
-        listGlobalDocuments({
-          q: debouncedQuery,
-          knowledgeBaseId: knowledgeBaseFilter,
-          status,
-          fileType,
-          sort,
-          page,
-          pageSize,
-        }),
-        listKnowledgeBases({ pageSize: 100 }),
-      ]).catch((err) => {
-        if (mountedRef.current && documentRequestIdRef.current === requestId) {
-          throw err;
-        }
-        return null;
+      const documentResponse = await listGlobalDocuments({
+        q: debouncedQuery,
+        knowledgeBaseId: knowledgeBaseFilter,
+        status,
+        fileType,
+        sort,
+        page,
+        pageSize,
       });
-      if (!responses || !mountedRef.current || documentRequestIdRef.current !== requestId) {
-        return;
+      if (documentRequestRef.current === request) {
+        setDocuments(documentResponse.items);
+        setTotal(documentResponse.total);
+        setSelectedIds((current) => current.filter((id) => (
+          documentResponse.items.some((document) => document.id === id)
+        )));
       }
-      const [documentResponse, kbResponse] = responses;
-      setLoadError('');
-      setDocuments(documentResponse.items);
-      setTotal(documentResponse.total);
-      setKnowledgeBases(kbResponse.items);
-      setUploadKnowledgeBaseId((current) => current || kbResponse.items[0]?.id || '');
-      setSelectedIds((current) => current.filter((id) => documentResponse.items.some((document) => document.id === id)));
+    } catch (err) {
+      if (documentRequestRef.current === request) {
+        setError(errorMessage(err, '全局文档加载失败'));
+      }
     } finally {
-      documentRequestsInFlightRef.current -= 1;
+      if (documentRequestRef.current === request) {
+        setLoading(false);
+      }
     }
   }, [debouncedQuery, fileType, knowledgeBaseFilter, page, pageSize, sort, status]);
 
   const refreshPage = useCallback(async (
-    fallback: string,
-    options: { background?: boolean; explicit?: boolean } = {},
+    fallback = '文档列表刷新失败',
+    options: { explicit?: boolean } = {},
   ) => {
-    if (options.explicit && explicitRefreshInFlightRef.current) {
-      return;
-    }
     if (options.explicit) {
-      explicitRefreshInFlightRef.current = true;
       setRefreshing(true);
-      setActionError('');
     }
     try {
-      await loadPage({ background: options.background });
+      await loadPage();
     } catch (err) {
-      if (mountedRef.current) {
-        setLoadError(errorMessage(err, fallback));
-      }
+      setError(errorMessage(err, fallback));
     } finally {
       if (options.explicit) {
-        explicitRefreshInFlightRef.current = false;
-        if (mountedRef.current) {
-          setRefreshing(false);
-        }
+        setRefreshing(false);
       }
     }
   }, [loadPage]);
@@ -147,77 +120,54 @@ export function DocumentsLandingPage() {
     try {
       await loadPage();
     } catch (err) {
-      if (mountedRef.current) {
-        setLoadError(`${successLabel}，但列表刷新失败：${errorMessage(err, '请求失败')}`);
-      }
+      setError(`${successLabel}，但页面数据刷新失败：${errorMessage(err, '请求失败')}`);
     }
   }, [loadPage]);
 
-  const hasProcessingDocuments = useMemo(
-    () => documents.some((document) => document.status !== 'completed' && document.status !== 'failed'),
-    [documents],
-  );
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      documentRequestIdRef.current += 1;
-    };
-  }, []);
-
-  useEffect(() => {
-    let mounted = true;
-    setLoading(true);
-
-    refreshPage('全局文档加载失败')
-      .finally(() => {
-        if (mounted) {
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, [refreshPage]);
-
-  useEffect(() => {
-    if (!hasProcessingDocuments) {
-      return;
+  const loadKnowledgeBases = useCallback(async () => {
+    const request = ++knowledgeBaseRequestRef.current;
+    setKnowledgeBasesLoading(true);
+    setUploadTargetError('');
+    try {
+      const response = await listKnowledgeBases({ pageSize: 100 });
+      if (knowledgeBaseRequestRef.current === request) {
+        setKnowledgeBases(response.items);
+        setUploadKnowledgeBaseId((current) => (
+          response.items.some((item) => item.id === current) ? current : response.items[0]?.id || ''
+        ));
+      }
+    } catch (err) {
+      if (knowledgeBaseRequestRef.current === request) {
+        setKnowledgeBases([]);
+        setUploadKnowledgeBaseId('');
+        setUploadTargetError(errorMessage(err, '上传目标加载失败'));
+      }
+    } finally {
+      if (knowledgeBaseRequestRef.current === request) {
+        setKnowledgeBasesLoading(false);
+      }
     }
-
-    let active = true;
-    const timer = window.setInterval(() => {
-      if (active) {
-        void refreshPage('文档状态刷新失败', { background: true });
-      }
-    }, 3000);
-
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [hasProcessingDocuments, refreshPage]);
+  }, []);
 
   useEffect(() => {
-    let mounted = true;
+    void loadPage();
+  }, [loadPage]);
 
-    Promise.all([
-      listKnowledgeBaseCategories().catch(() => ({ items: [] })),
-      getWorkspacePreference().catch(() => fallbackPreference),
-    ]).then(([categoryResponse, preference]) => {
-      if (!mounted) {
-        return;
-      }
-      setCategories(categoryResponse.items);
-      setExpandedIds(preference.expandedCategoryIds);
-    });
+  useEffect(() => {
+    void loadKnowledgeBases();
+  }, [loadKnowledgeBases]);
 
-    return () => {
-      mounted = false;
-    };
-  }, []);
+  function openDocumentDetail(documentId: string) {
+    const next = new URLSearchParams(searchParams);
+    next.set('documentId', documentId);
+    setSearchParams(next);
+  }
+
+  function closeDocumentDetail() {
+    const next = new URLSearchParams(searchParams);
+    next.delete('documentId');
+    setSearchParams(next, { replace: true });
+  }
 
   const fileTypes = useMemo(
     () => Array.from(new Set(documents.map((document) => document.fileType).filter(Boolean))).sort(),
@@ -227,7 +177,7 @@ export function DocumentsLandingPage() {
   const completedCount = documents.filter((document) => document.status === 'completed').length;
   const failedCount = documents.filter((document) => document.status === 'failed').length;
   const processingCount = documents.filter(
-    (document) => document.status !== 'completed' && document.status !== 'failed',
+    (document) => !isTerminalDocumentStatus(document.status),
   ).length;
   const currentUploadTarget = knowledgeBases.find((item) => item.id === uploadKnowledgeBaseId);
   const activeFilterCount = [queryDraft.trim(), knowledgeBaseFilter, status, fileType].filter(Boolean).length;
@@ -241,13 +191,13 @@ export function DocumentsLandingPage() {
     }
 
     setUploading(true);
-    setActionError('');
+    setError('');
 
 	try {
 	  try {
 		await uploadGlobalDocument(uploadKnowledgeBaseId, file);
 	  } catch (err) {
-		setActionError(errorMessage(err, '全局上传失败'));
+		setError(errorMessage(err, '全局上传失败'));
 		return;
 	  }
 	  await refreshAfterAction('文档已上传');
@@ -281,13 +231,13 @@ export function DocumentsLandingPage() {
     }
 
     setSubmitting(true);
-    setActionError('');
+    setError('');
 
 	try {
 	  try {
 		await batchReprocessDocuments(selectedIds);
 	  } catch (err) {
-		setActionError(errorMessage(err, '批量重处理失败'));
+		setError(errorMessage(err, '批量重处理失败'));
 		return;
 	  }
 	  setSelectedIds([]);
@@ -303,19 +253,16 @@ export function DocumentsLandingPage() {
     }
 
     setSubmitting(true);
-    setActionError('');
+    setDeleteError('');
 
-	try {
-	  try {
-		await batchDeleteDocuments(deleteTargetIds);
-	  } catch (err) {
-		setActionError(errorMessage(err, '批量删除失败'));
-		return;
-	  }
-	  setDeleteTargetIds(null);
-	  setSelectedIds([]);
-	  await refreshAfterAction('批量删除已完成');
-	} finally {
+    try {
+      await batchDeleteDocuments(deleteTargetIds);
+      setDeleteTargetIds(null);
+      setSelectedIds([]);
+      await loadPage();
+    } catch (err) {
+      setDeleteError(errorMessage(err, '批量删除失败'));
+    } finally {
       setSubmitting(false);
     }
   }
@@ -323,7 +270,7 @@ export function DocumentsLandingPage() {
   const listRefreshing = (loading || refreshing) && documents.length > 0;
 
   return (
-    <WorkspaceShell active="documents" categories={categories} expandedIds={expandedIds}>
+    <WorkspaceShell active="documents">
       <div className="documents-overview-page">
         <section className="document-command-band">
           <div className="document-command-main">
@@ -340,7 +287,7 @@ export function DocumentsLandingPage() {
                 aria-label="上传目标"
                 value={uploadKnowledgeBaseId}
                 onChange={(event) => setUploadKnowledgeBaseId(event.target.value)}
-                disabled={knowledgeBases.length === 0}
+                disabled={knowledgeBasesLoading || knowledgeBases.length === 0}
               >
                 {knowledgeBases.map((item) => (
                   <option key={item.id} value={item.id}>
@@ -350,8 +297,20 @@ export function DocumentsLandingPage() {
               </select>
             </label>
             <p className="document-aside-note">
-              {currentUploadTarget ? `将上传到：${currentUploadTarget.name}` : '暂无可上传的知识库'}
+              {knowledgeBasesLoading
+                ? '正在加载上传目标...'
+                : currentUploadTarget
+                  ? `将上传到：${currentUploadTarget.name}`
+                  : '暂无可上传的知识库'}
             </p>
+            {uploadTargetError && (
+              <div className="document-upload-target-error" role="alert">
+                <span>{uploadTargetError}</span>
+                <button className="link-button" type="button" onClick={() => void loadKnowledgeBases()}>
+                  重试
+                </button>
+              </div>
+            )}
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
@@ -359,6 +318,11 @@ export function DocumentsLandingPage() {
             >
               {uploading ? '上传中...' : '导入文档'}
             </button>
+            {!knowledgeBasesLoading && knowledgeBases.length === 0 && !uploadTargetError && (
+              <Link className="button-link" to="/knowledge-bases?intent=create">
+                新建知识库后导入
+              </Link>
+            )}
             <input
               ref={fileInputRef}
               accept=".txt,.md,.pdf,text/plain,text/markdown,application/pdf"
@@ -376,9 +340,7 @@ export function DocumentsLandingPage() {
           <MetricCard label="失败" value={failedCount} tone="danger" />
         </div>
 
-        {(actionError || loadError) && (
-          <p className="document-alert error-text" role="alert">{actionError || loadError}</p>
-        )}
+        {error && <p className="document-alert error-text" role="alert">{error}</p>}
 
         <div
           aria-busy={loading || refreshing}
@@ -431,7 +393,7 @@ export function DocumentsLandingPage() {
             >
               {statusOptions.map((item) => (
                 <option key={item || 'all'} value={item}>
-                  {item ? statusLabel(item) : '全部状态'}
+                  {item ? documentStatusLabel(item) : '全部状态'}
                 </option>
               ))}
             </select>
@@ -472,7 +434,7 @@ export function DocumentsLandingPage() {
               <button
                 className="danger-button"
                 type="button"
-                onClick={() => setDeleteTargetIds(selectedIds)}
+                onClick={() => { setDeleteError(''); setDeleteTargetIds(selectedIds); }}
                 disabled={submitting}
               >
                 批量删除
@@ -481,7 +443,7 @@ export function DocumentsLandingPage() {
           )}
 
         {loading && documents.length === 0 ? (
-          <LoadingSkeleton rows={5} columns={9} />
+          <LoadingSkeleton rows={5} columns={8} announce />
         ) : documents.length === 0 ? (
           <div className="empty-state">当前筛选下没有文档。选择知识库后导入 txt、md 或 pdf。</div>
         ) : (
@@ -526,23 +488,17 @@ export function DocumentsLandingPage() {
                     </td>
                     <td data-label="知识库">{document.knowledgeBaseName}</td>
                     <td data-label="类型">{document.fileType}</td>
-                    <td data-label="大小">{formatBytes(document.fileSize)}</td>
+                    <td data-label="大小">{formatDocumentBytes(document.fileSize)}</td>
                     <td data-label="状态">
-                      <span className={`status-pill status-${statusClass(document.status)}`}>
-                        {statusLabel(document.status)}
+                      <span className={`status-pill status-${documentStatusClass(document.status)}`}>
+                        {documentStatusLabel(document.status)}
                       </span>
                       <DocumentProgress compact document={document} />
                     </td>
-                    <td className="document-error-cell" data-label="错误信息">{document.errorMessage || '-'}</td>
-                    <td data-label="更新时间">{formatDateTime(document.updatedAt || document.createdAt)}</td>
+                    <td data-label="更新时间">{formatDocumentDateTime(document.updatedAt || document.createdAt)}</td>
                     <td data-label="操作">
                       <div className="table-actions">
-                        <button
-                          aria-label={`查看 ${document.filename}`}
-                          className="link-button"
-                          type="button"
-                          onClick={() => setDetailDocumentId(document.id)}
-                        >
+                        <button className="link-button" type="button" onClick={() => openDocumentDetail(document.id)}>
                           查看
                         </button>
                         <Link
@@ -565,14 +521,14 @@ export function DocumentsLandingPage() {
         <footer className="workspace-pagination document-pagination">
           <span>第 {page} / {totalPages} 页</span>
           <div className="pager">
-            <button className="secondary-button" type="button" disabled={page <= 1} onClick={() => setPage(page - 1)}>
-              ‹
+            <button aria-label="上一页" className="secondary-button" type="button" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+              <ChevronLeft aria-hidden="true" />
             </button>
             <button className="secondary-button active-page" type="button">
               {page}
             </button>
-            <button className="secondary-button" type="button" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>
-              ›
+            <button aria-label="下一页" className="secondary-button" type="button" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>
+              <ChevronRight aria-hidden="true" />
             </button>
             <select
               aria-label="每页数量"
@@ -595,8 +551,8 @@ export function DocumentsLandingPage() {
           <DocumentDetailDrawer
             documentId={detailDocumentId}
             knowledgeBaseName={documents.find((document) => document.id === detailDocumentId)?.knowledgeBaseName}
-			onChanged={() => void refreshPage('文档列表刷新失败')}
-            onClose={() => setDetailDocumentId(null)}
+            onChanged={() => void loadPage()}
+            onClose={closeDocumentDetail}
           />
         )}
 
@@ -613,7 +569,8 @@ export function DocumentsLandingPage() {
             description={`确认删除选中的 ${deleteTargetIds.length} 个文档？这些文档会进入回收站。`}
             confirmLabel="删除"
             busy={submitting}
-            onCancel={() => setDeleteTargetIds(null)}
+            error={deleteError}
+            onCancel={() => { setDeleteError(''); setDeleteTargetIds(null); }}
             onConfirm={handleBatchDelete}
           />
         )}
@@ -629,45 +586,6 @@ function MetricCard({ label, value, tone }: { label: string; value: number; tone
       <strong>{value}</strong>
     </div>
   );
-}
-
-function statusClass(status: DocumentStatus): string {
-  if (status === 'completed' || status === 'failed') {
-    return status;
-  }
-  return 'processing';
-}
-
-function statusLabel(status: DocumentStatus): string {
-  const labels: Record<DocumentStatus, string> = {
-    uploaded: '已上传',
-    parsing: '解析中',
-    chunking: '切分中',
-    embedding: '向量化',
-    completed: '已完成',
-    failed: '失败',
-  };
-  return labels[status];
-}
-
-function formatBytes(value: number): string {
-  if (value < 1024) {
-    return `${value} B`;
-  }
-  if (value < 1024 * 1024) {
-    return `${(value / 1024).toFixed(1)} KB`;
-  }
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function formatDateTime(value: string): string {
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value));
 }
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {

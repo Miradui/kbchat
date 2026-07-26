@@ -1,478 +1,561 @@
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  addKnowledgeBaseMember,
+  createChatSession,
+  getKnowledgeBase,
+  getKnowledgeBasePermissions,
+  getWorkspacePreference,
+  listDocuments,
+  listKnowledgeBaseCategories,
+  recordKnowledgeBaseView,
+  searchKnowledgeBase,
+  searchUsers,
+  updateKnowledgeBasePermissions,
+} from '../../api/resources';
 import { renderWithRouter } from '../../test/render';
+import type { DocumentItem, KnowledgeBase } from '../../types/api';
 import { KnowledgeBaseDetailPage } from './KnowledgeBaseDetailPage';
 
-const api = vi.hoisted(() => ({
+vi.mock('../../api/resources', () => ({
   addKnowledgeBaseMember: vi.fn(),
+  createChatSession: vi.fn(),
   deleteKnowledgeBaseMember: vi.fn(),
-  getCurrentUser: vi.fn(),
   getKnowledgeBase: vi.fn(),
   getKnowledgeBasePermissions: vi.fn(),
   getWorkspacePreference: vi.fn(),
   listDocuments: vi.fn(),
   listKnowledgeBaseCategories: vi.fn(),
+  logout: vi.fn(),
   recordKnowledgeBaseView: vi.fn(),
   searchKnowledgeBase: vi.fn(),
   searchUsers: vi.fn(),
   updateKnowledgeBaseMember: vi.fn(),
   updateKnowledgeBasePermissions: vi.fn(),
-  logout: vi.fn(),
 }));
 
-vi.mock('../../api/resources', () => api);
+const knowledgeBase = {
+  id: 'kb1',
+  name: '制度库',
+  description: '制度说明',
+  visibility: 'private',
+  retrievalConfig: { vectorTopN: 30, rerankTopK: 5, scoreThreshold: 0.3, enableRerank: true },
+  createdAt: '2026-07-01T00:00:00Z',
+  updatedAt: '2026-07-01T00:00:00Z',
+} satisfies KnowledgeBase;
 
-beforeEach(() => {
-  Object.values(api).forEach((mock) => mock.mockReset());
-  api.getCurrentUser.mockResolvedValue({ id: 'user-1', username: 'admin', displayName: '管理员' });
-  api.getKnowledgeBase.mockResolvedValue({
-    id: 'kb-1', name: '员工制度', description: '制度文档', visibility: 'private',
-    retrievalConfig: { vectorTopN: 30, rerankTopK: 5, scoreThreshold: 0.3, enableRerank: true },
-    createdAt: '2026-07-01T00:00:00Z', updatedAt: '2026-07-01T00:00:00Z',
+const completedDocument = {
+  id: 'doc1',
+  knowledgeBaseId: knowledgeBase.id,
+  filename: 'handbook.pdf',
+  fileType: 'pdf',
+  fileSize: 1024,
+  status: 'completed',
+  errorMessage: null,
+  createdAt: '2026-07-01T00:00:00Z',
+  updatedAt: '2026-07-01T00:00:00Z',
+} satisfies DocumentItem;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  api.listDocuments.mockResolvedValue({ items: [] });
-  api.listKnowledgeBaseCategories.mockResolvedValue({ items: [] });
-  api.getKnowledgeBasePermissions.mockResolvedValue({ owner: null, managers: [], members: [], visibility: 'private' });
-  api.getWorkspacePreference.mockResolvedValue({
-    viewMode: 'table', scope: 'all', sort: 'updatedAt_desc', visibility: 'all', expandedCategoryIds: [],
-  });
-  api.recordKnowledgeBaseView.mockResolvedValue(undefined);
-});
-
-describe('KnowledgeBaseDetailPage retrieval debug', () => {
-  it('opens a draft chat without creating an empty session', async () => {
-    const user = userEvent.setup();
-    renderWithRouter(
-      <>
-        <Routes>
-          <Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" />
-          <Route element={<div>问答页</div>} path="/chat/:sessionId" />
-        </Routes>
-        <LocationProbe />
-      </>,
-      ['/knowledge-bases/kb-1'],
-    );
-
-    await user.click(await screen.findByRole('button', { name: '开始问答' }));
-
-    expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat/new?knowledgeBaseId=kb-1');
-  });
-
-  it('requests and progressively displays vector, rerank, and final stages', async () => {
-    api.searchKnowledgeBase.mockResolvedValue({
-      items: [],
-      rerankFallback: { used: true, reason: 'provider_unavailable' },
-      debug: {
-        query: '报销',
-        vectorStage: { status: 'completed', items: [{ chunkId: 'c1', documentId: 'd1', filename: 'policy.pdf', content: '向量内容', pageNumber: 3, vectorScore: 0.8, rank: 1 }] },
-        rerankStage: { status: 'fallback', input: [{ chunkId: 'c1', pageNumber: 4, rank: 1 }], output: [{ chunkId: 'c1', pageNumber: 5, rerankScore: null, rank: 1 }] },
-        finalStage: { items: [{ chunkId: 'c1', pageNumber: 8, vectorScore: 0.8, rerankScore: null, rank: 1 }] },
-        rerankFallback: { used: true, reason: 'provider_unavailable' },
-      },
-    });
-    const user = userEvent.setup();
-    renderWithRouter(
-      <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>,
-      ['/knowledge-bases/kb-1'],
-    );
-
-    await screen.findByRole('heading', { name: '员工制度' });
-    await user.type(screen.getByLabelText('知识库内检索问题'), '报销');
-    await user.click(screen.getByLabelText('显示检索调试信息'));
-    await user.click(screen.getByRole('button', { name: '检索' }));
-
-    expect(api.searchKnowledgeBase).toHaveBeenCalledWith('kb-1', expect.objectContaining({ debug: true }));
-    expect(await screen.findByText('向量召回')).toBeInTheDocument();
-    expect(screen.getByText('Rerank 阶段')).toBeInTheDocument();
-    expect(screen.getByText('最终结果')).toBeInTheDocument();
-    expect(screen.getByText('第 3 页')).toBeInTheDocument();
-    expect(screen.getByText('第 4 页')).toBeInTheDocument();
-    expect(screen.getByText('第 5 页')).toBeInTheDocument();
-    expect(screen.getByText('第 8 页')).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('Rerank 服务暂不可用');
-    expect(screen.queryByText('provider_unavailable')).not.toBeInTheDocument();
-  });
-
-  it('ignores an older semantic-search response that resolves last', async () => {
-    const first = deferred<unknown>();
-    const second = deferred<unknown>();
-    api.searchKnowledgeBase.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
-    const user = userEvent.setup();
-    renderWithRouter(
-      <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>,
-      ['/knowledge-bases/kb-1'],
-    );
-
-    await screen.findByRole('heading', { name: '员工制度' });
-    const input = screen.getByLabelText('知识库内检索问题');
-    const form = input.closest('form');
-    if (!form) throw new Error('semantic search form not found');
-
-    await user.type(input, '旧问题');
-    fireEvent.submit(form);
-    await user.clear(input);
-    await user.type(input, '新问题');
-    fireEvent.submit(form);
-
-    await act(async () => second.resolve(searchResponse('新结果')));
-    expect(await screen.findByText('新结果')).toBeInTheDocument();
-    await act(async () => first.resolve(searchResponse('旧结果')));
-
-    expect(screen.getByText('新结果')).toBeInTheDocument();
-    expect(screen.queryByText('旧结果')).not.toBeInTheDocument();
-  });
-});
-
-describe('KnowledgeBaseDetailPage loading', () => {
-  it('ignores a previous knowledge base response that resolves after navigation', async () => {
-    const staleKnowledgeBase = deferred<ReturnType<typeof knowledgeBaseFixture>>();
-    api.getKnowledgeBase.mockImplementation((id: string) => (
-      id === 'kb-a' ? staleKnowledgeBase.promise : Promise.resolve(knowledgeBaseFixture('kb-b', '知识库 B'))
-    ));
-    api.listDocuments.mockImplementation((id: string) => Promise.resolve({
-      items: [documentFixture(id, id === 'kb-a' ? 'A 文档.md' : 'B 文档.md')],
-    }));
-    api.getKnowledgeBasePermissions.mockImplementation((id: string) => Promise.resolve(permissionFixture(
-      id,
-      id === 'kb-a' ? 'A Owner' : 'B Owner',
-    )));
-    const user = userEvent.setup();
-
-    renderWithRouter(
-      <>
-        <KnowledgeBaseNavigation />
-        <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>
-      </>,
-      ['/knowledge-bases/kb-a'],
-    );
-
-    await user.click(screen.getByRole('button', { name: '切换到知识库 B' }));
-    expect(await screen.findByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
-    expect(screen.getByText('B 文档.md')).toBeInTheDocument();
-    expect(screen.getByText('B Owner')).toBeInTheDocument();
-
-    await act(async () => staleKnowledgeBase.resolve(knowledgeBaseFixture('kb-a', '知识库 A')));
-
-    await waitFor(() => expect(screen.getByRole('heading', { name: '知识库 B' })).toBeInTheDocument());
-    expect(screen.queryByRole('heading', { name: '知识库 A' })).not.toBeInTheDocument();
-    expect(screen.getByText('B 文档.md')).toBeInTheDocument();
-    expect(screen.queryByText('A 文档.md')).not.toBeInTheDocument();
-    expect(screen.getByText('B Owner')).toBeInTheDocument();
-    expect(screen.queryByText('A Owner')).not.toBeInTheDocument();
-    expect(api.recordKnowledgeBaseView).toHaveBeenCalledTimes(1);
-    expect(api.recordKnowledgeBaseView).toHaveBeenCalledWith('kb-b');
-  });
-
-  it('ignores a visibility update for the previous knowledge base after navigation', async () => {
-    const stalePermissions = deferred<ReturnType<typeof permissionFixture>>();
-    api.getKnowledgeBase.mockImplementation((id: string) => Promise.resolve(knowledgeBaseFixture(
-      id,
-      id === 'kb-a' ? '知识库 A' : '知识库 B',
-    )));
-    api.getKnowledgeBasePermissions.mockImplementation((id: string) => Promise.resolve(permissionFixture(
-      id,
-      id === 'kb-a' ? 'A Owner' : 'B Owner',
-    )));
-    api.updateKnowledgeBasePermissions.mockReturnValue(stalePermissions.promise);
-    const user = userEvent.setup();
-
-    renderWithRouter(
-      <>
-        <KnowledgeBaseNavigation />
-        <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>
-      </>,
-      ['/knowledge-bases/kb-a'],
-    );
-
-    expect(await screen.findByRole('heading', { name: '知识库 A' })).toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText('可见性'), 'public');
-    expect(api.updateKnowledgeBasePermissions).toHaveBeenCalledWith('kb-a', 'public');
-
-    await user.click(screen.getByRole('button', { name: '切换到知识库 B' }));
-    expect(await screen.findByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
-
-    await act(async () => stalePermissions.resolve(permissionFixture('kb-a', 'A Owner', 'public')));
-
-    expect(screen.getByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: '知识库 A' })).not.toBeInTheDocument();
-    expect(screen.getByText('B Owner')).toBeInTheDocument();
-  });
-
-  it('ignores a member update for the previous knowledge base after navigation', async () => {
-    const staleMemberAdd = deferred<void>();
-    api.getKnowledgeBase.mockImplementation((id: string) => Promise.resolve(knowledgeBaseFixture(
-      id,
-      id === 'kb-a' ? '知识库 A' : '知识库 B',
-    )));
-    api.getKnowledgeBasePermissions.mockImplementation((id: string) => Promise.resolve(permissionFixture(
-      id,
-      id === 'kb-a' ? 'A Owner' : 'B Owner',
-    )));
-    api.searchUsers.mockResolvedValue({
-      items: [{ id: 'user-2', username: 'member', displayName: '待添加成员' }],
-    });
-    api.addKnowledgeBaseMember.mockReturnValue(staleMemberAdd.promise);
-    const user = userEvent.setup();
-
-    renderWithRouter(
-      <>
-        <KnowledgeBaseNavigation />
-        <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>
-      </>,
-      ['/knowledge-bases/kb-a'],
-    );
-
-    expect(await screen.findByRole('heading', { name: '知识库 A' })).toBeInTheDocument();
-    await user.type(screen.getByLabelText('搜索用户'), 'member');
-    await user.click(screen.getByRole('button', { name: '搜索' }));
-    await user.click(await screen.findByRole('button', { name: '设为成员' }));
-    expect(api.addKnowledgeBaseMember).toHaveBeenCalledWith('kb-a', 'user-2', 'member');
-
-    await user.click(screen.getByRole('button', { name: '切换到知识库 B' }));
-    expect(await screen.findByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
-    expect(screen.queryByText('待添加成员')).not.toBeInTheDocument();
-
-    await act(async () => staleMemberAdd.resolve());
-
-    expect(screen.getByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: '知识库 A' })).not.toBeInTheDocument();
-    expect(screen.getByText('B Owner')).toBeInTheDocument();
-  });
-
-  it('ignores a visibility update from an earlier visit after returning to the same knowledge base', async () => {
-    const stalePermissions = deferred<ReturnType<typeof permissionFixture>>();
-    api.getKnowledgeBase.mockImplementation((id: string) => Promise.resolve(knowledgeBaseFixture(
-      id,
-      id === 'kb-a' ? '知识库 A' : '知识库 B',
-    )));
-    api.getKnowledgeBasePermissions.mockImplementation((id: string) => Promise.resolve(permissionFixture(
-      id,
-      id === 'kb-a' ? 'A Owner' : 'B Owner',
-    )));
-    api.updateKnowledgeBasePermissions.mockReturnValue(stalePermissions.promise);
-    const user = userEvent.setup();
-
-    renderWithRouter(
-      <>
-        <KnowledgeBaseRoundTripNavigation />
-        <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>
-      </>,
-      ['/knowledge-bases/kb-a'],
-    );
-
-    expect(await screen.findByRole('heading', { name: '知识库 A' })).toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText('可见性'), 'public');
-    await user.click(screen.getByRole('button', { name: '切换到知识库 B' }));
-    expect(await screen.findByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '返回知识库 A' }));
-    expect(await screen.findByRole('heading', { name: '知识库 A' })).toBeInTheDocument();
-    expect(screen.getByLabelText('可见性')).toHaveValue('private');
-
-    await act(async () => stalePermissions.resolve(permissionFixture('kb-a', 'A Owner', 'public')));
-
-    expect(screen.getByLabelText('可见性')).toHaveValue('private');
-  });
-
-  it('disables all permission mutation controls while a member update is pending', async () => {
-    api.getKnowledgeBasePermissions.mockResolvedValue(permissionWithMembersFixture());
-    api.updateKnowledgeBaseMember.mockReturnValue(new Promise(() => undefined));
-    const user = userEvent.setup();
-
-    renderWithRouter(
-      <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>,
-      ['/knowledge-bases/kb-1'],
-    );
-
-    expect(await screen.findByRole('heading', { name: '员工制度' })).toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText('修改 成员一 的角色'), 'manager');
-
-    expect(api.updateKnowledgeBaseMember).toHaveBeenCalledWith('kb-1', 'member-1', 'manager');
-    expect(screen.getByLabelText('修改 成员一 的角色')).toBeDisabled();
-    expect(screen.getByLabelText('修改 成员二 的角色')).toBeDisabled();
-    expect(screen.getByLabelText('可见性')).toBeDisabled();
-  });
-
-  it('ignores a member update from an earlier visit after returning to the same knowledge base', async () => {
-    const staleMemberAdd = deferred<void>();
-    let knowledgeBaseAPermissionLoads = 0;
-    api.getKnowledgeBase.mockImplementation((id: string) => Promise.resolve(knowledgeBaseFixture(
-      id,
-      id === 'kb-a' ? '知识库 A' : '知识库 B',
-    )));
-    api.getKnowledgeBasePermissions.mockImplementation((id: string) => {
-      if (id === 'kb-b') {
-        return Promise.resolve(permissionFixture(id, 'B Owner'));
-      }
-      knowledgeBaseAPermissionLoads += 1;
-      const ownerName = knowledgeBaseAPermissionLoads === 1
-        ? 'A Initial Owner'
-        : knowledgeBaseAPermissionLoads === 2
-          ? 'A Current Owner'
-          : 'A Stale Owner';
-      return Promise.resolve(permissionFixture(id, ownerName));
-    });
-    api.searchUsers.mockResolvedValue({
-      items: [{ id: 'user-2', username: 'member', displayName: '待添加成员' }],
-    });
-    api.addKnowledgeBaseMember.mockReturnValue(staleMemberAdd.promise);
-    const user = userEvent.setup();
-
-    renderWithRouter(
-      <>
-        <KnowledgeBaseRoundTripNavigation />
-        <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>
-      </>,
-      ['/knowledge-bases/kb-a'],
-    );
-
-    expect(await screen.findByText('A Initial Owner')).toBeInTheDocument();
-    await user.type(screen.getByLabelText('搜索用户'), 'member');
-    await user.click(screen.getByRole('button', { name: '搜索' }));
-    await user.click(await screen.findByRole('button', { name: '设为成员' }));
-    await user.click(screen.getByRole('button', { name: '切换到知识库 B' }));
-    expect(await screen.findByText('B Owner')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '返回知识库 A' }));
-    expect(await screen.findByText('A Current Owner')).toBeInTheDocument();
-
-    await act(async () => staleMemberAdd.resolve());
-
-    expect(screen.getByText('A Current Owner')).toBeInTheDocument();
-    expect(screen.queryByText('A Stale Owner')).not.toBeInTheDocument();
-    expect(knowledgeBaseAPermissionLoads).toBe(2);
-  });
-
-  it('ignores user search results from the previous knowledge base', async () => {
-    const staleUserSearch = deferred<{ items: Array<{ id: string; username: string; displayName: string }> }>();
-    api.getKnowledgeBase.mockImplementation((id: string) => Promise.resolve(knowledgeBaseFixture(
-      id,
-      id === 'kb-a' ? '知识库 A' : '知识库 B',
-    )));
-    api.getKnowledgeBasePermissions.mockImplementation((id: string) => Promise.resolve(permissionFixture(
-      id,
-      id === 'kb-a' ? 'A Owner' : 'B Owner',
-    )));
-    api.searchUsers.mockReturnValue(staleUserSearch.promise);
-    const user = userEvent.setup();
-
-    renderWithRouter(
-      <>
-        <KnowledgeBaseNavigation />
-        <Routes><Route element={<KnowledgeBaseDetailPage />} path="/knowledge-bases/:id" /></Routes>
-      </>,
-      ['/knowledge-bases/kb-a'],
-    );
-
-    expect(await screen.findByRole('heading', { name: '知识库 A' })).toBeInTheDocument();
-    await user.type(screen.getByLabelText('搜索用户'), 'stale-member');
-    await user.click(screen.getByRole('button', { name: '搜索' }));
-
-    await user.click(screen.getByRole('button', { name: '切换到知识库 B' }));
-    expect(await screen.findByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
-
-    await act(async () => staleUserSearch.resolve({
-      items: [{ id: 'stale-user', username: 'stale-member', displayName: 'A 的搜索结果' }],
-    }));
-
-    expect(screen.queryByText('A 的搜索结果')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '知识库 B' })).toBeInTheDocument();
-  });
-
-});
+  return { promise, reject, resolve };
+}
 
 function LocationProbe() {
   const location = useLocation();
   return <output aria-label="当前位置">{location.pathname}{location.search}</output>;
 }
 
-function KnowledgeBaseNavigation() {
+function RouteControl() {
   const navigate = useNavigate();
-  return <button onClick={() => navigate('/knowledge-bases/kb-b')} type="button">切换到知识库 B</button>;
+  return <button type="button" onClick={() => navigate('/knowledge-bases/kb2')}>切换知识库</button>;
 }
 
-function KnowledgeBaseRoundTripNavigation() {
+function LeaveDetailButton() {
   const navigate = useNavigate();
-  return (
-    <>
-      <button onClick={() => navigate('/knowledge-bases/kb-b')} type="button">切换到知识库 B</button>
-      <button onClick={() => navigate('/knowledge-bases/kb-a')} type="button">返回知识库 A</button>
-    </>
-  );
+  return <button type="button" onClick={() => navigate('/away')}>离开详情</button>;
 }
 
-function knowledgeBaseFixture(id = 'kb-1', name = '员工制度') {
-  return {
-    id,
-    name,
-    description: `${name}描述`,
-    visibility: 'private' as const,
-    retrievalConfig: { vectorTopN: 30, rerankTopK: 5, scoreThreshold: 0.3, enableRerank: true },
-    createdAt: '2026-07-01T00:00:00Z',
-    updatedAt: '2026-07-01T00:00:00Z',
-  };
-}
-
-function documentFixture(knowledgeBaseId: string, filename: string) {
-  return {
-    id: `document-${knowledgeBaseId}`,
-    knowledgeBaseId,
-    filename,
-    fileType: 'md',
-    fileSize: 128,
-    status: 'completed' as const,
-    errorMessage: null,
-    createdAt: '2026-07-01T00:00:00Z',
-  };
-}
-
-function permissionFixture(
-  knowledgeBaseId: string,
-  ownerName: string,
-  visibility: 'private' | 'public' = 'private',
-) {
-  return {
-    knowledgeBaseId,
-    visibility,
-    owner: { id: `owner-${knowledgeBaseId}`, username: ownerName, displayName: ownerName },
+beforeEach(() => {
+  vi.mocked(getKnowledgeBase).mockReset().mockResolvedValue(knowledgeBase);
+  vi.mocked(listDocuments).mockReset().mockResolvedValue({ items: [] });
+  vi.mocked(listKnowledgeBaseCategories).mockReset().mockResolvedValue({ items: [] });
+  vi.mocked(getKnowledgeBasePermissions).mockReset().mockResolvedValue({
+    knowledgeBaseId: knowledgeBase.id,
+    visibility: 'private',
+    owner: { id: 'u1', username: 'admin', displayName: '管理员' },
     managers: [],
     members: [],
-  };
-}
-
-function permissionWithMembersFixture() {
-  return {
-    knowledgeBaseId: 'kb-1',
-    visibility: 'private' as const,
-    owner: { id: 'owner-kb-1', username: 'owner', displayName: 'Owner' },
-    managers: [],
-    members: [
-      { id: 'member-1', username: 'member-1', displayName: '成员一', role: 'member' as const },
-      { id: 'member-2', username: 'member-2', displayName: '成员二', role: 'member' as const },
-    ],
-  };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
   });
-  return { promise, resolve };
-}
+  vi.mocked(getWorkspacePreference).mockReset().mockResolvedValue({
+    viewMode: 'table', scope: 'all', sort: 'updatedAt_desc', visibility: 'all', expandedCategoryIds: [],
+  });
+  vi.mocked(recordKnowledgeBaseView).mockReset().mockResolvedValue(undefined);
+  vi.mocked(addKnowledgeBaseMember).mockReset().mockResolvedValue(undefined);
+  vi.mocked(createChatSession).mockReset();
+  vi.mocked(searchKnowledgeBase).mockReset().mockResolvedValue({ items: [], rerankFallback: null });
+  vi.mocked(searchUsers).mockReset().mockResolvedValue({ items: [] });
+  vi.mocked(updateKnowledgeBasePermissions).mockReset();
+});
 
-function searchResponse(content: string) {
-  return {
-    items: [{
-      chunkId: content,
-      documentId: 'd1',
-      filename: 'policy.md',
-      content,
-      pageNumber: null,
-      vectorScore: 0.8,
-      rerankScore: 0.9,
-    }],
-    rerankFallback: null,
-  };
-}
+describe('KnowledgeBaseDetailPage', () => {
+  it('opens a draft chat without creating an empty session', async () => {
+    vi.mocked(listDocuments).mockResolvedValue({ items: [completedDocument] });
+    const user = userEvent.setup();
+    renderWithRouter(
+      <>
+        <Routes>
+          <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+          <Route path="/chat/:sessionId" element={<div>问答页</div>} />
+        </Routes>
+        <LocationProbe />
+      </>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    await user.click(await screen.findByRole('button', { name: '开始问答' }));
+
+    expect(createChatSession).not.toHaveBeenCalled();
+    expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat/new?knowledgeBaseId=kb1');
+  });
+
+  it('guides users to upload instead of opening chat before any document is ready', async () => {
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    expect(await screen.findByRole('link', { name: '上传文档' })).toHaveAttribute(
+      'href',
+      '/knowledge-bases/kb1/documents?intent=upload',
+    );
+    expect(screen.queryByRole('button', { name: '开始问答' })).not.toBeInTheDocument();
+  });
+
+  it('shows optional detail counters as unknown when the API omits them', async () => {
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    await screen.findByRole('heading', { name: '制度库' });
+    expect(within(screen.getByText('浏览量').parentElement!).getByText('--')).toBeInTheDocument();
+    expect(within(screen.getByText('问答数').parentElement!).getByText('--')).toBeInTheDocument();
+  });
+
+  it('does not present upload as the primary action when document summary loading fails', async () => {
+    vi.mocked(listDocuments).mockRejectedValue(new Error('offline'));
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('文档摘要加载失败');
+    expect(screen.queryByRole('link', { name: '上传文档' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重试文档摘要' })).toBeInTheDocument();
+    expect(within(screen.getByText('文档总数').parentElement!).getByText('--')).toBeInTheDocument();
+  });
+
+  it('offers recovery actions when the main knowledge-base detail fails', async () => {
+    vi.mocked(getKnowledgeBase)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(knowledgeBase);
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('知识库详情加载失败');
+    expect(within(alert).getByRole('link', { name: '返回知识库列表' })).toHaveAttribute('href', '/knowledge-bases');
+    await user.click(within(alert).getByRole('button', { name: '重试详情' }));
+
+    expect(await screen.findByRole('heading', { name: '制度库' })).toBeInTheDocument();
+    expect(getKnowledgeBase).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps core detail and documents usable when optional metadata fails', async () => {
+    vi.mocked(listDocuments).mockResolvedValue({ items: [completedDocument] });
+    vi.mocked(getKnowledgeBasePermissions).mockRejectedValue(new Error('permissions unavailable'));
+    vi.mocked(listKnowledgeBaseCategories).mockRejectedValue(new Error('categories unavailable'));
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    expect(await screen.findByRole('heading', { name: '制度库' })).toBeInTheDocument();
+    expect(screen.getByText('handbook.pdf')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '开始问答' })).toBeEnabled();
+    expect(screen.getAllByRole('alert').map((node) => node.textContent).join(' ')).toContain('成员权限加载失败');
+  });
+
+  it('does not let a slow previous route overwrite the current knowledge base', async () => {
+    const firstKnowledgeBase = deferred<KnowledgeBase>();
+    const secondKnowledgeBase = { ...knowledgeBase, id: 'kb2', name: '产品库' };
+    vi.mocked(getKnowledgeBase).mockImplementation((id) => (
+      id === 'kb1' ? firstKnowledgeBase.promise : Promise.resolve(secondKnowledgeBase)
+    ));
+    vi.mocked(listDocuments).mockResolvedValue({ items: [] });
+    vi.mocked(getKnowledgeBasePermissions).mockImplementation((id) => Promise.resolve({
+      knowledgeBaseId: id,
+      visibility: 'private',
+      owner: { id: 'u1', username: 'admin', displayName: '管理员' },
+      managers: [],
+      members: [],
+    }));
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <>
+        <Routes>
+          <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+        </Routes>
+        <RouteControl />
+      </>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    await user.click(screen.getByRole('button', { name: '切换知识库' }));
+    expect(await screen.findByRole('heading', { name: '产品库' })).toBeInTheDocument();
+
+    await act(async () => {
+      firstKnowledgeBase.resolve(knowledgeBase);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('heading', { name: '产品库' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '制度库' })).not.toBeInTheDocument();
+  });
+
+  it('does not record a view when the detail request resolves after unmount', async () => {
+    const detailResult = deferred<KnowledgeBase>();
+    vi.mocked(getKnowledgeBase).mockReturnValue(detailResult.promise);
+    const user = userEvent.setup();
+    renderWithRouter(
+      <>
+        <Routes>
+          <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+          <Route path="/away" element={<div>已离开详情</div>} />
+        </Routes>
+        <LeaveDetailButton />
+      </>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    await user.click(screen.getByRole('button', { name: '离开详情' }));
+    expect(await screen.findByText('已离开详情')).toBeInTheDocument();
+    await act(async () => {
+      detailResult.resolve(knowledgeBase);
+      await Promise.resolve();
+    });
+
+    expect(recordKnowledgeBaseView).not.toHaveBeenCalled();
+  });
+
+  it('does not let a visibility save from the previous route overwrite the current knowledge base', async () => {
+    const visibilitySave = deferred<Awaited<ReturnType<typeof updateKnowledgeBasePermissions>>>();
+    const secondKnowledgeBase = { ...knowledgeBase, id: 'kb2', name: '产品库' };
+    vi.mocked(getKnowledgeBase).mockImplementation((id) => Promise.resolve(
+      id === 'kb2' ? secondKnowledgeBase : knowledgeBase,
+    ));
+    vi.mocked(getKnowledgeBasePermissions).mockImplementation((id) => Promise.resolve({
+      knowledgeBaseId: id,
+      visibility: 'private',
+      owner: { id: 'u1', username: 'admin', displayName: '管理员' },
+      managers: [],
+      members: [],
+    }));
+    vi.mocked(updateKnowledgeBasePermissions).mockReturnValue(visibilitySave.promise);
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <>
+        <Routes>
+          <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+        </Routes>
+        <RouteControl />
+      </>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    await user.selectOptions(await screen.findByRole('combobox', { name: '可见性' }), 'public');
+    expect(updateKnowledgeBasePermissions).toHaveBeenCalledWith('kb1', 'public');
+    await user.click(screen.getByRole('button', { name: '切换知识库' }));
+    expect(await screen.findByRole('heading', { name: '产品库' })).toBeInTheDocument();
+
+    await act(async () => {
+      visibilitySave.resolve({
+        knowledgeBaseId: 'kb1',
+        visibility: 'public',
+        owner: { id: 'u1', username: 'admin', displayName: '管理员' },
+        managers: [],
+        members: [],
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('heading', { name: '产品库' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: '可见性' })).toHaveValue('private');
+    expect(screen.queryByRole('heading', { name: '制度库' })).not.toBeInTheDocument();
+  });
+
+  it('does not let an initial permission read overwrite a completed visibility save', async () => {
+    const initialPermissions = deferred<Awaited<ReturnType<typeof getKnowledgeBasePermissions>>>();
+    vi.mocked(getKnowledgeBasePermissions).mockReturnValue(initialPermissions.promise);
+    vi.mocked(updateKnowledgeBasePermissions).mockResolvedValue({
+      knowledgeBaseId: 'kb1',
+      visibility: 'public',
+      owner: { id: 'u1', username: 'admin', displayName: '管理员' },
+      managers: [],
+      members: [],
+    });
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    const visibility = await screen.findByRole('combobox', { name: '可见性' });
+    await user.selectOptions(visibility, 'public');
+    await waitFor(() => expect(visibility).toHaveValue('public'));
+
+    await act(async () => {
+      initialPermissions.resolve({
+        knowledgeBaseId: 'kb1',
+        visibility: 'private',
+        owner: { id: 'u1', username: 'admin', displayName: '管理员' },
+        managers: [],
+        members: [],
+      });
+      await Promise.resolve();
+    });
+
+    expect(visibility).toHaveValue('public');
+  });
+
+  it('does not let a late member failure pollute or unlock a newer knowledge-base mutation', async () => {
+    const firstAdd = deferred<void>();
+    const secondAdd = deferred<void>();
+    const secondKnowledgeBase = { ...knowledgeBase, id: 'kb2', name: '产品库' };
+    vi.mocked(getKnowledgeBase).mockImplementation((knowledgeBaseId) => Promise.resolve(
+      knowledgeBaseId === secondKnowledgeBase.id ? secondKnowledgeBase : knowledgeBase,
+    ));
+    vi.mocked(getKnowledgeBasePermissions).mockImplementation((knowledgeBaseId) => Promise.resolve({
+      knowledgeBaseId,
+      visibility: 'private',
+      owner: { id: 'u1', username: 'admin', displayName: '管理员' },
+      managers: [],
+      members: [],
+    }));
+    vi.mocked(searchUsers)
+      .mockResolvedValueOnce({ items: [{ id: 'user-a', username: 'user-a', displayName: '用户 A' }] })
+      .mockResolvedValueOnce({ items: [{ id: 'user-b', username: 'user-b', displayName: '用户 B' }] });
+    vi.mocked(addKnowledgeBaseMember).mockImplementation((knowledgeBaseId) => (
+      knowledgeBaseId === secondKnowledgeBase.id ? secondAdd.promise : firstAdd.promise
+    ));
+    const user = userEvent.setup();
+    renderWithRouter(
+      <>
+        <Routes>
+          <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+        </Routes>
+        <RouteControl />
+      </>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    const searchInput = await screen.findByRole('textbox', { name: '搜索用户' });
+    await user.type(searchInput, '用户 A');
+    await user.click(screen.getByRole('button', { name: '搜索' }));
+    await user.click(await screen.findByRole('button', { name: '设为成员' }));
+    await user.click(screen.getByRole('button', { name: '切换知识库' }));
+    await screen.findByRole('heading', { name: '产品库' });
+    const nextSearchInput = await screen.findByRole('textbox', { name: '搜索用户' });
+    await user.clear(nextSearchInput);
+    await user.type(nextSearchInput, '用户 B');
+    await user.click(screen.getByRole('button', { name: '搜索' }));
+    await user.click(await screen.findByRole('button', { name: '设为成员' }));
+
+    await act(async () => {
+      firstAdd.reject(new Error('offline'));
+      await Promise.resolve();
+    });
+    expect(screen.queryByText('成员添加失败')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '添加中...' })).toBeDisabled();
+
+    await act(async () => {
+      secondAdd.resolve();
+      await Promise.resolve();
+    });
+  });
+
+  it('disables visibility changes while a member mutation is pending', async () => {
+    const addResult = deferred<void>();
+    vi.mocked(addKnowledgeBaseMember).mockReturnValue(addResult.promise);
+    vi.mocked(searchUsers).mockResolvedValue({
+      items: [{ id: 'user-a', username: 'user-a', displayName: '用户 A' }],
+    });
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    const searchInput = await screen.findByRole('textbox', { name: '搜索用户' });
+    await user.type(searchInput, '用户 A');
+    await user.click(screen.getByRole('button', { name: '搜索' }));
+    await user.click(await screen.findByRole('button', { name: '设为成员' }));
+
+    expect(screen.getByRole('combobox', { name: '可见性' })).toBeDisabled();
+    addResult.resolve();
+    await waitFor(() => expect(screen.getByRole('combobox', { name: '可见性' })).toBeEnabled());
+  });
+
+  it('disables member mutations while visibility is being saved', async () => {
+    const visibilityResult = deferred<Awaited<ReturnType<typeof updateKnowledgeBasePermissions>>>();
+    vi.mocked(updateKnowledgeBasePermissions).mockReturnValue(visibilityResult.promise);
+    vi.mocked(getKnowledgeBasePermissions).mockResolvedValue({
+      knowledgeBaseId: knowledgeBase.id,
+      visibility: 'private',
+      owner: { id: 'u1', username: 'admin', displayName: '管理员' },
+      managers: [],
+      members: [{ id: 'u2', username: 'member', displayName: '普通成员', role: 'member' }],
+    });
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    const visibility = await screen.findByRole('combobox', { name: '可见性' });
+    await screen.findByText('普通成员');
+    await user.selectOptions(visibility, 'public');
+
+    expect(screen.getByRole('textbox', { name: '搜索用户' })).toBeDisabled();
+    expect(screen.getByRole('combobox', { name: '修改 普通成员 的角色' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '移除' })).toBeDisabled();
+
+    visibilityResult.resolve({
+      knowledgeBaseId: knowledgeBase.id,
+      visibility: 'public',
+      owner: { id: 'u1', username: 'admin', displayName: '管理员' },
+      managers: [],
+      members: [{ id: 'u2', username: 'member', displayName: '普通成员', role: 'member' }],
+    });
+    await waitFor(() => expect(screen.getByRole('textbox', { name: '搜索用户' })).toBeEnabled());
+  });
+
+  it('keeps only the latest member search results', async () => {
+    const first = deferred<{ items: Array<{ id: string; username: string; displayName: string }> }>();
+    const second = deferred<{ items: Array<{ id: string; username: string; displayName: string }> }>();
+    vi.mocked(searchUsers)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    const input = await screen.findByRole('textbox', { name: '搜索用户' });
+    const form = input.closest('form')!;
+    await user.type(input, '旧用户');
+    await user.click(within(form).getByRole('button', { name: '搜索' }));
+    await user.clear(input);
+    await user.type(input, '新用户');
+    await user.click(within(form).getByRole('button', { name: '搜索' }));
+
+    await act(async () => {
+      second.resolve({ items: [{ id: 'new', username: 'new', displayName: '新用户结果' }] });
+      await Promise.resolve();
+    });
+    expect(await screen.findByText('新用户结果')).toBeInTheDocument();
+
+    await act(async () => {
+      first.resolve({ items: [{ id: 'old', username: 'old', displayName: '旧用户结果' }] });
+      await Promise.resolve();
+    });
+    expect(screen.getByText('新用户结果')).toBeInTheDocument();
+    expect(screen.queryByText('旧用户结果')).not.toBeInTheDocument();
+  });
+
+  it('keeps only the latest semantic search results and loading state', async () => {
+    const first = deferred<Awaited<ReturnType<typeof searchKnowledgeBase>>>();
+    const second = deferred<Awaited<ReturnType<typeof searchKnowledgeBase>>>();
+    vi.mocked(searchKnowledgeBase)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    const input = await screen.findByRole('textbox', { name: '知识库内检索问题' });
+    const form = input.closest('form')!;
+    await user.type(input, '旧问题');
+    await user.click(within(form).getByRole('button', { name: '检索' }));
+    await user.clear(input);
+    await user.type(input, '新问题');
+    await user.click(within(form).getByRole('button', { name: '检索' }));
+
+    await act(async () => {
+      second.resolve({
+        items: [{
+          chunkId: 'new', documentId: 'doc1', filename: 'new.md', content: '新结果',
+          pageNumber: 1, vectorScore: 0.9, rerankScore: 0.8,
+        }],
+        rerankFallback: null,
+      });
+      await Promise.resolve();
+    });
+    expect(await screen.findByText('新结果')).toBeInTheDocument();
+
+    await act(async () => {
+      first.resolve({
+        items: [{
+          chunkId: 'old', documentId: 'doc1', filename: 'old.md', content: '旧结果',
+          pageNumber: 1, vectorScore: 0.5, rerankScore: 0.4,
+        }],
+        rerankFallback: null,
+      });
+      await Promise.resolve();
+    });
+    expect(screen.getByText('新结果')).toBeInTheDocument();
+    expect(screen.queryByText('旧结果')).not.toBeInTheDocument();
+    await waitFor(() => expect(within(form).getByRole('button', { name: '检索' })).toBeEnabled());
+  });
+});

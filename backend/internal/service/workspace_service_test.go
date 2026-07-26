@@ -897,7 +897,7 @@ func TestGlobalDocumentListAndKeywordSearchUseOwnerScope(t *testing.T) {
 		t.Fatalf("expected only owned matching document, got %#v", documents)
 	}
 
-	search, err := services.search.Search(ctx, owner.ID, "product")
+	search, err := services.search.Search(ctx, owner.ID, dto.GlobalSearchRequest{Query: "product"})
 	if err != nil {
 		t.Fatalf("global keyword search: %v", err)
 	}
@@ -999,7 +999,7 @@ func TestRecycleBinHidesDeletedDocumentAndAllowsRestore(t *testing.T) {
 		t.Fatalf("expected deleted document hidden from global list, got %#v", globalList.Items)
 	}
 
-	search, err := services.search.Search(ctx, owner.ID, "manual")
+	search, err := services.search.Search(ctx, owner.ID, dto.GlobalSearchRequest{Query: "manual"})
 	if err != nil {
 		t.Fatalf("global search after delete: %v", err)
 	}
@@ -1921,6 +1921,47 @@ func TestDocumentChunksSupportPaginationAndSearch(t *testing.T) {
 	}
 	if page.Total != 2 || page.Page != 1 || page.PageSize != 1 || len(page.Items) != 1 || page.Items[0].ChunkIndex != 0 {
 		t.Fatalf("unexpected chunk page: %#v", page)
+	}
+}
+
+func TestDocumentChunksSupportExactChunkLookupAndScope(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	otherOwner := createWorkspaceUser(t, services.db, "other-owner")
+	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
+	doc := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "manual.pdf", "completed")
+	otherDoc := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "appendix.pdf", "completed")
+	target := createWorkspaceDocumentChunk(t, services.db, kb.ID, doc.ID, 0, "target content")
+	otherChunk := createWorkspaceDocumentChunk(t, services.db, kb.ID, otherDoc.ID, 0, "other content")
+	zeroChunkID := uuid.Nil
+
+	zeroID, err := services.documents.Chunks(ctx, owner.ID, doc.ID, dto.ChunkListQuery{ChunkID: &zeroChunkID})
+	if err != nil {
+		t.Fatalf("query zero chunk ID: %v", err)
+	}
+	if zeroID.Total != 0 || len(zeroID.Items) != 0 {
+		t.Fatalf("expected zero chunk ID to be an exact empty lookup, got %#v", zeroID)
+	}
+
+	exact, err := services.documents.Chunks(ctx, owner.ID, doc.ID, dto.ChunkListQuery{ChunkID: &target.ID})
+	if err != nil {
+		t.Fatalf("get exact chunk: %v", err)
+	}
+	if exact.Total != 1 || len(exact.Items) != 1 || exact.Items[0].ID != target.ID.String() || exact.Items[0].Content != "target content" {
+		t.Fatalf("unexpected exact chunk response: %#v", exact)
+	}
+
+	crossDocument, err := services.documents.Chunks(ctx, owner.ID, doc.ID, dto.ChunkListQuery{ChunkID: &otherChunk.ID})
+	if err != nil {
+		t.Fatalf("query cross-document chunk: %v", err)
+	}
+	if crossDocument.Total != 0 || len(crossDocument.Items) != 0 {
+		t.Fatalf("expected cross-document chunk to be hidden, got %#v", crossDocument)
+	}
+
+	if response, err := services.documents.Chunks(ctx, otherOwner.ID, doc.ID, dto.ChunkListQuery{ChunkID: &target.ID}); err == nil || response != nil {
+		t.Fatalf("expected foreign document lookup to be rejected, got response=%#v err=%v", response, err)
 	}
 }
 

@@ -85,7 +85,17 @@ type SearchDebugFinalItem struct {
 }
 
 type GlobalSearchResponse struct {
-	Items []GlobalSearchResultResponse `json:"items"`
+	Items    []GlobalSearchResultResponse `json:"items"`
+	Total    int64                        `json:"total"`
+	Page     int                          `json:"page"`
+	PageSize int                          `json:"pageSize"`
+}
+
+type GlobalSearchRequest struct {
+	Query    string `form:"q"`
+	Type     string `form:"type"`
+	Page     int    `form:"page"`
+	PageSize int    `form:"pageSize"`
 }
 
 type GlobalSearchResultResponse struct {

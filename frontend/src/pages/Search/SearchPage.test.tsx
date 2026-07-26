@@ -33,6 +33,25 @@ const documentResult = {
   title: '员工手册文档',
   snippet: '休假制度',
 };
+const chunkResult = {
+  type: 'chunk' as const,
+  id: 'chunk-1',
+  documentId: 'd1',
+  knowledgeBaseId: 'kb1',
+  knowledgeBaseName: '员工知识库',
+  filename: 'handbook.pdf',
+  title: '休假制度片段',
+  snippet: '年假按照工作年限计算',
+};
+
+function searchResponse(
+  items: GlobalSearchResponse['items'],
+  total = items.length,
+  page = 1,
+  pageSize = 20,
+): GlobalSearchResponse {
+  return { items, total, page, pageSize };
+}
 
 function RouterProbe() {
   const location = useLocation();
@@ -62,8 +81,10 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('SearchPage', () => {
-  it('reads URL state, filters locally, preserves other params, and does not refetch for type changes', async () => {
-    mockedSearch.mockResolvedValue({ items: [knowledgeBaseResult, documentResult] });
+  it('reads URL state and refetches from the server when the result type changes', async () => {
+	mockedSearch
+		.mockResolvedValueOnce({ items: [documentResult], total: 1, page: 1, pageSize: 20 })
+		.mockResolvedValueOnce({ items: [knowledgeBaseResult], total: 1, page: 1, pageSize: 20 });
     const user = userEvent.setup();
     renderWithRouter(
       <><SearchPage /><RouterProbe /></>,
@@ -74,18 +95,40 @@ describe('SearchPage', () => {
     expect(await screen.findByText('员工手册文档')).toBeInTheDocument();
     expect(screen.queryByText('员工知识库结果')).not.toBeInTheDocument();
     expect(screen.getByRole('group', { name: '结果类型' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '文档 1' })).toHaveAttribute('aria-pressed', 'true');
+	expect(screen.getByRole('button', { name: '文档' })).toHaveAttribute('aria-pressed', 'true');
+	expect(mockedSearch).toHaveBeenCalledWith({
+		query: 'handbook', type: 'document', page: 1, pageSize: 20,
+	}, expect.any(AbortSignal));
 
-    await user.click(screen.getByRole('button', { name: '知识库 1' }));
+	await user.click(screen.getByRole('button', { name: '知识库' }));
 
-    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/search?q=handbook&type=knowledgeBase&scope=owned');
-    expect(await screen.findByText('员工知识库结果')).toBeInTheDocument();
-    expect(mockedSearch).toHaveBeenCalledOnce();
+	expect(screen.getByLabelText('当前位置')).toHaveTextContent('/search?q=handbook&type=knowledgeBase&scope=owned');
+	expect(await screen.findByText('员工知识库结果')).toBeInTheDocument();
+	expect(mockedSearch).toHaveBeenCalledTimes(2);
   });
+
+	it('drives pagination from the URL and requests the next server page', async () => {
+		mockedSearch
+			.mockResolvedValueOnce({ items: [documentResult], total: 45, page: 2, pageSize: 20 })
+			.mockResolvedValueOnce({ items: [documentResult], total: 45, page: 3, pageSize: 20 });
+		const user = userEvent.setup();
+		renderWithRouter(
+			<><SearchPage /><RouterProbe /></>,
+			['/search?q=policy&type=document&page=2'],
+		);
+
+		expect(await screen.findByText(/第 2 \/ 3 页/)).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: '下一页' }));
+
+		expect(screen.getByLabelText('当前位置')).toHaveTextContent('/search?q=policy&type=document&page=3');
+		await waitFor(() => expect(mockedSearch).toHaveBeenLastCalledWith({
+			query: 'policy', type: 'document', page: 3, pageSize: 20,
+		}, expect.any(AbortSignal)));
+	});
 
   it('debounces typed queries with replace while preserving URL state', async () => {
     vi.useFakeTimers();
-    mockedSearch.mockResolvedValue({ items: [] });
+    mockedSearch.mockResolvedValue(searchResponse([]));
     renderWithRouter(
       <><SearchPage /><RouterProbe /></>,
       ['/before', '/search?type=document&scope=owned'],
@@ -98,14 +141,16 @@ describe('SearchPage', () => {
 
     await act(async () => vi.advanceTimersByTime(1));
     expect(screen.getByLabelText('当前位置')).toHaveTextContent('/search?type=document&scope=owned&q=policy');
-    expect(mockedSearch).toHaveBeenCalledWith('policy', expect.any(AbortSignal));
+	expect(mockedSearch).toHaveBeenCalledWith({
+		query: 'policy', type: 'document', page: 1, pageSize: 20,
+	}, expect.any(AbortSignal));
 
     fireEvent.click(screen.getByRole('button', { name: '返回上一页' }));
     expect(screen.getByLabelText('当前位置')).toHaveTextContent('/before');
   });
 
   it('uses push for explicit submit and removes only an empty q', async () => {
-    mockedSearch.mockResolvedValue({ items: [] });
+    mockedSearch.mockResolvedValue(searchResponse([]));
     const user = userEvent.setup();
     renderWithRouter(
       <><SearchPage /><RouterProbe /></>,
@@ -136,10 +181,10 @@ describe('SearchPage', () => {
 
     expect(firstSignal).toBeInstanceOf(AbortSignal);
     expect(firstSignal?.aborted).toBe(true);
-    await act(async () => second.resolve({ items: [{ ...documentResult, id: 'd2', title: '第二个结果' }] }));
+    await act(async () => second.resolve(searchResponse([{ ...documentResult, id: 'd2', title: '第二个结果' }])));
     expect(await screen.findByText('第二个结果')).toBeInTheDocument();
 
-    await act(async () => first.resolve({ items: [{ ...documentResult, title: '过期结果' }] }));
+    await act(async () => first.resolve(searchResponse([{ ...documentResult, title: '过期结果' }])));
     expect(screen.queryByText('过期结果')).not.toBeInTheDocument();
     expect(screen.getByText('第二个结果')).toBeInTheDocument();
   });
@@ -149,7 +194,7 @@ describe('SearchPage', () => {
     const aborted = deferred<GlobalSearchResponse>();
     mockedSearch.mockReturnValueOnce(first.promise).mockReturnValueOnce(aborted.promise);
     renderWithRouter(<SearchPage />, ['/search?q=first']);
-    await act(async () => first.resolve({ items: [documentResult] }));
+    await act(async () => first.resolve(searchResponse([documentResult])));
     expect(await screen.findByText('员工手册文档')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('搜索关键词'), { target: { value: 'second' } });
@@ -162,12 +207,26 @@ describe('SearchPage', () => {
   });
 
   it('falls back to all results for an invalid type', async () => {
-    mockedSearch.mockResolvedValue({ items: [knowledgeBaseResult, documentResult] });
+    mockedSearch.mockResolvedValue(searchResponse([knowledgeBaseResult, documentResult]));
     renderWithRouter(<SearchPage />, ['/search?q=handbook&type=invalid']);
 
     expect(await screen.findByText('员工知识库结果')).toBeInTheDocument();
     expect(screen.getByText('员工手册文档')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '全部 2' })).toHaveAttribute('aria-pressed', 'true');
+	expect(screen.getByRole('button', { name: '全部' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('links document and chunk results to their exact source', async () => {
+    mockedSearch.mockResolvedValue(searchResponse([documentResult, chunkResult]));
+    renderWithRouter(<SearchPage />, ['/search?q=policy']);
+
+    expect(await screen.findByRole('link', { name: /员工手册文档/ })).toHaveAttribute(
+      'href',
+      '/knowledge-bases/kb1/documents?documentId=d1',
+    );
+    expect(screen.getByRole('link', { name: /休假制度片段/ })).toHaveAttribute(
+      'href',
+      '/knowledge-bases/kb1/documents?documentId=d1&chunkId=chunk-1',
+    );
   });
 
   it('normalizes whitespace-only q without dropping other URL state', async () => {
@@ -193,8 +252,30 @@ describe('SearchPage', () => {
 
     await user.click(screen.getByRole('button', { name: '重试' }));
     expect(mockedSearch).toHaveBeenCalledTimes(2);
-    await act(async () => retried.resolve({ items: [] }));
+    await act(async () => retried.resolve(searchResponse([])));
     expect(await screen.findByRole('heading', { name: '没有匹配结果' })).toBeInTheDocument();
+  });
+
+  it('keeps one live status and announces search completion with the visible result count', async () => {
+    const result = deferred<GlobalSearchResponse>();
+	mockedSearch
+		.mockReturnValueOnce(result.promise)
+		.mockResolvedValueOnce(searchResponse([documentResult]));
+    const user = userEvent.setup();
+    renderWithRouter(<SearchPage />, ['/search?q=policy']);
+
+    const region = screen.getByRole('region', { name: '搜索结果' });
+    const status = screen.getByRole('status');
+    expect(region).toHaveAttribute('aria-busy', 'true');
+    expect(status).toHaveTextContent('正在搜索');
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+
+    await act(async () => result.resolve(searchResponse([knowledgeBaseResult, documentResult])));
+    await waitFor(() => expect(region).toHaveAttribute('aria-busy', 'false'));
+    expect(status).toHaveTextContent('找到 2 条结果');
+
+	await user.click(screen.getByRole('button', { name: '文档' }));
+	await waitFor(() => expect(status).toHaveTextContent('找到 1 条结果'));
   });
 
   it('shows a helpful empty state before a query is entered', () => {

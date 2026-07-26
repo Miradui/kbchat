@@ -84,6 +84,7 @@ type ChunkListQuery struct {
 	Page     int
 	PageSize int
 	Q        string
+	ChunkID  *uuid.UUID
 }
 
 type DocumentDownloadResponse struct {

@@ -240,6 +240,7 @@ export type DocumentChunkListParams = {
   page?: number;
   pageSize?: number;
   q?: string;
+  chunkId?: string;
 };
 
 export type DocumentPreviewResponse = {
@@ -286,6 +287,16 @@ export type GlobalSearchResult = {
 
 export type GlobalSearchResponse = {
   items: GlobalSearchResult[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+export type GlobalSearchParams = {
+  query: string;
+  type?: 'all' | GlobalSearchResultType;
+  page?: number;
+  pageSize?: number;
 };
 
 export type KnowledgeBaseSearchRequest = {
@@ -367,6 +378,7 @@ export type Citation = {
 export type ChatMessage = {
   id: string;
   sessionId: string;
+  clientRequestId?: string | null;
   role: 'user' | 'assistant';
   content: string;
   citations: Citation[];
@@ -377,7 +389,15 @@ export type ChatMessageListResponse = {
   items: ChatMessage[];
 };
 
+export type SendChatMessageRequest = {
+  content: string;
+  clientRequestId: string;
+};
+
 export type SendChatMessageResponse = {
+  clientRequestId?: string;
+  userMessage?: ChatMessage;
+  assistantMessage?: ChatMessage;
   answer: string;
   citations: Citation[];
   rerankFallback: KnowledgeBaseRerankFallback | null;

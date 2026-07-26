@@ -185,13 +185,15 @@ func (s *ChatSession) BeforeCreate(_ *gorm.DB) error {
 }
 
 type ChatMessage struct {
-	ID        uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
-	SessionID uuid.UUID      `gorm:"type:uuid;not null;index" json:"sessionId"`
-	Session   ChatSession    `gorm:"foreignKey:SessionID" json:"-"`
-	Role      string         `gorm:"size:32;not null" json:"role"`
-	Content   string         `gorm:"not null" json:"content"`
-	Citations datatypes.JSON `gorm:"type:jsonb" json:"citations"`
-	CreatedAt time.Time      `json:"createdAt"`
+	ID              uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
+	SessionID       uuid.UUID      `gorm:"type:uuid;not null;index;uniqueIndex:idx_chat_messages_session_client_role,where:client_request_id IS NOT NULL AND role IN ('user'\,'assistant')" json:"sessionId"`
+	Session         ChatSession    `gorm:"foreignKey:SessionID" json:"-"`
+	ClientRequestID *uuid.UUID     `gorm:"type:uuid;uniqueIndex:idx_chat_messages_session_client_role,where:client_request_id IS NOT NULL AND role IN ('user'\,'assistant')" json:"clientRequestId"`
+	Role            string         `gorm:"size:32;not null;uniqueIndex:idx_chat_messages_session_client_role,where:client_request_id IS NOT NULL AND role IN ('user'\,'assistant')" json:"role"`
+	Content         string         `gorm:"not null" json:"content"`
+	Citations       datatypes.JSON `gorm:"type:jsonb" json:"citations"`
+	RerankFallback  datatypes.JSON `gorm:"type:jsonb" json:"rerankFallback"`
+	CreatedAt       time.Time      `json:"createdAt"`
 }
 
 func (m *ChatMessage) BeforeCreate(_ *gorm.DB) error {

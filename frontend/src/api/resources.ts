@@ -12,6 +12,7 @@ import type {
   GlobalDocumentListParams,
   GlobalDocumentListResponse,
   GlobalSearchResponse,
+  GlobalSearchParams,
   KnowledgeBase,
   KnowledgeBaseCategory,
   KnowledgeBaseCategoryInput,
@@ -33,6 +34,7 @@ import type {
   RecycleBinListResponse,
   RegenerateChatMessageResponse,
   SendChatMessageResponse,
+  SendChatMessageRequest,
   User,
   UserSearchResponse,
 } from '../types/api';
@@ -391,8 +393,13 @@ export function emptyDocumentRecycleBin(): Promise<void> {
   });
 }
 
-export function globalSearch(query: string, signal?: AbortSignal): Promise<GlobalSearchResponse> {
-  return apiRequest<GlobalSearchResponse>(withQuery('/search', { q: query }), { signal });
+export function globalSearch(params: GlobalSearchParams, signal?: AbortSignal): Promise<GlobalSearchResponse> {
+  return apiRequest<GlobalSearchResponse>(withQuery('/search', {
+    q: params.query,
+    type: params.type,
+    page: params.page,
+    pageSize: params.pageSize,
+  }), { signal });
 }
 
 export function searchKnowledgeBase(
@@ -445,11 +452,11 @@ export function listChatMessages(sessionId: string): Promise<ChatMessageListResp
 
 export function sendChatMessage(
   sessionId: string,
-  content: string,
+  input: SendChatMessageRequest,
 ): Promise<SendChatMessageResponse> {
   return apiRequest<SendChatMessageResponse>(`/chat/sessions/${sessionId}/messages`, {
     method: 'POST',
-    body: { content },
+    body: input,
   });
 }
 

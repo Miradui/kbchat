@@ -9,6 +9,7 @@
 .auth-panel h1 { font-size: 30px; line-height: 1.18; margin: 4px 0; }
 .auth-field { display: grid; gap: 8px; }
 .auth-field > label { color: var(--color-text-secondary); font-size: 14px; font-weight: 650; }
+.auth-field-error { color: var(--color-danger); font-size: 13px; margin: 0; }
 .auth-field input { min-height: 46px; width: 100%; }
 .password-field { align-items: center; display: grid; grid-template-columns: minmax(0, 1fr) 44px; }
 .password-field input { border-bottom-right-radius: 0; border-top-right-radius: 0; }

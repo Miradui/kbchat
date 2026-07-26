@@ -49,11 +49,14 @@ export function KnowledgeBaseDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const activeKnowledgeBaseIdRef = useRef(id);
-  const pageLoadRequestIdRef = useRef(0);
-  const permissionMutationRequestIdRef = useRef(0);
-  const searchRequestIdRef = useRef(0);
-  const userSearchRequestIdRef = useRef(0);
-  activeKnowledgeBaseIdRef.current = id;
+  const knowledgeBaseRequestRef = useRef(0);
+  const documentRequestRef = useRef(0);
+  const permissionRequestRef = useRef(0);
+  const visibilityRequestRef = useRef(0);
+  const userSearchRequestRef = useRef(0);
+  const semanticSearchRequestRef = useRef(0);
+  const memberMutationRef = useRef<symbol | null>(null);
+  const visibilityMutationRef = useRef<symbol | null>(null);
   const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeBase | null>(null);
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [categories, setCategories] = useState<KnowledgeBaseCategory[]>([]);
@@ -64,6 +67,7 @@ export function KnowledgeBaseDetailPage() {
   const [searchDebugEnabled, setSearchDebugEnabled] = useState(false);
   const [searchDebug, setSearchDebug] = useState<KnowledgeBaseSearchDebug | null>(null);
   const [loading, setLoading] = useState(true);
+  const [documentsLoading, setDocumentsLoading] = useState(true);
   const [searching, setSearching] = useState(false);
   const [savingVisibility, setSavingVisibility] = useState(false);
   const [memberQuery, setMemberQuery] = useState('');
@@ -73,92 +77,134 @@ export function KnowledgeBaseDetailPage() {
   const [searchingUsers, setSearchingUsers] = useState(false);
   const [memberWorkingId, setMemberWorkingId] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [documentError, setDocumentError] = useState('');
+  const [permissionError, setPermissionError] = useState('');
+  activeKnowledgeBaseIdRef.current = id;
 
-  function isCurrentPermissionMutation(
-    targetKnowledgeBaseId: string,
-    pageRequestId: number,
-    mutationRequestId: number,
-  ) {
-    return pageLoadRequestIdRef.current === pageRequestId
-      && permissionMutationRequestIdRef.current === mutationRequestId
-      && activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId;
-  }
-
-  const loadPage = useCallback(async (requestId: number) => {
+  const loadKnowledgeBase = useCallback(async () => {
     if (!id) {
       return false;
     }
 
-    const targetKnowledgeBaseId = id;
-    const [kb, docs, categoryResponse, permissionResponse, preference] = await Promise.all([
-      getKnowledgeBase(targetKnowledgeBaseId),
-      listDocuments(targetKnowledgeBaseId),
-      listKnowledgeBaseCategories(),
-      getKnowledgeBasePermissions(targetKnowledgeBaseId),
-      getWorkspacePreference().catch(() => fallbackPreference),
-    ]);
-    if (
-      pageLoadRequestIdRef.current !== requestId
-      || activeKnowledgeBaseIdRef.current !== targetKnowledgeBaseId
-    ) {
-      return false;
+    const requestedId = id;
+    const request = ++knowledgeBaseRequestRef.current;
+    setLoading(true);
+    setError('');
+    try {
+      const response = await getKnowledgeBase(requestedId);
+      if (activeKnowledgeBaseIdRef.current === requestedId && knowledgeBaseRequestRef.current === request) {
+        setKnowledgeBase(response);
+        recordKnowledgeBaseView(requestedId).catch(() => undefined);
+      }
+    } catch (err) {
+      if (activeKnowledgeBaseIdRef.current === requestedId && knowledgeBaseRequestRef.current === request) {
+        setKnowledgeBase(null);
+        setError(errorMessage(err, '知识库详情加载失败'));
+      }
+    } finally {
+      if (activeKnowledgeBaseIdRef.current === requestedId && knowledgeBaseRequestRef.current === request) {
+        setLoading(false);
+      }
     }
-    setKnowledgeBase(kb);
-    setDocuments(docs.items);
-    setCategories(categoryResponse.items);
-    setPermissions(permissionResponse);
-    setExpandedIds(preference.expandedCategoryIds);
-    return true;
   }, [id]);
 
-  useEffect(() => {
-    searchRequestIdRef.current += 1;
-    userSearchRequestIdRef.current += 1;
-    const requestId = pageLoadRequestIdRef.current + 1;
-    pageLoadRequestIdRef.current = requestId;
-    setSearching(false);
-    setSearchResults([]);
-    setSearchFallback(null);
-    setSearchDebug(null);
-    setSavingVisibility(false);
-    setMemberWorkingId(null);
-    setMemberQuery('');
-    setUserResults([]);
-    setSearchingUsers(false);
-
+  const loadDocumentSummary = useCallback(async () => {
     if (!id) {
       return;
     }
 
-    let mounted = true;
-    setLoading(true);
-    setError('');
+    const requestedId = id;
+    const request = ++documentRequestRef.current;
+    setDocumentsLoading(true);
+    setDocumentError('');
+    try {
+      const response = await listDocuments(requestedId);
+      if (activeKnowledgeBaseIdRef.current === requestedId && documentRequestRef.current === request) {
+        setDocuments(response.items);
+      }
+    } catch (err) {
+      if (activeKnowledgeBaseIdRef.current === requestedId && documentRequestRef.current === request) {
+        setDocuments([]);
+        setDocumentError(errorMessage(err, '文档摘要加载失败'));
+      }
+    } finally {
+      if (activeKnowledgeBaseIdRef.current === requestedId && documentRequestRef.current === request) {
+        setDocumentsLoading(false);
+      }
+    }
+  }, [id]);
 
-    loadPage(requestId)
-      .then((applied) => {
-        if (mounted && applied) {
-          recordKnowledgeBaseView(id).catch(() => undefined);
-        }
-      })
-      .catch((err) => {
-        if (mounted && pageLoadRequestIdRef.current === requestId) {
-          setError(errorMessage(err, '知识库详情加载失败'));
-        }
-      })
-      .finally(() => {
-        if (mounted && pageLoadRequestIdRef.current === requestId) {
-          setLoading(false);
-        }
-      });
+  const loadPermissions = useCallback(async () => {
+    if (!id) {
+      return;
+    }
+
+    const requestedId = id;
+    const request = ++permissionRequestRef.current;
+    setPermissionError('');
+    try {
+      const response = await getKnowledgeBasePermissions(requestedId);
+      if (activeKnowledgeBaseIdRef.current === requestedId && permissionRequestRef.current === request) {
+        setPermissions(response);
+        setKnowledgeBase((current) => current?.id === requestedId
+          ? { ...current, visibility: response.visibility }
+          : current);
+      }
+    } catch (err) {
+      if (activeKnowledgeBaseIdRef.current === requestedId && permissionRequestRef.current === request) {
+        setPermissions(null);
+        setPermissionError(errorMessage(err, '成员权限加载失败'));
+      }
+    }
+  }, [id]);
+
+  useEffect(() => {
+    activeKnowledgeBaseIdRef.current = id;
+    setKnowledgeBase(null);
+    setDocuments([]);
+    setPermissions(null);
+    setSearchResults([]);
+    setUserResults([]);
+    visibilityRequestRef.current += 1;
+    userSearchRequestRef.current += 1;
+    semanticSearchRequestRef.current += 1;
+    memberMutationRef.current = null;
+    visibilityMutationRef.current = null;
+    setSavingVisibility(false);
+    setMemberWorkingId(null);
+    void loadKnowledgeBase();
+    void loadDocumentSummary();
+    void loadPermissions();
 
     return () => {
-      mounted = false;
-      if (pageLoadRequestIdRef.current === requestId) {
-        pageLoadRequestIdRef.current += 1;
+      if (activeKnowledgeBaseIdRef.current === id) {
+        activeKnowledgeBaseIdRef.current = undefined;
       }
-      permissionMutationRequestIdRef.current += 1;
+      knowledgeBaseRequestRef.current += 1;
+      documentRequestRef.current += 1;
+      permissionRequestRef.current += 1;
+      visibilityRequestRef.current += 1;
+      userSearchRequestRef.current += 1;
+      semanticSearchRequestRef.current += 1;
+      memberMutationRef.current = null;
+      visibilityMutationRef.current = null;
     };
-  }, [id, loadPage]);
+  }, [loadDocumentSummary, loadKnowledgeBase, loadPermissions]);
+
+  useEffect(() => {
+    let mounted = true;
+    Promise.all([
+      listKnowledgeBaseCategories().catch(() => ({ items: [] })),
+      getWorkspacePreference().catch(() => fallbackPreference),
+    ]).then(([categoryResponse, preference]) => {
+      if (!mounted) return;
+      setCategories(categoryResponse.items);
+      setExpandedIds(preference.expandedCategoryIds);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   function handleStartChat() {
     if (!knowledgeBase) {
@@ -170,128 +216,137 @@ export function KnowledgeBaseDetailPage() {
   async function handleVisibilityChange(visibility: 'private' | 'public') {
     if (
       !knowledgeBase
-      || savingVisibility
-      || memberWorkingId !== null
       || visibility === (permissions?.visibility ?? knowledgeBase.visibility)
+      || memberMutationRef.current
+      || visibilityMutationRef.current
     ) {
       return;
     }
 
-    const targetKnowledgeBaseId = knowledgeBase.id;
-    const pageRequestId = pageLoadRequestIdRef.current;
-    const mutationRequestId = permissionMutationRequestIdRef.current + 1;
-    permissionMutationRequestIdRef.current = mutationRequestId;
-    const isCurrentRequest = () => isCurrentPermissionMutation(
-      targetKnowledgeBaseId,
-      pageRequestId,
-      mutationRequestId,
-    );
+    const requestedId = knowledgeBase.id;
+    const operation = Symbol('update-knowledge-base-visibility');
+    visibilityMutationRef.current = operation;
+    const request = ++visibilityRequestRef.current;
+    permissionRequestRef.current += 1;
     setSavingVisibility(true);
     setError('');
 
     try {
-      const nextPermissions = await updateKnowledgeBasePermissions(targetKnowledgeBaseId, visibility);
-      if (!isCurrentRequest()) {
-        return;
-      }
-      setPermissions(nextPermissions);
-      setKnowledgeBase((current) => (
-        current?.id === targetKnowledgeBaseId
+      const nextPermissions = await updateKnowledgeBasePermissions(requestedId, visibility);
+      if (
+        activeKnowledgeBaseIdRef.current === requestedId
+        && visibilityRequestRef.current === request
+        && visibilityMutationRef.current === operation
+      ) {
+        setPermissions(nextPermissions);
+        setKnowledgeBase((current) => current?.id === requestedId
           ? { ...current, visibility: nextPermissions.visibility }
-          : current
-      ));
+          : current);
+      }
     } catch (err) {
-      if (isCurrentRequest()) {
+      if (
+        activeKnowledgeBaseIdRef.current === requestedId
+        && visibilityRequestRef.current === request
+        && visibilityMutationRef.current === operation
+      ) {
         setError(errorMessage(err, '权限展示字段更新失败'));
       }
     } finally {
-      if (isCurrentRequest()) {
+      if (
+        activeKnowledgeBaseIdRef.current === requestedId
+        && visibilityRequestRef.current === request
+        && visibilityMutationRef.current === operation
+      ) {
+        visibilityMutationRef.current = null;
         setSavingVisibility(false);
       }
     }
   }
 
-  async function reloadPermissions(
-    targetKnowledgeBaseId: string,
-    pageRequestId: number,
-    mutationRequestId: number,
-  ) {
-    if (!isCurrentPermissionMutation(targetKnowledgeBaseId, pageRequestId, mutationRequestId)) {
-      return;
-    }
-    const nextPermissions = await getKnowledgeBasePermissions(targetKnowledgeBaseId);
-    if (!isCurrentPermissionMutation(targetKnowledgeBaseId, pageRequestId, mutationRequestId)) {
+  async function reloadPermissions(requestedId: string, operation: symbol) {
+    const request = ++permissionRequestRef.current;
+    const nextPermissions = await getKnowledgeBasePermissions(requestedId);
+    if (
+      activeKnowledgeBaseIdRef.current !== requestedId
+      || memberMutationRef.current !== operation
+      || permissionRequestRef.current !== request
+    ) {
       return;
     }
     setPermissions(nextPermissions);
-    setKnowledgeBase((current) => (
-      current?.id === targetKnowledgeBaseId
-        ? { ...current, visibility: nextPermissions.visibility }
-        : current
-    ));
+    setPermissionError('');
+    setKnowledgeBase((current) => current?.id === requestedId
+      ? { ...current, visibility: nextPermissions.visibility }
+      : current);
   }
 
   async function handleUserSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const requestId = userSearchRequestIdRef.current + 1;
-    userSearchRequestIdRef.current = requestId;
     const query = memberQuery.trim();
-    if (!query || !knowledgeBase) {
+    if (!query) {
+      userSearchRequestRef.current += 1;
       setUserResults([]);
       return;
     }
 
-    const targetKnowledgeBaseId = knowledgeBase.id;
-    const isCurrentRequest = () => (
-      userSearchRequestIdRef.current === requestId
-      && activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId
-    );
+    const request = ++userSearchRequestRef.current;
+    const requestedKnowledgeBaseId = knowledgeBase?.id;
     setSearchingUsers(true);
     setError('');
 
     try {
       const response = await searchUsers(query);
-      if (isCurrentRequest()) {
+      if (
+        userSearchRequestRef.current === request
+        && activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
+      ) {
         setUserResults(response.items);
       }
     } catch (err) {
-      if (isCurrentRequest()) {
+      if (
+        userSearchRequestRef.current === request
+        && activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
+      ) {
         setError(errorMessage(err, '用户搜索失败'));
         setUserResults([]);
       }
     } finally {
-      if (isCurrentRequest()) {
+      if (
+        userSearchRequestRef.current === request
+        && activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
+      ) {
         setSearchingUsers(false);
       }
     }
   }
 
   async function handleAddMember(user: UserSummary) {
-    if (!knowledgeBase || savingVisibility || memberWorkingId !== null) {
+    if (!knowledgeBase || memberMutationRef.current || visibilityMutationRef.current) {
       return;
     }
 
-    const targetKnowledgeBaseId = knowledgeBase.id;
-    const pageRequestId = pageLoadRequestIdRef.current;
-    const mutationRequestId = permissionMutationRequestIdRef.current + 1;
-    permissionMutationRequestIdRef.current = mutationRequestId;
-    const isCurrentRequest = () => isCurrentPermissionMutation(
-      targetKnowledgeBaseId,
-      pageRequestId,
-      mutationRequestId,
-    );
+    const requestedId = knowledgeBase.id;
+    const operation = Symbol('add-knowledge-base-member');
+    memberMutationRef.current = operation;
     setMemberWorkingId(user.id);
     setError('');
 
     try {
-      await addKnowledgeBaseMember(targetKnowledgeBaseId, user.id, memberRole);
-      await reloadPermissions(targetKnowledgeBaseId, pageRequestId, mutationRequestId);
+      await addKnowledgeBaseMember(requestedId, user.id, memberRole);
+      await reloadPermissions(requestedId, operation);
     } catch (err) {
-      if (isCurrentRequest()) {
+      if (
+        activeKnowledgeBaseIdRef.current === requestedId
+        && memberMutationRef.current === operation
+      ) {
         setError(errorMessage(err, '成员添加失败'));
       }
     } finally {
-      if (isCurrentRequest()) {
+      if (
+        activeKnowledgeBaseIdRef.current === requestedId
+        && memberMutationRef.current === operation
+      ) {
+        memberMutationRef.current = null;
         setMemberWorkingId(null);
       }
     }
@@ -300,42 +355,43 @@ export function KnowledgeBaseDetailPage() {
   async function handleUpdateMemberRole(member: PermissionMember, role: MemberRole) {
     if (
       !knowledgeBase
-      || savingVisibility
-      || memberWorkingId !== null
       || member.role === 'owner'
       || member.role === role
+      || memberMutationRef.current
+      || visibilityMutationRef.current
     ) {
       return;
     }
 
-    const targetKnowledgeBaseId = knowledgeBase.id;
-    const pageRequestId = pageLoadRequestIdRef.current;
-    const mutationRequestId = permissionMutationRequestIdRef.current + 1;
-    permissionMutationRequestIdRef.current = mutationRequestId;
-    const isCurrentRequest = () => isCurrentPermissionMutation(
-      targetKnowledgeBaseId,
-      pageRequestId,
-      mutationRequestId,
-    );
+    const requestedId = knowledgeBase.id;
+    const operation = Symbol('update-knowledge-base-member');
+    memberMutationRef.current = operation;
     setMemberWorkingId(member.id);
     setError('');
 
     try {
-      await updateKnowledgeBaseMember(targetKnowledgeBaseId, member.id, role);
-      await reloadPermissions(targetKnowledgeBaseId, pageRequestId, mutationRequestId);
+      await updateKnowledgeBaseMember(requestedId, member.id, role);
+      await reloadPermissions(requestedId, operation);
     } catch (err) {
-      if (isCurrentRequest()) {
+      if (
+        activeKnowledgeBaseIdRef.current === requestedId
+        && memberMutationRef.current === operation
+      ) {
         setError(errorMessage(err, '成员角色更新失败'));
       }
     } finally {
-      if (isCurrentRequest()) {
+      if (
+        activeKnowledgeBaseIdRef.current === requestedId
+        && memberMutationRef.current === operation
+      ) {
+        memberMutationRef.current = null;
         setMemberWorkingId(null);
       }
     }
   }
 
   async function handleDeleteMember(member: PermissionMember) {
-    if (!knowledgeBase || savingVisibility || memberWorkingId !== null || member.role === 'owner') {
+    if (!knowledgeBase || member.role === 'owner' || memberMutationRef.current || visibilityMutationRef.current) {
       return;
     }
 
@@ -344,27 +400,28 @@ export function KnowledgeBaseDetailPage() {
       return;
     }
 
-    const targetKnowledgeBaseId = knowledgeBase.id;
-    const pageRequestId = pageLoadRequestIdRef.current;
-    const mutationRequestId = permissionMutationRequestIdRef.current + 1;
-    permissionMutationRequestIdRef.current = mutationRequestId;
-    const isCurrentRequest = () => isCurrentPermissionMutation(
-      targetKnowledgeBaseId,
-      pageRequestId,
-      mutationRequestId,
-    );
+    const requestedId = knowledgeBase.id;
+    const operation = Symbol('delete-knowledge-base-member');
+    memberMutationRef.current = operation;
     setMemberWorkingId(member.id);
     setError('');
 
     try {
-      await deleteKnowledgeBaseMember(targetKnowledgeBaseId, member.id);
-      await reloadPermissions(targetKnowledgeBaseId, pageRequestId, mutationRequestId);
+      await deleteKnowledgeBaseMember(requestedId, member.id);
+      await reloadPermissions(requestedId, operation);
     } catch (err) {
-      if (isCurrentRequest()) {
+      if (
+        activeKnowledgeBaseIdRef.current === requestedId
+        && memberMutationRef.current === operation
+      ) {
         setError(errorMessage(err, '成员移除失败'));
       }
     } finally {
-      if (isCurrentRequest()) {
+      if (
+        activeKnowledgeBaseIdRef.current === requestedId
+        && memberMutationRef.current === operation
+      ) {
+        memberMutationRef.current = null;
         setMemberWorkingId(null);
       }
     }
@@ -376,40 +433,43 @@ export function KnowledgeBaseDetailPage() {
       return;
     }
 
-    const targetKnowledgeBaseId = knowledgeBase.id;
-    const requestId = searchRequestIdRef.current + 1;
-    searchRequestIdRef.current = requestId;
-    const isCurrentRequest = () =>
-      searchRequestIdRef.current === requestId && activeKnowledgeBaseIdRef.current === targetKnowledgeBaseId;
-
+    const requestedKnowledgeBaseId = knowledgeBase.id;
+    const request = ++semanticSearchRequestRef.current;
+    const query = searchQuery.trim();
     setSearching(true);
     setError('');
     setSearchFallback(null);
     setSearchDebug(null);
 
     try {
-      const response = await searchKnowledgeBase(targetKnowledgeBaseId, {
-        query: searchQuery.trim(),
+      const response = await searchKnowledgeBase(requestedKnowledgeBaseId, {
+        query,
         vectorTopN: knowledgeBase.retrievalConfig.vectorTopN,
         rerankTopK: knowledgeBase.retrievalConfig.rerankTopK,
         enableRerank: knowledgeBase.retrievalConfig.enableRerank,
         debug: searchDebugEnabled,
       });
-      if (!isCurrentRequest()) {
-        return;
+      if (
+        semanticSearchRequestRef.current === request
+        && activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
+      ) {
+        setSearchResults(response.items);
+        setSearchFallback(response.rerankFallback?.used ? response.rerankFallback : null);
       }
-      setSearchResults(response.items);
-      setSearchFallback(response.rerankFallback?.used ? response.rerankFallback : null);
-      setSearchDebug(response.debug ?? null);
     } catch (err) {
-      if (isCurrentRequest()) {
+      if (
+        semanticSearchRequestRef.current === request
+        && activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
+      ) {
         setError(errorMessage(err, '知识库内检索失败'));
         setSearchResults([]);
         setSearchFallback(null);
-        setSearchDebug(null);
       }
     } finally {
-      if (isCurrentRequest()) {
+      if (
+        semanticSearchRequestRef.current === request
+        && activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
+      ) {
         setSearching(false);
       }
     }
@@ -427,7 +487,7 @@ export function KnowledgeBaseDetailPage() {
       <WorkspaceShell active="knowledge-bases" categories={categories} expandedIds={expandedIds}>
         <div className="kb-detail-page">
           <div className="panel">
-            <LoadingSkeleton rows={5} columns={4} />
+            <LoadingSkeleton rows={5} columns={4} announce />
           </div>
         </div>
       </WorkspaceShell>
@@ -438,7 +498,17 @@ export function KnowledgeBaseDetailPage() {
     return (
       <WorkspaceShell active="knowledge-bases" categories={categories} expandedIds={expandedIds}>
         <div className="kb-detail-page">
-          <div className="empty-state">{error || '知识库不存在或无权访问。'}</div>
+          <div className="empty-state" role="alert">
+            <p>{error || '知识库不存在或无权访问。'}</p>
+            <div className="toolbar">
+              <button className="secondary-button" type="button" onClick={() => void loadKnowledgeBase()}>
+                重试详情
+              </button>
+              <Link className="secondary-link" to="/knowledge-bases">
+                返回知识库列表
+              </Link>
+            </div>
+          </div>
         </div>
       </WorkspaceShell>
     );
@@ -447,6 +517,7 @@ export function KnowledgeBaseDetailPage() {
   const completedCount = documents.filter((document) => document.status === 'completed').length;
   const failedCount = documents.filter((document) => document.status === 'failed').length;
   const processingCount = documents.filter((document) => !terminalStatuses.includes(document.status)).length;
+  const documentMetricsKnown = documents.length > 0 || (!documentsLoading && !documentError);
   const visibility = permissions?.visibility ?? knowledgeBase.visibility ?? 'private';
   const managers = (permissions?.managers ?? []).filter((member) => member.role !== 'owner');
   const permissionMutationBusy = savingVisibility || memberWorkingId !== null;
@@ -473,17 +544,35 @@ export function KnowledgeBaseDetailPage() {
             <Link className="secondary-link" to={`/knowledge-bases/${knowledgeBase.id}/documents`}>
               文档管理
             </Link>
-            <button type="button" onClick={handleStartChat}>开始问答</button>
+            {completedCount > 0 ? (
+              <button type="button" onClick={handleStartChat}>开始问答</button>
+            ) : documentsLoading ? (
+              <button type="button" disabled>检查文档中...</button>
+            ) : documentError ? (
+              <button type="button" onClick={() => void loadDocumentSummary()}>重试文档摘要</button>
+            ) : documents.length === 0 ? (
+              <Link className="button-link" to={`/knowledge-bases/${knowledgeBase.id}/documents?intent=upload`}>
+                上传文档
+              </Link>
+            ) : processingCount > 0 ? (
+              <Link className="button-link" to={`/knowledge-bases/${knowledgeBase.id}/documents`}>
+                查看处理进度
+              </Link>
+            ) : (
+              <Link className="button-link" to={`/knowledge-bases/${knowledgeBase.id}/documents`}>
+                处理失败文档
+              </Link>
+            )}
           </div>
         </header>
 
-        {error && <p className="error-text">{error}</p>}
+        {error && <p className="error-text" role="alert">{error}</p>}
 
         <div className="summary-grid detail-summary">
-          <MetricCard label="文档总数" value={documents.length} />
-          <MetricCard label="已完成" value={completedCount} />
-          <MetricCard label="处理中" value={processingCount} />
-          <MetricCard label="失败文档" value={failedCount} tone="danger" />
+          <MetricCard label="文档总数" value={documentMetricsKnown ? documents.length : '--'} />
+          <MetricCard label="已完成" value={documentMetricsKnown ? completedCount : '--'} />
+          <MetricCard label="处理中" value={documentMetricsKnown ? processingCount : '--'} />
+          <MetricCard label="失败文档" value={documentMetricsKnown ? failedCount : '--'} tone="danger" />
         </div>
 
         <div className="detail-grid">
@@ -497,8 +586,8 @@ export function KnowledgeBaseDetailPage() {
               <InfoItem label="更新时间" value={formatDateTime(knowledgeBase.updatedAt)} />
               <InfoItem label="创建时间" value={formatDateTime(knowledgeBase.createdAt)} />
               <InfoItem label="最后更新人" value={knowledgeBase.updatedBy?.displayName || knowledgeBase.updatedBy?.username || '未知'} />
-              <InfoItem label="浏览量" value={String(knowledgeBase.viewCount ?? 0)} />
-              <InfoItem label="问答数" value={String(knowledgeBase.questionCount ?? 0)} />
+              <InfoItem label="浏览量" value={formatOptionalCount(knowledgeBase.viewCount)} />
+              <InfoItem label="问答数" value={formatOptionalCount(knowledgeBase.questionCount)} />
             </div>
             <div className="tag-section">
               <h3>标签</h3>
@@ -522,12 +611,20 @@ export function KnowledgeBaseDetailPage() {
               <span className="muted-text">管理成员及其角色</span>
             </div>
             <div className="permission-panel-body">
+              {permissionError && (
+                <div className="empty-state" role="alert">
+                  <p>{permissionError}</p>
+                  <button className="secondary-button" type="button" onClick={() => void loadPermissions()}>
+                    重试成员权限
+                  </button>
+                </div>
+              )}
               <label>
                 可见性
                 <select
                   value={visibility}
                   onChange={(event) => void handleVisibilityChange(event.target.value as 'private' | 'public')}
-                  disabled={permissionMutationBusy}
+                  disabled={savingVisibility || Boolean(memberWorkingId) || Boolean(permissionError)}
                 >
                   <option value="private">私有</option>
                   <option value="public">公开</option>
@@ -542,16 +639,22 @@ export function KnowledgeBaseDetailPage() {
                   placeholder="按用户名或显示名搜索"
                   value={memberQuery}
                   onChange={(event) => setMemberQuery(event.target.value)}
+                  disabled={savingVisibility || Boolean(memberWorkingId) || Boolean(permissionError)}
                 />
                 <select
                   aria-label="新增成员角色"
                   value={memberRole}
                   onChange={(event) => setMemberRole(event.target.value as MemberRole)}
+                  disabled={savingVisibility || Boolean(memberWorkingId) || Boolean(permissionError)}
                 >
                   <option value="member">成员</option>
                   <option value="manager">管理员</option>
                 </select>
-                <button type="submit" disabled={searchingUsers || !memberQuery.trim()}>
+                <button
+                  aria-label="搜索"
+                  type="submit"
+                  disabled={savingVisibility || Boolean(memberWorkingId) || !memberQuery.trim() || Boolean(permissionError)}
+                >
                   {searchingUsers ? '搜索中...' : '搜索'}
                 </button>
               </form>
@@ -564,7 +667,7 @@ export function KnowledgeBaseDetailPage() {
                         className="secondary-button"
                         type="button"
                         onClick={() => void handleAddMember(user)}
-                        disabled={permissionMutationBusy || user.id === permissions?.owner.id}
+                        disabled={savingVisibility || Boolean(memberWorkingId) || user.id === permissions?.owner.id}
                       >
                         {memberWorkingId === user.id ? '添加中...' : `设为${roleLabel(memberRole)}`}
                       </button>
@@ -613,7 +716,7 @@ export function KnowledgeBaseDetailPage() {
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
                 />
-                <button type="submit" disabled={searching || !searchQuery.trim()}>
+                <button aria-label="检索" type="submit" disabled={!searchQuery.trim()}>
                   {searching ? '检索中...' : '检索'}
                 </button>
                 <label className="semantic-debug-toggle">
@@ -662,7 +765,13 @@ export function KnowledgeBaseDetailPage() {
               </Link>
             </div>
             <div className="document-status-list">
-              {documents.length === 0 ? (
+              {documentsLoading ? (
+                <LoadingSkeleton rows={3} columns={2} compact announce />
+              ) : documentError ? (
+                <div className="empty-state" role="alert">
+                  <p>{documentError}</p>
+                </div>
+              ) : documents.length === 0 ? (
                 <div className="empty-state">还没有文档。进入文档管理上传 txt、md 或 pdf。</div>
               ) : (
                 documents.slice(0, 6).map((document) => (
@@ -685,7 +794,7 @@ export function KnowledgeBaseDetailPage() {
   );
 }
 
-function MetricCard({ label, value, tone }: { label: string; value: number; tone?: 'danger' }) {
+function MetricCard({ label, value, tone }: { label: string; value: number | string; tone?: 'danger' }) {
   return (
     <div className={tone === 'danger' ? 'stat-card danger-stat' : 'stat-card'}>
       <span>{label}</span>
@@ -805,17 +914,17 @@ function SearchDebugPanel({ debug }: { debug: KnowledgeBaseSearchDebug }) {
 function PermissionList({
   title,
   members,
+  disabled = false,
   emptyText = '暂无成员',
   workingId,
-  disabled = false,
   onDelete,
   onRoleChange,
 }: {
   title: string;
   members: PermissionMember[];
+  disabled?: boolean;
   emptyText?: string;
   workingId?: string | null;
-  disabled?: boolean;
   onDelete?: (member: PermissionMember) => void;
   onRoleChange?: (member: PermissionMember, role: MemberRole) => void;
 }) {
@@ -953,6 +1062,10 @@ function formatBytes(value: number): string {
 
 function formatScore(value: number): string {
   return value.toFixed(3);
+}
+
+function formatOptionalCount(value: number | null | undefined): string {
+  return typeof value === 'number' ? String(value) : '--';
 }
 
 function formatDateTime(value: string): string {

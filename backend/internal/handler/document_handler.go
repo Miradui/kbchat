@@ -240,11 +240,21 @@ func (h *DocumentHandler) Chunks(c *gin.Context) {
 	if !ok {
 		return
 	}
+	var chunkID *uuid.UUID
+	if rawChunkID, provided := c.GetQuery("chunkId"); provided {
+		parsedChunkID, err := uuid.Parse(rawChunkID)
+		if err != nil {
+			RespondError(c, apperror.Validation(map[string]any{"chunkId": "Chunk ID 不合法"}))
+			return
+		}
+		chunkID = &parsedChunkID
+	}
 
 	res, err := h.documents.Chunks(c.Request.Context(), userID, documentID, dto.ChunkListQuery{
 		Page:     queryInt(c, "page", 1),
 		PageSize: queryInt(c, "pageSize", 20),
 		Q:        c.Query("q"),
+		ChunkID:  chunkID,
 	})
 	if err != nil {
 		RespondError(c, err)

@@ -1,6 +1,6 @@
-import { act, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { StrictMode } from 'react';
+import { StrictMode, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -8,7 +8,8 @@ import { getCurrentUser, logout } from '../api/resources';
 import { currentUserStore } from '../store/currentUserStore';
 import { tokenStore } from '../store/tokenStore';
 import { renderWithRouter } from '../test/render';
-import { AppShell, completeLogout } from './AppShell';
+import { Dialog } from '../components/ui/Dialog';
+import { AppShell, completeLogout, finishLocalLogout } from './AppShell';
 
 vi.mock('../api/resources', () => ({ getCurrentUser: vi.fn(), logout: vi.fn() }));
 const mockedGetCurrentUser = vi.mocked(getCurrentUser);
@@ -47,9 +48,37 @@ function LocationProbe() {
   return <output aria-label="当前位置">{location.pathname + location.search}</output>;
 }
 
+function ShellWithContextDialog() {
+  const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <AppShell
+      active="knowledge-bases"
+      contextSidebar={<>
+        <button aria-expanded={expanded} type="button" onClick={() => setExpanded((value) => !value)}>展开制度分类</button>
+        <button data-app-drawer-dismiss="true" type="button" onClick={() => setOpen(true)}>编辑制度分类</button>
+      </>}
+    >
+      <Dialog open={open} title="编辑分类" onClose={() => setOpen(false)}>
+        <button type="button">保存分类</button>
+      </Dialog>
+    </AppShell>
+  );
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
   currentUserStore.clear();
-  mockedGetCurrentUser.mockReset().mockResolvedValue({ id: 'user-1', username: 'admin', displayName: '管理员' });
+  mockedGetCurrentUser.mockReset().mockResolvedValue({
+    id: 'user-1',
+    username: 'admin',
+    displayName: '管理员',
+  });
   mockedLogout.mockReset().mockResolvedValue(undefined);
 });
 afterEach(() => {
@@ -157,7 +186,11 @@ describe('AppShell', () => {
 
     expect(screen.getByRole('button', { name: '关闭主导航' })).toHaveFocus();
     expect(document.body.style.overflow).toBe('hidden');
-    expect(screen.getByRole('main')).toHaveAttribute('inert');
+    const applicationMain = opener.closest('.app-main');
+    expect(applicationMain).toHaveAttribute('inert');
+    expect(applicationMain).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByRole('main', { hidden: true })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: '全局搜索', hidden: true }).closest('.app-main')).toBe(applicationMain);
 
     const first = screen.getByRole('link', { name: 'RAG Console' });
     const last = screen.getByRole('link', { name: '标签管理' });
@@ -170,7 +203,8 @@ describe('AppShell', () => {
     await user.keyboard('{Escape}');
     expect(document.body.style.overflow).toBe('');
     expect(opener).toHaveFocus();
-    expect(screen.getByRole('main')).not.toHaveAttribute('inert');
+    expect(applicationMain).not.toHaveAttribute('inert');
+    expect(applicationMain).not.toHaveAttribute('aria-hidden');
   });
 
   it('closes the drawer after navigation', async () => {
@@ -183,6 +217,33 @@ describe('AppShell', () => {
     expect(screen.getByLabelText('当前位置')).toHaveTextContent('/knowledge-bases');
     expect(screen.getByRole('navigation', { name: '主导航', hidden: true }).closest('aside')).not.toHaveClass('is-open');
     expect(document.body.style.overflow).toBe('');
+  });
+
+  it('closes the mobile drawer before opening a modal from its context actions', async () => {
+    stubMatchMedia(true);
+    const user = userEvent.setup();
+    renderWithRouter(<ShellWithContextDialog />);
+
+    await user.click(screen.getByRole('button', { name: '打开主导航' }));
+    await user.click(screen.getByRole('button', { name: '编辑制度分类' }));
+
+    const dialog = screen.getByRole('dialog', { name: '编辑分类' });
+    expect(dialog.closest('.app-main')).not.toHaveAttribute('inert');
+    expect(dialog.closest('.app-main')).not.toHaveAttribute('aria-hidden');
+    expect(screen.getByRole('button', { name: '保存分类' })).toHaveFocus();
+  });
+
+  it('keeps the mobile drawer open for context actions that stay inside the drawer', async () => {
+    stubMatchMedia(true);
+    const user = userEvent.setup();
+    renderWithRouter(<ShellWithContextDialog />);
+
+    await user.click(screen.getByRole('button', { name: '打开主导航' }));
+    const expand = screen.getByRole('button', { name: '展开制度分类' });
+    await user.click(expand);
+
+    expect(expand).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('navigation', { name: '主导航' }).closest('aside')).toHaveClass('is-open');
   });
 
   it('encodes global search and ignores an empty submission', async () => {
@@ -216,5 +277,49 @@ describe('AppShell', () => {
     await user.click(screen.getByRole('button', { name: '退出登录' }));
     await waitFor(() => expect(tokenStore.getToken()).toBeNull());
     await waitFor(() => expect(screen.getByLabelText('当前位置')).toHaveTextContent('/login'));
+  });
+
+  it('finishes local logout without writing component state after unmount', () => {
+    tokenStore.setToken('token');
+    const setLoggingOut = vi.fn();
+    const navigate = vi.fn();
+
+    finishLocalLogout(false, setLoggingOut, navigate);
+
+    expect(setLoggingOut).not.toHaveBeenCalled();
+    expect(tokenStore.getToken()).toBeNull();
+    expect(navigate).toHaveBeenCalledWith('/login', { replace: true });
+  });
+
+  it('still clears the local token when a pending logout finishes after unmount', async () => {
+    stubMatchMedia(false);
+    tokenStore.setToken('token');
+    const result = deferred<void>();
+    const { unmount } = renderWithRouter(
+      <AppShell active="home" logoutRequest={() => result.promise}><p>内容</p></AppShell>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '退出登录' }));
+    unmount();
+    await act(async () => result.resolve());
+
+    expect(tokenStore.getToken()).toBeNull();
+  });
+
+  it('synchronously rejects repeated logout attempts', async () => {
+    stubMatchMedia(false);
+    const result = deferred<void>();
+    const request = vi.fn(() => result.promise);
+    renderWithRouter(<AppShell active="home" logoutRequest={request}><p>内容</p></AppShell>);
+    const button = screen.getByRole('button', { name: '退出登录' });
+
+    act(() => {
+      fireEvent.click(button);
+      fireEvent.click(button);
+    });
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(button).toBeDisabled();
+    result.resolve();
   });
 });

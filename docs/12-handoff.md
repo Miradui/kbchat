@@ -43,6 +43,8 @@
    - 知识库工作台接口：分类树、增强列表、统计、收藏、最近浏览。
    - 全局文档列表和全局导入文档接口。
    - 全局关键词搜索接口，覆盖当前用户拥有的知识库、文档和 chunk 内容。
+   - 全局关键词搜索支持服务端类型筛选、稳定分页和总数；`all` 模式按类型公平轮转，避免结果类型饿死。
+   - 聊天发送使用 session 作用域的 `clientRequestId` 严格幂等契约，网络结果未知时可跨刷新按请求 ID 恢复。
 9. 本地 `.env` 已配置 chat、embedding、rerank 三组模型 Provider；Rerank 当前按用户配置关闭。
 
 ## 已验证命令
@@ -196,6 +198,8 @@ Authorization: Bearer <token>
 14. `GET /api/v1/search` 是关键词搜索；知识库内语义检索仍使用 `POST /api/v1/knowledge-bases/:id/search`。
 15. `POST /api/v1/knowledge-bases/:id/search` 仅在请求 `debug=true` 时返回调试 payload；普通响应不携带 debug。
 16. Chat regenerate 不覆盖旧 assistant 消息；它会新增一条 assistant 消息，并且 citations 只来自本次重新检索进入 prompt 的 chunks。
+17. `POST /api/v1/chat/sessions/:id/messages` 必须携带 UUID `clientRequestId`；同键同内容返回原消息对，同键不同内容返回 `IDEMPOTENCY_KEY_REUSED`。
+18. `GET /api/v1/search` 支持 `type/page/pageSize`，响应包含 `total/page/pageSize`；前端筛选和分页均由 URL 驱动。
 
 ## Rerank Provider Update
 

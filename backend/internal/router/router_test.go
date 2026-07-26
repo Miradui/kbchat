@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
@@ -114,6 +116,111 @@ func TestNewRerankProviderUsesDisabledProviderWhenDisabled(t *testing.T) {
 
 	if _, ok := provider.(*corererank.DisabledProvider); !ok {
 		t.Fatalf("expected disabled provider, got %T", provider)
+	}
+}
+
+func TestDocumentChunksRejectInvalidChunkID(t *testing.T) {
+	cfg := config.Config{AppEnv: "test", ServerPort: "0", JWTSecret: "this-is-a-long-router-test-secret-1234", JWTExpiresIn: "1h"}
+	token, err := auth.GenerateToken(cfg, uuid.New())
+	if err != nil {
+		t.Fatalf("generate chunk query token: %v", err)
+	}
+	for _, rawChunkID := range []string{"not-a-uuid", ""} {
+		t.Run("chunkId="+rawChunkID, func(t *testing.T) {
+			r := New(cfg, testDB(t), logger.New(cfg))
+			req := httptest.NewRequest(
+				http.MethodGet,
+				"/api/v1/documents/"+uuid.NewString()+"/chunks?chunkId="+rawChunkID,
+				nil,
+			)
+			req.Header.Set("Authorization", "Bearer "+token)
+			rec := httptest.NewRecorder()
+
+			r.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected invalid chunk ID status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+			}
+			var response struct {
+				Code    string         `json:"code"`
+				Details map[string]any `json:"details"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatalf("decode validation response: %v", err)
+			}
+			if response.Code != "VALIDATION_ERROR" || response.Details["chunkId"] == nil {
+				t.Fatalf("unexpected validation response: %#v", response)
+			}
+		})
+	}
+}
+
+func TestGlobalSearchRejectsInvalidContractParameters(t *testing.T) {
+	cfg := config.Config{AppEnv: "test", ServerPort: "0", JWTSecret: "this-is-a-long-router-test-secret-1234", JWTExpiresIn: "1h"}
+	token, err := auth.GenerateToken(cfg, uuid.New())
+	if err != nil {
+		t.Fatalf("generate search token: %v", err)
+	}
+	r := New(cfg, testDB(t), logger.New(cfg))
+
+	for _, path := range []string{
+		"/api/v1/search?q=%20%20%20",
+		"/api/v1/search?q=policy&type=invalid",
+		"/api/v1/search?q=policy&page=abc",
+		"/api/v1/search?q=policy&pageSize=abc",
+	} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			rec := httptest.NewRecorder()
+
+			r.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected validation status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+			}
+			var response struct {
+				Code string `json:"code"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatalf("decode validation response: %v", err)
+			}
+			if response.Code != "VALIDATION_ERROR" {
+				t.Fatalf("expected VALIDATION_ERROR, got %#v", response)
+			}
+		})
+	}
+}
+
+func TestSendChatMessageRequiresUUIDClientRequestID(t *testing.T) {
+	cfg := config.Config{AppEnv: "test", ServerPort: "0", JWTSecret: "this-is-a-long-router-test-secret-1234", JWTExpiresIn: "1h"}
+	token, err := auth.GenerateToken(cfg, uuid.New())
+	if err != nil {
+		t.Fatalf("generate chat token: %v", err)
+	}
+	r := New(cfg, testDB(t), logger.New(cfg))
+	sessionID := uuid.NewString()
+
+	for name, body := range map[string]string{
+		"missing": `{"content":"question"}`,
+		"invalid": `{"content":"question","clientRequestId":"not-a-uuid"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/chat/sessions/"+sessionID+"/messages",
+				strings.NewReader(body),
+			)
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			r.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected validation status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 

@@ -3,6 +3,7 @@ type LoadingSkeletonProps = {
   columns?: number;
   compact?: boolean;
   announce?: boolean;
+  label?: string;
 };
 
 export function LoadingSkeleton({
@@ -10,12 +11,13 @@ export function LoadingSkeleton({
   columns = 3,
   compact = false,
   announce = false,
+  label = '正在加载',
 }: LoadingSkeletonProps) {
   return (
     <div
       aria-atomic={announce || undefined}
       aria-hidden={announce ? undefined : true}
-      aria-label={announce ? '正在加载' : undefined}
+      aria-label={announce ? label : undefined}
       aria-live={announce ? 'polite' : undefined}
       className={compact ? 'skeleton-stack compact' : 'skeleton-stack'}
       role={announce ? 'status' : undefined}

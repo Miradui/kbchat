@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 
 import { ApiError } from '../../api/client';
 import {
@@ -10,8 +11,10 @@ import {
 } from '../../api/resources';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
-import { useDialogModal } from '../../components/ui/Dialog';
+import { IconButton } from '../../components/ui/IconButton';
+import { useModalFocus } from '../../components/ui/useModalFocus';
 import type { RecycleBinItem } from '../../types/api';
+import { formatDocumentDateTime } from './documentDisplay';
 
 type DocumentRecycleBinDrawerProps = {
   onChanged: () => void;
@@ -22,10 +25,16 @@ export function DocumentRecycleBinDrawer({
   onChanged,
   onClose,
 }: DocumentRecycleBinDrawerProps) {
-  const requestIdRef = useRef(0);
-  const mountedRef = useRef(true);
+  const loadRequestRef = useRef(0);
+  const mutationOperationRef = useRef<symbol | null>(null);
   const explicitRefreshInFlightRef = useRef(false);
-  const mutationInFlightRef = useRef(false);
+  const mountedRef = useRef(false);
+  const requestClose = useCallback(() => {
+    if (!mutationOperationRef.current) {
+      onClose();
+    }
+  }, [onClose]);
+  const panelRef = useModalFocus<HTMLElement>(true, requestClose);
   const [items, setItems] = useState<RecycleBinItem[]>([]);
   const [page, setPage] = useState(1);
   const [pageSize] = useState(20);
@@ -36,33 +45,29 @@ export function DocumentRecycleBinDrawer({
   const [submitting, setSubmitting] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<RecycleBinItem | null>(null);
   const [confirmEmpty, setConfirmEmpty] = useState(false);
+  const [confirmError, setConfirmError] = useState('');
   const [error, setError] = useState('');
   const mutationBusy = workingId !== null || submitting;
-  const panelRef = useDialogModal<HTMLElement>(true, mutationBusy ? () => undefined : onClose);
 
   const loadPage = useCallback(async () => {
-    const requestId = requestIdRef.current + 1;
-    requestIdRef.current = requestId;
-    let response: Awaited<ReturnType<typeof listDocumentRecycleBin>>;
+    const request = ++loadRequestRef.current;
+    setLoading(true);
+    setError('');
     try {
-      response = await listDocumentRecycleBin(page, pageSize);
-    } catch (err) {
-      if (!mountedRef.current || requestIdRef.current !== requestId) {
-        return;
+      const response = await listDocumentRecycleBin(page, pageSize);
+      if (loadRequestRef.current === request) {
+        setItems(response.items);
+        setTotal(response.total);
       }
-      throw err;
+    } catch (err) {
+      if (loadRequestRef.current === request) {
+        setError(errorMessage(err, '文档回收站加载失败'));
+      }
+    } finally {
+      if (loadRequestRef.current === request) {
+        setLoading(false);
+      }
     }
-    if (!mountedRef.current || requestIdRef.current !== requestId) {
-      return;
-    }
-    setTotal(response.total);
-    const lastPage = Math.max(1, Math.ceil(response.total / pageSize));
-    if (page > lastPage) {
-      setItems([]);
-      setPage(lastPage);
-      return;
-    }
-    setItems(response.items);
   }, [page, pageSize]);
 
   const refreshPage = useCallback(async (fallback: string) => {
@@ -104,24 +109,11 @@ export function DocumentRecycleBinDrawer({
   }, [loadPage, onChanged]);
 
   useEffect(() => {
-    let active = true;
-    setLoading(true);
-    setError('');
-
-    loadPage()
-      .catch((err) => {
-        if (active && mountedRef.current) {
-          setError(errorMessage(err, '文档回收站加载失败'));
-        }
-      })
-      .finally(() => {
-        if (active && mountedRef.current) {
-          setLoading(false);
-        }
-      });
+    void loadPage();
 
     return () => {
-      active = false;
+      loadRequestRef.current += 1;
+      mutationOperationRef.current = null;
     };
   }, [loadPage]);
 
@@ -133,118 +125,131 @@ export function DocumentRecycleBinDrawer({
   }, []);
 
   async function handleRestore(item: RecycleBinItem) {
-    if (mutationInFlightRef.current) {
+    if (mutationOperationRef.current) {
       return;
     }
-    mutationInFlightRef.current = true;
+    const operation = Symbol('restore-document');
+    mutationOperationRef.current = operation;
     setWorkingId(item.id);
     setError('');
 
     try {
-      try {
-        await restoreDocument(item.id);
-      } catch (err) {
-        if (mountedRef.current) {
-          setError(errorMessage(err, '文档恢复失败'));
-        }
+      await restoreDocument(item.id);
+      if (mutationOperationRef.current !== operation) {
         return;
       }
-      await refreshAfterMutation('文档已恢复');
+      await loadPage();
+      if (mutationOperationRef.current === operation) {
+        onChanged();
+      }
+    } catch (err) {
+      if (mutationOperationRef.current === operation) {
+        setError(errorMessage(err, '文档恢复失败'));
+      }
     } finally {
-      mutationInFlightRef.current = false;
-      if (mountedRef.current) {
+      if (mutationOperationRef.current === operation) {
+        mutationOperationRef.current = null;
         setWorkingId(null);
       }
     }
   }
 
   async function handleRestorePage() {
-    if (items.length === 0 || mutationInFlightRef.current) {
+    if (items.length === 0 || mutationOperationRef.current) {
       return;
     }
 
-    mutationInFlightRef.current = true;
+    const operation = Symbol('restore-document-page');
+    mutationOperationRef.current = operation;
     setSubmitting(true);
     setError('');
 
     try {
-      try {
-        await batchRestoreDocuments(items.map((item) => item.id));
-      } catch (err) {
-        if (mountedRef.current) {
-          setError(errorMessage(err, '批量恢复失败'));
-        }
+      await batchRestoreDocuments(items.map((item) => item.id));
+      if (mutationOperationRef.current !== operation) {
         return;
       }
-      await refreshAfterMutation('本页文档已恢复');
+      await loadPage();
+      if (mutationOperationRef.current === operation) {
+        onChanged();
+      }
+    } catch (err) {
+      if (mutationOperationRef.current === operation) {
+        setError(errorMessage(err, '批量恢复失败'));
+      }
     } finally {
-      mutationInFlightRef.current = false;
-      if (mountedRef.current) {
+      if (mutationOperationRef.current === operation) {
+        mutationOperationRef.current = null;
         setSubmitting(false);
       }
     }
   }
 
   async function handlePermanentDelete() {
-    if (!deleteTarget || mutationInFlightRef.current) {
+    if (!deleteTarget || mutationOperationRef.current) {
       return;
     }
 
-    mutationInFlightRef.current = true;
+    const operation = Symbol('permanently-delete-document');
+    mutationOperationRef.current = operation;
     setSubmitting(true);
-    setError('');
+    setConfirmError('');
 
     try {
-      try {
-        await deleteDocumentPermanently(deleteTarget.id);
-      } catch (err) {
-        if (mountedRef.current) {
-          setError(errorMessage(err, '文档永久删除失败'));
-        }
+      await deleteDocumentPermanently(deleteTarget.id);
+      if (mutationOperationRef.current !== operation) {
         return;
       }
-      if (mountedRef.current) {
-        setDeleteTarget(null);
+      setDeleteTarget(null);
+      await loadPage();
+      if (mutationOperationRef.current === operation) {
+        onChanged();
       }
-      await refreshAfterMutation('文档已永久删除');
+    } catch (err) {
+      if (mutationOperationRef.current === operation) {
+        setConfirmError(errorMessage(err, '文档永久删除失败'));
+      }
     } finally {
-      mutationInFlightRef.current = false;
-      if (mountedRef.current) {
+      if (mutationOperationRef.current === operation) {
+        mutationOperationRef.current = null;
         setSubmitting(false);
       }
     }
   }
 
   async function handleEmptyRecycleBin() {
-    if (mutationInFlightRef.current) {
+    if (mutationOperationRef.current) {
       return;
     }
-    mutationInFlightRef.current = true;
+    const operation = Symbol('empty-document-recycle-bin');
+    mutationOperationRef.current = operation;
     setSubmitting(true);
-    setError('');
+    setConfirmError('');
 
     try {
-      try {
-        await emptyDocumentRecycleBin();
-      } catch (err) {
-        if (mountedRef.current) {
-          setError(errorMessage(err, '清空失败，后端按 all-or-nothing 语义未执行部分删除。'));
-        }
+      await emptyDocumentRecycleBin();
+      if (mutationOperationRef.current !== operation) {
         return;
       }
-      if (mountedRef.current) {
-        setConfirmEmpty(false);
+      setConfirmEmpty(false);
+      await loadPage();
+      if (mutationOperationRef.current === operation) {
+        onChanged();
       }
-      await refreshAfterMutation('回收站已清空');
+    } catch (err) {
+      if (mutationOperationRef.current === operation) {
+        setConfirmError(errorMessage(err, '清空失败，未删除任何文档。'));
+      }
     } finally {
-      mutationInFlightRef.current = false;
-      if (mountedRef.current) {
+      if (mutationOperationRef.current === operation) {
+        mutationOperationRef.current = null;
         setSubmitting(false);
       }
     }
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
   return (
     <>
     <aside className="drawer-backdrop" role="presentation">
@@ -261,33 +266,31 @@ export function DocumentRecycleBinDrawer({
             <h2 id="document-recycle-title">文档回收站</h2>
             <p className="muted-text">展示当前用户已删除的文档，可恢复到原知识库。</p>
           </div>
-          <button className="secondary-button" type="button" onClick={onClose} disabled={mutationBusy}>
-            关闭
-          </button>
+          <IconButton label="关闭" onClick={requestClose} disabled={mutationBusy}><X aria-hidden="true" /></IconButton>
         </header>
 
         <div className="drawer-actions">
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() => void refreshPage('文档回收站刷新失败')}
-            disabled={loading || refreshing || mutationBusy}
-          >
-            {refreshing ? '刷新中...' : '刷新'}
+          <button className="secondary-button" type="button" onClick={() => void loadPage()} disabled={loading || mutationBusy}>
+            刷新
           </button>
           <button className="secondary-button" type="button" onClick={() => void handleRestorePage()} disabled={mutationBusy || items.length === 0}>
             {submitting ? '恢复中...' : '恢复本页'}
           </button>
-          <button className="danger-button" type="button" onClick={() => setConfirmEmpty(true)} disabled={mutationBusy || items.length === 0}>
+          <button className="danger-button" type="button" onClick={() => { setConfirmError(''); setConfirmEmpty(true); }} disabled={mutationBusy || items.length === 0}>
             清空回收站
           </button>
         </div>
 
-        {error && <p className="drawer-error-text" role="alert">{error}</p>}
-
-        <div className="recycle-list document-recycle-list" aria-busy={loading || refreshing}>
+        <div className="recycle-list document-recycle-list">
           {loading ? (
-            <LoadingSkeleton rows={5} columns={2} compact />
+            <LoadingSkeleton rows={5} columns={2} compact announce />
+          ) : error ? (
+            <div className="empty-state" role="alert">
+              <p>{error}</p>
+              <button className="secondary-button" type="button" onClick={() => void loadPage()}>
+                重试加载
+              </button>
+            </div>
           ) : items.length === 0 ? (
             <div className="empty-state">文档回收站为空。</div>
           ) : (
@@ -296,7 +299,7 @@ export function DocumentRecycleBinDrawer({
                 <div>
                   <strong>{item.name}</strong>
                   <span>{item.knowledgeBaseName || '未知知识库'}</span>
-                  <span>删除时间 {formatDateTime(item.deletedAt)}</span>
+                  <span>删除时间 {formatDocumentDateTime(item.deletedAt)}</span>
                 </div>
                 <div className="table-actions">
                   <button
@@ -312,7 +315,7 @@ export function DocumentRecycleBinDrawer({
                     aria-label={`永久删除 ${item.name}`}
                     className="danger-button"
                     type="button"
-                    onClick={() => setDeleteTarget(item)}
+                    onClick={() => { setConfirmError(''); setDeleteTarget(item); }}
                     disabled={mutationBusy}
                   >
                     永久删除
@@ -324,16 +327,16 @@ export function DocumentRecycleBinDrawer({
         </div>
 
         <footer className="drawer-pagination">
-          <span>共 {total} 条</span>
+          <span>共 {error ? '--' : total} 条</span>
           <div className="pager">
-            <button className="secondary-button" type="button" disabled={mutationBusy || page <= 1} onClick={() => setPage(page - 1)}>
-              ‹
+            <button aria-label="上一页" className="secondary-button" type="button" disabled={page <= 1 || mutationBusy} onClick={() => setPage(page - 1)}>
+              <ChevronLeft aria-hidden="true" />
             </button>
             <button className="secondary-button active-page" type="button">
               {page}
             </button>
-            <button className="secondary-button" type="button" disabled={mutationBusy || page >= totalPages} onClick={() => setPage(page + 1)}>
-              ›
+            <button aria-label="下一页" className="secondary-button" type="button" disabled={page >= totalPages || mutationBusy} onClick={() => setPage(page + 1)}>
+              <ChevronRight aria-hidden="true" />
             </button>
           </div>
         </footer>
@@ -345,7 +348,8 @@ export function DocumentRecycleBinDrawer({
         description={`确认永久删除“${deleteTarget.name}”？该操作不可恢复。`}
         confirmLabel="永久删除"
         busy={submitting}
-        onCancel={() => setDeleteTarget(null)}
+        error={confirmError}
+        onCancel={() => { setConfirmError(''); setDeleteTarget(null); }}
         onConfirm={handlePermanentDelete}
       />
     )}
@@ -355,22 +359,13 @@ export function DocumentRecycleBinDrawer({
         description="确认清空文档回收站？操作失败时不会删除其中任何文档。"
         confirmLabel="清空"
         busy={submitting}
-        onCancel={() => setConfirmEmpty(false)}
+        error={confirmError}
+        onCancel={() => { setConfirmError(''); setConfirmEmpty(false); }}
         onConfirm={handleEmptyRecycleBin}
       />
     )}
     </>
   );
-}
-
-function formatDateTime(value: string): string {
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value));
 }
 
 function errorMessage(err: unknown, fallback: string): string {
