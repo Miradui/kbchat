@@ -33,7 +33,6 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { WorkspaceShell } from '../../components/WorkspaceShell';
 import { useToast } from '../../components/feedback/ToastProvider';
-import { useUnsavedChangesWarning } from '../../components/feedback/useUnsavedChangesWarning';
 import { Button } from '../../components/ui/Button';
 import { IconButton } from '../../components/ui/IconButton';
 import { OverflowMenu } from '../../components/ui/OverflowMenu';
@@ -116,9 +115,7 @@ export function KnowledgeBaseListPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkCategoryId, setBulkCategoryId] = useState('');
   const [form, setForm] = useState<FormState | null>(null);
-  const [formInitial, setFormInitial] = useState<FormState | null>(null);
   const [formError, setFormError] = useState('');
-  const [confirmDiscardForm, setConfirmDiscardForm] = useState(false);
   const [moveTarget, setMoveTarget] = useState<KnowledgeBase | null>(null);
   const [moveCategoryId, setMoveCategoryId] = useState('');
   const [moveError, setMoveError] = useState('');
@@ -159,12 +156,6 @@ export function KnowledgeBaseListPage() {
   const preferenceSaveInFlightRef = useRef(false);
   const pendingPreferenceRef = useRef<KnowledgeBaseWorkspacePreference | null>(null);
   const mountedRef = useRef(false);
-  const knowledgeBaseFormDirty = Boolean(
-    form && formInitial && !knowledgeBaseFormsEqual(form, formInitial),
-  );
-
-  useUnsavedChangesWarning(knowledgeBaseFormDirty);
-
   const flatCategories = useMemo(() => flattenCategories(categories), [categories]);
   const categoryParentOptions = useMemo(() => {
     if (!categoryForm?.id) {
@@ -915,9 +906,7 @@ export function KnowledgeBaseListPage() {
       return;
     }
     setFormError('');
-    setConfirmDiscardForm(false);
     const nextForm = { ...emptyForm, tagIds: [] };
-    setFormInitial(nextForm);
     setForm(nextForm);
   }
 
@@ -926,7 +915,6 @@ export function KnowledgeBaseListPage() {
       return;
     }
     setFormError('');
-    setConfirmDiscardForm(false);
     const nextForm = {
       id: item.id,
       name: item.name,
@@ -935,7 +923,6 @@ export function KnowledgeBaseListPage() {
       visibility: item.visibility ?? 'private',
       tagIds: item.tags?.map((tag) => tag.id) ?? [],
     } satisfies FormState;
-    setFormInitial(nextForm);
     setForm(nextForm);
   }
 
@@ -988,20 +975,7 @@ export function KnowledgeBaseListPage() {
 
   function closeKnowledgeBaseForm() {
     setForm(null);
-    setFormInitial(null);
     setFormError('');
-    setConfirmDiscardForm(false);
-  }
-
-  function requestCloseKnowledgeBaseForm() {
-    if (workspaceMutationBusy) {
-      return;
-    }
-    if (form && formInitial && !knowledgeBaseFormsEqual(form, formInitial)) {
-      setConfirmDiscardForm(true);
-      return;
-    }
-    closeKnowledgeBaseForm();
   }
 
   function applySearch(event: FormEvent<HTMLFormElement>) {
@@ -1394,7 +1368,7 @@ export function KnowledgeBaseListPage() {
               setFormError('');
             }
           }}
-          onClose={requestCloseKnowledgeBaseForm}
+          onClose={closeKnowledgeBaseForm}
           onSubmit={handleSubmit}
         />
       )}
@@ -1429,17 +1403,6 @@ export function KnowledgeBaseListPage() {
           onMoveCategory={moveCategory}
           onToggleExpanded={toggleCategoryExpanded}
           workingId={workingId}
-        />
-      )}
-
-      {confirmDiscardForm && (
-        <ConfirmDialog
-          title="放弃未保存的更改"
-          description="当前修改尚未保存，关闭后将丢失。"
-          confirmLabel="放弃更改"
-          cancelLabel="继续编辑"
-          onCancel={() => setConfirmDiscardForm(false)}
-          onConfirm={closeKnowledgeBaseForm}
         />
       )}
 
@@ -1839,15 +1802,6 @@ function flattenCategories(categories: KnowledgeBaseCategory[], level = 0): { id
     { id: category.id, label: `${'　'.repeat(level)}${category.name}` },
     ...flattenCategories(category.children ?? [], level + 1),
   ]);
-}
-
-function knowledgeBaseFormsEqual(left: FormState, right: FormState): boolean {
-  return left.id === right.id
-    && left.name === right.name
-    && left.description === right.description
-    && left.categoryId === right.categoryId
-    && left.visibility === right.visibility
-    && [...left.tagIds].sort().join(',') === [...right.tagIds].sort().join(',');
 }
 
 function descendantCategoryIds(categories: KnowledgeBaseCategory[], categoryId: string): string[] {

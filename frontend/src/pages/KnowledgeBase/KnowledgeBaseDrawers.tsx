@@ -1,6 +1,8 @@
-import { useCallback, useState, type FormEvent } from 'react';
+import { useCallback, useRef, useState, type FormEvent } from 'react';
 import { X } from 'lucide-react';
 
+import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { useUnsavedChangesWarning } from '../../components/feedback/useUnsavedChangesWarning';
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
 import { IconButton } from '../../components/ui/IconButton';
@@ -38,11 +40,21 @@ export function KnowledgeBaseFormOverlay({
   onClose,
   onSubmit,
 }: KnowledgeBaseFormOverlayProps) {
+  const initialFormRef = useRef(form);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const dirty = !knowledgeBaseFormsEqual(form, initialFormRef.current);
+  useUnsavedChangesWarning(dirty);
+
   const requestClose = useCallback(() => {
-    if (!busy) {
-      onClose();
+    if (busy) {
+      return;
     }
-  }, [busy, onClose]);
+    if (dirty) {
+      setConfirmDiscard(true);
+      return;
+    }
+    onClose();
+  }, [busy, dirty, onClose]);
   const panelRef = useModalFocus<HTMLElement>(Boolean(form.id), requestClose);
   const fields = (
     <KnowledgeBaseFormFields
@@ -57,8 +69,7 @@ export function KnowledgeBaseFormOverlay({
     />
   );
 
-  if (!form.id) {
-    return (
+  const overlay = !form.id ? (
       <Dialog
         open
         title="新建知识库"
@@ -67,10 +78,7 @@ export function KnowledgeBaseFormOverlay({
       >
         {fields}
       </Dialog>
-    );
-  }
-
-  return (
+  ) : (
     <aside className="drawer-backdrop" role="presentation">
       <section
         aria-labelledby="kb-form-title"
@@ -93,6 +101,25 @@ export function KnowledgeBaseFormOverlay({
         {fields}
       </section>
     </aside>
+  );
+
+  return (
+    <>
+      {overlay}
+      {confirmDiscard && (
+        <ConfirmDialog
+          cancelLabel="继续编辑"
+          confirmLabel="放弃更改"
+          description="当前修改尚未保存，关闭后将丢失。"
+          onCancel={() => setConfirmDiscard(false)}
+          onConfirm={() => {
+            setConfirmDiscard(false);
+            onClose();
+          }}
+          title="放弃未保存的更改"
+        />
+      )}
+    </>
   );
 }
 
@@ -206,6 +233,15 @@ function KnowledgeBaseFormFields({
       </div>
     </form>
   );
+}
+
+function knowledgeBaseFormsEqual(left: KnowledgeBaseFormState, right: KnowledgeBaseFormState): boolean {
+  return left.id === right.id
+    && left.name === right.name
+    && left.description === right.description
+    && left.categoryId === right.categoryId
+    && left.visibility === right.visibility
+    && [...left.tagIds].sort().join(',') === [...right.tagIds].sort().join(',');
 }
 
 type KnowledgeBaseRecycleBinDrawerProps = {
