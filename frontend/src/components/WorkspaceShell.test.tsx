@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithRouter } from '../test/render';
@@ -71,7 +71,7 @@ describe('WorkspaceShell', () => {
     expect(onToggleExpanded).not.toHaveBeenCalled();
   });
 
-  it('marks only category actions that should dismiss the mobile drawer', () => {
+  it('exposes category parent-child relationships as nested lists', () => {
     const parent = {
       ...category,
       children: [{ ...category, id: 'c2', parentId: category.id, name: '子分类' }],
@@ -80,10 +80,33 @@ describe('WorkspaceShell', () => {
       <WorkspaceShell
         active="knowledge-bases"
         categories={[parent]}
-        onCreateCategory={vi.fn()}
-        onDeleteCategory={vi.fn()}
-        onEditCategory={vi.fn()}
-        onMoveCategory={vi.fn()}
+        expandedIds={[parent.id]}
+        onSelectCategory={vi.fn()}
+        onToggleExpanded={vi.fn()}
+      >
+        <p>知识库</p>
+      </WorkspaceShell>,
+    );
+
+    const tree = screen.getByRole('list', { name: '分类层级' });
+    const parentItem = within(tree).getByRole('button', { name: '制度' }).closest('li');
+    expect(parentItem).not.toBeNull();
+    expect(within(parentItem!).getByRole('list')).toContainElement(
+      within(parentItem!).getByRole('button', { name: '子分类' }),
+    );
+  });
+
+  it('keeps the sidebar focused on filtering and dismisses it before opening category management', () => {
+    const onManageCategories = vi.fn();
+    const parent = {
+      ...category,
+      children: [{ ...category, id: 'c2', parentId: category.id, name: '子分类' }],
+    } satisfies KnowledgeBaseCategory;
+    renderWithRouter(
+      <WorkspaceShell
+        active="knowledge-bases"
+        categories={[parent]}
+        onManageCategories={onManageCategories}
         onSelectCategory={vi.fn()}
         onToggleExpanded={vi.fn()}
       >
@@ -92,9 +115,9 @@ describe('WorkspaceShell', () => {
     );
 
     expect(screen.getByRole('button', { name: '制度' })).toHaveAttribute('data-app-drawer-dismiss', 'true');
-    expect(screen.getByRole('button', { name: '编辑 制度' })).toHaveAttribute('data-app-drawer-dismiss', 'true');
-    expect(screen.getByRole('button', { name: '新增根分类' })).toHaveAttribute('data-app-drawer-dismiss', 'true');
+    expect(screen.getByRole('button', { name: '管理分类' })).toHaveAttribute('data-app-drawer-dismiss', 'true');
+    expect(screen.queryByRole('button', { name: '编辑 制度' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '新增根分类' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '展开 制度' })).not.toHaveAttribute('data-app-drawer-dismiss');
-    expect(screen.getByRole('button', { name: '制度 上移' })).not.toHaveAttribute('data-app-drawer-dismiss');
   });
 });

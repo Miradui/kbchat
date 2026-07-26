@@ -32,6 +32,8 @@ import {
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { WorkspaceShell } from '../../components/WorkspaceShell';
+import { useToast } from '../../components/feedback/ToastProvider';
+import { useUnsavedChangesWarning } from '../../components/feedback/useUnsavedChangesWarning';
 import { Button } from '../../components/ui/Button';
 import { IconButton } from '../../components/ui/IconButton';
 import { OverflowMenu } from '../../components/ui/OverflowMenu';
@@ -54,6 +56,7 @@ import type {
 import { formatMetricComparison } from './statsFormatting';
 import { CategoryDialog } from './CategoryDialog';
 import type { CategoryDialogValue } from './CategoryDialog';
+import { CategoryManagerDrawer } from './CategoryManagerDrawer';
 import {
   KnowledgeBaseFormOverlay,
   KnowledgeBaseRecycleBinDrawer,
@@ -96,6 +99,7 @@ const emptyForm: FormState = {
 
 export function KnowledgeBaseListPage() {
   const navigate = useNavigate();
+  const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const [items, setItems] = useState<KnowledgeBase[]>([]);
   const [categories, setCategories] = useState<KnowledgeBaseCategory[]>([]);
@@ -121,6 +125,7 @@ export function KnowledgeBaseListPage() {
   const [categoryForm, setCategoryForm] = useState<CategoryDialogValue | null>(null);
   const [categoryFormError, setCategoryFormError] = useState('');
   const [categoryDeleteTarget, setCategoryDeleteTarget] = useState<KnowledgeBaseCategory | null>(null);
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [permanentDeleteTarget, setPermanentDeleteTarget] = useState<RecycleBinItem | null>(null);
   const [confirmEmptyRecycleBin, setConfirmEmptyRecycleBin] = useState(false);
@@ -154,6 +159,11 @@ export function KnowledgeBaseListPage() {
   const preferenceSaveInFlightRef = useRef(false);
   const pendingPreferenceRef = useRef<KnowledgeBaseWorkspacePreference | null>(null);
   const mountedRef = useRef(false);
+  const knowledgeBaseFormDirty = Boolean(
+    form && formInitial && !knowledgeBaseFormsEqual(form, formInitial),
+  );
+
+  useUnsavedChangesWarning(knowledgeBaseFormDirty);
 
   const flatCategories = useMemo(() => flattenCategories(categories), [categories]);
   const categoryParentOptions = useMemo(() => {
@@ -486,6 +496,7 @@ export function KnowledgeBaseListPage() {
       sortOrder: categoryForm.sortOrder,
     };
 
+    const editing = Boolean(categoryForm.id);
     try {
       if (categoryForm.id) {
         await updateKnowledgeBaseCategory(categoryForm.id, input);
@@ -494,8 +505,15 @@ export function KnowledgeBaseListPage() {
       }
       if (workspaceMutationRef.current === operation) {
         setCategoryFormError('');
+        toast.success(editing ? '分类更新成功' : '分类创建成功');
+        workspaceMutationRef.current = null;
+        setSubmitting(false);
         setCategoryForm(null);
-        await reloadCategories();
+        try {
+          await reloadCategories();
+        } catch {
+          setError(mutationRefreshError);
+        }
       }
     } catch (err) {
       if (workspaceMutationRef.current === operation) {
@@ -534,7 +552,12 @@ export function KnowledgeBaseListPage() {
           setCategoryFilter('');
         }
         setCategoryDeleteTarget(null);
-        await reloadCategories();
+        toast.success('分类删除成功');
+        try {
+          await reloadCategories();
+        } catch {
+          setError(mutationRefreshError);
+        }
       }
     } catch (err) {
       if (workspaceMutationRef.current === operation) {
@@ -565,7 +588,12 @@ export function KnowledgeBaseListPage() {
     try {
       await reorderKnowledgeBaseCategories(itemsForReorder);
       if (workspaceMutationRef.current === operation) {
-        await reloadCategories();
+        toast.success('分类排序已保存');
+        try {
+          await reloadCategories();
+        } catch {
+          setError(mutationRefreshError);
+        }
       }
     } catch (err) {
       if (workspaceMutationRef.current === operation) {
@@ -606,12 +634,14 @@ export function KnowledgeBaseListPage() {
         await updateKnowledgeBase(form.id, input);
         if (workspaceMutationRef.current === operation) {
           closeKnowledgeBaseForm();
+          toast.success('知识库更新成功');
           await refreshAfterMutation();
         }
       } else {
         const created = await createKnowledgeBase(input);
         if (workspaceMutationRef.current === operation) {
           closeKnowledgeBaseForm();
+          toast.success('知识库创建成功');
           navigate(`/knowledge-bases/${encodeURIComponent(created.id)}/documents?intent=upload`);
         }
       }
@@ -645,6 +675,7 @@ export function KnowledgeBaseListPage() {
       }
       if (workspaceMutationRef.current === operation) {
         setDeleteTarget(null);
+        toast.success(deleteTarget.kind === 'single' ? '知识库已移入回收站' : '所选知识库已移入回收站');
         await refreshAfterMutation();
       }
     } catch (err) {
@@ -679,6 +710,7 @@ export function KnowledgeBaseListPage() {
     try {
       await restoreKnowledgeBase(item.id);
       if (workspaceMutationRef.current === operation) {
+        toast.success('知识库恢复成功');
         await refreshAfterMutation();
       }
     } catch (err) {
@@ -707,6 +739,7 @@ export function KnowledgeBaseListPage() {
     try {
       await batchRestoreKnowledgeBases(ids);
       if (workspaceMutationRef.current === operation) {
+        toast.success('知识库批量恢复成功');
         await refreshAfterMutation();
       }
     } catch (err) {
@@ -735,6 +768,7 @@ export function KnowledgeBaseListPage() {
       await deleteKnowledgeBasePermanently(permanentDeleteTarget.id);
       if (workspaceMutationRef.current === operation) {
         setPermanentDeleteTarget(null);
+        toast.success('知识库已永久删除');
         await refreshAfterMutation();
       }
     } catch (err) {
@@ -762,6 +796,7 @@ export function KnowledgeBaseListPage() {
       await emptyKnowledgeBaseRecycleBin();
       if (workspaceMutationRef.current === operation) {
         setConfirmEmptyRecycleBin(false);
+        toast.success('知识库回收站已清空');
         await refreshAfterMutation();
       }
     } catch (err) {
@@ -818,6 +853,7 @@ export function KnowledgeBaseListPage() {
     try {
       await batchFavoriteKnowledgeBases(selectedIds, favorite);
       if (workspaceMutationRef.current === operation) {
+        toast.success(favorite ? '已批量收藏知识库' : '已批量取消收藏');
         await loadWorkspace();
       }
     } catch (err) {
@@ -847,6 +883,7 @@ export function KnowledgeBaseListPage() {
       await batchMoveKnowledgeBases(selectedIds, bulkCategoryId || null);
       if (workspaceMutationRef.current === operation) {
         setSelectedIds([]);
+        toast.success('知识库已批量移动');
         await refreshAfterMutation();
       }
     } catch (err) {
@@ -934,6 +971,7 @@ export function KnowledgeBaseListPage() {
       if (workspaceMutationRef.current === operation) {
         setMoveTarget(null);
         setMoveCategoryId('');
+        toast.success('知识库移动成功');
         await refreshAfterMutation();
       }
     } catch (err) {
@@ -1030,16 +1068,7 @@ export function KnowledgeBaseListPage() {
       categoryFilter={categoryFilter}
       expandedIds={preference.expandedCategoryIds}
       categoryBusy={resourceMutationBusy}
-      categoryWorkingId={workingId}
-      onCreateCategory={openCreateCategory}
-      onDeleteCategory={(category) => {
-        if (!workspaceMutationRef.current) {
-          setError('');
-          setCategoryDeleteTarget(category);
-        }
-      }}
-      onEditCategory={openEditCategory}
-      onMoveCategory={moveCategory}
+      onManageCategories={() => setShowCategoryManager(true)}
       onSelectCategory={selectCategory}
       onToggleExpanded={toggleCategoryExpanded}
     >
@@ -1072,7 +1101,7 @@ export function KnowledgeBaseListPage() {
                 aria-disabled={workspaceMutationBusy || undefined}
                 className="secondary-link"
                 tabIndex={workspaceMutationBusy ? -1 : undefined}
-                to={items[0] ? `/knowledge-bases/${items[0].id}/documents` : '/documents'}
+                to="/documents"
                 onClick={(event) => {
                   if (workspaceMutationRef.current) {
                     event.preventDefault();
@@ -1380,6 +1409,26 @@ export function KnowledgeBaseListPage() {
           onChange={setMoveCategoryId}
           onClose={closeMoveKnowledgeBase}
           onSubmit={handleMoveKnowledgeBase}
+        />
+      )}
+
+      {showCategoryManager && (
+        <CategoryManagerDrawer
+          busy={workspaceMutationBusy}
+          categories={categories}
+          expandedIds={preference.expandedCategoryIds}
+          onClose={() => setShowCategoryManager(false)}
+          onCreateCategory={openCreateCategory}
+          onDeleteCategory={(category) => {
+            if (!workspaceMutationRef.current) {
+              setError('');
+              setCategoryDeleteTarget(category);
+            }
+          }}
+          onEditCategory={openEditCategory}
+          onMoveCategory={moveCategory}
+          onToggleExpanded={toggleCategoryExpanded}
+          workingId={workingId}
         />
       )}
 

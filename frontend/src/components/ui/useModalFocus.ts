@@ -29,6 +29,16 @@ function getFocusable(panel: HTMLElement): HTMLElement[] {
   ));
 }
 
+function canRestoreFocus(element: HTMLElement | null): element is HTMLElement {
+  return Boolean(
+    element?.isConnected
+    && !element.matches(':disabled')
+    && !element.hidden
+    && element.getAttribute('aria-hidden') !== 'true'
+    && !element.closest('[hidden], [inert], [aria-hidden="true"]'),
+  );
+}
+
 function focusModal(entry: ModalEntry) {
   const requestedInitialFocus = entry.panel.querySelector<HTMLElement>('[data-autofocus]');
   (requestedInitialFocus ?? getFocusable(entry.panel)[0] ?? entry.panel).focus();
@@ -79,6 +89,7 @@ function isolateBackgroundForTopModal() {
     if (!parent) break;
     Array.from(parent.children).forEach((sibling) => {
       if (sibling === current || !(sibling instanceof HTMLElement)) return;
+      if (sibling.matches('[data-modal-live-region]')) return;
       isolatedBackground.set(sibling, {
         ariaHidden: sibling.getAttribute('aria-hidden'),
         inert: sibling.hasAttribute('inert'),
@@ -189,12 +200,17 @@ export function useModalFocus<T extends HTMLElement>(active: boolean, onClose: (
         revealModal(nextTopModal);
       }
       if (
-        entry.restoreFocus?.isConnected
+        canRestoreFocus(entry.restoreFocus)
         && (!nextTopModal || nextTopModal.panel.contains(entry.restoreFocus))
       ) {
         entry.restoreFocus.focus();
       } else if (nextTopModal) {
         focusModal(nextTopModal);
+      } else {
+        const fallback = document.querySelector<HTMLElement>('[data-modal-focus-fallback]');
+        if (canRestoreFocus(fallback)) {
+          fallback.focus();
+        }
       }
     };
   }, [active]);

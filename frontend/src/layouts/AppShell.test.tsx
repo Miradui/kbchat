@@ -231,6 +231,10 @@ describe('AppShell', () => {
     expect(dialog.closest('.app-main')).not.toHaveAttribute('inert');
     expect(dialog.closest('.app-main')).not.toHaveAttribute('aria-hidden');
     expect(screen.getByRole('button', { name: '保存分类' })).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: '编辑分类' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '打开主导航' })).toHaveFocus();
   });
 
   it('keeps the mobile drawer open for context actions that stay inside the drawer', async () => {

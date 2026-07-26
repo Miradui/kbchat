@@ -192,7 +192,7 @@ export function AppShell({ active, contextSidebar, topbarContent, currentUserReq
         inert={(isMobile && drawerOpen) || undefined}
       >
         <header className="app-topbar">
-          {isMobile && <IconButton ref={menuButtonRef} className="app-menu-button" label="打开主导航" onClick={() => setDrawerOpen(true)}><Menu aria-hidden="true" /></IconButton>}
+          {isMobile && <IconButton ref={menuButtonRef} className="app-menu-button" data-modal-focus-fallback label="打开主导航" onClick={() => setDrawerOpen(true)}><Menu aria-hidden="true" /></IconButton>}
           <div className="app-topbar__context">{topbarContent ?? sectionLabels[active]}</div>
           <form className="app-global-search" onSubmit={handleSearch}>
             <Search aria-hidden="true" /><label className="sr-only" htmlFor="app-global-search">全局搜索</label>

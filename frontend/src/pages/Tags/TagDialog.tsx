@@ -3,6 +3,8 @@ import type { FormEvent } from 'react';
 
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { useUnsavedChangesWarning } from '../../components/feedback/useUnsavedChangesWarning';
 import { getErrorMessage } from '../../utils/errors';
 
 export type TagDialogProps = {
@@ -19,6 +21,8 @@ export function TagDialog({ open, initialName, title, onClose, onSubmit }: TagDi
   const [name, setName] = useState(initialName);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const dirty = open && name !== initialName;
 
   useEffect(() => {
     if (open) {
@@ -26,13 +30,21 @@ export function TagDialog({ open, initialName, title, onClose, onSubmit }: TagDi
       setName(initialName);
       setError('');
       setSubmitting(false);
+      setConfirmDiscard(false);
     }
   }, [initialName, open]);
 
+  useUnsavedChangesWarning(dirty);
+
   function close() {
-    if (!submittingRef.current) {
-      onClose();
+    if (submittingRef.current) {
+      return;
     }
+    if (dirty) {
+      setConfirmDiscard(true);
+      return;
+    }
+    onClose();
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -62,8 +74,9 @@ export function TagDialog({ open, initialName, title, onClose, onSubmit }: TagDi
   }
 
   return (
-    <Dialog open={open} title={title} description="标签可在知识库创建和编辑时绑定。" onClose={close}>
-      <form className="tag-dialog-form" onSubmit={handleSubmit}>
+    <>
+      <Dialog open={open} title={title} description="标签可在知识库创建和编辑时绑定。" onClose={close}>
+        <form className="tag-dialog-form" onSubmit={handleSubmit}>
         <label htmlFor="tag-name">标签名称</label>
         <input
           aria-describedby={error ? errorId : undefined}
@@ -77,7 +90,21 @@ export function TagDialog({ open, initialName, title, onClose, onSubmit }: TagDi
           <Button variant="secondary" disabled={submitting} onClick={close}>取消</Button>
           <Button loading={submitting} loadingLabel="保存中" type="submit">保存标签</Button>
         </div>
-      </form>
-    </Dialog>
+        </form>
+      </Dialog>
+      {confirmDiscard && (
+        <ConfirmDialog
+          cancelLabel="继续编辑"
+          confirmLabel="放弃更改"
+          description="当前标签修改尚未保存，关闭后将丢失。"
+          onCancel={() => setConfirmDiscard(false)}
+          onConfirm={() => {
+            setConfirmDiscard(false);
+            onClose();
+          }}
+          title="放弃未保存的更改"
+        />
+      )}
+    </>
   );
 }

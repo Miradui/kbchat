@@ -150,7 +150,7 @@ export function DocumentsLandingPage() {
       if (knowledgeBaseRequestRef.current === request) {
         setKnowledgeBases(response.items);
         setUploadKnowledgeBaseId((current) => (
-          response.items.some((item) => item.id === current) ? current : response.items[0]?.id || ''
+          response.items.some((item) => item.id === current) ? current : ''
         ));
       }
     } catch (err) {
@@ -310,7 +310,7 @@ export function DocumentsLandingPage() {
             <button
               type="button"
               onClick={() => setImportOpen(true)}
-              disabled={knowledgeBasesLoading || !uploadKnowledgeBaseId || submitting}
+              disabled={knowledgeBasesLoading || knowledgeBases.length === 0 || submitting}
             >
               {knowledgeBasesLoading ? '加载知识库中...' : '导入文档'}
             </button>

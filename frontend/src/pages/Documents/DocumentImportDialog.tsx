@@ -2,7 +2,9 @@ import { Upload, X } from 'lucide-react';
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiError } from '../../api/client';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { useToast } from '../../components/feedback/ToastProvider';
+import { useUnsavedChangesWarning } from '../../components/feedback/useUnsavedChangesWarning';
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
 import type { DocumentItem } from '../../types/api';
@@ -60,13 +62,14 @@ export function DocumentImportDialog({
   const [knowledgeBaseId, setKnowledgeBaseId] = useState('');
   const [validationError, setValidationError] = useState('');
   const [uploading, setUploading] = useState(false);
-  const firstKnowledgeBaseId = knowledgeBases[0]?.id ?? '';
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   useEffect(() => {
     const opening = open && !wasOpenRef.current;
     wasOpenRef.current = open;
     if (!open) {
       operationRef.current = null;
+      setConfirmDiscard(false);
       return;
     }
     if (!opening) {
@@ -77,13 +80,14 @@ export function DocumentImportDialog({
     setItems([]);
     setValidationError('');
     setUploading(false);
+    setConfirmDiscard(false);
     setKnowledgeBaseId(
       fixedKnowledgeBaseId
       ?? (knowledgeBases.some((item) => item.id === initialKnowledgeBaseId)
         ? initialKnowledgeBaseId ?? ''
-        : firstKnowledgeBaseId),
+        : ''),
     );
-  }, [firstKnowledgeBaseId, fixedKnowledgeBaseId, initialKnowledgeBaseId, open]);
+  }, [fixedKnowledgeBaseId, initialKnowledgeBaseId, knowledgeBases, open]);
 
   useEffect(() => () => {
     operationRef.current = null;
@@ -96,10 +100,17 @@ export function DocumentImportDialog({
     [items],
   );
 
+  useUnsavedChangesWarning(open && items.length > 0);
+
   function closeSafely() {
-    if (!uploading) {
-      onClose();
+    if (uploading) {
+      return;
     }
+    if (items.length > 0) {
+      setConfirmDiscard(true);
+      return;
+    }
+    onClose();
   }
 
   function handleFileInput(event: ChangeEvent<HTMLInputElement>) {
@@ -229,12 +240,13 @@ export function DocumentImportDialog({
   }
 
   return (
-    <Dialog
-      description="选择目标知识库并确认文件后开始导入。文档将在后台处理，完成后即可用于问答。"
-      onClose={closeSafely}
-      open={open}
-      title="导入文档"
-    >
+    <>
+      <Dialog
+        description="选择目标知识库并确认文件后开始导入。文档将在后台处理，完成后即可用于问答。"
+        onClose={closeSafely}
+        open={open}
+        title="导入文档"
+      >
       <div className="document-import-dialog">
         {fixedKnowledgeBaseId ? (
           <div className="document-import-target">
@@ -330,7 +342,21 @@ export function DocumentImportDialog({
           </Button>
         </div>
       </div>
-    </Dialog>
+      </Dialog>
+      {confirmDiscard && (
+        <ConfirmDialog
+          cancelLabel="继续编辑"
+          confirmLabel="放弃文件"
+          description="关闭后将清空当前待导入清单，已经上传的文档不受影响。"
+          onCancel={() => setConfirmDiscard(false)}
+          onConfirm={() => {
+            setConfirmDiscard(false);
+            onClose();
+          }}
+          title="放弃待导入文件"
+        />
+      )}
+    </>
   );
 }
 

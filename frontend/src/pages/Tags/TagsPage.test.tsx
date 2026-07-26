@@ -89,6 +89,26 @@ describe('TagsPage', () => {
     expect(listKnowledgeBaseTags).toHaveBeenCalledOnce();
   });
 
+  it('asks before discarding a dirty tag form', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<TagsPage />);
+    expect(await screen.findByText('制度')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '编辑 制度' }));
+    await user.type(screen.getByLabelText('标签名称'), '更新');
+    await user.keyboard('{Escape}');
+
+    const confirmation = await screen.findByRole('dialog', { name: '放弃未保存的更改' });
+    await user.click(within(confirmation).getByRole('button', { name: '继续编辑' }));
+    expect(screen.getByLabelText('标签名称')).toHaveValue('制度更新');
+
+    await user.keyboard('{Escape}');
+    await user.click(within(
+      await screen.findByRole('dialog', { name: '放弃未保存的更改' }),
+    ).getByRole('button', { name: '放弃更改' }));
+    expect(screen.queryByRole('dialog', { name: '编辑标签' })).not.toBeInTheDocument();
+  });
+
   it('deletes locally without refetching', async () => {
     vi.mocked(deleteKnowledgeBaseTag).mockResolvedValue(undefined);
     const user = userEvent.setup();

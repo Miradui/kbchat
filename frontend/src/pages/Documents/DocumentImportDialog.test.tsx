@@ -47,6 +47,28 @@ function renderDialog(props: Partial<React.ComponentProps<typeof DocumentImportD
 }
 
 describe('DocumentImportDialog', () => {
+  it('requires an explicit target for a global import', async () => {
+    const user = userEvent.setup();
+    renderDialog({
+      fixedKnowledgeBaseId: undefined,
+      fixedKnowledgeBaseName: undefined,
+      initialKnowledgeBaseId: undefined,
+      knowledgeBases: [{ id: 'kb1', name: '制度库' }, { id: 'kb2', name: '产品库' }],
+    });
+
+    const target = screen.getByRole('combobox', { name: '目标知识库' });
+    expect(target).toHaveValue('');
+
+    await user.upload(
+      screen.getByLabelText('选择文档文件'),
+      new File(['policy'], 'policy.md', { type: 'text/markdown' }),
+    );
+    expect(screen.getByRole('button', { name: '开始导入' })).toBeDisabled();
+
+    await user.selectOptions(target, 'kb2');
+    expect(screen.getByRole('button', { name: '开始导入' })).toBeEnabled();
+  });
+
   it('keeps selected files for confirmation and uploads a fixed-target batch in order', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
@@ -230,5 +252,28 @@ describe('DocumentImportDialog', () => {
       result.resolve(documentFor(file));
       await Promise.resolve();
     });
+  });
+
+  it('asks before discarding a selected import list', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    renderDialog({ onClose });
+
+    await user.upload(
+      screen.getByLabelText('选择文档文件'),
+      new File(['policy'], 'policy.md', { type: 'text/markdown' }),
+    );
+    await user.click(screen.getByRole('button', { name: '取消' }));
+
+    const confirmation = screen.getByRole('dialog', { name: '放弃待导入文件' });
+    expect(onClose).not.toHaveBeenCalled();
+    await user.click(within(confirmation).getByRole('button', { name: '继续编辑' }));
+    expect(screen.getByText('policy.md')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '取消' }));
+    await user.click(within(
+      screen.getByRole('dialog', { name: '放弃待导入文件' }),
+    ).getByRole('button', { name: '放弃文件' }));
+    expect(onClose).toHaveBeenCalledOnce();
   });
 });

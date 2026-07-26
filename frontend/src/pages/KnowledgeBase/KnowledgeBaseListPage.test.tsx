@@ -38,6 +38,11 @@ async function chooseKnowledgeBaseAction(
   await user.click(screen.getByRole('menuitem', { name: action }));
 }
 
+async function openCategoryManager(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole('button', { name: '管理分类' }));
+  return screen.getByRole('dialog', { name: '管理分类' });
+}
+
 vi.mock('../../api/resources', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../api/resources')>(),
   batchFavoriteKnowledgeBases: vi.fn(),
@@ -201,6 +206,26 @@ describe('KnowledgeBaseListPage', () => {
     expect(await screen.findByRole('link', { name: '管理标签' })).toHaveAttribute('href', '/tags');
   });
 
+  it('keeps category filtering in the sidebar and opens maintenance in a dedicated drawer', async () => {
+    vi.mocked(listKnowledgeBaseCategories).mockResolvedValue({ items: categories });
+    const user = userEvent.setup();
+    renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
+
+    const manageButton = await screen.findByRole('button', { name: '管理分类' });
+    expect(screen.queryByRole('button', { name: '编辑 制度分类' })).not.toBeInTheDocument();
+    await user.click(manageButton);
+
+    const drawer = screen.getByRole('dialog', { name: '管理分类' });
+    expect(within(drawer).getByRole('button', { name: '新建根分类' })).toBeInTheDocument();
+    expect(within(drawer).getByRole('button', { name: '编辑 制度分类' })).toBeInTheDocument();
+    expect(within(drawer).getByRole('button', { name: '制度分类 下移' })).toBeInTheDocument();
+    expect(within(drawer).getByRole('button', { name: '删除 制度分类' })).toBeInTheDocument();
+
+    await user.click(within(drawer).getByRole('button', { name: '关闭分类管理' }));
+    expect(screen.queryByRole('dialog', { name: '管理分类' })).not.toBeInTheDocument();
+    expect(manageButton).toHaveFocus();
+  });
+
   it('keeps statistics unknown when loading fails and retries statistics independently', async () => {
     vi.mocked(getKnowledgeBaseStats)
       .mockRejectedValueOnce(new Error('offline'))
@@ -270,7 +295,8 @@ describe('KnowledgeBaseListPage', () => {
 
     const alert = await screen.findByRole('alert');
     await user.click(within(alert).getByRole('button', { name: '重试初始化' }));
-    await user.click(screen.getByRole('button', { name: '新增根分类' }));
+    const manager = await openCategoryManager(user);
+    await user.click(within(manager).getByRole('button', { name: '新建根分类' }));
     const dialog = screen.getByRole('dialog', { name: '新建分类' });
     expect(dialog).toBeInTheDocument();
     await user.type(within(dialog).getByRole('textbox', { name: '分类名称' }), '最新分类');
@@ -279,11 +305,11 @@ describe('KnowledgeBaseListPage', () => {
     expect(screen.queryByRole('dialog', { name: '新建分类' })).not.toBeInTheDocument();
 
     await act(async () => mutationReload.resolve({ items: latestCategories }));
-    expect(await screen.findByRole('button', { name: '最新分类' })).toBeInTheDocument();
+    expect(await within(manager).findByText('最新分类')).toBeInTheDocument();
 
     await act(async () => bootstrapRetry.resolve({ items: categories }));
-    expect(screen.getByRole('button', { name: '最新分类' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '制度分类' })).not.toBeInTheDocument();
+    expect(within(manager).getByText('最新分类')).toBeInTheDocument();
+    expect(within(manager).queryByText('制度分类')).not.toBeInTheDocument();
   });
 
   it('keeps the category dialog open with its input after saving fails', async () => {
@@ -294,7 +320,8 @@ describe('KnowledgeBaseListPage', () => {
     const user = userEvent.setup();
     renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
 
-    await user.click(await screen.findByRole('button', { name: '新增根分类' }));
+    const manager = await openCategoryManager(user);
+    await user.click(within(manager).getByRole('button', { name: '新建根分类' }));
     const dialog = screen.getByRole('dialog', { name: '新建分类' });
     const input = within(dialog).getByRole('textbox', { name: '分类名称' });
     await user.type(input, '制度分类');
@@ -303,6 +330,48 @@ describe('KnowledgeBaseListPage', () => {
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('分类名称已存在');
     expect(input).toHaveValue('制度分类');
     expect(screen.getByRole('dialog', { name: '新建分类' })).toBeInTheDocument();
+  });
+
+  it('restores focus to an enabled category action after saving', async () => {
+    const categoryRefresh = deferred<{ items: typeof categories }>();
+    vi.mocked(listKnowledgeBaseCategories)
+      .mockResolvedValueOnce({ items: [] })
+      .mockReturnValueOnce(categoryRefresh.promise);
+    const user = userEvent.setup();
+    renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
+
+    const manager = await openCategoryManager(user);
+    const createButton = within(manager).getByRole('button', { name: '新建根分类' });
+    await user.click(createButton);
+    const dialog = screen.getByRole('dialog', { name: '新建分类' });
+    await user.type(within(dialog).getByRole('textbox', { name: '分类名称' }), '新分类');
+    await user.click(within(dialog).getByRole('button', { name: '保存分类' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '新建分类' })).not.toBeInTheDocument());
+    expect(createButton).toBeEnabled();
+    expect(createButton).toHaveFocus();
+
+    await act(async () => categoryRefresh.resolve({ items: categories }));
+  });
+
+  it('asks before discarding a dirty category form', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
+
+    const manager = await openCategoryManager(user);
+    await user.click(within(manager).getByRole('button', { name: '新建根分类' }));
+    await user.type(screen.getByRole('textbox', { name: '分类名称' }), '尚未保存的分类');
+    await user.keyboard('{Escape}');
+
+    const confirmation = await screen.findByRole('dialog', { name: '放弃未保存的更改' });
+    await user.click(within(confirmation).getByRole('button', { name: '继续编辑' }));
+    expect(screen.getByRole('textbox', { name: '分类名称' })).toHaveValue('尚未保存的分类');
+
+    await user.keyboard('{Escape}');
+    await user.click(within(
+      await screen.findByRole('dialog', { name: '放弃未保存的更改' }),
+    ).getByRole('button', { name: '放弃更改' }));
+    expect(screen.queryByRole('dialog', { name: '新建分类' })).not.toBeInTheDocument();
   });
 
   it('keeps the recycle-bin count unknown when its initial request fails', async () => {
@@ -349,9 +418,7 @@ describe('KnowledgeBaseListPage', () => {
     expect(within(secondRow).getByRole('button', { name: '最新筛选结果的更多操作' })).toBeDisabled();
     expect(screen.getByRole('button', { name: '批量收藏' })).toBeDisabled();
     expect(screen.getByRole('button', { name: '取消收藏' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '新增根分类' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '编辑 制度分类' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '删除 制度分类' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '管理分类' })).toBeDisabled();
 
     favoriteResult.resolve();
     await waitFor(() => expect(
@@ -389,9 +456,12 @@ describe('KnowledgeBaseListPage', () => {
     const user = userEvent.setup();
     renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
 
-    const moveButton = await screen.findByRole('button', { name: '制度分类 下移' });
     const row = await screen.findByRole('row', { name: /新知识库/ });
     const favoriteButton = within(row).getByRole('button', { name: '收藏' });
+    const newKnowledgeBaseButton = screen.getByRole('button', { name: '新建知识库' });
+    const recycleBinButton = screen.getByRole('button', { name: '回收站 0' });
+    const manager = await openCategoryManager(user);
+    const moveButton = within(manager).getByRole('button', { name: '制度分类 下移' });
     act(() => {
       moveButton.click();
       favoriteButton.click();
@@ -399,11 +469,11 @@ describe('KnowledgeBaseListPage', () => {
 
     expect(reorderKnowledgeBaseCategories).toHaveBeenCalledOnce();
     expect(favoriteKnowledgeBase).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: '新增根分类' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '编辑 制度分类' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '删除 制度分类' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '新建知识库' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '回收站 0' })).toBeDisabled();
+    expect(within(manager).getByRole('button', { name: '新建根分类' })).toBeDisabled();
+    expect(within(manager).getByRole('button', { name: '编辑 制度分类' })).toBeDisabled();
+    expect(within(manager).getByRole('button', { name: '删除 制度分类' })).toBeDisabled();
+    expect(newKnowledgeBaseButton).toBeDisabled();
+    expect(recycleBinButton).toBeDisabled();
     expect(favoriteButton).toBeDisabled();
 
     reorderResult.resolve({ processedCount: 2 });
@@ -452,10 +522,12 @@ describe('KnowledgeBaseListPage', () => {
     vi.mocked(listKnowledgeBases).mockResolvedValue({
       items: [createdKnowledgeBase], total: 1, page: 1, pageSize: 10,
     });
+    const user = userEvent.setup();
     renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
 
     const favoriteButton = await screen.findByRole('button', { name: '收藏' });
-    const moveButton = screen.getByRole('button', { name: '制度分类 下移' });
+    const manager = await openCategoryManager(user);
+    const moveButton = within(manager).getByRole('button', { name: '制度分类 下移' });
     act(() => {
       favoriteButton.click();
       moveButton.click();
@@ -626,6 +698,29 @@ describe('KnowledgeBaseListPage', () => {
     expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent(
       '/knowledge-bases/kb-new/documents?intent=upload',
     );
+    expect(within(screen.getByRole('region', { name: '通知' })).getByRole('status')).toHaveTextContent('知识库创建成功');
+  });
+
+  it('keeps the global document-import action independent from list ordering', async () => {
+    vi.mocked(listKnowledgeBases).mockResolvedValue({
+      items: [createdKnowledgeBase], total: 1, page: 1, pageSize: 10,
+    });
+    renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
+
+    expect(await screen.findByRole('link', { name: '导入文档' })).toHaveAttribute('href', '/documents');
+  });
+
+  it('announces successful category creation', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
+
+    const manager = await openCategoryManager(user);
+    await user.click(within(manager).getByRole('button', { name: '新建根分类' }));
+    const dialog = screen.getByRole('dialog', { name: '新建分类' });
+    await user.type(within(dialog).getByRole('textbox', { name: '分类名称' }), '财务制度');
+    await user.click(within(dialog).getByRole('button', { name: '保存分类' }));
+
+    expect(await within(screen.getByRole('region', { name: '通知' })).findByRole('status')).toHaveTextContent('分类创建成功');
   });
 
   it('constrains focus in the create modal and closes a pristine form with Escape', async () => {
@@ -713,6 +808,9 @@ describe('KnowledgeBaseListPage', () => {
 
     const name = await screen.findByRole('textbox', { name: '名称' });
     await user.type(name, '尚未保存的知识库');
+    const unloadEvent = new Event('beforeunload', { cancelable: true });
+    expect(window.dispatchEvent(unloadEvent)).toBe(false);
+    expect(unloadEvent.defaultPrevented).toBe(true);
     await user.keyboard('{Escape}');
 
     const confirmation = await screen.findByRole('dialog', { name: '放弃未保存的更改' });
@@ -968,9 +1066,11 @@ describe('KnowledgeBaseListPage', () => {
       .mockResolvedValueOnce({ items: categories })
       .mockReturnValueOnce(categoryReload.promise);
     vi.mocked(reorderKnowledgeBaseCategories).mockResolvedValue({ processedCount: 2 });
+    const user = userEvent.setup();
     const { unmount } = renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
 
-    (await screen.findByRole('button', { name: '制度分类 下移' })).click();
+    const manager = await openCategoryManager(user);
+    within(manager).getByRole('button', { name: '制度分类 下移' }).click();
     await waitFor(() => expect(listKnowledgeBaseCategories).toHaveBeenCalledTimes(2));
     unmount();
 

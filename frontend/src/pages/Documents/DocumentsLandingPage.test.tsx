@@ -119,6 +119,18 @@ describe('DocumentsLandingPage', () => {
     expect(screen.getByRole('button', { name: '导入文档' })).toBeDisabled();
   });
 
+  it('opens a global import without binding the first knowledge base', async () => {
+    vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
+    const user = userEvent.setup();
+    renderPage();
+
+    const importButton = await screen.findByRole('button', { name: '导入文档' });
+    expect(importButton).toBeEnabled();
+    await user.click(importButton);
+
+    expect(screen.getByRole('combobox', { name: '目标知识库' })).toHaveValue('');
+  });
+
   it('opens and closes document detail from URL parameters', async () => {
     const user = userEvent.setup();
     renderPage('/documents?documentId=doc1');
@@ -159,6 +171,7 @@ describe('DocumentsLandingPage', () => {
 
     await user.click(await screen.findByRole('button', { name: '导入文档' }));
     const dialog = screen.getByRole('dialog', { name: '导入文档' });
+    await user.selectOptions(within(dialog).getByRole('combobox', { name: '目标知识库' }), 'kb1');
     await user.upload(within(dialog).getByLabelText('选择文档文件'), file);
     await user.click(within(dialog).getByRole('button', { name: '开始导入' }));
 

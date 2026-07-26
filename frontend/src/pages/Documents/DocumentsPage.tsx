@@ -14,6 +14,7 @@ import {
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { WorkspaceShell } from '../../components/WorkspaceShell';
+import { useToast } from '../../components/feedback/ToastProvider';
 import { KnowledgeBaseSectionNav } from '../KnowledgeBase/KnowledgeBaseSectionNav';
 import { DocumentDetailDrawer } from './DocumentDetailDrawer';
 import { DocumentImportDialog } from './DocumentImportDialog';
@@ -45,6 +46,7 @@ type DeleteTarget =
 export function DocumentsPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const activeKnowledgeBaseIdRef = useRef(id);
   const loadRequestRef = useRef(0);
@@ -266,6 +268,7 @@ export function DocumentsPage() {
         activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
         && reprocessOperationRef.current === operation
       ) {
+        toast.success('已开始重新处理文档');
         await loadPage();
       }
     } catch (err) {
@@ -305,6 +308,7 @@ export function DocumentsPage() {
         activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
         && submitOperationRef.current === operation
       ) {
+        toast.success('已开始批量重新处理文档');
         await loadPage();
       }
     } catch (err) {
@@ -351,6 +355,7 @@ export function DocumentsPage() {
       ) {
         setDeleteError('');
         setDeleteTarget(null);
+        toast.success(deleteTarget.kind === 'single' ? '文档已移入回收站' : '所选文档已移入回收站');
         await loadPage();
       }
     } catch (err) {

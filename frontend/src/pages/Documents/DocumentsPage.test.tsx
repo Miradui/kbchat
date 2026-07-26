@@ -364,6 +364,17 @@ describe('DocumentsPage', () => {
     expect(listDocuments).toHaveBeenCalledTimes(1);
   });
 
+  it('announces successful document reprocessing', async () => {
+    vi.mocked(listDocuments).mockResolvedValue({ items: [{ ...uploadedDocument, status: 'completed' }] });
+    vi.mocked(reprocessDocument).mockResolvedValue({ ...uploadedDocument, status: 'uploaded' });
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: '重处理' }));
+
+    expect(await within(screen.getByRole('region', { name: '通知' })).findByRole('status')).toHaveTextContent('已开始重新处理文档');
+  });
+
   it('locks every document mutation while one reprocess is pending', async () => {
     const reprocessResult = deferred<Awaited<ReturnType<typeof reprocessDocument>>>();
     vi.mocked(reprocessDocument).mockReturnValue(reprocessResult.promise);

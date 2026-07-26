@@ -37,7 +37,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div aria-label="通知" className="ui-toast-region" role="region">
+      <div aria-label="通知" className="ui-toast-region" data-modal-live-region="true" role="region">
         {items.map((item) => (
           <div
             aria-atomic="true"
