@@ -86,6 +86,15 @@ func (r *ChatRepository) ListMessages(ctx context.Context, sessionID uuid.UUID) 
 	return messages, err
 }
 
+func (r *ChatRepository) FindMessagesByClientRequestID(ctx context.Context, sessionID, clientRequestID uuid.UUID) ([]model.ChatMessage, error) {
+	var messages []model.ChatMessage
+	err := r.db.WithContext(ctx).
+		Where("session_id = ? AND client_request_id = ?", sessionID, clientRequestID).
+		Order("created_at asc, id asc").
+		Find(&messages).Error
+	return messages, err
+}
+
 func (r *ChatRepository) CreateMessage(ctx context.Context, message *model.ChatMessage) error {
 	return r.db.WithContext(ctx).Create(message).Error
 }

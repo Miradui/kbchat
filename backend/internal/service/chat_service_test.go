@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
+	"rag/backend/internal/apperror"
 	chatcore "rag/backend/internal/chat"
 	"rag/backend/internal/config"
 	"rag/backend/internal/dto"
@@ -22,11 +24,15 @@ type fakeChatProvider struct {
 	responses []string
 	messages  []chatcore.Message
 	calls     [][]chatcore.Message
+	err       error
 }
 
 func (p *fakeChatProvider) Chat(_ context.Context, messages []chatcore.Message) (string, error) {
 	p.messages = messages
 	p.calls = append(p.calls, messages)
+	if p.err != nil {
+		return "", p.err
+	}
 	if len(p.responses) > 0 {
 		response := p.responses[0]
 		p.responses = p.responses[1:]
@@ -277,7 +283,11 @@ func TestSendMessageReturnsRerankFallbackMetadata(t *testing.T) {
 		nil,
 	)
 
-	res, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{Content: "question"})
+	clientRequestID := uuid.New().String()
+	res, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{
+		Content:         "question",
+		ClientRequestID: clientRequestID,
+	})
 	if err != nil {
 		t.Fatalf("send message: %v", err)
 	}
@@ -290,6 +300,73 @@ func TestSendMessageReturnsRerankFallbackMetadata(t *testing.T) {
 	}
 	if res.Citations[0].RerankScore != nil {
 		t.Fatalf("expected fallback citation rerankScore to stay nil, got %#v", res.Citations[0].RerankScore)
+	}
+	if res.ClientRequestID != clientRequestID {
+		t.Fatalf("expected client request id %q, got %q", clientRequestID, res.ClientRequestID)
+	}
+	if res.UserMessage.ClientRequestID == nil || *res.UserMessage.ClientRequestID != clientRequestID {
+		t.Fatalf("expected user message to expose client request id, got %#v", res.UserMessage)
+	}
+	if res.AssistantMessage.ClientRequestID == nil || *res.AssistantMessage.ClientRequestID != clientRequestID {
+		t.Fatalf("expected assistant message to expose client request id, got %#v", res.AssistantMessage)
+	}
+
+	repeated, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{
+		Content:         "question",
+		ClientRequestID: clientRequestID,
+	})
+	if err != nil {
+		t.Fatalf("repeat send message: %v", err)
+	}
+	if len(chatProvider.calls) != 2 {
+		t.Fatalf("expected duplicate request not to call chat provider again, got %d calls", len(chatProvider.calls))
+	}
+	if repeated.UserMessage.ID != res.UserMessage.ID || repeated.AssistantMessage.ID != res.AssistantMessage.ID {
+		t.Fatalf("expected duplicate request to return persisted message pair, got %#v", repeated)
+	}
+	if repeated.RerankFallback == nil || !repeated.RerankFallback.Used {
+		t.Fatalf("expected duplicate response to rebuild rerank fallback, got %#v", repeated.RerankFallback)
+	}
+}
+
+func TestSendMessageRejectsClientRequestIDReuseWithDifferentContent(t *testing.T) {
+	ctx := context.Background()
+	db := newChatServiceTestDB(t)
+	user := createChatServiceUser(t, db)
+	kb := createChatServiceKnowledgeBase(t, db, user.ID)
+	session := createChatServiceSession(t, db, user.ID, kb.ID)
+	clientRequestID := uuid.New().String()
+	requestID, _ := uuid.Parse(clientRequestID)
+	if err := repository.NewChatRepository(db).CreateMessages(ctx,
+		&model.ChatMessage{SessionID: session.ID, Role: "user", Content: "original", ClientRequestID: &requestID},
+		&model.ChatMessage{SessionID: session.ID, Role: "assistant", Content: "answer", ClientRequestID: &requestID},
+	); err != nil {
+		t.Fatalf("seed message pair: %v", err)
+	}
+
+	chatProvider := &fakeChatProvider{err: errors.New("provider should not be called")}
+	service := NewChatService(
+		config.Config{ChatHistoryLimit: 10},
+		repository.NewChatRepository(db),
+		repository.NewKnowledgeBaseRepository(db),
+		&fakeChatRetrieval{},
+		chatProvider,
+		nil,
+	)
+
+	_, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{
+		Content:         "different",
+		ClientRequestID: clientRequestID,
+	})
+	if err == nil {
+		t.Fatal("expected idempotency key reuse to fail")
+	}
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || appErr.Status != 409 || appErr.Code != "IDEMPOTENCY_KEY_REUSED" {
+		t.Fatalf("expected IDEMPOTENCY_KEY_REUSED conflict, got %#v", err)
+	}
+	if len(chatProvider.calls) != 0 {
+		t.Fatalf("expected conflict to be detected before provider call, got %d calls", len(chatProvider.calls))
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -190,37 +191,106 @@ func (s *ChatService) SendMessage(ctx context.Context, userID, sessionID uuid.UU
 	if err != nil {
 		return nil, err
 	}
+	content := strings.TrimSpace(req.Content)
+	if content == "" {
+		return nil, apperror.Validation(map[string]any{"content": "content is required"})
+	}
+	clientRequestID, err := uuid.Parse(req.ClientRequestID)
+	if err != nil {
+		return nil, apperror.Validation(map[string]any{"clientRequestId": "client request id is invalid"})
+	}
+
+	existing, err := s.chats.FindMessagesByClientRequestID(ctx, session.ID, clientRequestID)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	if len(existing) > 0 {
+		return sendMessageResponseFromPair(clientRequestID, content, existing)
+	}
 
 	history, err := s.chats.ListMessages(ctx, session.ID)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
 
-	generated, err := s.generateAnswer(ctx, userID, session, req.Content, history)
+	generated, err := s.generateAnswer(ctx, userID, session, content, history)
 	if err != nil {
 		return nil, err
 	}
 
 	userMessage := &model.ChatMessage{
-		SessionID: session.ID,
-		Role:      "user",
-		Content:   req.Content,
+		SessionID:       session.ID,
+		ClientRequestID: &clientRequestID,
+		Role:            "user",
+		Content:         content,
 	}
 	assistantMessage := &model.ChatMessage{
-		SessionID: session.ID,
-		Role:      "assistant",
-		Content:   generated.answer,
-		Citations: generated.citationJSON,
+		SessionID:       session.ID,
+		ClientRequestID: &clientRequestID,
+		Role:            "assistant",
+		Content:         generated.answer,
+		Citations:       generated.citationJSON,
+	}
+	if generated.rerankFallback != nil {
+		fallbackJSON, marshalErr := json.Marshal(generated.rerankFallback)
+		if marshalErr != nil {
+			return nil, apperror.Internal(marshalErr)
+		}
+		assistantMessage.RerankFallback = datatypes.JSON(fallbackJSON)
 	}
 	if err := s.chats.CreateMessages(ctx, userMessage, assistantMessage); err != nil {
+		existing, lookupErr := s.chats.FindMessagesByClientRequestID(ctx, session.ID, clientRequestID)
+		if lookupErr == nil && len(existing) > 0 {
+			return sendMessageResponseFromPair(clientRequestID, content, existing)
+		}
 		return nil, apperror.Internal(err)
 	}
-	s.updateSessionTitleIfNeeded(ctx, session, req.Content, generated.answer)
+	s.updateSessionTitleIfNeeded(ctx, session, content, generated.answer)
 
 	return &dto.SendChatMessageResponse{
-		Answer:         generated.answer,
-		Citations:      generated.citations,
-		RerankFallback: generated.rerankFallback,
+		ClientRequestID:  clientRequestID.String(),
+		UserMessage:      toChatMessageResponse(userMessage),
+		AssistantMessage: toChatMessageResponse(assistantMessage),
+		Answer:           generated.answer,
+		Citations:        generated.citations,
+		RerankFallback:   generated.rerankFallback,
+	}, nil
+}
+
+func sendMessageResponseFromPair(clientRequestID uuid.UUID, content string, messages []model.ChatMessage) (*dto.SendChatMessageResponse, error) {
+	var userMessage *model.ChatMessage
+	var assistantMessage *model.ChatMessage
+	for i := range messages {
+		switch messages[i].Role {
+		case "user":
+			userMessage = &messages[i]
+		case "assistant":
+			assistantMessage = &messages[i]
+		}
+	}
+	if userMessage == nil || assistantMessage == nil {
+		return nil, apperror.Internal(fmt.Errorf("incomplete chat message pair for client request %s", clientRequestID))
+	}
+	if userMessage.Content != content {
+		return nil, apperror.New(http.StatusConflict, "IDEMPOTENCY_KEY_REUSED", "clientRequestId has already been used with different content")
+	}
+
+	assistantResponse := toChatMessageResponse(assistantMessage)
+	var fallback *dto.RerankFallbackResponse
+	if len(assistantMessage.RerankFallback) > 0 {
+		var stored dto.RerankFallbackResponse
+		if err := json.Unmarshal(assistantMessage.RerankFallback, &stored); err != nil {
+			return nil, apperror.Internal(err)
+		}
+		fallback = &stored
+	}
+	return &dto.SendChatMessageResponse{
+		ClientRequestID:  clientRequestID.String(),
+		UserMessage:      toChatMessageResponse(userMessage),
+		AssistantMessage: assistantResponse,
+		Answer:           assistantMessage.Content,
+		Citations:        assistantResponse.Citations,
+		RerankFallback:   fallback,
 	}, nil
 }
 
@@ -457,13 +527,19 @@ func toChatMessageResponse(message *model.ChatMessage) dto.ChatMessageResponse {
 	if len(message.Citations) > 0 {
 		_ = json.Unmarshal(message.Citations, &citations)
 	}
+	var clientRequestID *string
+	if message.ClientRequestID != nil {
+		value := message.ClientRequestID.String()
+		clientRequestID = &value
+	}
 	return dto.ChatMessageResponse{
-		ID:        message.ID.String(),
-		SessionID: message.SessionID.String(),
-		Role:      message.Role,
-		Content:   message.Content,
-		Citations: citations,
-		CreatedAt: message.CreatedAt,
+		ID:              message.ID.String(),
+		SessionID:       message.SessionID.String(),
+		ClientRequestID: clientRequestID,
+		Role:            message.Role,
+		Content:         message.Content,
+		Citations:       citations,
+		CreatedAt:       message.CreatedAt,
 	}
 }
 

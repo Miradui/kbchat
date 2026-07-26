@@ -29,6 +29,24 @@ function deferred<T>() {
 }
 
 describe('HomePage', () => {
+  it('links the primary knowledge-base action to the create intent', async () => {
+    renderWithRouter(<HomePage sources={createSources()} />);
+
+    expect(await screen.findByRole('link', { name: /新建知识库/ })).toHaveAttribute(
+      'href',
+      '/knowledge-bases?intent=create',
+    );
+  });
+
+  it('links document activity directly to the document detail', async () => {
+    renderWithRouter(<HomePage sources={createSources()} />);
+
+    expect(await screen.findByRole('link', { name: /handbook\.pdf/ })).toHaveAttribute(
+      'href',
+      '/knowledge-bases/kb1/documents?documentId=d1',
+    );
+  });
+
   it('keeps successful regions visible beside a failed document region', async () => {
     const sources = createSources();
     vi.mocked(sources.loadDocuments).mockRejectedValue(new Error('offline'));

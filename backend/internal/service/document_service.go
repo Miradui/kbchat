@@ -369,7 +369,7 @@ func (s *DocumentService) Chunks(ctx context.Context, ownerID, documentID uuid.U
 	}
 
 	page, pageSize := normalizedPage(query.Page, query.PageSize)
-	chunks, total, err := s.chunks.ListByDocumentPaged(ctx, documentID, query.Q, page, pageSize)
+	chunks, total, err := s.chunks.ListByDocumentPaged(ctx, documentID, query.ChunkID, query.Q, page, pageSize)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}

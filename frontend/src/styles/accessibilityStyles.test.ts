@@ -1,0 +1,96 @@
+// @ts-nocheck -- This Vitest-only source reads CSS through Node APIs; app builds stay DOM-typed.
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { describe, expect, it } from 'vitest';
+
+const legacyStyles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8').replace(/\s+/g, ' ');
+const layoutStyles = readFileSync(resolve(process.cwd(), 'src/styles/layouts.css'), 'utf8').replace(/\s+/g, ' ');
+const premiumStyles = readFileSync(resolve(process.cwd(), 'src/styles/premium.css'), 'utf8').replace(/\s+/g, ' ');
+const componentStyles = readFileSync(resolve(process.cwd(), 'src/styles/components.css'), 'utf8').replace(/\s+/g, ' ');
+const tagStyles = readFileSync(resolve(process.cwd(), 'src/styles/pages/tags.css'), 'utf8').replace(/\s+/g, ' ');
+
+function zIndex(styles: string, selector: string): number {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const value = styles.match(new RegExp(`${escaped}\\s*\\{[^}]*z-index:\\s*(\\d+)`))?.[1];
+  if (!value) throw new Error(`Missing z-index for ${selector}`);
+  return Number(value);
+}
+
+describe('mobile interaction target styles', () => {
+  it.each([
+    '.star-button',
+    'button.citation-summary-button',
+    '.pager button',
+  ])('gives %s a 44px target at the mobile breakpoint', (selector) => {
+    expect(legacyStyles).toMatch(new RegExp(
+      `@media \\(max-width: 980px\\).*?${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^}]*min-height: 44px`,
+    ));
+  });
+
+  it('gives category names a 44px target in the navigation drawer', () => {
+    expect(layoutStyles).toMatch(
+      /@media \(max-width: 980px\).*?button\.category-name[^}]*min-height: 44px/,
+    );
+  });
+
+  it('gives link-style actions a 44px target at the mobile breakpoint', () => {
+    for (const selector of ['.link-button']) {
+      expect(legacyStyles).toMatch(new RegExp(
+        `@media \\(max-width: 980px\\).*?${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^}]*min-height: 44px`,
+      ));
+    }
+    for (const selector of ['.button-link', '.secondary-link']) {
+      expect(premiumStyles).toMatch(new RegExp(
+        `@media \\(max-width: 980px\\).*?${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^}]*min-height: 44px`,
+      ));
+    }
+  });
+
+  it.each(['.primary-nav__cta', '.app-global-search input'])(
+    'gives %s a 44px target in the mobile app shell',
+    (selector) => {
+      expect(layoutStyles).toMatch(new RegExp(
+        `@media \\(max-width: 980px\\).*?${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^}]*min-height: 44px`,
+      ));
+    },
+  );
+});
+
+describe('action layout styles', () => {
+  it('keeps chat landing actions visually separated', () => {
+    expect(legacyStyles).toMatch(/\.kb-launch-actions[^}]*gap:\s*(?:8|10|12)px/);
+  });
+
+  it.each(['.chat-shell', '.overview-grid'])(
+    'stacks %s at the mobile breakpoint',
+    (selector) => {
+      expect(legacyStyles).toMatch(new RegExp(
+        `@media \\(max-width: 980px\\).*?${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^}]*grid-template-columns: 1fr`,
+      ));
+    },
+  );
+
+  it('keeps fixed overlays viewport-anchored after the page entrance animation', () => {
+    const entranceKeyframes = premiumStyles.match(/@keyframes premium-enter\s*{.*?}\s*}/)?.[0] ?? '';
+    expect(entranceKeyframes).not.toContain('transform:');
+  });
+
+  it('caps the chat main panel for low-height viewports', () => {
+    expect(premiumStyles).toMatch(
+      /@media \(max-height: 640px\).*?\.chat-main-panel[^}]*min-height:\s*clamp\(/,
+    );
+  });
+
+  it('places drawers above the application chrome and below confirmation dialogs', () => {
+    const drawer = zIndex(legacyStyles, '.drawer-backdrop');
+    expect(drawer).toBeGreaterThan(zIndex(layoutStyles, '.app-sidebar'));
+    expect(drawer).toBeLessThan(zIndex(componentStyles, '.ui-dialog-backdrop'));
+  });
+
+  it('visually hides mobile table headers without removing them from the accessibility tree', () => {
+    expect(legacyStyles).not.toMatch(/@media \(max-width: 680px\).*?\.data-table thead\s*\{[^}]*display:\s*none/);
+    expect(tagStyles).not.toMatch(/@media \(max-width: 680px\).*?\.tags-table thead\s*\{[^}]*display:\s*none/);
+    expect(legacyStyles).toMatch(/@media \(max-width: 680px\).*?\.data-table thead\s*\{[^}]*clip:/);
+    expect(tagStyles).toMatch(/@media \(max-width: 680px\).*?\.tags-table thead\s*\{[^}]*clip:/);
+  });
+});

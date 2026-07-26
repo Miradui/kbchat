@@ -1,4 +1,5 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 import { ApiError } from '../../api/client';
@@ -12,22 +13,39 @@ import {
 } from '../../api/resources';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
-import type { DocumentChunk, DocumentItem, DocumentPreviewResponse, DocumentStatus } from '../../types/api';
+import { IconButton } from '../../components/ui/IconButton';
+import { useModalFocus } from '../../components/ui/useModalFocus';
+import type { DocumentChunk, DocumentItem, DocumentPreviewResponse } from '../../types/api';
 import { getDocumentProcessingErrorMessage, getErrorMessage } from '../../utils/errors';
+import {
+  documentStatusClass,
+  documentStatusLabel,
+  formatDocumentBytes,
+  formatDocumentDateTime,
+} from './documentDisplay';
 
 type DocumentDetailDrawerProps = {
+  chunkId?: string;
   documentId: string;
+  knowledgeBaseId?: string;
   knowledgeBaseName?: string;
   onChanged?: () => void;
   onClose: () => void;
 };
 
+type DocumentOperation = 'download' | 'reprocess' | 'delete' | null;
+
 export function DocumentDetailDrawer({
+  chunkId,
   documentId,
+  knowledgeBaseId,
   knowledgeBaseName,
   onChanged,
   onClose,
 }: DocumentDetailDrawerProps) {
+  const activeDocumentIdRef = useRef(documentId);
+  const mountedRef = useRef(false);
+  const mutationRef = useRef<symbol | null>(null);
   const [document, setDocument] = useState<DocumentItem | null>(null);
   const [preview, setPreview] = useState<DocumentPreviewResponse | null>(null);
   const [previewUrl, setPreviewUrl] = useState('');
@@ -39,34 +57,65 @@ export function DocumentDetailDrawer({
   const [chunkTotal, setChunkTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [chunksLoading, setChunksLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
+  const [operation, setOperation] = useState<DocumentOperation>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
   const [error, setError] = useState('');
   const [previewError, setPreviewError] = useState('');
   const [chunkError, setChunkError] = useState('');
+  const submitting = operation !== null;
+  const panelRef = useModalFocus<HTMLElement>(true, () => {
+    if (!submitting) onClose();
+  });
+  activeDocumentIdRef.current = documentId;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      mutationRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
+    mutationRef.current = null;
+    setOperation(null);
+    setConfirmDelete(false);
+    setDeleteError('');
     setLoading(true);
     setError('');
+    setDocument(null);
     setPreview(null);
     setPreviewUrl('');
     setPreviewError('');
+    setChunks([]);
+    setChunkQueryDraft('');
+    setChunkQuery('');
+    setChunkPage(1);
+    setChunkTotal(0);
+    setChunkError('');
 
-    Promise.all([
-      getDocument(documentId),
-      getDocumentPreview(documentId).catch((err) => {
+    getDocument(documentId)
+      .then(async (documentResponse) => {
+        if (!mounted) {
+          return;
+        }
+        if (knowledgeBaseId && documentResponse.knowledgeBaseId !== knowledgeBaseId) {
+          setError('该文档不属于当前知识库，请从正确的知识库重新打开来源。');
+          return;
+        }
+
+        setDocument(documentResponse);
+        const previewResponse = await getDocumentPreview(documentId).catch((err) => {
         if (mounted) {
           setPreviewError(errorMessage(err, '文档预览加载失败'));
         }
         return null;
-      }),
-    ])
-      .then(async ([documentResponse, previewResponse]) => {
+        });
         if (!mounted) {
           return;
         }
-        setDocument(documentResponse);
         setPreview(previewResponse);
         if (previewResponse?.kind === 'file') {
           try {
@@ -95,14 +144,22 @@ export function DocumentDetailDrawer({
     return () => {
       mounted = false;
     };
-  }, [documentId]);
+  }, [documentId, knowledgeBaseId]);
 
   useEffect(() => {
+    if (!document || document.id !== documentId) {
+      setChunks([]);
+      setChunkTotal(0);
+      setChunksLoading(false);
+      return;
+    }
+
     let mounted = true;
     setChunksLoading(true);
     setChunkError('');
 
     listDocumentChunks(documentId, {
+      chunkId,
       page: chunkPage,
       pageSize: chunkPageSize,
       q: chunkQuery,
@@ -130,7 +187,7 @@ export function DocumentDetailDrawer({
     return () => {
       mounted = false;
     };
-  }, [chunkPage, chunkPageSize, chunkQuery, documentId]);
+  }, [chunkId, chunkPage, chunkPageSize, chunkQuery, document, documentId]);
 
   useEffect(() => {
     return () => {
@@ -141,15 +198,25 @@ export function DocumentDetailDrawer({
   }, [previewUrl]);
 
   async function handleReprocess() {
-    if (!document) {
+    if (!document || mutationRef.current) {
       return;
     }
 
-    setSubmitting(true);
+    setOperation('reprocess');
     setError('');
+    const targetDocumentId = document.id;
+    const operation = Symbol('reprocess-document');
+    mutationRef.current = operation;
 
     try {
-      const nextDocument = await reprocessDocument(document.id);
+      const nextDocument = await reprocessDocument(targetDocumentId);
+      if (
+        !mountedRef.current
+        || activeDocumentIdRef.current !== targetDocumentId
+        || mutationRef.current !== operation
+      ) {
+        return;
+      }
       setDocument(nextDocument);
       setChunks([]);
       setChunkTotal(0);
@@ -158,29 +225,65 @@ export function DocumentDetailDrawer({
       setPreviewError('');
       onChanged?.();
     } catch (err) {
-      setError(errorMessage(err, '文档重处理失败'));
+      if (
+        mountedRef.current
+        && activeDocumentIdRef.current === targetDocumentId
+        && mutationRef.current === operation
+      ) {
+        setError(errorMessage(err, '文档重处理失败'));
+      }
     } finally {
-      setSubmitting(false);
+      if (
+        mountedRef.current
+        && activeDocumentIdRef.current === targetDocumentId
+        && mutationRef.current === operation
+      ) {
+        mutationRef.current = null;
+        setOperation(null);
+      }
     }
   }
 
   async function handleDelete() {
-    if (!document) {
+    if (!document || mutationRef.current) {
       return;
     }
 
-    setSubmitting(true);
-    setError('');
+    setOperation('delete');
+    setDeleteError('');
+    const targetDocumentId = document.id;
+    const operation = Symbol('delete-document');
+    mutationRef.current = operation;
 
     try {
-      await deleteDocument(document.id);
+      await deleteDocument(targetDocumentId);
+      if (
+        !mountedRef.current
+        || activeDocumentIdRef.current !== targetDocumentId
+        || mutationRef.current !== operation
+      ) {
+        return;
+      }
       setConfirmDelete(false);
       onChanged?.();
       onClose();
     } catch (err) {
-      setError(errorMessage(err, '文档删除失败'));
+      if (
+        mountedRef.current
+        && activeDocumentIdRef.current === targetDocumentId
+        && mutationRef.current === operation
+      ) {
+        setDeleteError(errorMessage(err, '文档删除失败'));
+      }
     } finally {
-      setSubmitting(false);
+      if (
+        mountedRef.current
+        && activeDocumentIdRef.current === targetDocumentId
+        && mutationRef.current === operation
+      ) {
+        mutationRef.current = null;
+        setOperation(null);
+      }
     }
   }
 
@@ -191,15 +294,25 @@ export function DocumentDetailDrawer({
   }
 
   async function handleDownload() {
-    if (!document) {
+    if (!document || mutationRef.current) {
       return;
     }
 
-    setSubmitting(true);
+    setOperation('download');
     setError('');
+    const targetDocumentId = document.id;
+    const operation = Symbol('download-document');
+    mutationRef.current = operation;
 
     try {
-      const blob = await downloadDocument(document.id);
+      const blob = await downloadDocument(targetDocumentId);
+      if (
+        !mountedRef.current
+        || activeDocumentIdRef.current !== targetDocumentId
+        || mutationRef.current !== operation
+      ) {
+        return;
+      }
       const objectUrl = URL.createObjectURL(blob);
       const anchor = window.document.createElement('a');
       anchor.href = objectUrl;
@@ -209,33 +322,62 @@ export function DocumentDetailDrawer({
       anchor.remove();
       URL.revokeObjectURL(objectUrl);
     } catch (err) {
-      setError(errorMessage(err, '文档下载失败'));
+      if (
+        mountedRef.current
+        && activeDocumentIdRef.current === targetDocumentId
+        && mutationRef.current === operation
+      ) {
+        setError(errorMessage(err, '文档下载失败'));
+      }
     } finally {
-      setSubmitting(false);
+      if (
+        mountedRef.current
+        && activeDocumentIdRef.current === targetDocumentId
+        && mutationRef.current === operation
+      ) {
+        mutationRef.current = null;
+        setOperation(null);
+      }
     }
+  }
+
+  function openDeleteConfirmation() {
+    if (mutationRef.current) {
+      return;
+    }
+    setDeleteError('');
+    setConfirmDelete(true);
   }
 
   const chunkTotalPages = Math.max(1, Math.ceil(chunkTotal / chunkPageSize));
 
   return (
     <>
-      <aside className="drawer-backdrop" role="presentation">
-        <section className="drawer-panel document-detail-drawer" role="dialog" aria-modal="true" aria-labelledby="document-detail-title">
+      <aside
+        className="drawer-backdrop"
+        role="presentation"
+        onClick={(event) => {
+          if (event.target === event.currentTarget && !submitting) {
+            onClose();
+          }
+        }}
+      >
+        <section className="drawer-panel document-detail-drawer" ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="document-detail-title" tabIndex={-1}>
           <header>
             <div>
               <h2 id="document-detail-title">文档详情</h2>
               <p className="muted-text">查看文档状态、预览内容和内容片段。</p>
             </div>
-            <button className="secondary-button" type="button" onClick={onClose} disabled={submitting}>
-              关闭
-            </button>
+            <IconButton disabled={submitting} label="关闭" onClick={onClose}>
+              <X aria-hidden="true" />
+            </IconButton>
           </header>
 
           {loading ? (
-            <LoadingSkeleton rows={6} columns={2} compact />
+            <LoadingSkeleton rows={6} columns={2} compact announce />
           ) : (
             <>
-              {error && <p className="drawer-error-text">{error}</p>}
+              {error && <p className="drawer-error-text" role="alert">{error}</p>}
               {document ? (
                 <div className="document-detail-content">
                   <section className="document-detail-summary">
@@ -246,8 +388,8 @@ export function DocumentDetailDrawer({
                         <span>{knowledgeBaseName ?? document.knowledgeBaseId}</span>
                       </div>
                     </div>
-                    <span className={`status-pill status-${statusClass(document.status)}`}>
-                      {statusLabel(document.status)}
+                    <span className={`status-pill status-${documentStatusClass(document.status)}`}>
+                      {documentStatusLabel(document.status)}
                     </span>
                   </section>
 
@@ -258,15 +400,15 @@ export function DocumentDetailDrawer({
                     </div>
                     <div>
                       <dt>大小</dt>
-                      <dd>{formatBytes(document.fileSize)}</dd>
+                      <dd>{formatDocumentBytes(document.fileSize)}</dd>
                     </div>
                     <div>
                       <dt>创建时间</dt>
-                      <dd>{formatDateTime(document.createdAt)}</dd>
+                      <dd>{formatDocumentDateTime(document.createdAt)}</dd>
                     </div>
                     <div>
                       <dt>更新时间</dt>
-                      <dd>{formatDateTime(document.updatedAt || document.createdAt)}</dd>
+                      <dd>{formatDocumentDateTime(document.updatedAt || document.createdAt)}</dd>
                     </div>
                   </dl>
 
@@ -281,12 +423,12 @@ export function DocumentDetailDrawer({
                       打开处理详情
                     </Link>
                     <button className="secondary-button" type="button" onClick={() => void handleDownload()} disabled={submitting}>
-                      下载
+                      {operation === 'download' ? '下载中...' : '下载'}
                     </button>
                     <button className="secondary-button" type="button" onClick={() => void handleReprocess()} disabled={submitting}>
-                      {submitting ? '处理中...' : '重处理'}
+                      {operation === 'reprocess' ? '处理中...' : '重处理'}
                     </button>
-                    <button className="danger-button" type="button" onClick={() => setConfirmDelete(true)} disabled={submitting}>
+                    <button className="danger-button" type="button" onClick={openDeleteConfirmation} disabled={submitting}>
                       删除
                     </button>
                   </div>
@@ -299,9 +441,9 @@ export function DocumentDetailDrawer({
                       </div>
                     </header>
                     {previewError ? (
-                      <div className="empty-state">{previewError}</div>
+                      <div className="empty-state" role="alert">{previewError}</div>
                     ) : !preview ? (
-                      <LoadingSkeleton rows={3} columns={1} compact />
+                      <LoadingSkeleton rows={3} columns={1} compact announce />
                     ) : preview.kind === 'text' ? (
                       <pre className="document-text-preview">{preview.content || ''}</pre>
                     ) : previewUrl ? (
@@ -316,17 +458,19 @@ export function DocumentDetailDrawer({
                         </div>
                       )
                     ) : (
-                      <LoadingSkeleton rows={3} columns={1} compact />
+                      <LoadingSkeleton rows={3} columns={1} compact announce />
                     )}
                   </section>
 
                   <section className="document-chunk-section">
                     <header>
                       <div>
-                        <h3>内容片段</h3>
-                        <p className="muted-text">共 {chunkTotal} 个切片。</p>
+                        <h3>{chunkId ? '引用来源片段' : '内容片段'}</h3>
+                        <p className="muted-text">
+                          {chunkId ? '查看该回答实际使用的文档片段。' : `共 ${chunkTotal} 个切片。`}
+                        </p>
                       </div>
-                      <form className="chunk-search-form" onSubmit={handleChunkSearch}>
+                      {!chunkId && <form className="chunk-search-form" onSubmit={handleChunkSearch}>
                         <input
                           aria-label="搜索内容片段"
                           placeholder="搜索内容片段"
@@ -336,22 +480,39 @@ export function DocumentDetailDrawer({
                         <button className="secondary-button" type="submit" disabled={chunksLoading}>
                           搜索
                         </button>
-                      </form>
+                      </form>}
                     </header>
 
                     {chunkError ? (
-                      <div className="empty-state">{chunkError}</div>
+                      <div className="empty-state" role="alert">{chunkError}</div>
                     ) : chunksLoading ? (
-                      <LoadingSkeleton rows={4} columns={1} compact />
+                      <LoadingSkeleton rows={4} columns={1} compact announce />
                     ) : chunks.length === 0 ? (
-                      <div className="empty-state">当前还没有内容片段。文档完成处理后可在这里查看。</div>
+                      chunkId ? (
+                        <div className="empty-state" role="alert">
+                          未找到该引用片段，可能已重新处理或删除。你仍可查看当前文档内容。
+                        </div>
+                      ) : (
+                        <div className="empty-state">当前还没有内容片段。文档完成处理后可在这里查看。</div>
+                      )
                     ) : (
                       <>
                         <div className="document-chunk-list">
                           {chunks.map((chunk) => (
-                            <article className="document-chunk-card" key={chunk.id}>
+                            <article
+                              aria-label={chunkId && chunk.id === chunkId ? '引用来源片段' : undefined}
+                              className={chunkId && chunk.id === chunkId
+                                ? 'document-chunk-card is-citation-source'
+                                : 'document-chunk-card'}
+                              key={chunk.id}
+                            >
                               <header>
-                                <strong>#{chunk.chunkIndex}</strong>
+                                <strong>
+                                  #{chunk.chunkIndex}
+                                  {chunkId && chunk.id === chunkId && (
+                                    <span className="citation-source-badge">引用来源</span>
+                                  )}
+                                </strong>
                                 <span>
                                   {chunk.tokenCount} 词元
                                   {chunk.pageNumber ? ` · p.${chunk.pageNumber}` : ''}
@@ -364,30 +525,32 @@ export function DocumentDetailDrawer({
                             </article>
                           ))}
                         </div>
-                        <footer className="drawer-pagination chunk-pagination">
+                        {!chunkId && <footer className="drawer-pagination chunk-pagination">
                           <span>第 {chunkPage} / {chunkTotalPages} 页</span>
                           <div className="pager">
                             <button
+                              aria-label="上一页"
                               className="secondary-button"
                               type="button"
                               disabled={chunkPage <= 1 || chunksLoading}
                               onClick={() => setChunkPage(chunkPage - 1)}
                             >
-                              ‹
+                              <ChevronLeft aria-hidden="true" />
                             </button>
                             <button className="secondary-button active-page" type="button">
                               {chunkPage}
                             </button>
                             <button
+                              aria-label="下一页"
                               className="secondary-button"
                               type="button"
                               disabled={chunkPage >= chunkTotalPages || chunksLoading}
                               onClick={() => setChunkPage(chunkPage + 1)}
                             >
-                              ›
+                              <ChevronRight aria-hidden="true" />
                             </button>
                           </div>
-                        </footer>
+                        </footer>}
                       </>
                     )}
                   </section>
@@ -406,51 +569,13 @@ export function DocumentDetailDrawer({
           description={`确认删除“${document.filename}”？文档会进入回收站。`}
           confirmLabel="删除"
           busy={submitting}
-          onCancel={() => setConfirmDelete(false)}
+          error={deleteError}
+          onCancel={() => { setDeleteError(''); setConfirmDelete(false); }}
           onConfirm={handleDelete}
         />
       )}
     </>
   );
-}
-
-function statusClass(status: DocumentStatus): string {
-  if (status === 'completed' || status === 'failed') {
-    return status;
-  }
-  return 'processing';
-}
-
-function statusLabel(status: DocumentStatus): string {
-  const labels: Record<DocumentStatus, string> = {
-    uploaded: '已上传',
-    parsing: '解析中',
-    chunking: '切分中',
-    embedding: '向量化',
-    completed: '已完成',
-    failed: '失败',
-  };
-  return labels[status];
-}
-
-function formatBytes(value: number): string {
-  if (value < 1024) {
-    return `${value} B`;
-  }
-  if (value < 1024 * 1024) {
-    return `${(value / 1024).toFixed(1)} KB`;
-  }
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function formatDateTime(value: string): string {
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value));
 }
 
 function errorMessage(err: unknown, fallback: string): string {

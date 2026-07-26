@@ -58,7 +58,7 @@ export function HomePage({ sources }: HomePageProps) {
         </header>
 
         <section className="home-quick-actions" aria-label="快捷入口">
-          <QuickAction icon={Library} title="新建知识库" description="创建新的知识空间" to="/knowledge-bases" />
+          <QuickAction icon={Library} title="新建知识库" description="创建新的知识空间" to="/knowledge-bases?intent=create" />
           <QuickAction icon={Upload} title="导入文档" description="上传并处理企业资料" to="/documents" />
           <QuickAction icon={MessageSquareText} title="开始问答" description="基于可信来源生成回答" to="/chat" />
         </section>
@@ -134,7 +134,7 @@ export function HomePage({ sources }: HomePageProps) {
             ) : failedDocuments.length === 0 ? (
               <EmptyState title="暂无失败任务" description="最近文档处理状态正常。" />
             ) : failedDocuments.map((document) => (
-              <Link className="home-list-row" key={document.id} to={`/knowledge-bases/${document.knowledgeBaseId}/documents`}>
+              <Link className="home-list-row" key={document.id} to={`/knowledge-bases/${document.knowledgeBaseId}/documents?documentId=${encodeURIComponent(document.id)}`}>
                 <strong>{document.filename}</strong>
                 <small>{getDocumentProcessingErrorMessage(document.errorMessage)}</small>
               </Link>
@@ -231,7 +231,7 @@ function DashboardRegion({
 
 function DocumentActivity({ document }: { document: GlobalDocumentItem }) {
   return (
-    <Link className="home-list-row" to={`/knowledge-bases/${document.knowledgeBaseId}/documents`}>
+    <Link className="home-list-row" to={`/knowledge-bases/${document.knowledgeBaseId}/documents?documentId=${encodeURIComponent(document.id)}`}>
       <strong>{document.filename}</strong>
       <small>{document.knowledgeBaseName} · {document.status} · {formatDateTime(document.updatedAt ?? document.createdAt)}</small>
     </Link>

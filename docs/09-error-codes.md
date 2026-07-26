@@ -57,6 +57,7 @@
 | 500 | `EMBEDDING_FAILED` | 向量生成失败 |
 | 500 | `RERANK_FAILED` | 检索精排失败 |
 | 500 | `CHAT_COMPLETION_FAILED` | 生成回答失败 |
+| 409 | `IDEMPOTENCY_KEY_REUSED` | 同一幂等键已用于不同的聊天内容 |
 
 ## 字段校验错误示例
 

@@ -1,5 +1,6 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight, Grid2X2, List, Plus, Star } from 'lucide-react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { ApiError } from '../../api/client';
 import {
@@ -20,7 +21,6 @@ import {
   listKnowledgeBaseRecycleBin,
   listKnowledgeBases,
   listKnowledgeBaseTags,
-  logout,
   recordKnowledgeBaseView,
   reorderKnowledgeBaseCategories,
   restoreKnowledgeBase,
@@ -32,7 +32,7 @@ import {
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { WorkspaceShell } from '../../components/WorkspaceShell';
-import { tokenStore } from '../../store/tokenStore';
+import { Button } from '../../components/ui/Button';
 import type {
   KnowledgeBase,
   KnowledgeBaseCategory,
@@ -50,6 +50,11 @@ import type {
   WorkspaceVisibility,
 } from '../../types/api';
 import { formatMetricComparison } from './statsFormatting';
+import {
+  KnowledgeBaseFormDrawer,
+  KnowledgeBaseRecycleBinDrawer,
+} from './KnowledgeBaseDrawers';
+import type { KnowledgeBaseFormState } from './KnowledgeBaseDrawers';
 
 const defaultConfig: RetrievalConfig = {
   vectorTopN: 30,
@@ -68,14 +73,7 @@ const defaultPreference: KnowledgeBaseWorkspacePreference = {
 
 const pageSizeOptions = [10, 20, 50];
 
-type FormState = {
-  id?: string;
-  name: string;
-  description: string;
-  categoryId: string;
-  visibility: 'private' | 'public';
-  tagIds: string[];
-};
+type FormState = KnowledgeBaseFormState;
 
 type DeleteTarget =
   | { kind: 'single'; item: KnowledgeBase }
@@ -98,13 +96,19 @@ const emptyForm: FormState = {
 
 export function KnowledgeBaseListPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [items, setItems] = useState<KnowledgeBase[]>([]);
   const [categories, setCategories] = useState<KnowledgeBaseCategory[]>([]);
   const [tags, setTags] = useState<KnowledgeBaseTag[]>([]);
   const [stats, setStats] = useState<KnowledgeBaseStatsResponse | null>(null);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [statsError, setStatsError] = useState('');
   const [preference, setPreference] = useState<KnowledgeBaseWorkspacePreference>(defaultPreference);
   const [recycleItems, setRecycleItems] = useState<RecycleBinItem[]>([]);
   const [recycleCount, setRecycleCount] = useState(0);
+  const [recycleCountKnown, setRecycleCountKnown] = useState(false);
+  const [recycleLoading, setRecycleLoading] = useState(false);
+  const [recycleError, setRecycleError] = useState('');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkCategoryId, setBulkCategoryId] = useState('');
   const [form, setForm] = useState<FormState | null>(null);
@@ -126,7 +130,24 @@ export function KnowledgeBaseListPage() {
   const [bootstrapping, setBootstrapping] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [workingId, setWorkingId] = useState<string | null>(null);
+  const [favoriteWorkingId, setFavoriteWorkingId] = useState<string | null>(null);
+  const [preferenceSaving, setPreferenceSaving] = useState(false);
   const [error, setError] = useState('');
+  const [bootstrapError, setBootstrapError] = useState('');
+  const [workspaceError, setWorkspaceError] = useState('');
+  const [preferenceError, setPreferenceError] = useState('');
+  const workspaceRequestRef = useRef(0);
+  const recycleRequestRef = useRef(0);
+  const bootstrapRequestRef = useRef(0);
+  const categoryRequestRef = useRef(0);
+  const statsRequestRef = useRef(0);
+  const workspaceMutationRef = useRef<symbol | null>(null);
+  const preferenceOperationRef = useRef<symbol | null>(null);
+  const preferenceRef = useRef(defaultPreference);
+  const confirmedPreferenceRef = useRef(defaultPreference);
+  const preferenceSaveInFlightRef = useRef(false);
+  const pendingPreferenceRef = useRef<KnowledgeBaseWorkspacePreference | null>(null);
+  const mountedRef = useRef(false);
 
   const flatCategories = useMemo(() => flattenCategories(categories), [categories]);
   const categoryParentOptions = useMemo(() => {
@@ -138,23 +159,104 @@ export function KnowledgeBaseListPage() {
   }, [categories, categoryForm?.id, flatCategories]);
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const resourceMutationBusy = submitting || Boolean(workingId) || Boolean(favoriteWorkingId);
+  const workspaceMutationBusy = resourceMutationBusy || preferenceSaving;
 
   const loadRecycleBin = useCallback(async () => {
-    const response = await listKnowledgeBaseRecycleBin(1, 20);
-    setRecycleItems(response.items);
-    setRecycleCount(response.total);
-    return response;
+    const request = ++recycleRequestRef.current;
+    setRecycleLoading(true);
+    setRecycleError('');
+    try {
+      const response = await listKnowledgeBaseRecycleBin(1, 20);
+      if (recycleRequestRef.current === request) {
+        setRecycleItems(response.items);
+        setRecycleCount(response.total);
+        setRecycleCountKnown(true);
+      }
+    } catch (err) {
+      if (recycleRequestRef.current === request) {
+        setRecycleError(errorMessage(err, '知识库回收站加载失败'));
+      }
+    } finally {
+      if (recycleRequestRef.current === request) {
+        setRecycleLoading(false);
+      }
+    }
+  }, []);
+
+  const loadStats = useCallback(async () => {
+    const request = ++statsRequestRef.current;
+    setStatsLoading(true);
+    setStatsError('');
+    try {
+      const response = await getKnowledgeBaseStats('month');
+      if (statsRequestRef.current === request) {
+        setStats(response);
+      }
+    } catch (err) {
+      if (statsRequestRef.current === request) {
+        setStatsError(errorMessage(err, '知识库统计加载失败'));
+      }
+    } finally {
+      if (statsRequestRef.current === request) {
+        setStatsLoading(false);
+      }
+    }
+  }, []);
+
+  const loadBootstrap = useCallback(async () => {
+    const request = ++bootstrapRequestRef.current;
+    const categoryRequest = ++categoryRequestRef.current;
+    const recycleRequest = ++recycleRequestRef.current;
+    setBootstrapping(true);
+    setBootstrapError('');
+    try {
+      const [pref, categoryResponse, tagResponse, recycleResponse] = await Promise.all([
+        getWorkspacePreference().catch(() => defaultPreference),
+        listKnowledgeBaseCategories(),
+        listKnowledgeBaseTags().catch(() => ({ items: [] })),
+        listKnowledgeBaseRecycleBin(1, 20).catch(() => null),
+      ]);
+      if (bootstrapRequestRef.current !== request) {
+        return;
+      }
+      preferenceRef.current = pref;
+      confirmedPreferenceRef.current = pref;
+      setPreference(pref);
+      if (categoryRequestRef.current === categoryRequest) {
+        setCategories(categoryResponse.items);
+      }
+      setTags(tagResponse.items);
+      if (recycleResponse && recycleRequestRef.current === recycleRequest) {
+        setRecycleItems(recycleResponse.items);
+        setRecycleCount(recycleResponse.total);
+        setRecycleCountKnown(true);
+      }
+    } catch (err) {
+      if (bootstrapRequestRef.current === request) {
+        setBootstrapError(errorMessage(err, '工作台初始化失败'));
+      }
+    } finally {
+      if (bootstrapRequestRef.current === request) {
+        setBootstrapping(false);
+      }
+    }
   }, []);
 
   const reloadCategories = useCallback(async () => {
+    const request = ++categoryRequestRef.current;
     const response = await listKnowledgeBaseCategories();
+    if (!mountedRef.current || categoryRequestRef.current !== request) {
+      return null;
+    }
     setCategories(response.items);
     return response.items;
   }, []);
 
   const loadWorkspace = useCallback(async () => {
+    const request = ++workspaceRequestRef.current;
     setLoading(true);
-    setError('');
+    setWorkspaceError('');
 
     try {
       const response = await listKnowledgeBases({
@@ -167,54 +269,54 @@ export function KnowledgeBaseListPage() {
         page,
         pageSize,
       });
-      setItems(response.items);
-      setTotal(response.total ?? response.items.length);
-      setSelectedIds((current) =>
-        current.filter((id) => response.items.some((item) => item.id === id)),
-      );
+      if (workspaceRequestRef.current === request) {
+        setItems(response.items);
+        setTotal(response.total ?? response.items.length);
+        setSelectedIds((current) =>
+          current.filter((id) => response.items.some((item) => item.id === id)),
+        );
+      }
     } catch (err) {
-      setError(errorMessage(err, '知识库加载失败'));
+      if (workspaceRequestRef.current === request) {
+        setWorkspaceError(errorMessage(err, '知识库加载失败'));
+      }
     } finally {
-      setLoading(false);
+      if (workspaceRequestRef.current === request) {
+        setLoading(false);
+      }
     }
   }, [categoryFilter, page, pageSize, preference.scope, preference.sort, preference.visibility, query, tagFilter]);
 
   useEffect(() => {
-    let mounted = true;
+    if (searchParams.get('intent') !== 'create') {
+      return;
+    }
 
-    Promise.all([
-      getWorkspacePreference().catch(() => defaultPreference),
-      listKnowledgeBaseCategories(),
-      listKnowledgeBaseTags().catch(() => ({ items: [] })),
-      getKnowledgeBaseStats('month'),
-      listKnowledgeBaseRecycleBin(1, 20).catch(() => ({ items: [], total: 0, page: 1, pageSize: 20 })),
-    ])
-      .then(([pref, categoryResponse, tagResponse, statsResponse, recycleResponse]) => {
-        if (!mounted) {
-          return;
-        }
-        setPreference(pref);
-        setCategories(categoryResponse.items);
-        setTags(tagResponse.items);
-        setStats(statsResponse);
-        setRecycleItems(recycleResponse.items);
-        setRecycleCount(recycleResponse.total);
-      })
-      .catch((err) => {
-        if (mounted) {
-          setError(errorMessage(err, '工作台初始化失败'));
-        }
-      })
-      .finally(() => {
-        if (mounted) {
-          setBootstrapping(false);
-        }
-      });
+    openCreateForm();
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete('intent');
+      return next;
+    }, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    void loadBootstrap();
+    void loadStats();
 
     return () => {
-      mounted = false;
+      mountedRef.current = false;
+      bootstrapRequestRef.current += 1;
+      categoryRequestRef.current += 1;
+      statsRequestRef.current += 1;
+      workspaceRequestRef.current += 1;
+      recycleRequestRef.current += 1;
+      workspaceMutationRef.current = null;
+      preferenceOperationRef.current = null;
+      pendingPreferenceRef.current = null;
     };
-  }, []);
+  }, [loadBootstrap, loadStats]);
 
   useEffect(() => {
     if (!bootstrapping) {
@@ -228,46 +330,118 @@ export function KnowledgeBaseListPage() {
     }
   }, [page, totalPages]);
 
-  async function persistPreference(next: KnowledgeBaseWorkspacePreference) {
-    setPreference(next);
+  async function flushPreferenceQueue() {
+    if (preferenceSaveInFlightRef.current || !pendingPreferenceRef.current) {
+      return;
+    }
+
+    let operation = preferenceOperationRef.current;
+    if (!operation) {
+      if (workspaceMutationRef.current) {
+        return;
+      }
+      operation = Symbol('save-workspace-preference');
+      preferenceOperationRef.current = operation;
+      workspaceMutationRef.current = operation;
+      setPreferenceSaving(true);
+    }
+
+    const next = pendingPreferenceRef.current;
+    pendingPreferenceRef.current = null;
+    preferenceSaveInFlightRef.current = true;
     try {
       const saved = await updateWorkspacePreference(next);
-      setPreference(saved);
+      if (!mountedRef.current || preferenceOperationRef.current !== operation) {
+        return;
+      }
+      confirmedPreferenceRef.current = saved;
+      setPreferenceError('');
+      if (!pendingPreferenceRef.current) {
+        preferenceRef.current = saved;
+        setPreference(saved);
+      }
     } catch (err) {
-      setError(errorMessage(err, '工作台偏好保存失败'));
+      if (!mountedRef.current || preferenceOperationRef.current !== operation) {
+        return;
+      }
+      setPreferenceError(errorMessage(err, '工作台偏好保存失败'));
+      if (!pendingPreferenceRef.current) {
+        preferenceRef.current = confirmedPreferenceRef.current;
+        setPreference(confirmedPreferenceRef.current);
+      }
+    } finally {
+      preferenceSaveInFlightRef.current = false;
+      if (!mountedRef.current || preferenceOperationRef.current !== operation) {
+        return;
+      }
+      if (pendingPreferenceRef.current) {
+        void flushPreferenceQueue();
+      } else if (preferenceOperationRef.current === operation) {
+        preferenceOperationRef.current = null;
+        if (workspaceMutationRef.current === operation) {
+          workspaceMutationRef.current = null;
+        }
+        setPreferenceSaving(false);
+      }
     }
   }
 
+  function persistPreference(next: KnowledgeBaseWorkspacePreference): boolean {
+    if (
+      workspaceMutationRef.current
+      && workspaceMutationRef.current !== preferenceOperationRef.current
+    ) {
+      return false;
+    }
+    preferenceRef.current = next;
+    pendingPreferenceRef.current = next;
+    setPreference(next);
+    void flushPreferenceQueue();
+    return true;
+  }
+
   function updateScope(scope: KnowledgeBaseScope) {
-    setPage(1);
-    void persistPreference({ ...preference, scope });
+    if (persistPreference({ ...preferenceRef.current, scope })) {
+      setPage(1);
+    }
   }
 
   function updateVisibility(visibility: WorkspaceVisibility) {
-    setPage(1);
-    void persistPreference({ ...preference, visibility });
+    if (persistPreference({ ...preferenceRef.current, visibility })) {
+      setPage(1);
+    }
   }
 
   function updateSort(sort: KnowledgeBaseSort) {
-    setPage(1);
-    void persistPreference({ ...preference, sort });
+    if (persistPreference({ ...preferenceRef.current, sort })) {
+      setPage(1);
+    }
   }
 
   function updateViewMode(viewMode: WorkspaceViewMode) {
-    void persistPreference({ ...preference, viewMode });
+    persistPreference({ ...preferenceRef.current, viewMode });
   }
 
   function toggleCategoryExpanded(categoryId: string) {
-    const expanded = new Set(preference.expandedCategoryIds);
+    if (
+      workspaceMutationRef.current
+      && workspaceMutationRef.current !== preferenceOperationRef.current
+    ) {
+      return;
+    }
+    const expanded = new Set(preferenceRef.current.expandedCategoryIds);
     if (expanded.has(categoryId)) {
       expanded.delete(categoryId);
     } else {
       expanded.add(categoryId);
     }
-    void persistPreference({ ...preference, expandedCategoryIds: Array.from(expanded) });
+    persistPreference({ ...preferenceRef.current, expandedCategoryIds: Array.from(expanded) });
   }
 
   function openCreateCategory(parentId = '') {
+    if (workspaceMutationRef.current) {
+      return;
+    }
     setCategoryForm({
       name: '',
       parentId,
@@ -276,6 +450,9 @@ export function KnowledgeBaseListPage() {
   }
 
   function openEditCategory(category: KnowledgeBaseCategory) {
+    if (workspaceMutationRef.current) {
+      return;
+    }
     setCategoryForm({
       id: category.id,
       name: category.name,
@@ -286,10 +463,12 @@ export function KnowledgeBaseListPage() {
 
   async function handleCategorySubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!categoryForm) {
+    if (!categoryForm || workspaceMutationRef.current) {
       return;
     }
 
+    const operation = Symbol('save-knowledge-base-category');
+    workspaceMutationRef.current = operation;
     setSubmitting(true);
     setFormError('');
 
@@ -305,62 +484,92 @@ export function KnowledgeBaseListPage() {
       } else {
         await createKnowledgeBaseCategory(input);
       }
-      setCategoryForm(null);
-      await reloadCategories();
+      if (workspaceMutationRef.current === operation) {
+        setCategoryForm(null);
+        await reloadCategories();
+      }
     } catch (err) {
-      setError(errorMessage(err, '分类保存失败'));
+      if (workspaceMutationRef.current === operation) {
+        setError(errorMessage(err, '分类保存失败'));
+      }
     } finally {
-      setSubmitting(false);
+      if (workspaceMutationRef.current === operation) {
+        workspaceMutationRef.current = null;
+        setSubmitting(false);
+      }
     }
   }
 
   async function handleCategoryDelete() {
-    if (!categoryDeleteTarget) {
+    if (!categoryDeleteTarget || workspaceMutationRef.current) {
       return;
     }
 
+    const operation = Symbol('delete-knowledge-base-category');
+    workspaceMutationRef.current = operation;
     setSubmitting(true);
     setError('');
 
     try {
       await deleteKnowledgeBaseCategory(categoryDeleteTarget.id);
-      if (categoryFilter === categoryDeleteTarget.id) {
-        setCategoryFilter('');
+      if (workspaceMutationRef.current === operation) {
+        if (categoryFilter === categoryDeleteTarget.id) {
+          setCategoryFilter('');
+        }
+        setCategoryDeleteTarget(null);
+        await reloadCategories();
       }
-      setCategoryDeleteTarget(null);
-      await reloadCategories();
     } catch (err) {
-      setError(errorMessage(err, '分类删除失败'));
+      if (workspaceMutationRef.current === operation) {
+        setError(errorMessage(err, '分类删除失败'));
+      }
     } finally {
-      setSubmitting(false);
+      if (workspaceMutationRef.current === operation) {
+        workspaceMutationRef.current = null;
+        setSubmitting(false);
+      }
     }
   }
 
   async function moveCategory(categoryId: string, direction: 'up' | 'down') {
+    if (workspaceMutationRef.current) {
+      return;
+    }
     const itemsForReorder = categoryReorderItemsAfterMove(categories, categoryId, direction);
     if (!itemsForReorder) {
       return;
     }
 
+    const operation = Symbol('reorder-knowledge-base-categories');
+    workspaceMutationRef.current = operation;
     setWorkingId(categoryId);
     setError('');
 
     try {
       await reorderKnowledgeBaseCategories(itemsForReorder);
-      await reloadCategories();
+      if (workspaceMutationRef.current === operation) {
+        await reloadCategories();
+      }
     } catch (err) {
-      setError(errorMessage(err, '分类排序保存失败'));
+      if (workspaceMutationRef.current === operation) {
+        setError(errorMessage(err, '分类排序保存失败'));
+      }
     } finally {
-      setWorkingId(null);
+      if (workspaceMutationRef.current === operation) {
+        workspaceMutationRef.current = null;
+        setWorkingId(null);
+      }
     }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!form) {
+    if (!form || workspaceMutationRef.current) {
       return;
     }
 
+    const operation = Symbol('save-knowledge-base');
+    workspaceMutationRef.current = operation;
     setSubmitting(true);
     setError('');
 
@@ -378,24 +587,38 @@ export function KnowledgeBaseListPage() {
     try {
       if (form.id) {
         await updateKnowledgeBase(form.id, input);
+        if (workspaceMutationRef.current === operation) {
+          setForm(null);
+          setFormError('');
+          await refreshAfterMutation();
+        }
       } else {
-        await createKnowledgeBase(input);
+        const created = await createKnowledgeBase(input);
+        if (workspaceMutationRef.current === operation) {
+          setForm(null);
+          setFormError('');
+          navigate(`/knowledge-bases/${encodeURIComponent(created.id)}/documents?intent=upload`);
+        }
       }
-      setForm(null);
-      setFormError('');
-      await refreshAfterMutation();
     } catch (err) {
-      setFormError(errorMessage(err, '知识库保存失败'));
+      if (workspaceMutationRef.current === operation) {
+        setFormError(errorMessage(err, '知识库保存失败'));
+      }
     } finally {
-      setSubmitting(false);
+      if (workspaceMutationRef.current === operation) {
+        workspaceMutationRef.current = null;
+        setSubmitting(false);
+      }
     }
   }
 
   async function handleDelete() {
-    if (!deleteTarget) {
+    if (!deleteTarget || workspaceMutationRef.current) {
       return;
     }
 
+    const operation = Symbol('delete-knowledge-bases');
+    workspaceMutationRef.current = operation;
     setSubmitting(true);
     setError('');
 
@@ -405,97 +628,146 @@ export function KnowledgeBaseListPage() {
       } else {
         await batchDeleteKnowledgeBases(deleteTarget.ids);
       }
-      setDeleteTarget(null);
-      await refreshAfterMutation();
+      if (workspaceMutationRef.current === operation) {
+        setDeleteTarget(null);
+        await refreshAfterMutation();
+      }
     } catch (err) {
-      setError(errorMessage(err, '知识库删除失败'));
+      if (workspaceMutationRef.current === operation) {
+        setError(errorMessage(err, '知识库删除失败'));
+      }
     } finally {
-      setSubmitting(false);
+      if (workspaceMutationRef.current === operation) {
+        workspaceMutationRef.current = null;
+        setSubmitting(false);
+      }
     }
   }
 
   async function refreshAfterMutation() {
-    const [statsResponse, recycleResponse] = await Promise.all([
-      getKnowledgeBaseStats('month').catch(() => stats),
-      listKnowledgeBaseRecycleBin(1, 20).catch(() => ({ items: recycleItems, total: recycleCount, page: 1, pageSize: 20 })),
+    await Promise.all([
+      loadStats(),
+      loadRecycleBin(),
+      loadWorkspace(),
     ]);
-    if (statsResponse) {
-      setStats(statsResponse);
-    }
-    setRecycleItems(recycleResponse.items);
-    setRecycleCount(recycleResponse.total);
-    await loadWorkspace();
   }
 
   async function handleRestoreRecycleItem(item: RecycleBinItem) {
+    if (workspaceMutationRef.current) {
+      return;
+    }
+    const operation = Symbol('restore-knowledge-base');
+    workspaceMutationRef.current = operation;
     setWorkingId(item.id);
     setError('');
 
     try {
       await restoreKnowledgeBase(item.id);
-      await refreshAfterMutation();
+      if (workspaceMutationRef.current === operation) {
+        await refreshAfterMutation();
+      }
     } catch (err) {
-      setError(errorMessage(err, '知识库恢复失败'));
+      if (workspaceMutationRef.current === operation) {
+        setError(errorMessage(err, '知识库恢复失败'));
+      }
     } finally {
-      setWorkingId(null);
+      if (workspaceMutationRef.current === operation) {
+        workspaceMutationRef.current = null;
+        setWorkingId(null);
+      }
     }
   }
 
   async function handleRestoreAllRecycleItems() {
     const ids = recycleItems.map((item) => item.id);
-    if (ids.length === 0) {
+    if (ids.length === 0 || workspaceMutationRef.current) {
       return;
     }
 
+    const operation = Symbol('restore-all-knowledge-bases');
+    workspaceMutationRef.current = operation;
     setSubmitting(true);
     setError('');
 
     try {
       await batchRestoreKnowledgeBases(ids);
-      await refreshAfterMutation();
+      if (workspaceMutationRef.current === operation) {
+        await refreshAfterMutation();
+      }
     } catch (err) {
-      setError(errorMessage(err, '批量恢复失败'));
+      if (workspaceMutationRef.current === operation) {
+        setError(errorMessage(err, '批量恢复失败'));
+      }
     } finally {
-      setSubmitting(false);
+      if (workspaceMutationRef.current === operation) {
+        workspaceMutationRef.current = null;
+        setSubmitting(false);
+      }
     }
   }
 
   async function handlePermanentDeleteKnowledgeBase() {
-    if (!permanentDeleteTarget) {
+    if (!permanentDeleteTarget || workspaceMutationRef.current) {
       return;
     }
 
+    const operation = Symbol('permanently-delete-knowledge-base');
+    workspaceMutationRef.current = operation;
     setSubmitting(true);
     setError('');
 
     try {
       await deleteKnowledgeBasePermanently(permanentDeleteTarget.id);
-      setPermanentDeleteTarget(null);
-      await refreshAfterMutation();
+      if (workspaceMutationRef.current === operation) {
+        setPermanentDeleteTarget(null);
+        await refreshAfterMutation();
+      }
     } catch (err) {
-      setError(errorMessage(err, '知识库永久删除失败'));
+      if (workspaceMutationRef.current === operation) {
+        setError(errorMessage(err, '知识库永久删除失败'));
+      }
     } finally {
-      setSubmitting(false);
+      if (workspaceMutationRef.current === operation) {
+        workspaceMutationRef.current = null;
+        setSubmitting(false);
+      }
     }
   }
 
   async function handleEmptyKnowledgeBaseRecycleBin() {
+    if (workspaceMutationRef.current) {
+      return;
+    }
+    const operation = Symbol('empty-knowledge-base-recycle-bin');
+    workspaceMutationRef.current = operation;
     setSubmitting(true);
     setError('');
 
     try {
       await emptyKnowledgeBaseRecycleBin();
-      setConfirmEmptyRecycleBin(false);
-      await refreshAfterMutation();
+      if (workspaceMutationRef.current === operation) {
+        setConfirmEmptyRecycleBin(false);
+        await refreshAfterMutation();
+      }
     } catch (err) {
-      setError(errorMessage(err, '清空失败，未删除任何知识库。'));
+      if (workspaceMutationRef.current === operation) {
+        setError(errorMessage(err, '清空失败，未删除任何知识库。'));
+      }
     } finally {
-      setSubmitting(false);
+      if (workspaceMutationRef.current === operation) {
+        workspaceMutationRef.current = null;
+        setSubmitting(false);
+      }
     }
   }
 
   async function toggleFavorite(item: KnowledgeBase) {
-    setWorkingId(item.id);
+    if (workspaceMutationRef.current) {
+      return;
+    }
+    const operation = Symbol('favorite-knowledge-base');
+    workspaceMutationRef.current = operation;
+    setFavoriteWorkingId(item.id);
     setError('');
 
     try {
@@ -504,46 +776,73 @@ export function KnowledgeBaseListPage() {
       } else {
         await favoriteKnowledgeBase(item.id);
       }
-      await loadWorkspace();
+      if (workspaceMutationRef.current === operation) {
+        await loadWorkspace();
+      }
     } catch (err) {
-      setError(errorMessage(err, '收藏状态更新失败'));
+      if (workspaceMutationRef.current === operation) {
+        setError(errorMessage(err, '收藏状态更新失败'));
+      }
     } finally {
-      setWorkingId(null);
+      if (workspaceMutationRef.current === operation) {
+        workspaceMutationRef.current = null;
+        setFavoriteWorkingId(null);
+      }
     }
   }
 
   async function handleBatchFavorite(favorite: boolean) {
-    if (selectedIds.length === 0) {
+    if (selectedIds.length === 0 || workspaceMutationRef.current) {
       return;
     }
+    const operation = Symbol('batch-favorite-knowledge-bases');
+    workspaceMutationRef.current = operation;
+    setFavoriteWorkingId('batch');
     setSubmitting(true);
     setError('');
     try {
       await batchFavoriteKnowledgeBases(selectedIds, favorite);
-      await loadWorkspace();
+      if (workspaceMutationRef.current === operation) {
+        await loadWorkspace();
+      }
     } catch (err) {
-      setError(errorMessage(err, '批量收藏更新失败'));
+      if (workspaceMutationRef.current === operation) {
+        setError(errorMessage(err, '批量收藏更新失败'));
+      }
     } finally {
-      setSubmitting(false);
+      if (workspaceMutationRef.current === operation) {
+        workspaceMutationRef.current = null;
+        setFavoriteWorkingId(null);
+        setSubmitting(false);
+      }
     }
   }
 
   async function handleBatchMoveCategory() {
-    if (selectedIds.length === 0) {
+    if (selectedIds.length === 0 || workspaceMutationRef.current) {
       return;
     }
 
+    const operation = Symbol('move-knowledge-bases');
+    workspaceMutationRef.current = operation;
     setSubmitting(true);
     setError('');
 
     try {
       await batchMoveKnowledgeBases(selectedIds, bulkCategoryId || null);
-      setSelectedIds([]);
-      await refreshAfterMutation();
+      if (workspaceMutationRef.current === operation) {
+        setSelectedIds([]);
+        await refreshAfterMutation();
+      }
     } catch (err) {
-      setError(errorMessage(err, '批量移动分类失败'));
+      if (workspaceMutationRef.current === operation) {
+        setError(errorMessage(err, '批量移动分类失败'));
+      }
     } finally {
-      setSubmitting(false);
+      if (workspaceMutationRef.current === operation) {
+        workspaceMutationRef.current = null;
+        setSubmitting(false);
+      }
     }
   }
 
@@ -560,11 +859,17 @@ export function KnowledgeBaseListPage() {
   }
 
   function openCreateForm() {
+    if (workspaceMutationRef.current) {
+      return;
+    }
     setFormError('');
     setForm(emptyForm);
   }
 
   function openEditForm(item: KnowledgeBase) {
+    if (workspaceMutationRef.current) {
+      return;
+    }
     setFormError('');
     setForm({
       id: item.id,
@@ -587,62 +892,55 @@ export function KnowledgeBaseListPage() {
     setQuery(searchDraft.trim());
   }
 
-  function applyGlobalSearch(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const keyword = searchDraft.trim();
-    if (keyword) {
-      navigate(`/search?q=${encodeURIComponent(keyword)}`);
-    }
-  }
-
-  async function handleLogout() {
-    try {
-      await logout();
-    } catch {
-      // Local logout should still happen if the server token is already invalid.
-    } finally {
-      tokenStore.clearToken();
-      navigate('/login', { replace: true });
-    }
-  }
-
   function selectCategory(categoryId: string) {
+    if (workspaceMutationRef.current) {
+      return;
+    }
     setCategoryFilter((current) => (current === categoryId ? '' : categoryId));
     setPage(1);
   }
 
-  async function handleOpenKnowledgeBase(item: KnowledgeBase) {
+  function handleScopeKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    let nextIndex: number | null = null;
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % scopeTabs.length;
+    if (event.key === 'ArrowLeft') nextIndex = (index - 1 + scopeTabs.length) % scopeTabs.length;
+    if (event.key === 'Home') nextIndex = 0;
+    if (event.key === 'End') nextIndex = scopeTabs.length - 1;
+    if (nextIndex === null) return;
+
+    event.preventDefault();
+    const target = event.currentTarget.parentElement
+      ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[nextIndex];
+    target?.focus();
+    updateScope(scopeTabs[nextIndex].value);
+  }
+
+  function handleOpenKnowledgeBase(item: KnowledgeBase): boolean {
+    if (workspaceMutationRef.current) {
+      return false;
+    }
     recordKnowledgeBaseView(item.id).catch(() => undefined);
+    return true;
+  }
+
+  function openRecycleBin() {
+    if (workspaceMutationRef.current) {
+      return;
+    }
+    setShowRecycleBin(true);
+    void loadRecycleBin();
+  }
+
+  function openKnowledgeBaseDelete(target: DeleteTarget) {
+    if (workspaceMutationRef.current) {
+      return;
+    }
+    setError('');
+    setDeleteTarget(target);
   }
 
   const allVisibleSelected = items.length > 0 && items.every((item) => selectedSet.has(item.id));
   const listRefreshing = loading && !bootstrapping && items.length > 0;
-
-  const knowledgeBaseTopbar = (
-    <header className="workspace-topbar">
-      <form className="global-search" onSubmit={applyGlobalSearch}>
-        <span aria-hidden="true">⌕</span>
-        <input
-          aria-label="搜索知识库"
-          placeholder="搜索知识库、文档、内容"
-          value={searchDraft}
-          onChange={(event) => setSearchDraft(event.target.value)}
-        />
-        <kbd>⌘ K</kbd>
-      </form>
-      <div className="topbar-actions" aria-label="用户工具">
-        <button className="icon-button" type="button" title="通知" aria-label="通知">
-          bell
-        </button>
-        <button className="icon-button" type="button" title="帮助" aria-label="帮助">
-          ?
-        </button>
-        <button className="secondary-button" type="button" onClick={() => void handleLogout()}>
-          退出登录
-        </button>
-      </div>
-    </header>
-  );
 
   return (
     <WorkspaceShell
@@ -650,49 +948,81 @@ export function KnowledgeBaseListPage() {
       categories={categories}
       categoryFilter={categoryFilter}
       expandedIds={preference.expandedCategoryIds}
+      categoryBusy={resourceMutationBusy}
       categoryWorkingId={workingId}
-      topbar={knowledgeBaseTopbar}
       onCreateCategory={openCreateCategory}
-      onDeleteCategory={setCategoryDeleteTarget}
+      onDeleteCategory={(category) => {
+        if (!workspaceMutationRef.current) {
+          setError('');
+          setCategoryDeleteTarget(category);
+        }
+      }}
       onEditCategory={openEditCategory}
       onMoveCategory={moveCategory}
       onSelectCategory={selectCategory}
       onToggleExpanded={toggleCategoryExpanded}
     >
+      <section aria-busy={workspaceMutationBusy} aria-label="知识库工作区">
+          {workspaceMutationBusy && (
+            <p aria-label="正在处理工作区操作" className="sr-only" role="status">
+              正在处理工作区操作，请稍候。
+            </p>
+          )}
           <header className="page-header workspace-heading">
             <div>
               <h1>知识库</h1>
               <p className="page-description">集中管理和组织您的知识资产，构建企业智慧大脑</p>
             </div>
             <div className="toolbar">
-              <Link className="secondary-link" to={items[0] ? `/knowledge-bases/${items[0].id}/documents` : '/documents'}>
+              <Link
+                aria-disabled={workspaceMutationBusy || undefined}
+                className="secondary-link"
+                tabIndex={workspaceMutationBusy ? -1 : undefined}
+                to={items[0] ? `/knowledge-bases/${items[0].id}/documents` : '/documents'}
+                onClick={(event) => {
+                  if (workspaceMutationRef.current) {
+                    event.preventDefault();
+                  }
+                }}
+              >
                 导入文档
               </Link>
               <button
                 className="secondary-button"
                 type="button"
-                onClick={() => {
-                  setShowRecycleBin(true);
-                  void loadRecycleBin();
-                }}
+                onClick={openRecycleBin}
+                disabled={workspaceMutationBusy}
               >
-                回收站 {recycleCount}
+                回收站 {recycleCountKnown ? recycleCount : '--'}
               </button>
-              <button type="button" onClick={openCreateForm}>
-                + 新建知识库
-              </button>
+              <Button disabled={workspaceMutationBusy} leadingIcon={<Plus aria-hidden="true" />} onClick={openCreateForm}>
+                新建知识库
+              </Button>
             </div>
           </header>
 
-          <StatsGrid stats={stats} fallbackTotal={total} />
+          <StatsGrid
+            error={statsError}
+            fallbackTotal={!loading && !workspaceError ? total : null}
+            loading={statsLoading}
+            onRetry={() => void loadStats()}
+            stats={stats}
+          />
 
           <div className="workspace-tabs" role="tablist" aria-label="知识库范围">
-            {scopeTabs.map((tab) => (
+            {scopeTabs.map((tab, index) => (
               <button
+                aria-controls="knowledge-base-scope-panel"
+                aria-selected={preference.scope === tab.value}
                 className={preference.scope === tab.value ? 'workspace-tab active' : 'workspace-tab'}
+                disabled={resourceMutationBusy}
+                id={`knowledge-base-scope-${tab.value}`}
                 key={tab.value}
+                role="tab"
+                tabIndex={preference.scope === tab.value ? 0 : -1}
                 type="button"
                 onClick={() => updateScope(tab.value)}
+                onKeyDown={(event) => handleScopeKeyDown(event, index)}
               >
                 {tab.label}
               </button>
@@ -702,6 +1032,7 @@ export function KnowledgeBaseListPage() {
           <div className="workspace-controls">
             <select
               aria-label="知识库可见性"
+              disabled={resourceMutationBusy}
               value={preference.visibility}
               onChange={(event) => updateVisibility(event.target.value as WorkspaceVisibility)}
             >
@@ -735,6 +1066,7 @@ export function KnowledgeBaseListPage() {
             <div className="workspace-sort">
               <select
                 aria-label="排序"
+                disabled={resourceMutationBusy}
                 value={preference.sort}
                 onChange={(event) => updateSort(event.target.value as KnowledgeBaseSort)}
               >
@@ -742,22 +1074,26 @@ export function KnowledgeBaseListPage() {
                 <option value="createdAt_desc">最新创建</option>
                 <option value="name_asc">名称升序</option>
               </select>
-              <div className="segmented-control" aria-label="视图模式">
+              <div className="segmented-control" aria-label="视图模式" role="group">
                 <button
+                  aria-pressed={preference.viewMode === 'card'}
                   className={preference.viewMode === 'card' ? 'active' : ''}
+                  disabled={resourceMutationBusy}
                   type="button"
                   onClick={() => updateViewMode('card')}
                   aria-label="卡片视图"
                 >
-                  grid
+                  <Grid2X2 aria-hidden="true" />
                 </button>
                 <button
+                  aria-pressed={preference.viewMode === 'table'}
                   className={preference.viewMode === 'table' ? 'active' : ''}
+                  disabled={resourceMutationBusy}
                   type="button"
                   onClick={() => updateViewMode('table')}
                   aria-label="列表视图"
                 >
-                  list
+                  <List aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -766,10 +1102,10 @@ export function KnowledgeBaseListPage() {
           {selectedIds.length > 0 && (
             <div className="bulk-bar">
               <span>已选择 {selectedIds.length} 项</span>
-              <button className="secondary-button" type="button" onClick={() => void handleBatchFavorite(true)} disabled={submitting}>
+              <button className="secondary-button" type="button" onClick={() => void handleBatchFavorite(true)} disabled={workspaceMutationBusy}>
                 批量收藏
               </button>
-              <button className="secondary-button" type="button" onClick={() => void handleBatchFavorite(false)} disabled={submitting}>
+              <button className="secondary-button" type="button" onClick={() => void handleBatchFavorite(false)} disabled={workspaceMutationBusy}>
                 取消收藏
               </button>
               <label className="inline-select bulk-category-select">
@@ -777,7 +1113,7 @@ export function KnowledgeBaseListPage() {
                 <select
                   value={bulkCategoryId}
                   onChange={(event) => setBulkCategoryId(event.target.value)}
-                  disabled={submitting}
+                  disabled={workspaceMutationBusy}
                 >
                   <option value="">未分类</option>
                   {flatCategories.map((category) => (
@@ -787,21 +1123,19 @@ export function KnowledgeBaseListPage() {
                   ))}
                 </select>
               </label>
-              <button className="secondary-button" type="button" onClick={() => void handleBatchMoveCategory()} disabled={submitting}>
+              <button className="secondary-button" type="button" onClick={() => void handleBatchMoveCategory()} disabled={workspaceMutationBusy}>
                 移动分类
               </button>
-              <button className="danger-button" type="button" onClick={() => setDeleteTarget({ kind: 'batch', ids: selectedIds })} disabled={submitting}>
+              <button className="danger-button" type="button" onClick={() => openKnowledgeBaseDelete({ kind: 'batch', ids: selectedIds })} disabled={workspaceMutationBusy}>
                 批量删除
               </button>
               <button
                 className="secondary-button"
                 type="button"
-                onClick={() => {
-                  setShowRecycleBin(true);
-                  void loadRecycleBin();
-                }}
+                onClick={openRecycleBin}
+                disabled={workspaceMutationBusy}
               >
-                回收站 {recycleCount}
+                回收站 {recycleCountKnown ? recycleCount : '--'}
               </button>
             </div>
           )}
@@ -859,11 +1193,39 @@ export function KnowledgeBaseListPage() {
             </form>
           )}
 
-          {error && <p className="error-text">{error}</p>}
+          {error && <p className="error-text" role="alert">{error}</p>}
+          {preferenceError && <p className="error-text" role="alert">{preferenceError}</p>}
+          {bootstrapError && items.length > 0 && (
+            <div className="error-text" role="alert">
+              <span>{bootstrapError}</span>
+              <button className="link-button" type="button" onClick={() => void loadBootstrap()}>
+                重试初始化
+              </button>
+            </div>
+          )}
 
-          <div className={listRefreshing ? 'workspace-list-panel is-refreshing' : 'workspace-list-panel'}>
+          <div
+            aria-labelledby={`knowledge-base-scope-${preference.scope}`}
+            className={listRefreshing ? 'workspace-list-panel is-refreshing' : 'workspace-list-panel'}
+            id="knowledge-base-scope-panel"
+            role="tabpanel"
+          >
             {(loading || bootstrapping) && items.length === 0 ? (
-              <LoadingSkeleton rows={6} columns={5} />
+              <LoadingSkeleton rows={6} columns={5} announce />
+            ) : workspaceError ? (
+              <div className="empty-state" role="alert">
+                <p>{workspaceError}</p>
+                <button className="secondary-button" type="button" onClick={() => void loadWorkspace()}>
+                  重试知识库列表
+                </button>
+              </div>
+            ) : bootstrapError && items.length === 0 ? (
+              <div className="empty-state" role="alert">
+                <p>{bootstrapError}</p>
+                <button className="secondary-button" type="button" onClick={() => void loadBootstrap()}>
+                  重试初始化
+                </button>
+              </div>
             ) : items.length === 0 ? (
               <div className="empty-state">
                 当前筛选下没有知识库。可以调整分类和范围，或新建一个知识库开始整理资料。
@@ -872,8 +1234,8 @@ export function KnowledgeBaseListPage() {
               <KnowledgeBaseCards
                 items={items}
                 selectedSet={selectedSet}
-                workingId={workingId}
-                onDelete={(item) => setDeleteTarget({ kind: 'single', item })}
+                working={workspaceMutationBusy}
+                onDelete={(item) => openKnowledgeBaseDelete({ kind: 'single', item })}
                 onEdit={openEditForm}
                 onFavorite={toggleFavorite}
                 onOpen={handleOpenKnowledgeBase}
@@ -884,8 +1246,8 @@ export function KnowledgeBaseListPage() {
                 allVisibleSelected={allVisibleSelected}
                 items={items}
                 selectedSet={selectedSet}
-                workingId={workingId}
-                onDelete={(item) => setDeleteTarget({ kind: 'single', item })}
+                working={workspaceMutationBusy}
+                onDelete={(item) => openKnowledgeBaseDelete({ kind: 'single', item })}
                 onEdit={openEditForm}
                 onFavorite={toggleFavorite}
                 onOpen={handleOpenKnowledgeBase}
@@ -898,8 +1260,8 @@ export function KnowledgeBaseListPage() {
           <footer className="workspace-pagination">
             <span>共 {total} 条</span>
             <div className="pager">
-              <button className="secondary-button" type="button" disabled={page <= 1} onClick={() => setPage(page - 1)}>
-                ‹
+              <button aria-label="上一页" className="secondary-button" type="button" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+                <ChevronLeft aria-hidden="true" />
               </button>
               {paginationItems(page, totalPages).map((item) => (
                 <button
@@ -911,8 +1273,8 @@ export function KnowledgeBaseListPage() {
                   {item}
                 </button>
               ))}
-              <button className="secondary-button" type="button" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>
-                ›
+              <button aria-label="下一页" className="secondary-button" type="button" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>
+                <ChevronRight aria-hidden="true" />
               </button>
               <select
                 aria-label="每页数量"
@@ -930,15 +1292,18 @@ export function KnowledgeBaseListPage() {
               </select>
             </div>
           </footer>
+      </section>
       {showRecycleBin && (
         <KnowledgeBaseRecycleBinDrawer
-          busy={submitting}
+          busy={workspaceMutationBusy}
+          error={recycleError}
           items={recycleItems}
+          loading={recycleLoading}
           workingId={workingId}
           onClose={() => setShowRecycleBin(false)}
           onRefresh={() => void loadRecycleBin()}
-          onDeletePermanently={setPermanentDeleteTarget}
-          onEmpty={() => setConfirmEmptyRecycleBin(true)}
+          onDeletePermanently={(item) => { setError(''); setPermanentDeleteTarget(item); }}
+          onEmpty={() => { setError(''); setConfirmEmptyRecycleBin(true); }}
           onRestore={handleRestoreRecycleItem}
           onRestoreAll={handleRestoreAllRecycleItems}
         />
@@ -946,7 +1311,7 @@ export function KnowledgeBaseListPage() {
 
       {form && (
         <KnowledgeBaseFormDrawer
-          busy={submitting}
+          busy={workspaceMutationBusy}
           categories={flatCategories}
           error={formError}
           form={form}
@@ -967,8 +1332,9 @@ export function KnowledgeBaseListPage() {
           title="删除分类"
           description={`确认删除“${categoryDeleteTarget.name}”？包含子分类或知识库的分类无法删除。`}
           confirmLabel="删除"
-          busy={submitting}
-          onCancel={() => setCategoryDeleteTarget(null)}
+          busy={workspaceMutationBusy}
+          error={error}
+          onCancel={() => { setError(''); setCategoryDeleteTarget(null); }}
           onConfirm={handleCategoryDelete}
         />
       )}
@@ -982,8 +1348,9 @@ export function KnowledgeBaseListPage() {
               : `确认删除选中的 ${deleteTarget.ids.length} 个知识库？这些知识库会进入回收站。`
           }
           confirmLabel="删除"
-          busy={submitting}
-          onCancel={() => setDeleteTarget(null)}
+          busy={workspaceMutationBusy}
+          error={error}
+          onCancel={() => { setError(''); setDeleteTarget(null); }}
           onConfirm={handleDelete}
         />
       )}
@@ -993,8 +1360,9 @@ export function KnowledgeBaseListPage() {
           title="永久删除知识库"
           description={`确认永久删除“${permanentDeleteTarget.name}”？关联文档、内容片段、会话和成员等数据会被清理，且不可恢复。`}
           confirmLabel="永久删除"
-          busy={submitting}
-          onCancel={() => setPermanentDeleteTarget(null)}
+          busy={workspaceMutationBusy}
+          error={error}
+          onCancel={() => { setError(''); setPermanentDeleteTarget(null); }}
           onConfirm={handlePermanentDeleteKnowledgeBase}
         />
       )}
@@ -1004,8 +1372,9 @@ export function KnowledgeBaseListPage() {
           title="清空知识库回收站"
           description="确认清空知识库回收站？操作失败时不会删除其中任何知识库。"
           confirmLabel="清空"
-          busy={submitting}
-          onCancel={() => setConfirmEmptyRecycleBin(false)}
+          busy={workspaceMutationBusy}
+          error={error}
+          onCancel={() => { setError(''); setConfirmEmptyRecycleBin(false); }}
           onConfirm={handleEmptyKnowledgeBaseRecycleBin}
         />
       )}
@@ -1013,227 +1382,61 @@ export function KnowledgeBaseListPage() {
   );
 }
 
-function KnowledgeBaseFormDrawer({
-  busy,
-  categories,
+function StatsGrid({
   error,
-  form,
-  tags,
-  onChange,
-  onClose,
-  onSubmit,
+  fallbackTotal,
+  loading,
+  onRetry,
+  stats,
 }: {
-  busy: boolean;
-  categories: { id: string; label: string }[];
   error: string;
-  form: FormState;
-  tags: KnowledgeBaseTag[];
-  onChange: (form: FormState) => void;
-  onClose: () => void;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  fallbackTotal: number | null;
+  loading: boolean;
+  onRetry: () => void;
+  stats: KnowledgeBaseStatsResponse | null;
 }) {
-  return (
-    <aside className="drawer-backdrop" role="presentation">
-      <section className="drawer-panel kb-form-drawer" role="dialog" aria-modal="true" aria-labelledby="kb-form-title">
-        <header>
-          <div>
-            <h2 id="kb-form-title">{form.id ? '编辑知识库' : '新建知识库'}</h2>
-            <p className="muted-text">保存后，分类、可见性和标签将立即更新。</p>
-          </div>
-          <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>
-            关闭
-          </button>
-        </header>
-
-        <form className="drawer-form" onSubmit={onSubmit}>
-          <div className="form-grid drawer-form-grid">
-            <label>
-              名称
-              <input
-                value={form.name}
-                onChange={(event) => onChange({ ...form, name: event.target.value })}
-                required
-              />
-            </label>
-            <label>
-              分类
-              <select
-                value={form.categoryId}
-                onChange={(event) => onChange({ ...form, categoryId: event.target.value })}
-              >
-                <option value="">未分类</option>
-                {categories.map((category) => (
-                  <option key={category.id} value={category.id}>
-                    {category.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              可见性
-              <select
-                value={form.visibility}
-                onChange={(event) =>
-                  onChange({ ...form, visibility: event.target.value as 'private' | 'public' })
-                }
-              >
-                <option value="private">私有</option>
-                <option value="public">公开</option>
-              </select>
-            </label>
-            <label>
-              标签
-              <select
-                value={form.tagIds[0] ?? ''}
-                onChange={(event) =>
-                  onChange({ ...form, tagIds: event.target.value ? [event.target.value] : [] })
-                }
-              >
-                <option value="">不设置标签</option>
-                {tags.map((tag) => (
-                  <option key={tag.id} value={tag.id}>
-                    {tag.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="form-field-wide">
-              描述
-              <textarea
-                value={form.description}
-                onChange={(event) => onChange({ ...form, description: event.target.value })}
-                rows={4}
-              />
-            </label>
-          </div>
-
-          {error && <p className="drawer-error-text">{error}</p>}
-
-          <div className="form-actions drawer-form-actions">
-            <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>
-              取消
-            </button>
-            <button type="submit" disabled={busy}>
-              {busy ? '保存中...' : '保存'}
-            </button>
-          </div>
-        </form>
-      </section>
-    </aside>
-  );
-}
-
-function KnowledgeBaseRecycleBinDrawer({
-  busy,
-  items,
-  workingId,
-  onClose,
-  onDeletePermanently,
-  onEmpty,
-  onRefresh,
-  onRestore,
-  onRestoreAll,
-}: {
-  busy: boolean;
-  items: RecycleBinItem[];
-  workingId: string | null;
-  onClose: () => void;
-  onDeletePermanently: (item: RecycleBinItem) => void;
-  onEmpty: () => void;
-  onRefresh: () => void;
-  onRestore: (item: RecycleBinItem) => void;
-  onRestoreAll: () => void;
-}) {
-  return (
-    <aside className="drawer-backdrop" role="presentation">
-      <section className="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="kb-recycle-title">
-        <header>
-          <div>
-            <h2 id="kb-recycle-title">知识库回收站</h2>
-            <p className="muted-text">展示当前用户已删除的知识库，可恢复后继续管理文档和会话。</p>
-          </div>
-          <button className="secondary-button" type="button" onClick={onClose}>
-            关闭
-          </button>
-        </header>
-
-        <div className="drawer-actions">
-          <button className="secondary-button" type="button" onClick={onRefresh}>
-            刷新
-          </button>
-          <button className="secondary-button" type="button" onClick={onRestoreAll} disabled={busy || items.length === 0}>
-            恢复全部
-          </button>
-          <button className="danger-button" type="button" onClick={onEmpty} disabled={busy || items.length === 0}>
-            清空回收站
-          </button>
-        </div>
-
-        <div className="recycle-list">
-          {items.length === 0 ? (
-            <div className="empty-state">知识库回收站为空。</div>
-          ) : (
-            items.map((item) => (
-              <article className="recycle-item" key={item.id}>
-                <div>
-                  <strong>{item.name}</strong>
-                  <span>删除时间 {formatDateTime(item.deletedAt)}</span>
-                </div>
-                <div className="table-actions">
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => onRestore(item)}
-                    disabled={workingId === item.id || busy}
-                  >
-                    {workingId === item.id ? '恢复中...' : '恢复'}
-                  </button>
-                  <button
-                    className="danger-button"
-                    type="button"
-                    onClick={() => onDeletePermanently(item)}
-                    disabled={busy}
-                  >
-                    永久删除
-                  </button>
-                </div>
-              </article>
-            ))
-          )}
-        </div>
-      </section>
-    </aside>
-  );
-}
-
-function StatsGrid({ stats, fallbackTotal }: { stats: KnowledgeBaseStatsResponse | null; fallbackTotal: number }) {
   const cards = [
     { label: '知识库总数', metric: stats?.knowledgeBases, fallback: fallbackTotal, unit: '个', tone: 'blue' },
-    { label: '文档总数', metric: stats?.documents, fallback: 0, unit: '篇', tone: 'green' },
-    { label: '总浏览量', metric: stats?.views, fallback: 0, unit: '次', tone: 'violet' },
-    { label: '问答总数', metric: stats?.questions, fallback: 0, unit: '条', tone: 'orange' },
+    { label: '文档总数', metric: stats?.documents, fallback: null, unit: '篇', tone: 'green' },
+    { label: '总浏览量', metric: stats?.views, fallback: null, unit: '次', tone: 'violet' },
+    { label: '问答总数', metric: stats?.questions, fallback: null, unit: '条', tone: 'orange' },
   ];
 
   return (
-    <div className="workspace-stats">
-      {cards.map((card) => (
-        <article className="workspace-stat-card" key={card.label}>
-          <span className={`stat-icon ${card.tone}`} aria-hidden="true" />
-          <div>
-            <span>{card.label}</span>
-            <strong>
-              {formatNumber(card.metric?.value ?? card.fallback)}
-              <small>{card.unit}</small>
-            </strong>
-            <em>
-              {card.metric
-                ? formatMetricComparison(card.metric, stats?.period ?? 'month')
-                : '暂无可比数据'}
-            </em>
-          </div>
-        </article>
-      ))}
-    </div>
+    <>
+      <div className="workspace-stats">
+        {cards.map((card) => {
+          const value = card.metric?.value ?? card.fallback;
+          return (
+            <article className="workspace-stat-card" key={card.label}>
+              <span className={`stat-icon ${card.tone}`} aria-hidden="true" />
+              <div>
+                <span>{card.label}</span>
+                <strong>
+                  {value === null ? '--' : formatNumber(value)}
+                  <small>{card.unit}</small>
+                </strong>
+                <em>
+                  {card.metric
+                    ? formatMetricComparison(card.metric, stats?.period ?? 'month')
+                    : loading
+                      ? '统计加载中'
+                      : '暂无可比数据'}
+                </em>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+      {error && (
+        <div className="error-text" role="alert">
+          <span>{error}</span>
+          <button className="link-button" type="button" onClick={onRetry}>
+            重试统计
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1241,7 +1444,7 @@ function KnowledgeBaseTable({
   allVisibleSelected,
   items,
   selectedSet,
-  workingId,
+  working,
   onDelete,
   onEdit,
   onFavorite,
@@ -1252,11 +1455,11 @@ function KnowledgeBaseTable({
   allVisibleSelected: boolean;
   items: KnowledgeBase[];
   selectedSet: Set<string>;
-  workingId: string | null;
+  working: boolean;
   onDelete: (item: KnowledgeBase) => void;
   onEdit: (item: KnowledgeBase) => void;
   onFavorite: (item: KnowledgeBase) => void;
-  onOpen: (item: KnowledgeBase) => void;
+  onOpen: (item: KnowledgeBase) => boolean;
   onToggleAll: () => void;
   onToggleSelected: (id: string) => void;
 }) {
@@ -1293,7 +1496,17 @@ function KnowledgeBaseTable({
                 />
               </td>
               <td className="table-title" data-label="名称">
-                <Link className="kb-name-cell" to={`/knowledge-bases/${item.id}`} onClick={() => void onOpen(item)}>
+                <Link
+                  aria-disabled={working || undefined}
+                  className="kb-name-cell"
+                  tabIndex={working ? -1 : undefined}
+                  to={`/knowledge-bases/${item.id}`}
+                  onClick={(event) => {
+                    if (!onOpen(item)) {
+                      event.preventDefault();
+                    }
+                  }}
+                >
                   <span className={`kb-icon ${item.visibility === 'public' ? 'public' : 'private'}`} aria-hidden="true" />
                   <span>
                     <strong>{item.name}</strong>
@@ -1306,7 +1519,7 @@ function KnowledgeBaseTable({
                   {item.visibility === 'public' ? '公开' : '私有'}
                 </span>
               </td>
-              <td data-label="文档数">{item.documentCount ?? 0}</td>
+              <td data-label="文档数">{formatOptionalCount(item.documentCount)}</td>
               <td data-label="更新人">
                 <UserCell user={item.updatedBy} />
               </td>
@@ -1314,7 +1527,7 @@ function KnowledgeBaseTable({
               <td data-label="操作">
                 <RowActions
                   item={item}
-                  working={workingId === item.id}
+                  working={working}
                   onDelete={onDelete}
                   onEdit={onEdit}
                   onFavorite={onFavorite}
@@ -1331,7 +1544,7 @@ function KnowledgeBaseTable({
 function KnowledgeBaseCards({
   items,
   selectedSet,
-  workingId,
+  working,
   onDelete,
   onEdit,
   onFavorite,
@@ -1340,11 +1553,11 @@ function KnowledgeBaseCards({
 }: {
   items: KnowledgeBase[];
   selectedSet: Set<string>;
-  workingId: string | null;
+  working: boolean;
   onDelete: (item: KnowledgeBase) => void;
   onEdit: (item: KnowledgeBase) => void;
   onFavorite: (item: KnowledgeBase) => void;
-  onOpen: (item: KnowledgeBase) => void;
+  onOpen: (item: KnowledgeBase) => boolean;
   onToggleSelected: (id: string) => void;
 }) {
   return (
@@ -1361,20 +1574,29 @@ function KnowledgeBaseCards({
             <span className={`kb-icon ${item.visibility === 'public' ? 'public' : 'private'}`} aria-hidden="true" />
             <RowActions
               item={item}
-              working={workingId === item.id}
+              working={working}
               onDelete={onDelete}
               onEdit={onEdit}
               onFavorite={onFavorite}
             />
           </header>
-          <Link to={`/knowledge-bases/${item.id}`} onClick={() => void onOpen(item)}>
+          <Link
+            aria-disabled={working || undefined}
+            tabIndex={working ? -1 : undefined}
+            to={`/knowledge-bases/${item.id}`}
+            onClick={(event) => {
+              if (!onOpen(item)) {
+                event.preventDefault();
+              }
+            }}
+          >
             <strong>{item.name}</strong>
             <p>{item.description || '未填写描述'}</p>
           </Link>
           <div className="kb-card-meta">
-            <span>{item.documentCount ?? 0} 文档</span>
-            <span>{item.viewCount ?? 0} 浏览</span>
-            <span>{item.questionCount ?? 0} 问答</span>
+            <span>{formatOptionalCount(item.documentCount)} 文档</span>
+            <span>{formatOptionalCount(item.viewCount)} 浏览</span>
+            <span>{formatOptionalCount(item.questionCount)} 问答</span>
           </div>
           <div className="tag-row">
             {(item.tags ?? []).slice(0, 3).map((tag) => (
@@ -1409,12 +1631,12 @@ function RowActions({
         disabled={working}
         onClick={() => void onFavorite(item)}
       >
-        ☆
+        <Star aria-hidden="true" fill={item.isFavorite ? 'currentColor' : 'none'} />
       </button>
-      <button className="link-button" type="button" onClick={() => onEdit(item)}>
+      <button className="link-button" type="button" disabled={working} onClick={() => onEdit(item)}>
         编辑
       </button>
-      <button className="link-button" type="button" onClick={() => onDelete(item)}>
+      <button className="link-button" type="button" disabled={working} onClick={() => onDelete(item)}>
         删除
       </button>
     </div>
@@ -1588,6 +1810,10 @@ function paginationItems(page: number, totalPages: number): number[] {
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat('zh-CN').format(value);
+}
+
+function formatOptionalCount(value: number | null | undefined): string {
+  return typeof value === 'number' ? String(value) : '--';
 }
 
 function formatDateTime(value: string): string {

@@ -1,5 +1,5 @@
 import { Search } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 
@@ -15,6 +15,7 @@ import { getErrorMessage } from '../../utils/errors';
 type SearchType = 'all' | GlobalSearchResultType;
 
 const SEARCH_DEBOUNCE_MS = 300;
+const DEFAULT_PAGE_SIZE = 20;
 const typeOptions: Array<{ value: SearchType; label: string }> = [
   { value: 'all', label: '全部' },
   { value: 'knowledgeBase', label: '知识库' },
@@ -26,13 +27,24 @@ function readType(value: string | null): SearchType {
   return typeOptions.some((option) => option.value === value) ? value as SearchType : 'all';
 }
 
+function readPositiveInteger(value: string | null, fallback: number, maximum?: number): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return maximum ? Math.min(parsed, maximum) : parsed;
+}
+
 export function SearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const rawQuery = searchParams.get('q') ?? '';
   const submittedQuery = rawQuery.trim();
   const selectedType = readType(searchParams.get('type'));
+  const selectedPage = readPositiveInteger(searchParams.get('page'), 1);
+  const selectedPageSize = readPositiveInteger(searchParams.get('pageSize'), DEFAULT_PAGE_SIZE, 100);
   const [draft, setDraft] = useState(submittedQuery);
   const [items, setItems] = useState<GlobalSearchResult[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
@@ -40,19 +52,21 @@ export function SearchPage() {
   useEffect(() => setDraft(submittedQuery), [submittedQuery]);
 
   useEffect(() => {
-    if (!searchParams.has('q') || rawQuery === submittedQuery) {
+    const normalizedType = selectedType === 'all' ? null : selectedType;
+    const normalizedPage = selectedPage === 1 ? null : String(selectedPage);
+    const normalizedPageSize = selectedPageSize === DEFAULT_PAGE_SIZE ? null : String(selectedPageSize);
+    if (
+      (!searchParams.has('q') || rawQuery === submittedQuery)
+      && searchParams.get('type') === normalizedType
+      && searchParams.get('page') === normalizedPage
+      && searchParams.get('pageSize') === normalizedPageSize
+    ) {
       return;
     }
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current);
-      if (submittedQuery) {
-        next.set('q', submittedQuery);
-      } else {
-        next.delete('q');
-      }
-      return next;
-    }, { replace: true });
-  }, [rawQuery, searchParams, setSearchParams, submittedQuery]);
+    setSearchParams((current) => (
+      updateParams(current, submittedQuery, selectedType, selectedPage, selectedPageSize)
+    ), { replace: true });
+  }, [rawQuery, searchParams, selectedPage, selectedPageSize, selectedType, setSearchParams, submittedQuery]);
 
   useEffect(() => {
     const query = draft.trim();
@@ -61,14 +75,17 @@ export function SearchPage() {
     }
 
     const timer = window.setTimeout(() => {
-      setSearchParams((current) => updateParams(current, query, selectedType), { replace: true });
+      setSearchParams((current) => (
+        updateParams(current, query, selectedType, 1, selectedPageSize)
+      ), { replace: true });
     }, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [draft, selectedType, setSearchParams, submittedQuery]);
+  }, [draft, selectedPageSize, selectedType, setSearchParams, submittedQuery]);
 
   useEffect(() => {
     if (!submittedQuery) {
       setItems([]);
+      setTotal(0);
       setError('');
       setLoading(false);
       return;
@@ -77,10 +94,16 @@ export function SearchPage() {
     const controller = new AbortController();
     setLoading(true);
     setError('');
-    void globalSearch(submittedQuery, controller.signal)
+    void globalSearch({
+      query: submittedQuery,
+      type: selectedType,
+      page: selectedPage,
+      pageSize: selectedPageSize,
+    }, controller.signal)
       .then((response) => {
         if (!controller.signal.aborted) {
           setItems(response.items);
+          setTotal(response.total);
         }
       })
       .catch((caught: unknown) => {
@@ -97,24 +120,24 @@ export function SearchPage() {
       });
 
     return () => controller.abort();
-  }, [reloadKey, submittedQuery]);
+  }, [reloadKey, selectedPage, selectedPageSize, selectedType, submittedQuery]);
 
-  const counts = useMemo(() => items.reduce<Record<SearchType, number>>((result, item) => {
-    result.all += 1;
-    result[item.type] += 1;
-    return result;
-  }, { all: 0, knowledgeBase: 0, document: 0, chunk: 0 }), [items]);
-  const visibleItems = selectedType === 'all'
-    ? items
-    : items.filter((item) => item.type === selectedType);
+  const totalPages = Math.max(1, Math.ceil(total / selectedPageSize));
+  const resultStatus = loading
+    ? '正在搜索'
+    : error || !submittedQuery
+      ? ''
+      : items.length === 0
+        ? '没有匹配结果'
+        : `找到 ${total} 条结果`;
 
-  function writeParams(query: string, type: SearchType) {
-    setSearchParams((current) => updateParams(current, query, type));
+  function writeParams(query: string, type: SearchType, page = 1) {
+    setSearchParams((current) => updateParams(current, query, type, page, selectedPageSize));
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    writeParams(draft.trim(), selectedType);
+    writeParams(draft.trim(), selectedType, 1);
   }
 
   return (
@@ -145,31 +168,58 @@ export function SearchPage() {
               aria-pressed={selectedType === option.value}
               className={selectedType === option.value ? 'is-active' : ''}
               key={option.value}
-              onClick={() => writeParams(submittedQuery, option.value)}
+              onClick={() => writeParams(submittedQuery, option.value, 1)}
               type="button"
             >
-              {option.label} {counts[option.value]}
+              {option.label}
             </button>
           ))}
         </div>
 
-        <section className="search-results" aria-labelledby="search-results-title">
+        <section aria-busy={loading} className="search-results" aria-labelledby="search-results-title">
           <header>
             <h2 id="search-results-title">搜索结果</h2>
             <span>{submittedQuery ? `关键词：${submittedQuery}` : '等待输入关键词'}</span>
           </header>
+          <p
+            aria-atomic="true"
+            aria-label={loading ? '正在加载' : '搜索状态'}
+            className="sr-only"
+            role="status"
+          >
+            {resultStatus}
+          </p>
           {loading ? (
-            <LoadingSkeleton announce rows={5} columns={3} />
+            <LoadingSkeleton rows={5} columns={3} />
           ) : error ? (
             <ErrorState title="搜索失败" description={error} onRetry={() => setReloadKey((value) => value + 1)} />
           ) : !submittedQuery ? (
             <EmptyState title="输入关键词开始搜索" description="可搜索知识库名称、文件名与内容片段。" />
-          ) : visibleItems.length === 0 ? (
+          ) : items.length === 0 ? (
             <EmptyState title="没有匹配结果" description="尝试更短的关键词或切换结果类型。" />
           ) : (
             <div className="search-result-list">
-              {visibleItems.map((item) => <SearchResult item={item} key={`${item.type}-${item.id}`} />)}
+              {items.map((item) => <SearchResult item={item} key={`${item.type}-${item.id}`} />)}
             </div>
+          )}
+          {!loading && !error && submittedQuery && total > 0 && (
+            <nav aria-label="搜索结果分页" className="workspace-pagination">
+              <Button
+                variant="secondary"
+                disabled={selectedPage <= 1}
+                onClick={() => writeParams(submittedQuery, selectedType, selectedPage - 1)}
+              >
+                上一页
+              </Button>
+              <span>第 {selectedPage} / {totalPages} 页 · 共 {total} 条</span>
+              <Button
+                variant="secondary"
+                disabled={selectedPage >= totalPages}
+                onClick={() => writeParams(submittedQuery, selectedType, selectedPage + 1)}
+              >
+                下一页
+              </Button>
+            </nav>
           )}
         </section>
       </div>
@@ -177,7 +227,13 @@ export function SearchPage() {
   );
 }
 
-function updateParams(current: URLSearchParams, query: string, type: SearchType) {
+function updateParams(
+  current: URLSearchParams,
+  query: string,
+  type: SearchType,
+  page = 1,
+  pageSize = DEFAULT_PAGE_SIZE,
+) {
   const next = new URLSearchParams(current);
   if (query) {
     next.set('q', query);
@@ -189,13 +245,21 @@ function updateParams(current: URLSearchParams, query: string, type: SearchType)
   } else {
     next.set('type', type);
   }
+  if (page <= 1) {
+    next.delete('page');
+  } else {
+    next.set('page', String(page));
+  }
+  if (pageSize === DEFAULT_PAGE_SIZE) {
+    next.delete('pageSize');
+  } else {
+    next.set('pageSize', String(pageSize));
+  }
   return next;
 }
 
 function SearchResult({ item }: { item: GlobalSearchResult }) {
-  const href = item.type === 'knowledgeBase'
-    ? `/knowledge-bases/${item.knowledgeBaseId}`
-    : `/knowledge-bases/${item.knowledgeBaseId}/documents`;
+  const href = searchResultHref(item);
   const label = item.type === 'knowledgeBase' ? '知识库' : item.type === 'document' ? '文档' : '内容片段';
   return (
     <Link className="search-result-row" to={href}>
@@ -207,4 +271,23 @@ function SearchResult({ item }: { item: GlobalSearchResult }) {
       <p>{item.snippet || '暂无摘要'}</p>
     </Link>
   );
+}
+
+function searchResultHref(item: GlobalSearchResult): string {
+  if (item.type === 'knowledgeBase') {
+    return `/knowledge-bases/${item.knowledgeBaseId}`;
+  }
+
+  const params = new URLSearchParams();
+  const documentId = item.documentId ?? (item.type === 'document' ? item.id : '');
+  if (documentId) {
+    params.set('documentId', documentId);
+  }
+  if (item.type === 'chunk') {
+    params.set('chunkId', item.id);
+  }
+
+  const query = params.toString();
+  const documentsPath = `/knowledge-bases/${item.knowledgeBaseId}/documents`;
+  return query ? `${documentsPath}?${query}` : documentsPath;
 }

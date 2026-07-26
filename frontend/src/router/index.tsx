@@ -40,6 +40,7 @@ export const router = createBrowserRouter([{
         { path: 'knowledge-bases/:id/documents', element: <RoutePage><DocumentsPage /></RoutePage> },
         { path: 'documents', element: <RoutePage><DocumentsLandingPage /></RoutePage> },
         { path: 'chat', element: <RoutePage><ChatLandingPage /></RoutePage> },
+        { path: 'chat/new', element: <RoutePage><ChatPage draftSession /></RoutePage> },
         { path: 'chat/:sessionId', element: <RoutePage><ChatPage /></RoutePage> },
         { path: 'search', element: <RoutePage><SearchPage /></RoutePage> },
         { path: 'tags', element: <RoutePage><TagsPage /></RoutePage> },

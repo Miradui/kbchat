@@ -2,6 +2,7 @@ import { Command, LogOut, Menu, Search, UserRound, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
+import type { NavigateFunction } from 'react-router-dom';
 
 import { logout } from '../api/resources';
 import { PrimaryNav } from '../components/navigation/PrimaryNav';
@@ -38,6 +39,18 @@ export async function completeLogout(request: () => Promise<void>, finish: () =>
   finally { finish(); }
 }
 
+export function finishLocalLogout(
+  mounted: boolean,
+  setLoggingOut: (loggingOut: boolean) => void,
+  navigate: NavigateFunction,
+): void {
+  if (mounted) {
+    setLoggingOut(false);
+  }
+  tokenStore.clearToken();
+  navigate('/login', { replace: true });
+}
+
 export function AppShell({ active, contextSidebar, topbarContent, logoutRequest = logout, children }: AppShellProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -48,6 +61,16 @@ export function AppShell({ active, contextSidebar, topbarContent, logoutRequest 
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const drawerWasOpen = useRef(false);
+  const logoutPendingRef = useRef(false);
+  const mountedRef = useRef(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return;
@@ -62,7 +85,12 @@ export function AppShell({ active, contextSidebar, topbarContent, logoutRequest 
   useEffect(() => {
     if (!isMobile) { drawerWasOpen.current = false; return; }
     if (drawerOpen) { drawerWasOpen.current = true; closeButtonRef.current?.focus(); }
-    else if (drawerWasOpen.current) { drawerWasOpen.current = false; menuButtonRef.current?.focus(); }
+    else if (drawerWasOpen.current) {
+      drawerWasOpen.current = false;
+      if (!document.querySelector('[aria-modal="true"]')) {
+        menuButtonRef.current?.focus();
+      }
+    }
   }, [drawerOpen, isMobile]);
 
   useEffect(() => {
@@ -91,7 +119,13 @@ export function AppShell({ active, contextSidebar, topbarContent, logoutRequest 
   }
 
   function handleLogout() {
-    const finish = () => { tokenStore.clearToken(); navigate('/login', { replace: true }); };
+    if (logoutPendingRef.current) return;
+    logoutPendingRef.current = true;
+    setLoggingOut(true);
+    const finish = () => {
+      logoutPendingRef.current = false;
+      finishLocalLogout(mountedRef.current, setLoggingOut, navigate);
+    };
     void completeLogout(logoutRequest, finish);
   }
 
@@ -107,10 +141,30 @@ export function AppShell({ active, contextSidebar, topbarContent, logoutRequest 
           {isMobile && <IconButton ref={closeButtonRef} className="app-drawer-close" label="关闭主导航" onClick={() => setDrawerOpen(false)}><X aria-hidden="true" /></IconButton>}
         </div>
         <PrimaryNav active={active} onNavigate={() => setDrawerOpen(false)} />
-        {contextSidebar && <div className="app-context-sidebar">{contextSidebar}</div>}
+        {contextSidebar && (
+          <div
+            className="app-context-sidebar"
+            onClickCapture={(event) => {
+              const target = event.target;
+              if (
+                isMobile
+                && target instanceof Element
+                && target.closest('[data-app-drawer-dismiss="true"]')
+              ) {
+                setDrawerOpen(false);
+              }
+            }}
+          >
+            {contextSidebar}
+          </div>
+        )}
       </aside>
       {isMobile && drawerOpen && <button aria-hidden="true" className="app-drawer-backdrop" onClick={() => setDrawerOpen(false)} tabIndex={-1} type="button" />}
-      <div className="app-main">
+      <div
+        aria-hidden={(isMobile && drawerOpen) || undefined}
+        className="app-main"
+        inert={(isMobile && drawerOpen) || undefined}
+      >
         <header className="app-topbar">
           {isMobile && <IconButton ref={menuButtonRef} className="app-menu-button" label="打开主导航" onClick={() => setDrawerOpen(true)}><Menu aria-hidden="true" /></IconButton>}
           <div className="app-topbar__context">{topbarContent ?? sectionLabels[active]}</div>
@@ -118,9 +172,9 @@ export function AppShell({ active, contextSidebar, topbarContent, logoutRequest 
             <Search aria-hidden="true" /><label className="sr-only" htmlFor="app-global-search">全局搜索</label>
             <input id="app-global-search" placeholder="搜索知识库、文档和内容" value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} />
           </form>
-          <div className="app-account-actions" aria-label="账户操作"><span className="app-user-badge" aria-hidden="true"><UserRound /></span><span>当前用户</span><IconButton label="退出登录" onClick={handleLogout}><LogOut aria-hidden="true" /></IconButton></div>
+          <div className="app-account-actions" aria-label="账户操作"><span className="app-user-badge" aria-hidden="true"><UserRound /></span><span>当前用户</span><IconButton disabled={loggingOut} label="退出登录" onClick={handleLogout}><LogOut aria-hidden="true" /></IconButton></div>
         </header>
-        <main className="app-content" inert={(isMobile && drawerOpen) || undefined}>{children}</main>
+        <main className="app-content">{children}</main>
       </div>
     </section>
   );

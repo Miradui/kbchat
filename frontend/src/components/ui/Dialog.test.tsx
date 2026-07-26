@@ -9,6 +9,33 @@ afterEach(() => {
 });
 
 describe('Dialog', () => {
+  it('isolates the application background for the first modal and restores its attributes', () => {
+    const { rerender } = render(
+      <>
+        <section aria-hidden="false" data-testid="application-background">
+          <button type="button">背景操作</button>
+        </section>
+        <Dialog open title="说明" onClose={() => undefined}><button type="button">确认</button></Dialog>
+      </>,
+    );
+    const background = screen.getByTestId('application-background');
+
+    expect(background).toHaveAttribute('inert');
+    expect(background).toHaveAttribute('aria-hidden', 'true');
+
+    rerender(
+      <>
+        <section aria-hidden="false" data-testid="application-background">
+          <button type="button">背景操作</button>
+        </section>
+        <Dialog open={false} title="说明" onClose={() => undefined}><button type="button">确认</button></Dialog>
+      </>,
+    );
+
+    expect(background).not.toHaveAttribute('inert');
+    expect(background).toHaveAttribute('aria-hidden', 'false');
+  });
+
   it('traps focus in both directions, closes on Escape, and restores state', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
@@ -86,5 +113,122 @@ describe('Dialog', () => {
 
     expect(() => rerender(<Dialog open={false} title="说明" onClose={() => undefined}><p>内容</p></Dialog>)).not.toThrow();
     expect(focusSpy).not.toHaveBeenCalled();
+  });
+
+  it('preserves the outer opener when a lower modal unmounts before the top modal', () => {
+    const opener = document.createElement('button');
+    opener.textContent = '打开外层';
+    document.body.append(opener);
+    opener.focus();
+    document.body.style.overflow = 'clip';
+
+    const { rerender } = render(
+      <>
+        <Dialog open title="外层" onClose={() => undefined}><button type="button">打开内层</button></Dialog>
+        <Dialog open={false} title="内层" onClose={() => undefined}><button type="button">取消</button></Dialog>
+      </>,
+    );
+    rerender(
+      <>
+        <Dialog open title="外层" onClose={() => undefined}><button type="button">打开内层</button></Dialog>
+        <Dialog open title="内层" onClose={() => undefined}><button type="button">取消</button></Dialog>
+      </>,
+    );
+    rerender(
+      <>
+        <Dialog open={false} title="外层" onClose={() => undefined}><button type="button">打开内层</button></Dialog>
+        <Dialog open title="内层" onClose={() => undefined}><button type="button">取消</button></Dialog>
+      </>,
+    );
+    rerender(
+      <>
+        <Dialog open={false} title="外层" onClose={() => undefined}><button type="button">打开内层</button></Dialog>
+        <Dialog open={false} title="内层" onClose={() => undefined}><button type="button">取消</button></Dialog>
+      </>,
+    );
+
+    expect(document.body.style.overflow).toBe('clip');
+    expect(opener).toHaveFocus();
+    opener.remove();
+  });
+
+  it('keeps focus inside the remaining modal when a top modal was opened elsewhere', () => {
+    const outsideOpener = document.createElement('button');
+    outsideOpener.textContent = '外部触发器';
+    document.body.append(outsideOpener);
+
+    const { rerender } = render(
+      <>
+        <Dialog open title="底层" onClose={() => undefined}><button type="button">底层操作</button></Dialog>
+        <Dialog open={false} title="顶层" onClose={() => undefined}><button type="button">顶层操作</button></Dialog>
+      </>,
+    );
+    outsideOpener.focus();
+    rerender(
+      <>
+        <Dialog open title="底层" onClose={() => undefined}><button type="button">底层操作</button></Dialog>
+        <Dialog open title="顶层" onClose={() => undefined}><button type="button">顶层操作</button></Dialog>
+      </>,
+    );
+    rerender(
+      <>
+        <Dialog open title="底层" onClose={() => undefined}><button type="button">底层操作</button></Dialog>
+        <Dialog open={false} title="顶层" onClose={() => undefined}><button type="button">顶层操作</button></Dialog>
+      </>,
+    );
+
+    expect(screen.getByRole('button', { name: '底层操作' })).toHaveFocus();
+    expect(outsideOpener).not.toHaveFocus();
+    outsideOpener.remove();
+  });
+
+  it('hides and inerts a lower modal while a nested modal is open', () => {
+    const { rerender } = render(
+      <>
+        <Dialog open title="底层" onClose={() => undefined}><button type="button">底层操作</button></Dialog>
+        <Dialog open={false} title="顶层" onClose={() => undefined}><button type="button">顶层操作</button></Dialog>
+      </>,
+    );
+    const lowerDialog = screen.getByRole('dialog', { name: '底层' });
+
+    rerender(
+      <>
+        <Dialog open title="底层" onClose={() => undefined}><button type="button">底层操作</button></Dialog>
+        <Dialog open title="顶层" onClose={() => undefined}><button type="button">顶层操作</button></Dialog>
+      </>,
+    );
+    expect(lowerDialog).toHaveAttribute('aria-hidden', 'true');
+    expect(lowerDialog).toHaveAttribute('inert');
+
+    rerender(
+      <>
+        <Dialog open title="底层" onClose={() => undefined}><button type="button">底层操作</button></Dialog>
+        <Dialog open={false} title="顶层" onClose={() => undefined}><button type="button">顶层操作</button></Dialog>
+      </>,
+    );
+    expect(lowerDialog).not.toHaveAttribute('aria-hidden');
+    expect(lowerDialog).not.toHaveAttribute('inert');
+  });
+
+  it('keeps a top modal operable when it is rendered inside the lower modal DOM', () => {
+    const { rerender } = render(
+      <Dialog open title="外层" onClose={() => undefined}>
+        <button type="button">打开内层</button>
+      </Dialog>,
+    );
+
+    rerender(
+      <Dialog open title="外层" onClose={() => undefined}>
+        <button type="button">打开内层</button>
+        <Dialog open title="内层" onClose={() => undefined}>
+          <button type="button">确认内层</button>
+        </Dialog>
+      </Dialog>,
+    );
+
+    const innerDialog = screen.getByRole('dialog', { name: '内层', hidden: true });
+    expect(innerDialog.parentElement?.closest('[inert]')).toBeNull();
+    expect(innerDialog.parentElement?.closest('[aria-hidden="true"]')).toBeNull();
+    expect(screen.getByRole('button', { name: '确认内层', hidden: true })).toHaveFocus();
   });
 });

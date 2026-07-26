@@ -604,9 +604,15 @@ Content-Disposition: attachment
 page=1
 pageSize=20
 q=关键词
+chunkId=chunk_uuid
 ```
 
 `q` 对 chunk `content` 做大小写不敏感匹配。
+
+`chunkId` 可选。提供时，只返回路径参数所指定文档内对应 UUID 的 chunk；UUID
+格式不合法返回 `VALIDATION_ERROR`，chunk 不存在或属于其他文档时返回空分页结果。
+该查询仍通过文档所属知识库的 `owner_id` 校验所有权，无权访问时返回
+`DOCUMENT_NOT_FOUND`。`chunkId` 与 `q` 同时提供时，两项条件同时生效。
 
 响应：
 
@@ -638,24 +644,36 @@ q=关键词
 
 ```text
 q=关键词
+type=all|knowledgeBase|document|chunk
+page=1
+pageSize=20
 ```
 
-响应项：
+`type` 默认 `all`，`page` 默认 `1`，`pageSize` 默认 `20` 且最大为 `100`。空白关键词或非法类型返回 `VALIDATION_ERROR`。
+
+响应：
 
 ```json
 {
-  "type": "knowledgeBase|document|chunk",
-  "id": "uuid",
-  "knowledgeBaseId": "uuid",
-  "knowledgeBaseName": "产品知识库",
-  "documentId": "uuid",
-  "filename": "manual.pdf",
-  "title": "manual.pdf",
-  "snippet": "匹配摘要"
+  "items": [
+    {
+      "type": "knowledgeBase|document|chunk",
+      "id": "uuid",
+      "knowledgeBaseId": "uuid",
+      "knowledgeBaseName": "产品知识库",
+      "documentId": "uuid",
+      "filename": "manual.pdf",
+      "title": "manual.pdf",
+      "snippet": "匹配摘要"
+    }
+  ],
+  "total": 123,
+  "page": 1,
+  "pageSize": 20
 }
 ```
 
-该接口为关键词搜索；语义检索仍使用知识库内 `POST /knowledge-bases/:kbId/search`。
+`total` 是当前 `type` 筛选下的总命中数。`type=all` 时，知识库和文档按更新时间、chunk 按创建时间排序，并以 ID 作为稳定次序键，再按知识库、文档、chunk 轮转输出，避免单一类型占满分页。越界页返回空 `items`，但保留真实 `total/page/pageSize`。该接口为关键词搜索；语义检索仍使用知识库内 `POST /knowledge-bases/:kbId/search`。
 
 ### POST /knowledge-bases/:kbId/search
 
@@ -826,6 +844,8 @@ q=关键词
 
 必须校验 session 属于当前用户，且知识库属于当前用户。
 
+消息项包含 `clientRequestId`；历史消息或 regenerate 产生的 assistant 消息可为 `null`。客户端用该字段确定性核对发送结果，不得按消息数量或文本相等推测。
+
 ### POST /chat/sessions/:id/messages
 
 聊天接口必须读取当前会话最近历史消息。服务端会先调用 Chat Provider 做意图分类，模型必须返回 `intent` 和 `standaloneQuery`，程序再根据分类结果执行路由。
@@ -848,7 +868,8 @@ q=关键词
 
 ```json
 {
-  "content": "差旅报销需要哪些材料？"
+  "content": "差旅报销需要哪些材料？",
+  "clientRequestId": "4c6b6701-c6dd-4804-9f95-826df9ccff91"
 }
 ```
 
@@ -856,6 +877,25 @@ q=关键词
 
 ```json
 {
+  "clientRequestId": "4c6b6701-c6dd-4804-9f95-826df9ccff91",
+  "userMessage": {
+    "id": "user_message_uuid",
+    "sessionId": "session_uuid",
+    "clientRequestId": "4c6b6701-c6dd-4804-9f95-826df9ccff91",
+    "role": "user",
+    "content": "差旅报销需要哪些材料？",
+    "citations": [],
+    "createdAt": "2026-07-26T10:00:00Z"
+  },
+  "assistantMessage": {
+    "id": "assistant_message_uuid",
+    "sessionId": "session_uuid",
+    "clientRequestId": "4c6b6701-c6dd-4804-9f95-826df9ccff91",
+    "role": "assistant",
+    "content": "差旅报销通常需要提交发票、行程单和审批单。",
+    "citations": [],
+    "createdAt": "2026-07-26T10:00:01Z"
+  },
   "answer": "差旅报销通常需要提交发票、行程单和审批单。",
   "citations": [
     {
@@ -871,6 +911,8 @@ q=关键词
   "rerankFallback": null
 }
 ```
+
+`clientRequestId` 必须是 UUID，幂等作用域为当前 session。同一 session 内重复提交相同 `clientRequestId` 和相同 `content` 时，服务端只持久化一对 user/assistant 消息，并始终返回这对消息；已存在完整消息对的后续请求不会再次调用模型。同一 ID 对应不同内容时返回 `409 IDEMPOTENCY_KEY_REUSED`。Provider 或事务在消息落库前失败时，客户端可复用原 ID 重试。两个同时到达且都早于首次落库的请求可能各自调用一次 Provider，但唯一约束会阻止重复消息落库；若业务要求 Provider 调用也全局至多一次，需要另行引入持久化请求状态与并发协调机制。
 
 当聊天知识库检索发生 Rerank fallback 时，响应显式返回：
 
