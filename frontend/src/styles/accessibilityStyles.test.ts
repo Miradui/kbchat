@@ -78,6 +78,24 @@ describe('action layout styles', () => {
     expect(premiumStyles).not.toMatch(/\.chat-shell\s*\{[^}]*(?:grid-template-columns|grid-template-areas)/);
   });
 
+  it('keeps user and assistant message alignment under chat page ownership', () => {
+    expect(chatStyles).toMatch(/\.chat-thread \.message-bubble\.user[^}]*justify-self:\s*end/);
+    expect(chatStyles).toMatch(/\.chat-thread \.message-bubble\.user[^}]*color:\s*#fff/);
+    expect(chatStyles).toMatch(/\.chat-thread \.message-bubble\.assistant[^}]*justify-self:\s*start/);
+  });
+
+  it('avoids repeating the citation heading inside the responsive drawer', () => {
+    expect(chatStyles).toMatch(
+      /@media \(max-width: 1439px\).*?\.chat-citations-aux\.is-open \.chat-citation-intro h2[^}]*display:\s*none/,
+    );
+  });
+
+  it('gives inline citations a 44px mobile touch target', () => {
+    expect(chatStyles).toMatch(
+      /@media \(max-width: 680px\).*?\.inline-citation[^}]*min-height:\s*44px[^}]*min-width:\s*44px/,
+    );
+  });
+
   it('separates category dialog fields with a stable form rhythm', () => {
     expect(componentStyles).toMatch(/\.category-dialog-form[^}]*display:\s*grid/);
     expect(componentStyles).toMatch(/\.category-dialog-form[^}]*gap:\s*(?:8|12|16)px/);

@@ -14,6 +14,7 @@ import {
   listChatSessions,
   listKnowledgeBaseCategories,
   listKnowledgeBases,
+  regenerateChatMessage,
   sendChatMessage,
   updateChatSessionTitle,
 } from '../../api/resources';
@@ -32,6 +33,7 @@ vi.mock('../../api/resources', () => ({
   listKnowledgeBaseCategories: vi.fn(),
   listKnowledgeBases: vi.fn(),
   logout: vi.fn(),
+  regenerateChatMessage: vi.fn(),
   sendChatMessage: vi.fn(),
   updateChatSessionTitle: vi.fn(),
 }));
@@ -134,6 +136,8 @@ function deferred<T>() {
 beforeEach(() => {
 	window.localStorage.removeItem('rag.chat.pending-request:s1');
 	window.localStorage.removeItem('rag.chat.pending-request:s2');
+	window.localStorage.removeItem('rag.chat.pending-regeneration:s1');
+	window.localStorage.removeItem('rag.chat.pending-regeneration:s2');
   Element.prototype.scrollTo = vi.fn();
   vi.mocked(listChatSessions).mockReset().mockResolvedValue({ items: [session] });
   vi.mocked(listKnowledgeBases).mockReset().mockResolvedValue({ items: [knowledgeBase] });
@@ -147,6 +151,7 @@ beforeEach(() => {
   vi.mocked(archiveChatSession).mockReset();
   vi.mocked(createChatSession).mockReset();
   vi.mocked(deleteChatSession).mockReset();
+  vi.mocked(regenerateChatMessage).mockReset();
   vi.mocked(updateChatSessionTitle).mockReset();
 });
 
@@ -574,6 +579,411 @@ describe('ChatPage', () => {
       'href',
       '/knowledge-bases/kb1/documents?documentId=doc-new&chunkId=chunk-new',
     );
+  });
+
+  it('renders valid inline citations as source controls and keeps invalid markers as text', async () => {
+    vi.mocked(listChatMessages).mockResolvedValue({
+      items: [{
+        ...historicalAnswers[1],
+        content: '报销需要审批 [source:1]，无效引用保持原文 [source:0] [source:-1] [source:2]。',
+      }],
+    });
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
+      </Routes>,
+      ['/chat/s1'],
+    );
+
+    const sourceControl = await screen.findByRole('button', { name: '查看来源 1：新制度.pdf' });
+    expect(screen.queryByRole('button', { name: /查看来源 0/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /查看来源 2/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/\[source:0\] \[source:-1\] \[source:2\]/)).toBeInTheDocument();
+
+    await user.click(sourceControl);
+
+    expect(screen.getByRole('article', { name: '来源 1：新制度.pdf' })).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByRole('status')).toHaveTextContent('已定位到来源 1：新制度.pdf');
+  });
+
+  it('renders a grouped source marker as separate validated source controls', async () => {
+    vi.mocked(listChatMessages).mockResolvedValue({
+      items: [{
+        ...historicalAnswers[1],
+        content: '原子性由多条依据共同支持 [source: 1, 1, 2]。',
+        citations: [
+          historicalAnswers[1].citations[0],
+          {
+            ...historicalAnswers[0].citations[0],
+            filename: '事务日志.md',
+          },
+        ],
+      }],
+    });
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
+      </Routes>,
+      ['/chat/s1'],
+    );
+
+    expect(await screen.findAllByRole('button', { name: '查看来源 1：新制度.pdf' })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: '查看来源 2：事务日志.md' })).toBeInTheDocument();
+    expect(screen.queryByText('[source: 1, 1, 2]')).not.toBeInTheDocument();
+  });
+
+  it('keeps oversized grouped source markers as text even when numbers repeat', async () => {
+    const oversizedMarker = `[source: ${Array.from({ length: 21 }, () => '1').join(', ')}]`;
+    vi.mocked(listChatMessages).mockResolvedValue({
+      items: [{
+        ...historicalAnswers[1],
+        content: `超长引用 ${oversizedMarker}。`,
+      }],
+    });
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
+      </Routes>,
+      ['/chat/s1'],
+    );
+
+    expect(await screen.findByText(`超长引用 ${oversizedMarker}。`)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '查看来源 1：新制度.pdf' })).not.toBeInTheDocument();
+  });
+
+  it('collapses long source content and hides technical scores in retrieval details', async () => {
+    const longContent = '制度依据'.repeat(80);
+    vi.mocked(listChatMessages).mockResolvedValue({
+      items: [{
+        ...historicalAnswers[1],
+        citations: [{
+          ...historicalAnswers[1].citations[0],
+          content: longContent,
+          rerankScore: null,
+        }],
+      }],
+    });
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
+      </Routes>,
+      ['/chat/s1'],
+    );
+
+    const sourceCard = await screen.findByRole('article', { name: '来源 1：新制度.pdf' });
+    expect(within(sourceCard).getByText(/\.\.\.$/)).toBeInTheDocument();
+    expect(within(sourceCard).getByText('查看完整摘录').closest('details')).not.toHaveAttribute('open');
+    expect(within(sourceCard).getByText('检索详情').closest('details')).not.toHaveAttribute('open');
+    expect(within(sourceCard).getByText(/精排相关度 无精排分/)).toBeInTheDocument();
+  });
+
+  it('keeps regeneration failures beside the affected answer and allows retrying', async () => {
+    vi.mocked(listChatMessages).mockResolvedValue({ items: historicalAnswers });
+    vi.mocked(regenerateChatMessage)
+      .mockRejectedValueOnce(new ApiError(500, {
+        code: 'CHAT_COMPLETION_FAILED',
+        message: 'chat completion failed',
+      }))
+      .mockResolvedValueOnce({ message: historicalAnswers[1], rerankFallback: null });
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
+      </Routes>,
+      ['/chat/s1'],
+    );
+
+    const answer = (await screen.findByText('新回答')).closest('article');
+    expect(answer).not.toBeNull();
+    await user.click(within(answer!).getByRole('button', { name: '重新生成回答' }));
+
+    const recovery = await within(answer!).findByRole('alert');
+    expect(within(recovery).getByText('重新生成失败')).toBeInTheDocument();
+    expect(within(recovery).getByText('回答生成失败，请稍后重试。')).toBeInTheDocument();
+    expect(within(answer!).getByRole('button', { name: '重试重新生成' })).toBeInTheDocument();
+    expect(within(answer!).queryByRole('button', { name: '重新生成回答' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+
+    await user.click(within(answer!).getByRole('button', { name: '重试重新生成' }));
+    await waitFor(() => expect(regenerateChatMessage).toHaveBeenCalledTimes(2));
+  });
+
+  it('checks an uncertain regeneration result before allowing another write', async () => {
+    const regeneratedAnswer = {
+      ...historicalAnswers[1],
+      id: 'assistant-after-unknown-result',
+      content: '网络中断前已经生成的回答',
+    } satisfies ChatMessage;
+    vi.mocked(listChatMessages)
+      .mockResolvedValueOnce({ items: historicalAnswers })
+      .mockResolvedValueOnce({ items: [...historicalAnswers, regeneratedAnswer] });
+    vi.mocked(regenerateChatMessage).mockRejectedValue(new Error('network disconnected'));
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
+      </Routes>,
+      ['/chat/s1'],
+    );
+
+    const answer = (await screen.findByText('新回答')).closest('article');
+    await user.click(within(answer!).getByRole('button', { name: '重新生成回答' }));
+
+    const recovery = await within(answer!).findByRole('alert');
+    expect(within(recovery).getByText('重新生成结果待确认')).toBeInTheDocument();
+    expect(within(answer!).getByRole('button', { name: '再次检查' })).toBeInTheDocument();
+    expect(within(answer!).queryByRole('button', { name: '重试重新生成' })).not.toBeInTheDocument();
+    expect(within(answer!).queryByRole('button', { name: '重新生成回答' })).not.toBeInTheDocument();
+    expect(window.localStorage.getItem('rag.chat.pending-regeneration:s1')).not.toBeNull();
+
+    await user.click(within(answer!).getByRole('button', { name: '再次检查' }));
+
+    expect(await screen.findByText('网络中断前已经生成的回答')).toBeInTheDocument();
+    expect(regenerateChatMessage).toHaveBeenCalledTimes(1);
+    expect(listChatMessages).toHaveBeenCalledTimes(2);
+    expect(window.localStorage.getItem('rag.chat.pending-regeneration:s1')).toBeNull();
+  });
+
+  it('requires explicit confirmation before retrying after a check finds no new answer', async () => {
+    const confirmedAnswer = {
+      ...historicalAnswers[1],
+      id: 'assistant-after-confirmed-retry',
+      content: '用户确认后重新生成的回答',
+    } satisfies ChatMessage;
+    vi.mocked(listChatMessages)
+      .mockResolvedValueOnce({ items: historicalAnswers })
+      .mockResolvedValueOnce({ items: historicalAnswers });
+    vi.mocked(regenerateChatMessage)
+      .mockRejectedValueOnce(new Error('network disconnected'))
+      .mockResolvedValueOnce({ message: confirmedAnswer, rerankFallback: null });
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
+      </Routes>,
+      ['/chat/s1'],
+    );
+
+    const answer = (await screen.findByText('新回答')).closest('article');
+    await user.click(within(answer!).getByRole('button', { name: '重新生成回答' }));
+    await user.click(await within(answer!).findByRole('button', { name: '再次检查' }));
+
+    expect(await within(answer!).findByRole('button', { name: '确认重新生成' })).toBeInTheDocument();
+    expect(regenerateChatMessage).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(window.localStorage.getItem('rag.chat.pending-regeneration:s1') ?? '{}')).toMatchObject({
+      checked: true,
+    });
+
+    await user.click(within(answer!).getByRole('button', { name: '确认重新生成' }));
+
+    expect(await screen.findByText('用户确认后重新生成的回答')).toBeInTheDocument();
+    expect(regenerateChatMessage).toHaveBeenCalledTimes(2);
+    expect(window.localStorage.getItem('rag.chat.pending-regeneration:s1')).toBeNull();
+  });
+
+  it('persists regeneration protection before an in-flight request can outlive the page', async () => {
+    const regeneration = deferred<Awaited<ReturnType<typeof regenerateChatMessage>>>();
+    vi.mocked(listChatMessages).mockResolvedValue({ items: historicalAnswers });
+    vi.mocked(regenerateChatMessage).mockReturnValue(regeneration.promise);
+    const user = userEvent.setup();
+    const view = renderWithRouter(
+      <Routes>
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
+      </Routes>,
+      ['/chat/s1'],
+    );
+
+    const answer = (await screen.findByText('新回答')).closest('article');
+    await user.click(within(answer!).getByRole('button', { name: '重新生成回答' }));
+
+    expect(window.localStorage.getItem('rag.chat.pending-regeneration:s1')).not.toBeNull();
+    view.unmount();
+    await act(async () => {
+      regeneration.reject(new Error('network disconnected after navigation'));
+    });
+    expect(window.localStorage.getItem('rag.chat.pending-regeneration:s1')).not.toBeNull();
+  });
+
+  it('does not start regeneration when browser storage cannot persist its recovery state', async () => {
+    vi.mocked(listChatMessages).mockResolvedValue({ items: historicalAnswers });
+    vi.mocked(regenerateChatMessage).mockResolvedValue({
+      message: historicalAnswers[1],
+      rerankFallback: null,
+    });
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage unavailable');
+    });
+    const user = userEvent.setup();
+
+    try {
+      renderWithRouter(
+        <Routes>
+          <Route path="/chat/:sessionId" element={<ChatPage />} />
+        </Routes>,
+        ['/chat/s1'],
+      );
+
+      const answer = (await screen.findByText('新回答')).closest('article');
+      await user.click(within(answer!).getByRole('button', { name: '重新生成回答' }));
+
+      expect(regenerateChatMessage).not.toHaveBeenCalled();
+      expect(await within(answer!).findByText('无法安全发起重新生成，请检查浏览器存储设置后重试。')).toBeInTheDocument();
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+
+  it('keeps regeneration protection when another session mutation wins the confirmation race', async () => {
+    const archiveResult = deferred<ChatSession>();
+    vi.mocked(listChatMessages).mockResolvedValue({ items: historicalAnswers });
+    vi.mocked(archiveChatSession).mockReturnValue(archiveResult.promise);
+    window.localStorage.setItem('rag.chat.pending-regeneration:s1', JSON.stringify({
+      sessionId: 's1',
+      messageId: historicalAnswers[1].id,
+      baselineMessageIds: historicalAnswers.map((message) => message.id),
+      checked: true,
+      createdAt: '2026-07-01T00:03:00.000Z',
+    }));
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
+      </Routes>,
+      ['/chat/s1'],
+    );
+
+    const answer = (await screen.findByText('新回答')).closest('article');
+    const confirmRegeneration = await within(answer!).findByRole('button', { name: '确认重新生成' });
+    await user.click(screen.getByRole('button', { name: '归档' }));
+    const archiveDialog = screen.getByRole('dialog', { name: '归档会话' });
+    act(() => {
+      fireEvent.click(within(archiveDialog).getByRole('button', { name: '归档' }));
+      fireEvent.click(confirmRegeneration);
+    });
+
+    expect(regenerateChatMessage).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem('rag.chat.pending-regeneration:s1')).not.toBeNull();
+    await act(async () => {
+      archiveResult.resolve({ ...session, archivedAt: '2026-07-01T01:00:00Z' });
+    });
+  });
+
+  it('does not offer a confirmed regeneration write for an archived session', async () => {
+    const archivedSession = {
+      ...session,
+      archivedAt: '2026-07-01T01:00:00Z',
+    } satisfies ChatSession;
+    vi.mocked(getChatSession).mockResolvedValue(archivedSession);
+    vi.mocked(listChatMessages).mockResolvedValue({ items: historicalAnswers });
+    window.localStorage.setItem('rag.chat.pending-regeneration:s1', JSON.stringify({
+      sessionId: 's1',
+      messageId: historicalAnswers[1].id,
+      baselineMessageIds: historicalAnswers.map((message) => message.id),
+      checked: true,
+      createdAt: '2026-07-01T00:03:00.000Z',
+    }));
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
+      </Routes>,
+      ['/chat/s1'],
+    );
+
+    const answer = (await screen.findByText('新回答')).closest('article');
+    expect(await within(answer!).findByText('重新生成结果待确认')).toBeInTheDocument();
+    expect(within(answer!).queryByRole('button', { name: '确认重新生成' })).not.toBeInTheDocument();
+    expect(window.localStorage.getItem('rag.chat.pending-regeneration:s1')).not.toBeNull();
+  });
+
+  it('restores uncertain regeneration protection after reloading a session', async () => {
+    window.localStorage.setItem('rag.chat.pending-regeneration:s1', JSON.stringify({
+      sessionId: 's1',
+      messageId: historicalAnswers[1].id,
+      baselineMessageIds: historicalAnswers.map((message) => message.id),
+      createdAt: '2026-07-01T00:03:00.000Z',
+    }));
+    vi.mocked(listChatMessages).mockResolvedValue({ items: historicalAnswers });
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
+      </Routes>,
+      ['/chat/s1'],
+    );
+
+    const answer = (await screen.findByText('新回答')).closest('article');
+    expect(await within(answer!).findByText('重新生成结果待确认')).toBeInTheDocument();
+    expect(within(answer!).getByRole('button', { name: '再次检查' })).toBeInTheDocument();
+    expect(within(answer!).queryByRole('button', { name: '重新生成回答' })).not.toBeInTheDocument();
+  });
+
+  it('clears a persisted regeneration check when the new answer is already present', async () => {
+    const regeneratedAnswer = {
+      ...historicalAnswers[1],
+      id: 'assistant-persisted-regeneration',
+      content: '刷新前已完成的重新生成回答',
+    } satisfies ChatMessage;
+    window.localStorage.setItem('rag.chat.pending-regeneration:s1', JSON.stringify({
+      sessionId: 's1',
+      messageId: historicalAnswers[1].id,
+      baselineMessageIds: historicalAnswers.map((message) => message.id),
+      createdAt: '2026-07-01T00:03:00.000Z',
+    }));
+    vi.mocked(listChatMessages).mockResolvedValue({
+      items: [...historicalAnswers, regeneratedAnswer],
+    });
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
+      </Routes>,
+      ['/chat/s1'],
+    );
+
+    expect(await screen.findByText('刷新前已完成的重新生成回答')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(window.localStorage.getItem('rag.chat.pending-regeneration:s1')).toBeNull();
+    });
+    expect(screen.queryByText('重新生成结果待确认')).not.toBeInTheDocument();
+  });
+
+  it('uses a successful regeneration response without requiring a message-list refresh', async () => {
+    const regeneratedAnswer = {
+      ...historicalAnswers[1],
+      id: 'assistant-regenerated',
+      content: '重新生成后的回答',
+    } satisfies ChatMessage;
+    vi.mocked(listChatMessages).mockResolvedValueOnce({ items: historicalAnswers });
+    vi.mocked(regenerateChatMessage).mockResolvedValue({
+      message: regeneratedAnswer,
+      rerankFallback: null,
+    });
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
+      </Routes>,
+      ['/chat/s1'],
+    );
+
+    const answer = (await screen.findByText('新回答')).closest('article');
+    await user.click(within(answer!).getByRole('button', { name: '重新生成回答' }));
+
+    expect(await screen.findByText('重新生成后的回答')).toBeInTheDocument();
+    expect(listChatMessages).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '重试重新生成' })).not.toBeInTheDocument();
   });
 
   it('disables session mutations while the routed session detail is loading', async () => {

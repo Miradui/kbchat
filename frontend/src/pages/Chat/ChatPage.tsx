@@ -25,13 +25,14 @@ import { useModalFocus } from '../../components/ui/useModalFocus';
 import type {
   ChatMessage,
   ChatSession,
-  Citation,
   KnowledgeBase,
   KnowledgeBaseRerankFallback,
 } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
+import { CitationCard, MessageBubble } from './ChatMessage';
 import { pendingChatRequestStore } from './pendingChatRequestStore';
 import type { PendingChatRequest } from './pendingChatRequestStore';
+import { pendingRegenerationStore } from './pendingRegenerationStore';
 
 type ChatPageProps = {
   draftSession?: boolean;
@@ -79,6 +80,14 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
   const [knowledgeBaseListError, setKnowledgeBaseListError] = useState('');
   const [messageLoadError, setMessageLoadError] = useState('');
   const [activeCitationMessageId, setActiveCitationMessageId] = useState<string | null>(null);
+  const [activeCitationIndex, setActiveCitationIndex] = useState<number | null>(null);
+  const [regenerationError, setRegenerationError] = useState<{
+    messageId: string;
+    message: string;
+    kind: 'failed' | 'uncertain';
+    baselineMessageIds: string[];
+    checked: boolean;
+  } | null>(null);
   const [uncertainSend, setUncertainSend] = useState<PendingChatRequest | null>(null);
   const [auxiliaryPanel, setAuxiliaryPanel] = useState<'sessions' | 'citations' | null>(null);
   const isCompact = useMediaQuery('(max-width: 1439px)');
@@ -153,6 +162,8 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
     setTitleDraft('');
     setMessages([]);
     setActiveCitationMessageId(null);
+    setActiveCitationIndex(null);
+    setRegenerationError(null);
     setMessageLoadError('');
     setMessagesLoading(true);
 
@@ -170,6 +181,31 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
         setTitleDraft(sessionResponse.title || '');
         setMessages(messageResponse.items);
         setSessions((current) => mergeSession(current, sessionResponse));
+        const pendingRegeneration = pendingRegenerationStore.get(requestedSessionId);
+        if (pendingRegeneration && !regenerateOperationRef.current) {
+          const regeneratedAnswer = findNewAssistantMessage(
+            messageResponse.items,
+            pendingRegeneration.baselineMessageIds,
+          );
+          const targetMessage = messageResponse.items.find(
+            (message) => message.id === pendingRegeneration.messageId && message.role === 'assistant',
+          );
+          if (regeneratedAnswer) {
+            pendingRegenerationStore.clear(requestedSessionId, pendingRegeneration.messageId);
+          } else if (targetMessage) {
+            setRegenerationError({
+              messageId: pendingRegeneration.messageId,
+              message: pendingRegeneration.checked
+                ? '检查后仍未发现新的回答。你可以继续检查，或确认重新生成。'
+                : '重新生成结果暂时无法确认。请先检查会话，避免重复生成。',
+              kind: 'uncertain',
+              baselineMessageIds: pendingRegeneration.baselineMessageIds,
+              checked: pendingRegeneration.checked,
+            });
+          } else {
+            pendingRegenerationStore.clear(requestedSessionId, pendingRegeneration.messageId);
+          }
+        }
         const persistedRequest = pendingChatRequestStore.get(requestedSessionId);
         if (persistedRequest && !sendOperationRef.current) {
           const requestWasAccepted = messageResponse.items.some(
@@ -217,6 +253,8 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
     setSessionConfirmError('');
     regenerateOperationRef.current = null;
     setRegeneratingMessageId(null);
+    setRegenerationError(null);
+    setActiveCitationIndex(null);
     setRerankFallback(null);
     if (!continuingDraftSend) {
       sendOperationRef.current = null;
@@ -285,6 +323,12 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
   const activeCitations = useMemo(() => {
     return messages.find((message) => message.id === activeCitationMessageId)?.citations ?? [];
   }, [activeCitationMessageId, messages]);
+
+  useEffect(() => {
+    setActiveCitationIndex((current) => (
+      current !== null && activeCitations[current] ? current : null
+    ));
+  }, [activeCitations]);
   const latestAssistantMessageId = useMemo(
     () => [...messages].reverse().find((message) => message.role === 'assistant')?.id ?? null,
     [messages],
@@ -681,13 +725,33 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
     }
 
     const targetSessionId = sessionId;
+    const baselineMessageIds = messages.map((message) => message.id);
+    const pendingStored = pendingRegenerationStore.set({
+      sessionId: targetSessionId,
+      messageId,
+      baselineMessageIds,
+      checked: false,
+      createdAt: new Date().toISOString(),
+    });
+    if (!pendingStored) {
+      setRegenerationError({
+        messageId,
+        message: '无法安全发起重新生成，请检查浏览器存储设置后重试。',
+        kind: 'failed',
+        baselineMessageIds,
+        checked: false,
+      });
+      return;
+    }
     const operation = Symbol('regenerate-message');
     regenerateOperationRef.current = operation;
     setRegeneratingMessageId(messageId);
+    setRegenerationError(null);
     setError('');
     setRerankFallback(null);
     try {
       const response = await regenerateChatMessage(targetSessionId, messageId);
+      pendingRegenerationStore.clear(targetSessionId, messageId);
       if (
         !mountedRef.current
         || activeSessionIdRef.current !== targetSessionId
@@ -696,23 +760,36 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
         return;
       }
       setRerankFallback(response.rerankFallback?.used ? response.rerankFallback : null);
-      const messageResponse = await listChatMessages(targetSessionId);
-      if (
-        mountedRef.current
-        && activeSessionIdRef.current === targetSessionId
-        && regenerateOperationRef.current === operation
-      ) {
-        setMessages(messageResponse.items);
-        setMessageLoadError('');
-        setActiveCitationMessageId(null);
-      }
+      setMessages((current) => (
+        current.some((message) => message.id === response.message.id)
+          ? current.map((message) => (message.id === response.message.id ? response.message : message))
+          : [...current, response.message]
+      ));
+      setMessageLoadError('');
+      setActiveCitationMessageId(response.message.id);
+      setActiveCitationIndex(null);
+      setRegenerationError(null);
+      void loadSessions();
     } catch (err) {
+      const definitiveFailure = err instanceof ApiError && isDefinitiveSendFailure(err);
+      if (definitiveFailure) {
+        pendingRegenerationStore.clear(targetSessionId, messageId);
+      }
       if (
         mountedRef.current
         && activeSessionIdRef.current === targetSessionId
         && regenerateOperationRef.current === operation
       ) {
-        setError(errorMessage(err, '重新生成回答失败'));
+        const recovery = {
+          messageId,
+          message: definitiveFailure
+            ? errorMessage(err, '重新生成回答失败')
+            : '重新生成结果暂时无法确认。请先检查会话，避免重复生成。',
+          kind: definitiveFailure ? 'failed' as const : 'uncertain' as const,
+          baselineMessageIds,
+          checked: false,
+        };
+        setRegenerationError(recovery);
       }
     } finally {
       if (regenerateOperationRef.current === operation) {
@@ -722,6 +799,97 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
         }
       }
     }
+  }
+
+  async function handleCheckRegeneration(messageId: string) {
+    if (
+      !sessionId
+      || isDraftSession
+      || !sessionDetailsReady
+      || regenerationError?.messageId !== messageId
+      || regenerationError.kind !== 'uncertain'
+      || sendOperationRef.current
+      || sendCheckOperationRef.current
+      || sessionMutationRef.current
+      || regenerateOperationRef.current
+    ) {
+      return;
+    }
+
+    const targetSessionId = sessionId;
+    const recoverySnapshot = regenerationError;
+    const operation = Symbol('check-regeneration');
+    regenerateOperationRef.current = operation;
+    setRegeneratingMessageId(messageId);
+    try {
+      const response = await listChatMessages(targetSessionId);
+      if (
+        !mountedRef.current
+        || activeSessionIdRef.current !== targetSessionId
+        || regenerateOperationRef.current !== operation
+      ) {
+        return;
+      }
+
+      const regeneratedAnswer = findNewAssistantMessage(
+        response.items,
+        recoverySnapshot.baselineMessageIds,
+      );
+      setMessages(response.items);
+      setMessageLoadError('');
+      if (regeneratedAnswer) {
+        pendingRegenerationStore.clear(targetSessionId, messageId);
+        setActiveCitationMessageId(regeneratedAnswer.id);
+        setActiveCitationIndex(null);
+        setRegenerationError(null);
+        void loadSessions();
+      } else {
+        const checkedRecovery = {
+          ...recoverySnapshot,
+          message: '检查后仍未发现新的回答。你可以继续检查，或确认重新生成。',
+          checked: true,
+        };
+        pendingRegenerationStore.set({
+          sessionId: targetSessionId,
+          messageId,
+          baselineMessageIds: recoverySnapshot.baselineMessageIds,
+          checked: true,
+          createdAt: new Date().toISOString(),
+        });
+        setRegenerationError(checkedRecovery);
+      }
+    } catch {
+      if (
+        mountedRef.current
+        && activeSessionIdRef.current === targetSessionId
+        && regenerateOperationRef.current === operation
+      ) {
+        setRegenerationError({
+          ...recoverySnapshot,
+          message: '暂时无法检查重新生成结果，请稍后再次检查。',
+        });
+      }
+    } finally {
+      if (regenerateOperationRef.current === operation) {
+        regenerateOperationRef.current = null;
+        if (mountedRef.current) {
+          setRegeneratingMessageId(null);
+        }
+      }
+    }
+  }
+
+  function handleConfirmRegeneration(messageId: string) {
+    if (
+      !sessionId
+      || archived
+      || regenerationError?.messageId !== messageId
+      || regenerationError.kind !== 'uncertain'
+      || !regenerationError.checked
+    ) {
+      return;
+    }
+    void handleRegenerateMessage(messageId);
   }
 
   return (
@@ -969,16 +1137,28 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
             ) : (
               messages.map((message) => (
                 <MessageBubble
+                  activeCitationIndex={message.id === activeCitationMessageId ? activeCitationIndex : null}
                   activeCitations={message.id === activeCitationMessageId}
                   message={message}
                   key={message.id}
+                  onSelectCitation={(index) => {
+                    setActiveCitationMessageId(message.id);
+                    setActiveCitationIndex(index);
+                    if (isCompact) setAuxiliaryPanel('citations');
+                  }}
                   onSelectCitations={() => {
                     setActiveCitationMessageId(message.id);
+                    setActiveCitationIndex(null);
                     if (isCompact) setAuxiliaryPanel('citations');
                   }}
                   onRegenerate={message.id === latestAssistantMessageId && !archived ? handleRegenerateMessage : undefined}
+                  onCheckRegeneration={handleCheckRegeneration}
+                  onConfirmRegeneration={!archived ? handleConfirmRegeneration : undefined}
                   regenerating={regeneratingMessageId === message.id}
                   regenerationDisabled={chatMutationBusy}
+                  regenerationChecked={regenerationError?.messageId === message.id && regenerationError.checked}
+                  regenerationError={regenerationError?.messageId === message.id ? regenerationError.message : undefined}
+                  regenerationUncertain={regenerationError?.messageId === message.id && regenerationError.kind === 'uncertain'}
                 />
               ))
             )}
@@ -1091,9 +1271,14 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
               <X aria-hidden="true" size={18} />
             </button>
           </div>
-          <div>
+          <div className="chat-citation-intro">
             <h2>引用来源</h2>
             <p className="muted-text">回答有依据时会在这里列出来源。</p>
+            <p aria-live="polite" className="sr-only" role="status">
+              {activeCitationIndex !== null && activeCitations[activeCitationIndex]
+                ? `已定位到来源 ${activeCitationIndex + 1}：${activeCitations[activeCitationIndex].filename}`
+                : ''}
+            </p>
           </div>
 
           <div className="citation-list" id="chat-citation-list">
@@ -1110,6 +1295,7 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
             ) : (
               activeCitations.map((citation, index) => (
                 <CitationCard
+                  active={activeCitationIndex === index}
                   citation={citation}
                   index={index + 1}
                   key={`${citation.documentId}-${citation.chunkId}-${index}`}
@@ -1184,111 +1370,11 @@ function mergeSession(sessions: ChatSession[], nextSession: ChatSession): ChatSe
   return sessions.map((session) => (session.id === nextSession.id ? nextSession : session));
 }
 
-function MessageBubble({
-  activeCitations,
-  message,
-  onSelectCitations,
-  onRegenerate,
-  regenerating = false,
-  regenerationDisabled = false,
-}: {
-  activeCitations: boolean;
-  message: ChatMessage;
-  onSelectCitations: () => void;
-  onRegenerate?: (messageId: string) => void;
-  regenerating?: boolean;
-  regenerationDisabled?: boolean;
-}) {
-  const citationSummary =
-    message.citations.length > 0
-      ? `引用 ${message.citations.length} 条`
-      : '当前知识库中未找到足够依据。';
-
-  return (
-    <article className={message.role === 'assistant' ? 'message-bubble assistant' : 'message-bubble user'}>
-      <span className="message-role">{message.role === 'assistant' ? '助手' : '用户'}</span>
-      <p>{message.content}</p>
-      {message.role === 'assistant' && (
-        <button
-          aria-controls="chat-citation-list"
-          aria-label={`查看回答“${citationLabel(message.content)}”的引用`}
-          aria-pressed={activeCitations}
-          className="citation-summary citation-summary-button"
-          type="button"
-          onClick={onSelectCitations}
-        >
-          {citationSummary}
-        </button>
-      )}
-      {message.role === 'assistant' && onRegenerate && (
-        <div className="message-actions">
-          <button
-            className="secondary-button"
-            disabled={regenerationDisabled}
-            onClick={() => onRegenerate(message.id)}
-            type="button"
-          >
-            {regenerating ? '重新生成中...' : '重新生成回答'}
-          </button>
-        </div>
-      )}
-    </article>
-  );
-}
-
-function citationLabel(content: string): string {
-  const normalized = content.replace(/\s+/g, ' ').trim();
-  return normalized ? normalized.slice(0, 40) : '该回答';
-}
-
-function CitationCard({
-  citation,
-  index,
-  knowledgeBaseId,
-}: {
-  citation: Citation;
-  index: number;
-  knowledgeBaseId?: string;
-}) {
-  const pageLabel = citation.pageNumber ? `第 ${citation.pageNumber} 页` : '无页码';
-  const sourcePath = knowledgeBaseId
-    ? `/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents?documentId=${encodeURIComponent(citation.documentId)}&chunkId=${encodeURIComponent(citation.chunkId)}`
-    : null;
-
-  return (
-    <article className="citation-card enhanced-citation-card">
-      <header>
-        {sourcePath ? (
-          <Link
-            aria-label={`打开来源：${citation.filename}，${pageLabel}`}
-            className="citation-source-link"
-            to={sourcePath}
-          >
-            <strong>{index}. {citation.filename}</strong>
-            <span>{citation.pageNumber ? `p.${citation.pageNumber}` : '无页码'}</span>
-          </Link>
-        ) : (
-          <>
-            <strong>{index}. {citation.filename}</strong>
-            <span>{citation.pageNumber ? `p.${citation.pageNumber}` : '无页码'}</span>
-          </>
-        )}
-      </header>
-      <p>{citation.content}</p>
-      <div className="citation-score-grid">
-        <span>相关度 {formatScore(citation.vectorScore)}</span>
-        <span>排序分 {formatNullableScore(citation.rerankScore)}</span>
-      </div>
-    </article>
-  );
-}
-
-function formatScore(value: number): string {
-  return value.toFixed(2);
-}
-
-function formatNullableScore(value: number | null): string {
-  return typeof value === 'number' ? value.toFixed(2) : '未精排';
+function findNewAssistantMessage(messages: ChatMessage[], baselineMessageIds: string[]): ChatMessage | undefined {
+  const knownIds = new Set(baselineMessageIds);
+  return [...messages].reverse().find((message) => (
+    message.role === 'assistant' && !knownIds.has(message.id)
+  ));
 }
 
 function formatDateTime(value: string): string {

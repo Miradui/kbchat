@@ -63,6 +63,121 @@
   justify-content: flex-start;
 }
 
+.message-content {
+  overflow-wrap: anywhere;
+}
+
+.chat-thread .message-bubble.user {
+  color: #fff;
+  justify-self: end;
+}
+
+.chat-thread .message-bubble.user .message-role {
+  color: rgb(255 255 255 / 78%);
+}
+
+.chat-thread .message-bubble.assistant {
+  justify-self: start;
+}
+
+.inline-citation {
+  align-items: center;
+  background: var(--color-primary-soft, #e8f2ee);
+  border: 1px solid var(--color-primary, #1f6b57);
+  border-radius: 999px;
+  color: var(--color-primary, #1f6b57);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 700;
+  height: 22px;
+  justify-content: center;
+  line-height: 1;
+  margin: 0 3px;
+  min-width: 22px;
+  padding: 0 6px;
+  vertical-align: 1px;
+}
+
+.inline-citation-group {
+  align-items: center;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-inline: 2px;
+  max-width: 100%;
+  vertical-align: 1px;
+}
+
+.inline-citation-group .inline-citation {
+  margin: 0;
+}
+
+.inline-citation:hover,
+.inline-citation:focus-visible {
+  background: var(--color-primary, #1f6b57);
+  color: #fff;
+}
+
+.chat-message-recovery {
+  border-top: 1px solid var(--color-danger, #b42318);
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.chat-message-recovery > strong {
+  color: var(--color-danger, #b42318);
+  font-size: 13px;
+}
+
+.chat-message-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-self: start;
+}
+
+.enhanced-citation-card {
+  scroll-margin-block: 16px;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.enhanced-citation-card.is-active {
+  border-color: var(--color-primary, #1f6b57);
+  box-shadow: 0 0 0 2px rgb(31 107 87 / 14%);
+}
+
+.citation-preview {
+  overflow-wrap: anywhere;
+}
+
+.citation-details {
+  border-top: 1px solid var(--color-border, #dfe4e1);
+  margin-top: 8px;
+  padding-top: 2px;
+}
+
+.citation-details > summary {
+  align-items: center;
+  color: var(--color-text-secondary, #53605b);
+  cursor: pointer;
+  display: flex;
+  font-size: 12px;
+  font-weight: 600;
+  min-height: 44px;
+}
+
+.citation-details > p {
+  margin-top: 0;
+  overflow-wrap: anywhere;
+}
+
+.citation-retrieval-details .citation-score-grid {
+  padding-bottom: 8px;
+}
+
 @media (max-width: 1439px) {
   .chat-shell {
     grid-template-columns: 260px minmax(0, 1fr);
@@ -96,6 +211,10 @@
 
   .chat-citations-aux.is-open .chat-aux__header {
     display: flex;
+  }
+
+  .chat-citations-aux.is-open .chat-citation-intro h2 {
+    display: none;
   }
 }
 
@@ -186,6 +305,11 @@
 
   .chat-thread {
     padding: 14px;
+  }
+
+  .inline-citation {
+    min-height: 44px;
+    min-width: 44px;
   }
 
   .citation-score-grid {
