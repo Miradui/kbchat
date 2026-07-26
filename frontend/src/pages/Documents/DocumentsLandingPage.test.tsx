@@ -5,10 +5,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   batchDeleteDocuments,
+  batchReprocessDocuments,
   getWorkspacePreference,
   listGlobalDocuments,
   listKnowledgeBaseCategories,
   listKnowledgeBases,
+  uploadGlobalDocument,
 } from '../../api/resources';
 import { renderWithRouter } from '../../test/render';
 import type { GlobalDocumentItem, KnowledgeBase } from '../../types/api';
@@ -17,11 +19,13 @@ import { DocumentsLandingPage } from './DocumentsLandingPage';
 vi.mock('../../api/resources', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../api/resources')>(),
   batchDeleteDocuments: vi.fn(),
+  batchReprocessDocuments: vi.fn(),
   getWorkspacePreference: vi.fn(),
   listGlobalDocuments: vi.fn(),
   listKnowledgeBaseCategories: vi.fn(),
   listKnowledgeBases: vi.fn(),
   logout: vi.fn(),
+  uploadGlobalDocument: vi.fn(),
 }));
 
 vi.mock('./DocumentDetailDrawer', () => ({
@@ -47,6 +51,12 @@ const knowledgeBase = {
   updatedAt: '2026-07-01T00:00:00Z',
 } satisfies KnowledgeBase;
 
+const secondKnowledgeBase = {
+  ...knowledgeBase,
+  id: 'kb2',
+  name: '产品库',
+} satisfies KnowledgeBase;
+
 const document = {
   id: 'doc1',
   knowledgeBaseId: knowledgeBase.id,
@@ -70,12 +80,14 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.mocked(batchDeleteDocuments).mockReset().mockResolvedValue({ processedCount: 1 });
+  vi.mocked(batchReprocessDocuments).mockReset().mockResolvedValue({ processedCount: 1 });
   vi.mocked(listGlobalDocuments).mockReset().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
   vi.mocked(listKnowledgeBases).mockReset().mockResolvedValue({ items: [knowledgeBase] });
   vi.mocked(listKnowledgeBaseCategories).mockReset().mockResolvedValue({ items: [] });
   vi.mocked(getWorkspacePreference).mockReset().mockResolvedValue({
     viewMode: 'table', scope: 'all', sort: 'updatedAt_desc', visibility: 'all', expandedCategoryIds: [],
   });
+  vi.mocked(uploadGlobalDocument).mockReset().mockResolvedValue(document);
 });
 
 function LocationProbe() {
@@ -117,6 +129,44 @@ describe('DocumentsLandingPage', () => {
     expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/documents');
   });
 
+  it('imports a document into the target selected inside the dialog and refreshes the list', async () => {
+    vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
+    vi.mocked(listGlobalDocuments)
+      .mockResolvedValueOnce({ items: [], total: 0, page: 1, pageSize: 20 })
+      .mockResolvedValueOnce({ items: [document], total: 1, page: 1, pageSize: 20 });
+    const user = userEvent.setup();
+    const file = new File(['policy'], 'policy.md', { type: 'text/markdown' });
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: '导入文档' }));
+    const dialog = screen.getByRole('dialog', { name: '导入文档' });
+    await user.selectOptions(within(dialog).getByRole('combobox', { name: '目标知识库' }), 'kb2');
+    await user.upload(within(dialog).getByLabelText('选择文档文件'), file);
+    await user.click(within(dialog).getByRole('button', { name: '开始导入' }));
+
+    await waitFor(() => expect(uploadGlobalDocument).toHaveBeenCalledWith('kb2', file));
+    expect(await screen.findByText('handbook.pdf')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: '导入文档' })).not.toBeInTheDocument();
+  });
+
+  it('reports when upload succeeds but the global list refresh fails', async () => {
+    vi.mocked(listGlobalDocuments)
+      .mockResolvedValueOnce({ items: [], total: 0, page: 1, pageSize: 20 })
+      .mockRejectedValueOnce(new Error('offline'));
+    const user = userEvent.setup();
+    const file = new File(['policy'], 'policy.md', { type: 'text/markdown' });
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: '导入文档' }));
+    const dialog = screen.getByRole('dialog', { name: '导入文档' });
+    await user.upload(within(dialog).getByLabelText('选择文档文件'), file);
+    await user.click(within(dialog).getByRole('button', { name: '开始导入' }));
+
+    expect(await screen.findByText('文档已上传，但列表刷新失败')).toBeInTheDocument();
+    expect(screen.queryByText('已导入 1 个文档，正在处理中。')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: '导入文档' })).not.toBeInTheDocument();
+  });
+
   it('keeps loaded documents usable when upload-target loading fails', async () => {
     vi.mocked(listGlobalDocuments).mockResolvedValue({ items: [document], total: 1, page: 1, pageSize: 20 });
     vi.mocked(listKnowledgeBases).mockRejectedValue(new Error('offline'));
@@ -153,6 +203,30 @@ describe('DocumentsLandingPage', () => {
     expect(screen.getByText('handbook.pdf')).toBeInTheDocument();
   });
 
+  it('polls while global documents are processing and stops presenting stale status', async () => {
+    let poll: TimerHandler | undefined;
+    vi.spyOn(window, 'setInterval').mockImplementation((handler, timeout) => {
+      if (timeout === 3000) poll = handler;
+      return 1;
+    });
+    const processingDocument = { ...document, status: 'uploaded' as const };
+    vi.mocked(listGlobalDocuments)
+      .mockResolvedValueOnce({ items: [processingDocument], total: 1, page: 1, pageSize: 20 })
+      .mockResolvedValueOnce({ items: [document], total: 1, page: 1, pageSize: 20 });
+    renderPage();
+
+    const processingRow = (await screen.findByText('handbook.pdf')).closest('tr');
+    expect(processingRow).not.toBeNull();
+    expect(within(processingRow!).getByText('已上传')).toBeInTheDocument();
+    await waitFor(() => expect(poll).toBeTypeOf('function'));
+    act(() => {
+      if (typeof poll === 'function') poll();
+    });
+
+    expect(await screen.findByText('已完成')).toBeInTheDocument();
+    expect(listGlobalDocuments).toHaveBeenCalledTimes(2);
+  });
+
   it('does not load knowledge-base category workspace data', async () => {
     renderPage();
     await screen.findByRole('heading', { name: '全局文档台账' });
@@ -167,6 +241,57 @@ describe('DocumentsLandingPage', () => {
 
     expect(screen.getByRole('button', { name: '上一页' }).querySelector('svg')).not.toBeNull();
     expect(screen.getByRole('button', { name: '下一页' }).querySelector('svg')).not.toBeNull();
+  });
+
+  it('keeps global document table cells aligned with their headers', async () => {
+    vi.mocked(listGlobalDocuments).mockResolvedValue({ items: [document], total: 1, page: 1, pageSize: 20 });
+    renderPage();
+
+    const documentRow = (await screen.findByText('handbook.pdf')).closest('tr');
+    expect(documentRow).not.toBeNull();
+    expect(within(documentRow!).getAllByRole('cell')).toHaveLength(9);
+  });
+
+  it('disables document import while a batch mutation is running', async () => {
+    const mutation = deferred<{ processedCount: number }>();
+    vi.mocked(listGlobalDocuments).mockResolvedValue({ items: [document], total: 1, page: 1, pageSize: 20 });
+    vi.mocked(batchReprocessDocuments).mockReturnValue(mutation.promise);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole('checkbox', { name: '选择 handbook.pdf' }));
+    await user.click(screen.getByRole('button', { name: '批量重处理' }));
+
+    expect(screen.getByRole('button', { name: '导入文档' })).toBeDisabled();
+    mutation.resolve({ processedCount: 1 });
+  });
+
+  it('distinguishes a submitted batch reprocess from its failed list refresh', async () => {
+    vi.mocked(listGlobalDocuments)
+      .mockResolvedValueOnce({ items: [document], total: 1, page: 1, pageSize: 20 })
+      .mockRejectedValueOnce(new Error('offline'));
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole('checkbox', { name: '选择 handbook.pdf' }));
+    await user.click(screen.getByRole('button', { name: '批量重处理' }));
+
+    expect(await screen.findByText('批量重处理已提交，但页面数据刷新失败：请求失败')).toBeInTheDocument();
+  });
+
+  it('distinguishes a completed batch delete from its failed list refresh', async () => {
+    vi.mocked(listGlobalDocuments)
+      .mockResolvedValueOnce({ items: [document], total: 1, page: 1, pageSize: 20 })
+      .mockRejectedValueOnce(new Error('offline'));
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole('checkbox', { name: '选择 handbook.pdf' }));
+    await user.click(screen.getByRole('button', { name: '批量删除' }));
+    await user.click(within(screen.getByRole('dialog', { name: '批量删除文档' })).getByRole('button', { name: '删除' }));
+
+    expect(await screen.findByText('批量删除已完成，但列表刷新失败：请求失败')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: '批量删除文档' })).not.toBeInTheDocument();
   });
 
   it('keeps a batch-delete failure inside the confirmation dialog', async () => {

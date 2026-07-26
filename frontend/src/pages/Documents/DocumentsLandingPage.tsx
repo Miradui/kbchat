@@ -1,4 +1,4 @@
-import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 
@@ -13,6 +13,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { WorkspaceShell } from '../../components/WorkspaceShell';
 import { DocumentDetailDrawer } from './DocumentDetailDrawer';
+import { DocumentImportDialog } from './DocumentImportDialog';
 import { DocumentProgress } from './DocumentProgress';
 import { DocumentRecycleBinDrawer } from './DocumentRecycleBinDrawer';
 import {
@@ -29,16 +30,21 @@ import type {
   GlobalDocumentItem,
   KnowledgeBase,
 } from '../../types/api';
-import { getErrorMessage } from '../../utils/errors';
+import { getDocumentProcessingErrorMessage, getErrorMessage } from '../../utils/errors';
 
 const statusOptions: Array<DocumentStatus | ''> = [
   '',
   ...documentStatuses,
 ];
 
+type LoadPageOptions = {
+  clearError?: boolean;
+  reportError?: boolean;
+  showLoading?: boolean;
+};
+
 export function DocumentsLandingPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const documentRequestRef = useRef(0);
   const knowledgeBaseRequestRef = useRef(0);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
@@ -54,7 +60,7 @@ export function DocumentsLandingPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [uploadTargetError, setUploadTargetError] = useState('');
@@ -66,10 +72,18 @@ export function DocumentsLandingPage() {
   const debouncedQuery = useDebouncedValue(queryDraft.trim(), 260);
   const detailDocumentId = searchParams.get('documentId');
 
-  const loadPage = useCallback(async () => {
+  const loadPage = useCallback(async ({
+    clearError = true,
+    reportError = true,
+    showLoading = true,
+  }: LoadPageOptions = {}) => {
     const request = ++documentRequestRef.current;
-    setLoading(true);
-    setError('');
+    if (showLoading) {
+      setLoading(true);
+    }
+    if (clearError) {
+      setError('');
+    }
     try {
       const documentResponse = await listGlobalDocuments({
         q: debouncedQuery,
@@ -89,10 +103,13 @@ export function DocumentsLandingPage() {
       }
     } catch (err) {
       if (documentRequestRef.current === request) {
-        setError(errorMessage(err, '全局文档加载失败'));
+        if (reportError) {
+          setError(errorMessage(err, '全局文档加载失败'));
+        }
+        throw err;
       }
     } finally {
-      if (documentRequestRef.current === request) {
+      if (showLoading && documentRequestRef.current === request) {
         setLoading(false);
       }
     }
@@ -106,7 +123,7 @@ export function DocumentsLandingPage() {
       setRefreshing(true);
     }
     try {
-      await loadPage();
+      await loadPage({ reportError: false });
     } catch (err) {
       setError(errorMessage(err, fallback));
     } finally {
@@ -118,7 +135,7 @@ export function DocumentsLandingPage() {
 
   const refreshAfterAction = useCallback(async (successLabel: string) => {
     try {
-      await loadPage();
+      await loadPage({ reportError: false });
     } catch (err) {
       setError(`${successLabel}，但页面数据刷新失败：${errorMessage(err, '请求失败')}`);
     }
@@ -150,12 +167,28 @@ export function DocumentsLandingPage() {
   }, []);
 
   useEffect(() => {
-    void loadPage();
+    void loadPage().catch(() => undefined);
   }, [loadPage]);
 
   useEffect(() => {
     void loadKnowledgeBases();
   }, [loadKnowledgeBases]);
+
+  const hasProcessingDocuments = useMemo(
+    () => documents.some((document) => !isTerminalDocumentStatus(document.status)),
+    [documents],
+  );
+
+  useEffect(() => {
+    if (!hasProcessingDocuments) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void loadPage({ clearError: false, showLoading: false }).catch(() => undefined);
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [hasProcessingDocuments, loadPage]);
 
   function openDocumentDetail(documentId: string) {
     const next = new URLSearchParams(searchParams);
@@ -179,33 +212,9 @@ export function DocumentsLandingPage() {
   const processingCount = documents.filter(
     (document) => !isTerminalDocumentStatus(document.status),
   ).length;
-  const currentUploadTarget = knowledgeBases.find((item) => item.id === uploadKnowledgeBaseId);
   const activeFilterCount = [queryDraft.trim(), knowledgeBaseFilter, status, fileType].filter(Boolean).length;
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const allVisibleSelected = documents.length > 0 && documents.every((document) => selectedSet.has(document.id));
-
-  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file || !uploadKnowledgeBaseId) {
-      return;
-    }
-
-    setUploading(true);
-    setError('');
-
-	try {
-	  try {
-		await uploadGlobalDocument(uploadKnowledgeBaseId, file);
-	  } catch (err) {
-		setError(errorMessage(err, '全局上传失败'));
-		return;
-	  }
-	  await refreshAfterAction('文档已上传');
-	} finally {
-      setUploading(false);
-      event.target.value = '';
-    }
-  }
 
   function resetToFirstPage(update: () => void) {
     update();
@@ -257,11 +266,18 @@ export function DocumentsLandingPage() {
 
     try {
       await batchDeleteDocuments(deleteTargetIds);
-      setDeleteTargetIds(null);
-      setSelectedIds([]);
-      await loadPage();
     } catch (err) {
       setDeleteError(errorMessage(err, '批量删除失败'));
+      setSubmitting(false);
+      return;
+    }
+
+    setDeleteTargetIds(null);
+    setSelectedIds([]);
+    try {
+      await loadPage({ reportError: false });
+    } catch (err) {
+      setError(`批量删除已完成，但列表刷新失败：${errorMessage(err, '请求失败')}`);
     } finally {
       setSubmitting(false);
     }
@@ -277,32 +293,12 @@ export function DocumentsLandingPage() {
             <p className="breadcrumb">首页 / 文档管理</p>
             <h1>全局文档台账</h1>
             <p className="page-description">
-              跨知识库查看文档处理进度、失败原因和处理入口；上传时先选择目标知识库。
+              跨知识库查看文档是否可用、处理中的任务和需要处理的失败项。
             </p>
           </div>
           <div className="document-command-aside" aria-label="上传文档">
-            <span className="document-aside-label">上传目标</span>
-            <label className="document-target-select">
-              <select
-                aria-label="上传目标"
-                value={uploadKnowledgeBaseId}
-                onChange={(event) => setUploadKnowledgeBaseId(event.target.value)}
-                disabled={knowledgeBasesLoading || knowledgeBases.length === 0}
-              >
-                {knowledgeBases.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p className="document-aside-note">
-              {knowledgeBasesLoading
-                ? '正在加载上传目标...'
-                : currentUploadTarget
-                  ? `将上传到：${currentUploadTarget.name}`
-                  : '暂无可上传的知识库'}
-            </p>
+            <span className="document-aside-label">添加资料</span>
+            <p className="document-aside-note">在导入窗口中选择目标知识库并确认文件。</p>
             {uploadTargetError && (
               <div className="document-upload-target-error" role="alert">
                 <span>{uploadTargetError}</span>
@@ -313,29 +309,21 @@ export function DocumentsLandingPage() {
             )}
             <button
               type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading || !uploadKnowledgeBaseId}
+              onClick={() => setImportOpen(true)}
+              disabled={knowledgeBasesLoading || !uploadKnowledgeBaseId || submitting}
             >
-              {uploading ? '上传中...' : '导入文档'}
+              {knowledgeBasesLoading ? '加载知识库中...' : '导入文档'}
             </button>
             {!knowledgeBasesLoading && knowledgeBases.length === 0 && !uploadTargetError && (
               <Link className="button-link" to="/knowledge-bases?intent=create">
                 新建知识库后导入
               </Link>
             )}
-            <input
-              ref={fileInputRef}
-              accept=".txt,.md,.pdf,text/plain,text/markdown,application/pdf"
-              hidden
-              type="file"
-              onChange={handleFileChange}
-            />
           </div>
         </section>
 
         <div className="document-status-strip">
-          <MetricCard label="当前页文档" value={documents.length} />
-          <MetricCard label="已完成" value={completedCount} tone="success" />
+          <MetricCard label="可用于问答" value={completedCount} tone="success" />
           <MetricCard label="处理中" value={processingCount} tone="warning" />
           <MetricCard label="失败" value={failedCount} tone="danger" />
         </div>
@@ -464,7 +452,7 @@ export function DocumentsLandingPage() {
                   <th>类型</th>
                   <th>大小</th>
                   <th>状态</th>
-                  <th>错误信息</th>
+                  <th>处理提示</th>
                   <th>更新时间</th>
                   <th>操作</th>
                 </tr>
@@ -494,6 +482,11 @@ export function DocumentsLandingPage() {
                         {documentStatusLabel(document.status)}
                       </span>
                       <DocumentProgress compact document={document} />
+                    </td>
+                    <td className="document-error-cell" data-label="处理提示">
+                      {document.status === 'failed'
+                        ? getDocumentProcessingErrorMessage(document.errorMessage)
+                        : '-'}
                     </td>
                     <td data-label="更新时间">{formatDocumentDateTime(document.updatedAt || document.createdAt)}</td>
                     <td data-label="操作">
@@ -551,7 +544,7 @@ export function DocumentsLandingPage() {
           <DocumentDetailDrawer
             documentId={detailDocumentId}
             knowledgeBaseName={documents.find((document) => document.id === detailDocumentId)?.knowledgeBaseName}
-            onChanged={() => void loadPage()}
+            onChanged={() => void refreshPage('文档列表刷新失败')}
             onClose={closeDocumentDetail}
           />
         )}
@@ -574,6 +567,16 @@ export function DocumentsLandingPage() {
             onConfirm={handleBatchDelete}
           />
         )}
+
+        <DocumentImportDialog
+          initialKnowledgeBaseId={uploadKnowledgeBaseId}
+          knowledgeBases={knowledgeBases}
+          onBatchComplete={() => loadPage({ reportError: false })}
+          onClose={() => setImportOpen(false)}
+          onKnowledgeBaseChange={setUploadKnowledgeBaseId}
+          onUpload={uploadGlobalDocument}
+          open={importOpen}
+        />
       </div>
     </WorkspaceShell>
   );

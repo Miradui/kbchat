@@ -145,6 +145,15 @@ function LeaveDocumentsButton() {
   return <button type="button" onClick={() => navigate('/away')}>离开文档页</button>;
 }
 
+async function uploadThroughDialog(user: ReturnType<typeof userEvent.setup>, file: File, open = true) {
+  if (open) {
+    await user.click(screen.getByRole('button', { name: '导入文档' }));
+  }
+  const dialog = await screen.findByRole('dialog', { name: '导入文档' });
+  await user.upload(within(dialog).getByLabelText('选择文档文件'), file);
+  await user.click(within(dialog).getByRole('button', { name: '开始导入' }));
+}
+
 describe('DocumentsPage', () => {
   it('does not load knowledge-base category workspace data', async () => {
     renderPage();
@@ -166,7 +175,7 @@ describe('DocumentsPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('文档列表加载失败');
     expect(screen.queryByText('当前筛选下没有文档。上传 txt、md 或 pdf 后开始处理。')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '重试加载' })).toBeInTheDocument();
-    expect(within(screen.getByText('文档总数').parentElement!).getByText('--')).toBeInTheDocument();
+    expect(within(screen.getByText('可用于问答').parentElement!).getByText('--')).toBeInTheDocument();
   });
 
   it('does not let a late reprocess failure affect a newer knowledge-base operation', async () => {
@@ -277,14 +286,12 @@ describe('DocumentsPage', () => {
     }));
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
     const user = userEvent.setup();
-    const { container } = renderPage();
-    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+    renderPage();
 
-    await user.upload(fileInput!, new File(['content'], 'handbook.pdf', { type: 'application/pdf' }));
+    await uploadThroughDialog(user, new File(['content'], 'handbook.pdf', { type: 'application/pdf' }));
     await waitFor(() => expect(uploadDocument).toHaveBeenCalledWith(knowledgeBase.id, expect.any(File)));
-    await user.click(screen.getByRole('button', { name: '切换到产品库路由' }));
+    act(() => screen.getByText('切换到产品库路由').click());
     expect(await screen.findByRole('heading', { name: '产品库' })).toBeInTheDocument();
-    expect(fileInput).toHaveValue('');
 
     await act(async () => {
       uploadResult.resolve(uploadedDocument);
@@ -310,26 +317,25 @@ describe('DocumentsPage', () => {
     }));
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
     const user = userEvent.setup();
-    const { container } = renderPage();
-    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    renderPage();
 
-    await user.upload(fileInput, new File(['a'], 'first.pdf', { type: 'application/pdf' }));
-    await user.click(screen.getByRole('button', { name: '切换到产品库路由' }));
+    await uploadThroughDialog(user, new File(['a'], 'first.pdf', { type: 'application/pdf' }));
+    act(() => screen.getByText('切换到产品库路由').click());
     await screen.findByRole('heading', { name: '产品库' });
-    await user.upload(fileInput, new File(['b'], 'second.md', { type: 'text/markdown' }));
+    await uploadThroughDialog(user, new File(['b'], 'second.md', { type: 'text/markdown' }));
     await waitFor(() => expect(uploadDocument).toHaveBeenCalledTimes(2));
 
     await act(async () => {
       firstUpload.resolve(uploadedDocument);
       await Promise.resolve();
     });
-    expect(screen.getByRole('button', { name: '上传中...' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '正在导入' })).toBeDisabled();
 
     await act(async () => {
       secondUpload.resolve(secondDocument);
       await Promise.resolve();
     });
-    await waitFor(() => expect(screen.getByRole('button', { name: '上传文档' })).toBeEnabled());
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '导入文档' })).not.toBeInTheDocument());
   });
 
   it('announces the primary document-list loading state', () => {
@@ -367,7 +373,7 @@ describe('DocumentsPage', () => {
     await user.click(await screen.findByRole('checkbox', { name: `选择 ${uploadedDocument.filename}` }));
     await user.click(screen.getByRole('button', { name: '重处理' }));
 
-    expect(screen.getByRole('button', { name: '上传文档' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '导入文档' })).toBeDisabled();
     expect(screen.getByRole('button', { name: '批量重处理' })).toBeDisabled();
     expect(screen.getByRole('button', { name: '批量删除' })).toBeDisabled();
     expect(screen.getByRole('button', { name: '删除' })).toBeDisabled();
@@ -375,7 +381,7 @@ describe('DocumentsPage', () => {
     expect(screen.getByRole('button', { name: '文档回收站' })).toBeDisabled();
 
     reprocessResult.resolve({ ...uploadedDocument, status: 'uploaded' });
-    await waitFor(() => expect(screen.getByRole('button', { name: '上传文档' })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: '导入文档' })).toBeEnabled());
   });
 
   it('synchronously blocks opening document detail after a mutation starts', async () => {
@@ -407,17 +413,14 @@ describe('DocumentsPage', () => {
     }));
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
     const user = userEvent.setup();
-    const { container } = renderPage();
+    renderPage();
 
-    await user.upload(
-      container.querySelector<HTMLInputElement>('input[type="file"]')!,
-      new File(['content'], 'handbook.pdf', { type: 'application/pdf' }),
-    );
-    expect(await screen.findByRole('alert')).toHaveTextContent('文档上传失败');
-    await user.click(screen.getByRole('button', { name: '切换到产品库路由' }));
+    await uploadThroughDialog(user, new File(['content'], 'handbook.pdf', { type: 'application/pdf' }));
+    expect(await screen.findByText('上传失败', { selector: 'small' })).toBeInTheDocument();
+    act(() => screen.getByText('切换到产品库路由').click());
 
     expect(await screen.findByRole('heading', { name: '产品库' })).toBeInTheDocument();
-    expect(screen.queryByText('文档上传失败')).not.toBeInTheDocument();
+    expect(screen.queryByText('上传失败', { selector: 'small' })).not.toBeInTheDocument();
   });
 
   it('does not let an older poll overwrite a newer manual refresh', async () => {
@@ -484,11 +487,14 @@ describe('DocumentsPage', () => {
   it('guides the user to upload without opening the system file picker automatically', async () => {
     renderPage('/knowledge-bases/kb1/documents?intent=upload');
 
-    const uploadButton = await screen.findByRole('button', { name: '上传文档' });
+    const dialog = await screen.findByRole('dialog', { name: '导入文档' });
+    const filePicker = within(dialog).getByRole('button', { name: '拖放或选择文档' });
 
-    expect(await screen.findByRole('status', { name: '文档导入进度' })).toHaveTextContent('上传第一个文档');
-    await waitFor(() => expect(uploadButton).toHaveFocus());
+    await waitFor(() => expect(filePicker).toHaveFocus());
     expect(uploadDocument).not.toHaveBeenCalled();
+
+    await userEvent.setup().click(within(dialog).getByRole('button', { name: '取消' }));
+    expect(await screen.findByRole('status', { name: '文档导入进度' })).toHaveTextContent('上传第一个文档');
   });
 
   it('offers chat only after the document uploaded in this flow finishes processing', async () => {
@@ -504,11 +510,8 @@ describe('DocumentsPage', () => {
     vi.mocked(listDocuments)
       .mockResolvedValueOnce({ items: [] })
       .mockResolvedValueOnce({ items: [{ ...uploadedDocument, status: 'completed' }] });
-    const { container } = renderPage('/knowledge-bases/kb1/documents?intent=upload');
-    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
-
-    expect(fileInput).not.toBeNull();
-    await user.upload(fileInput!, new File(['content'], 'handbook.pdf', { type: 'application/pdf' }));
+    renderPage('/knowledge-bases/kb1/documents?intent=upload');
+    await uploadThroughDialog(user, new File(['content'], 'handbook.pdf', { type: 'application/pdf' }), false);
 
     await act(async () => {
       await Promise.resolve();
@@ -544,10 +547,8 @@ describe('DocumentsPage', () => {
     vi.mocked(listDocuments)
       .mockResolvedValueOnce({ items: [] })
       .mockResolvedValueOnce({ items: [{ ...uploadedDocument, status: 'failed' }] });
-    const { container } = renderPage('/knowledge-bases/kb1/documents?intent=upload');
-    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
-
-    await user.upload(fileInput!, new File(['content'], 'handbook.pdf', { type: 'application/pdf' }));
+    renderPage('/knowledge-bases/kb1/documents?intent=upload');
+    await uploadThroughDialog(user, new File(['content'], 'handbook.pdf', { type: 'application/pdf' }), false);
     await waitFor(() => expect(poll).toBeTypeOf('function'));
     await act(async () => {
       if (typeof poll === 'function') {

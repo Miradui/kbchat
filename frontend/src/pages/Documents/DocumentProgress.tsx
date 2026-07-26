@@ -1,12 +1,19 @@
-import type { DocumentItem, DocumentStatus } from '../../types/api';
+import type { DocumentItem, DocumentJobStatus, DocumentStatus } from '../../types/api';
 
 const stageLabels: Record<DocumentStatus, string> = {
   uploaded: '等待处理',
-  parsing: 'Parsing',
-  chunking: 'Chunking',
-  embedding: 'Embedding',
+  parsing: '解析中',
+  chunking: '切分中',
+  embedding: '向量化中',
   completed: '已完成',
   failed: '处理失败',
+};
+
+const jobStatusLabels: Record<DocumentJobStatus, string> = {
+  pending: '等待处理',
+  running: '处理中',
+  completed: '已完成',
+  failed: '失败',
 };
 
 type DocumentProgressProps = {
@@ -30,7 +37,7 @@ export function DocumentProgress({ compact = false, document }: DocumentProgress
       </header>
       <progress aria-label="处理进度" max={100} value={progress} />
       <div className="document-progress-meta">
-        <span>任务 {document.jobStatus ?? inferredJobStatus(stage)}</span>
+        <span>任务 {jobStatusLabels[document.jobStatus ?? inferredJobStatus(stage)]}</span>
         {maxRetries > 0 && <span>重试 {retryCount} / {maxRetries}</span>}
         {document.nextRetryAt && <span>下次重试 {formatDateTime(document.nextRetryAt)}</span>}
       </div>
@@ -43,13 +50,13 @@ function progressForStage(stage: DocumentStatus): number {
     case 'parsing': return 25;
     case 'chunking': return 50;
     case 'embedding': return 75;
-    case 'completed':
-    case 'failed': return 100;
+    case 'completed': return 100;
+    case 'failed': return 0;
     default: return 0;
   }
 }
 
-function inferredJobStatus(stage: DocumentStatus): string {
+function inferredJobStatus(stage: DocumentStatus): DocumentJobStatus {
   if (stage === 'completed' || stage === 'failed') {
     return stage;
   }

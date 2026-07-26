@@ -1,4 +1,4 @@
-import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import {
@@ -16,6 +16,7 @@ import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { WorkspaceShell } from '../../components/WorkspaceShell';
 import { KnowledgeBaseSectionNav } from '../KnowledgeBase/KnowledgeBaseSectionNav';
 import { DocumentDetailDrawer } from './DocumentDetailDrawer';
+import { DocumentImportDialog } from './DocumentImportDialog';
 import { DocumentProgress } from './DocumentProgress';
 import { DocumentRecycleBinDrawer } from './DocumentRecycleBinDrawer';
 import {
@@ -37,8 +38,6 @@ const statusOptions: Array<DocumentStatus | 'all'> = [
   'all',
   ...documentStatuses,
 ];
-const pipelineStatuses = documentStatuses;
-
 type DeleteTarget =
   | { kind: 'single'; document: DocumentItem }
   | { kind: 'batch'; ids: string[] };
@@ -47,12 +46,9 @@ export function DocumentsPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const uploadButtonRef = useRef<HTMLButtonElement | null>(null);
   const activeKnowledgeBaseIdRef = useRef(id);
   const loadRequestRef = useRef(0);
   const documentDataRequestRef = useRef(0);
-  const uploadOperationRef = useRef<symbol | null>(null);
   const reprocessOperationRef = useRef<symbol | null>(null);
   const submitOperationRef = useRef<symbol | null>(null);
   const mutationOperationRef = useRef<symbol | null>(null);
@@ -66,7 +62,7 @@ export function DocumentsPage() {
   const [typeFilter, setTypeFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [workingId, setWorkingId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -91,14 +87,10 @@ export function DocumentsPage() {
     setLoadError('');
     setError('');
     setTrackedUploadId(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-    uploadOperationRef.current = null;
+    setImportOpen(false);
     reprocessOperationRef.current = null;
     submitOperationRef.current = null;
     mutationOperationRef.current = null;
-    setUploading(false);
     setWorkingId(null);
     setSubmitting(false);
     setUploadFlowActive(searchParams.get('intent') === 'upload');
@@ -110,7 +102,7 @@ export function DocumentsPage() {
     }
 
     setUploadFlowActive(true);
-    uploadButtonRef.current?.focus();
+    setImportOpen(true);
     const nextSearchParams = new URLSearchParams(searchParams);
     nextSearchParams.delete('intent');
     setSearchParams(nextSearchParams, { replace: true });
@@ -170,7 +162,6 @@ export function DocumentsPage() {
     return () => {
       loadRequestRef.current += 1;
       documentDataRequestRef.current += 1;
-      uploadOperationRef.current = null;
       reprocessOperationRef.current = null;
       submitOperationRef.current = null;
       mutationOperationRef.current = null;
@@ -243,54 +234,18 @@ export function DocumentsPage() {
   const trackedDocument = trackedUploadId
     ? documents.find((document) => document.id === trackedUploadId) ?? null
     : null;
-  const documentMutationBusy = uploading || Boolean(workingId) || submitting;
+  const documentMutationBusy = Boolean(workingId) || submitting;
 
-  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file || !id || uploadOperationRef.current || mutationOperationRef.current) {
+  function handleUploadedDocument(uploadedDocument: DocumentItem) {
+    if (activeKnowledgeBaseIdRef.current !== uploadedDocument.knowledgeBaseId) {
       return;
     }
-
-    const operation = Symbol('upload-document');
-    const uploadKnowledgeBaseId = id;
-    uploadOperationRef.current = operation;
-    mutationOperationRef.current = operation;
-    setUploading(true);
-    setError('');
-
-    try {
-      const uploadedDocument = await uploadDocument(uploadKnowledgeBaseId, file);
-      if (
-        activeKnowledgeBaseIdRef.current !== uploadKnowledgeBaseId
-        || uploadOperationRef.current !== operation
-      ) {
-        return;
-      }
-      setTrackedUploadId(uploadedDocument.id);
-      setUploadFlowActive(true);
-      setDocuments((current) => [
-        uploadedDocument,
-        ...current.filter((document) => document.id !== uploadedDocument.id),
-      ]);
-    } catch (err) {
-      if (
-        activeKnowledgeBaseIdRef.current === uploadKnowledgeBaseId
-        && uploadOperationRef.current === operation
-      ) {
-        setError(errorMessage(err, '文档上传失败'));
-      }
-    } finally {
-      if (
-        activeKnowledgeBaseIdRef.current === uploadKnowledgeBaseId
-        && uploadOperationRef.current === operation
-        && mutationOperationRef.current === operation
-      ) {
-        uploadOperationRef.current = null;
-        mutationOperationRef.current = null;
-        setUploading(false);
-        event.target.value = '';
-      }
-    }
+    setTrackedUploadId(uploadedDocument.id);
+    setUploadFlowActive(true);
+    setDocuments((current) => [
+      uploadedDocument,
+      ...current.filter((document) => document.id !== uploadedDocument.id),
+    ]);
   }
 
   async function handleReprocess(document: DocumentItem) {
@@ -469,7 +424,7 @@ export function DocumentsPage() {
             </p>
             <h1>{knowledgeBase?.name ?? '文档管理'}</h1>
             <p className="page-description">
-              管理当前知识库的上传、解析、切分和向量化队列。存在处理中任务时，页面会每 3 秒刷新状态。
+              管理当前知识库中的资料，并查看哪些文档已可用于问答。
             </p>
           </div>
           <div className="document-command-aside" aria-label="当前知识库操作">
@@ -489,21 +444,13 @@ export function DocumentsPage() {
             </label>
             <div className="document-command-actions">
               <button
-                ref={uploadButtonRef}
                 type="button"
-                onClick={() => fileInputRef.current?.click()}
+                onClick={() => setImportOpen(true)}
                 disabled={documentMutationBusy}
               >
-                {uploading ? '上传中...' : '上传文档'}
+                导入文档
               </button>
             </div>
-            <input
-              ref={fileInputRef}
-              accept=".txt,.md,.pdf,text/plain,text/markdown,application/pdf"
-              hidden
-              type="file"
-              onChange={handleFileChange}
-            />
           </div>
         </section>
 
@@ -528,17 +475,17 @@ export function DocumentsPage() {
               </strong>
               <p>
                 {!trackedDocument
-                  ? '选择 txt、md 或 pdf 文件，系统会自动完成解析、切分和向量化。'
+                  ? '选择文件并确认导入，上传后可在这里查看可用状态。'
                   : trackedDocument.status === 'completed'
-                    ? `${trackedDocument.filename} 已完成向量化，可以基于这份文档开始提问。`
+                    ? `${trackedDocument.filename} 已可用于基于此知识库的问答。`
                     : trackedDocument.status === 'failed'
                       ? '请查看处理提示并重试，或重新上传一份文档。'
-                      : `当前阶段：${documentStatusLabel(trackedDocument.status)}。页面会自动刷新处理结果。`}
+                      : `${trackedDocument.filename} 正在准备中，完成后即可用于问答。`}
               </p>
             </div>
             {!trackedDocument && (
-              <button type="button" onClick={() => fileInputRef.current?.click()} disabled={documentMutationBusy}>
-                {uploading ? '上传中...' : '选择文件'}
+              <button type="button" onClick={() => setImportOpen(true)} disabled={documentMutationBusy}>
+                导入文档
               </button>
             )}
             {trackedDocument?.status === 'completed' && id && (
@@ -549,22 +496,8 @@ export function DocumentsPage() {
           </section>
         )}
 
-        <section className="document-pipeline-panel">
-          <div className="document-pipeline-copy">
-            <span className="document-aside-label">处理流水线</span>
-            <strong>上传后自动进入解析队列</strong>
-            <p>支持 txt、md、pdf，完成向量化后即可在搜索和问答中引用。</p>
-          </div>
-          <div className="document-pipeline-steps" aria-label="文档处理阶段">
-            {pipelineStatuses.map((status) => (
-              <span key={status}>{documentStatusLabel(status)}</span>
-            ))}
-          </div>
-        </section>
-
         <div className="document-status-strip">
-          <MetricCard label="文档总数" value={documentMetricsKnown ? documents.length : '--'} />
-          <MetricCard label="已完成" value={documentMetricsKnown ? completedCount : '--'} tone="success" />
+          <MetricCard label="可用于问答" value={documentMetricsKnown ? completedCount : '--'} tone="success" />
           <MetricCard label="处理中" value={documentMetricsKnown ? processingCount : '--'} tone="warning" />
           <MetricCard label="失败" value={documentMetricsKnown ? failedCount : '--'} tone="danger" />
         </div>
@@ -574,7 +507,7 @@ export function DocumentsPage() {
         <div className="panel document-list-panel">
           <div className="panel-header document-list-header">
             <div>
-              <h2>处理队列</h2>
+              <h2>文档</h2>
               <p>
                 当前显示 {filteredDocuments.length} / {documents.length} 个文档
                 {activeFilterCount > 0 ? `，已启用 ${activeFilterCount} 个筛选` : ''}
@@ -780,6 +713,18 @@ export function DocumentsPage() {
         <DocumentRecycleBinDrawer
           onChanged={() => void loadPage()}
           onClose={() => setShowRecycleBin(false)}
+        />
+      )}
+
+      {id && (
+        <DocumentImportDialog
+          fixedKnowledgeBaseId={id}
+          fixedKnowledgeBaseName={knowledgeBase?.name}
+          knowledgeBases={knowledgeBase ? [knowledgeBase] : []}
+          onClose={() => setImportOpen(false)}
+          onUpload={uploadDocument}
+          onUploaded={handleUploadedDocument}
+          open={importOpen}
         />
       )}
       </div>
