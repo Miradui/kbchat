@@ -1093,7 +1093,7 @@ describe('ChatPage', () => {
     expect(await screen.findAllByText('制度会话问题')).toHaveLength(2);
 
     expect(screen.getByLabelText('当前知识库')).toBeDisabled();
-    screen.getAllByRole('button', { name: /新建.*会话/ }).forEach((button) => {
+    screen.getAllByRole('button', { name: '新建对话' }).forEach((button) => {
       expect(button).toBeDisabled();
     });
     const secondSessionLink = screen.getByRole('link', { name: /产品问答/ });
@@ -1203,7 +1203,7 @@ describe('ChatPage', () => {
     const otherSession = screen.getByRole('link', { name: /产品问答/ });
     expect(otherSession).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByLabelText('当前知识库')).toBeDisabled();
-    screen.getAllByRole('button', { name: /新建.*会话/ }).forEach((button) => expect(button).toBeDisabled());
+    screen.getAllByRole('button', { name: '新建对话' }).forEach((button) => expect(button).toBeDisabled());
     await user.click(otherSession);
     expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat/s1');
 
@@ -1285,7 +1285,18 @@ describe('ChatPage', () => {
     expect(screen.getByRole('button', { name: '发送' })).toBeEnabled();
   });
 
-  it('opens a draft when creating another session from the chat page', async () => {
+  it('labels a draft as a new conversation', async () => {
+    renderWithRouter(
+      <Routes>
+        <Route path="/chat/new" element={<ChatPage draftSession />} />
+      </Routes>,
+      ['/chat/new?knowledgeBaseId=kb1'],
+    );
+
+    expect(await screen.findByRole('heading', { name: '新建对话' })).toBeInTheDocument();
+  });
+
+  it('opens a draft when creating another conversation from the chat page', async () => {
     const user = userEvent.setup();
     renderWithRouter(
       <>
@@ -1297,7 +1308,7 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    await user.click(await screen.findByRole('button', { name: '新建会话' }));
+    await user.click(await screen.findByRole('button', { name: '新建对话' }));
 
     expect(createChatSession).not.toHaveBeenCalled();
     expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat/new?knowledgeBaseId=kb1');

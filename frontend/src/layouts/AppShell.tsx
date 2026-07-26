@@ -33,7 +33,7 @@ function getFocusable(container: HTMLElement): HTMLElement[] {
 }
 
 const sectionLabels: Record<AppSection, string> = {
-  home: '首页', 'knowledge-bases': '知识库', documents: '文档管理', chat: '问答管理', search: '全局搜索', tags: '标签管理',
+  home: '首页', 'knowledge-bases': '知识库', documents: '文档', chat: 'AI 问答', search: '全局搜索', tags: '标签管理',
 };
 
 export async function completeLogout(request: () => Promise<void>, finish: () => void): Promise<void> {

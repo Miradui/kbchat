@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addKnowledgeBaseMember,
   createChatSession,
+  deleteKnowledgeBaseMember,
   getKnowledgeBase,
   getKnowledgeBasePermissions,
   getWorkspacePreference,
@@ -101,6 +102,7 @@ beforeEach(() => {
   vi.mocked(recordKnowledgeBaseView).mockReset().mockResolvedValue(undefined);
   vi.mocked(addKnowledgeBaseMember).mockReset().mockResolvedValue(undefined);
   vi.mocked(createChatSession).mockReset();
+  vi.mocked(deleteKnowledgeBaseMember).mockReset().mockResolvedValue(undefined);
   vi.mocked(searchKnowledgeBase).mockReset().mockResolvedValue({ items: [], rerankFallback: null });
   vi.mocked(searchUsers).mockReset().mockResolvedValue({ items: [] });
   vi.mocked(updateKnowledgeBasePermissions).mockReset();
@@ -117,23 +119,24 @@ describe('KnowledgeBaseDetailPage', () => {
     );
 
     await screen.findByRole('heading', { name: '制度库' });
-    expect(screen.getByRole('link', { name: '概览' })).toHaveAttribute('aria-current', 'page');
-    expect(screen.getByRole('link', { name: '文档' })).toHaveAttribute(
+    const sectionNav = screen.getByRole('navigation', { name: '知识库功能' });
+    expect(within(sectionNav).getByRole('link', { name: '概览' })).toHaveAttribute('aria-current', 'page');
+    expect(within(sectionNav).getByRole('link', { name: '文档' })).toHaveAttribute(
       'href',
       '/knowledge-bases/kb1/documents',
     );
-    expect(screen.getByRole('link', { name: 'AI 问答' })).toHaveAttribute(
+    expect(within(sectionNav).getByRole('link', { name: 'AI 问答' })).toHaveAttribute(
       'href',
       '/knowledge-bases/kb1?tab=qa',
     );
     expect(getKnowledgeBasePermissions).not.toHaveBeenCalled();
     expect(screen.queryByRole('heading', { name: '成员权限' })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('link', { name: '设置' }));
+    await user.click(within(sectionNav).getByRole('link', { name: '设置' }));
 
     expect(await screen.findByRole('heading', { name: '成员权限' })).toBeInTheDocument();
     expect(getKnowledgeBasePermissions).toHaveBeenCalledOnce();
-    expect(screen.getByRole('link', { name: '设置' })).toHaveAttribute('aria-current', 'page');
+    expect(within(sectionNav).getByRole('link', { name: '设置' })).toHaveAttribute('aria-current', 'page');
     expect(screen.queryByText('文档总数')).not.toBeInTheDocument();
   });
 
@@ -485,6 +488,107 @@ describe('KnowledgeBaseDetailPage', () => {
     expect(screen.getByRole('combobox', { name: '可见性' })).toBeDisabled();
     addResult.resolve();
     await waitFor(() => expect(screen.getByRole('combobox', { name: '可见性' })).toBeEnabled());
+  });
+
+  it('confirms member removal and announces success without reloading permissions', async () => {
+    vi.mocked(getKnowledgeBasePermissions).mockResolvedValue({
+      knowledgeBaseId: knowledgeBase.id,
+      visibility: 'private',
+      owner: { id: 'u1', username: 'admin', displayName: '管理员' },
+      managers: [],
+      members: [{ id: 'u2', username: 'member', displayName: '普通成员', role: 'member' }],
+    });
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1?tab=settings'],
+    );
+
+    await user.click(await screen.findByRole('button', { name: '移除' }));
+    const firstDialog = screen.getByRole('dialog', { name: '移除成员' });
+    expect(firstDialog).toHaveTextContent('普通成员');
+    expect(deleteKnowledgeBaseMember).not.toHaveBeenCalled();
+    await user.click(within(firstDialog).getByRole('button', { name: '取消' }));
+    expect(deleteKnowledgeBaseMember).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: '移除' }));
+    await user.click(within(screen.getByRole('dialog', { name: '移除成员' })).getByRole('button', { name: '移除成员' }));
+
+    await waitFor(() => expect(deleteKnowledgeBaseMember).toHaveBeenCalledWith('kb1', 'u2'));
+    expect(await screen.findByRole('status')).toHaveTextContent('成员移除成功');
+    expect(screen.queryByText('普通成员')).not.toBeInTheDocument();
+    expect(getKnowledgeBasePermissions).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a failed member removal inside the confirmation dialog', async () => {
+    vi.mocked(getKnowledgeBasePermissions).mockResolvedValue({
+      knowledgeBaseId: knowledgeBase.id,
+      visibility: 'private',
+      owner: { id: 'u1', username: 'admin', displayName: '管理员' },
+      managers: [],
+      members: [{ id: 'u2', username: 'member', displayName: '普通成员', role: 'member' }],
+    });
+    vi.mocked(deleteKnowledgeBaseMember).mockRejectedValue(new Error('offline'));
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1?tab=settings'],
+    );
+
+    await user.click(await screen.findByRole('button', { name: '移除' }));
+    const dialog = screen.getByRole('dialog', { name: '移除成员' });
+    await user.click(within(dialog).getByRole('button', { name: '移除成员' }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('成员移除失败');
+    expect(screen.getByRole('dialog', { name: '移除成员' })).toBeInTheDocument();
+  });
+
+  it('ignores a stale member-removal result after switching knowledge bases', async () => {
+    const removal = deferred<void>();
+    const secondKnowledgeBase = { ...knowledgeBase, id: 'kb2', name: '产品库' };
+    vi.mocked(getKnowledgeBase).mockImplementation((id) => Promise.resolve(
+      id === secondKnowledgeBase.id ? secondKnowledgeBase : knowledgeBase,
+    ));
+    vi.mocked(getKnowledgeBasePermissions).mockImplementation((id) => Promise.resolve({
+      knowledgeBaseId: id,
+      visibility: 'private',
+      owner: { id: 'u1', username: 'admin', displayName: '管理员' },
+      managers: [],
+      members: id === secondKnowledgeBase.id
+        ? [{ id: 'u3', username: 'product-member', displayName: '产品成员', role: 'member' }]
+        : [{ id: 'u2', username: 'member', displayName: '普通成员', role: 'member' }],
+    }));
+    vi.mocked(deleteKnowledgeBaseMember).mockReturnValue(removal.promise);
+    const user = userEvent.setup();
+    renderWithRouter(
+      <>
+        <Routes>
+          <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+        </Routes>
+        <RouteControl target="/knowledge-bases/kb2?tab=settings" />
+      </>,
+      ['/knowledge-bases/kb1?tab=settings'],
+    );
+
+    await user.click(await screen.findByRole('button', { name: '移除' }));
+    await user.click(within(screen.getByRole('dialog', { name: '移除成员' })).getByRole('button', { name: '移除成员' }));
+    await waitFor(() => expect(deleteKnowledgeBaseMember).toHaveBeenCalledWith('kb1', 'u2'));
+    act(() => screen.getByText('切换知识库').click());
+
+    expect(await screen.findByRole('heading', { name: '产品库' })).toBeInTheDocument();
+    expect(await screen.findByText('产品成员')).toBeInTheDocument();
+    await act(async () => {
+      removal.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('产品成员')).toBeInTheDocument();
+    expect(screen.queryByText('成员移除成功')).not.toBeInTheDocument();
+    expect(screen.queryByText('成员移除失败')).not.toBeInTheDocument();
   });
 
   it('disables member mutations while visibility is being saved', async () => {

@@ -15,9 +15,11 @@ import {
   updateKnowledgeBaseMember,
   updateKnowledgeBasePermissions,
 } from '../../api/resources';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { WorkspaceShell } from '../../components/WorkspaceShell';
 import { RerankFallbackNotice } from '../../components/feedback/RerankFallbackNotice';
+import { useToast } from '../../components/feedback/ToastProvider';
 import type {
   DocumentItem,
   DocumentStatus,
@@ -51,6 +53,7 @@ export function KnowledgeBaseDetailPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const activeTab = normalizeDetailTab(searchParams.get('tab'));
+  const toast = useToast();
   const activeKnowledgeBaseIdRef = useRef(id);
   const knowledgeBaseRequestRef = useRef(0);
   const documentRequestRef = useRef(0);
@@ -82,6 +85,8 @@ export function KnowledgeBaseDetailPage() {
   const [searchFallback, setSearchFallback] = useState<KnowledgeBaseRerankFallback | null>(null);
   const [searchingUsers, setSearchingUsers] = useState(false);
   const [memberWorkingId, setMemberWorkingId] = useState<string | null>(null);
+  const [memberDeleteTarget, setMemberDeleteTarget] = useState<PermissionMember | null>(null);
+  const [memberDeleteError, setMemberDeleteError] = useState('');
   const [error, setError] = useState('');
   const [documentError, setDocumentError] = useState('');
   const [permissionError, setPermissionError] = useState('');
@@ -189,6 +194,8 @@ export function KnowledgeBaseDetailPage() {
     visibilityMutationRef.current = null;
     setSavingVisibility(false);
     setMemberWorkingId(null);
+    setMemberDeleteTarget(null);
+    setMemberDeleteError('');
     void loadKnowledgeBase();
 
     return () => {
@@ -225,6 +232,8 @@ export function KnowledgeBaseDetailPage() {
     userSearchRequestRef.current += 1;
     setPermissionsLoading(false);
     setSearchingUsers(false);
+    setMemberDeleteTarget(null);
+    setMemberDeleteError('');
   }, [activeTab, loadPermissions, permissionsLoaded, permissionsLoading]);
 
   useEffect(() => {
@@ -426,13 +435,17 @@ export function KnowledgeBaseDetailPage() {
     }
   }
 
-  async function handleDeleteMember(member: PermissionMember) {
-    if (!knowledgeBase || member.role === 'owner' || memberMutationRef.current || visibilityMutationRef.current) {
+  function openMemberDelete(member: PermissionMember) {
+    if (member.role === 'owner' || memberMutationRef.current || visibilityMutationRef.current) {
       return;
     }
+    setMemberDeleteTarget(member);
+    setMemberDeleteError('');
+  }
 
-    const confirmed = window.confirm(`确认移除成员“${member.displayName || member.username}”？`);
-    if (!confirmed) {
+  async function handleDeleteMember() {
+    const member = memberDeleteTarget;
+    if (!knowledgeBase || !member || member.role === 'owner' || memberMutationRef.current || visibilityMutationRef.current) {
       return;
     }
 
@@ -440,17 +453,28 @@ export function KnowledgeBaseDetailPage() {
     const operation = Symbol('delete-knowledge-base-member');
     memberMutationRef.current = operation;
     setMemberWorkingId(member.id);
-    setError('');
+    setMemberDeleteError('');
 
     try {
       await deleteKnowledgeBaseMember(requestedId, member.id);
-      await reloadPermissions(requestedId, operation);
+      if (
+        activeKnowledgeBaseIdRef.current === requestedId
+        && memberMutationRef.current === operation
+      ) {
+        setPermissions((current) => current ? {
+          ...current,
+          managers: current.managers.filter((item) => item.id !== member.id),
+          members: current.members.filter((item) => item.id !== member.id),
+        } : current);
+        setMemberDeleteTarget(null);
+        toast.success('成员移除成功');
+      }
     } catch (err) {
       if (
         activeKnowledgeBaseIdRef.current === requestedId
         && memberMutationRef.current === operation
       ) {
-        setError(errorMessage(err, '成员移除失败'));
+        setMemberDeleteError(errorMessage(err, '成员移除失败'));
       }
     } finally {
       if (
@@ -790,7 +814,7 @@ export function KnowledgeBaseDetailPage() {
                     members={managers}
                     workingId={memberWorkingId}
                     disabled={permissionMutationBusy}
-                    onDelete={handleDeleteMember}
+                    onDelete={openMemberDelete}
                     onRoleChange={handleUpdateMemberRole}
                   />
                   <PermissionList
@@ -799,7 +823,7 @@ export function KnowledgeBaseDetailPage() {
                     emptyText="暂无成员。"
                     workingId={memberWorkingId}
                     disabled={permissionMutationBusy}
-                    onDelete={handleDeleteMember}
+                    onDelete={openMemberDelete}
                     onRoleChange={handleUpdateMemberRole}
                   />
                 </>
@@ -872,6 +896,20 @@ export function KnowledgeBaseDetailPage() {
           </div>
         )}
       </div>
+      {memberDeleteTarget && (
+        <ConfirmDialog
+          busy={memberWorkingId === memberDeleteTarget.id}
+          confirmLabel="移除成员"
+          description={`移除“${memberDeleteTarget.displayName || memberDeleteTarget.username}”后，该成员将无法继续访问此知识库。`}
+          error={memberDeleteError}
+          onCancel={() => {
+            setMemberDeleteTarget(null);
+            setMemberDeleteError('');
+          }}
+          onConfirm={() => void handleDeleteMember()}
+          title="移除成员"
+        />
+      )}
     </WorkspaceShell>
   );
 }

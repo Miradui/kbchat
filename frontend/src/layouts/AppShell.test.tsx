@@ -193,7 +193,7 @@ describe('AppShell', () => {
     expect(screen.getByRole('textbox', { name: '全局搜索', hidden: true }).closest('.app-main')).toBe(applicationMain);
 
     const first = screen.getByRole('link', { name: 'RAG Console' });
-    const last = screen.getByRole('link', { name: '标签管理' });
+    const last = screen.getByRole('link', { name: 'AI 问答' });
     last.focus();
     await user.tab();
     expect(first).toHaveFocus();

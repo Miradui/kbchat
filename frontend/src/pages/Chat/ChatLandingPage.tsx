@@ -93,9 +93,9 @@ export function ChatLandingPage() {
       <div className="chat-overview-page">
       <header className="page-header workspace-heading">
         <div>
-          <p className="breadcrumb">首页 / 聊天问答</p>
-          <h1>聊天问答</h1>
-          <p className="page-description">选择知识库继续已有问答，或开始一次新问答。</p>
+          <p className="breadcrumb">首页 / AI 问答</p>
+          <h1>AI 问答</h1>
+          <p className="page-description">选择知识库继续已有对话，或新建对话。</p>
         </div>
         <Link className="button-link" to="/knowledge-bases">
           新建知识库
@@ -112,7 +112,7 @@ export function ChatLandingPage() {
           <section className="panel">
             <div className="panel-header">
               <h2>按知识库开始</h2>
-              <span className="muted-text">继续最近问答或开始新问答</span>
+              <span className="muted-text">继续最近对话或新建对话</span>
             </div>
             {knowledgeBasesLoading ? (
               <LoadingSkeleton rows={4} columns={2} announce />
@@ -125,7 +125,7 @@ export function ChatLandingPage() {
               </div>
             ) : knowledgeBases.length === 0 ? (
               <div className="empty-state">
-                <p>还没有知识库。请先新建知识库，再开始聊天问答。</p>
+                <p>还没有知识库。请先新建知识库，再开始 AI 问答。</p>
                 <Link className="button-link" to="/knowledge-bases?intent=create">新建知识库</Link>
               </div>
             ) : (
@@ -157,7 +157,7 @@ export function ChatLandingPage() {
                         className={existingSession ? 'link-button' : 'button-link'}
                         to={`/chat/new?knowledgeBaseId=${encodeURIComponent(knowledgeBase.id)}`}
                       >
-                        新建问答
+                        新建对话
                       </Link>
                     </span>
                   </article>

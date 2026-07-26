@@ -1059,6 +1059,19 @@ export function KnowledgeBaseListPage() {
                 aria-disabled={workspaceMutationBusy || undefined}
                 className="secondary-link"
                 tabIndex={workspaceMutationBusy ? -1 : undefined}
+                to="/tags"
+                onClick={(event) => {
+                  if (workspaceMutationRef.current) {
+                    event.preventDefault();
+                  }
+                }}
+              >
+                管理标签
+              </Link>
+              <Link
+                aria-disabled={workspaceMutationBusy || undefined}
+                className="secondary-link"
+                tabIndex={workspaceMutationBusy ? -1 : undefined}
                 to={items[0] ? `/knowledge-bases/${items[0].id}/documents` : '/documents'}
                 onClick={(event) => {
                   if (workspaceMutationRef.current) {

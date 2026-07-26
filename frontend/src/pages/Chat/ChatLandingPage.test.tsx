@@ -65,12 +65,13 @@ function renderPage() {
 }
 
 describe('ChatLandingPage', () => {
-  it('offers separate actions to continue a recent session and start a new question', async () => {
+  it('uses AI Q&A language and separates continuing from starting a conversation', async () => {
     renderPage();
 
+    expect(await screen.findByRole('heading', { name: 'AI 问答' })).toBeInTheDocument();
     const row = await screen.findByRole('article', { name: '制度库' });
     expect(within(row).getByRole('link', { name: '继续最近会话' })).toHaveAttribute('href', '/chat/session1');
-    expect(within(row).getByRole('link', { name: '新建问答' })).toHaveAttribute(
+    expect(within(row).getByRole('link', { name: '新建对话' })).toHaveAttribute(
       'href',
       '/chat/new?knowledgeBaseId=kb1',
     );
@@ -85,7 +86,7 @@ describe('ChatLandingPage', () => {
     expect(within(row).getByText('会话加载中')).toBeInTheDocument();
     expect(within(screen.getByText('会话').parentElement!).getByText('--')).toBeInTheDocument();
     expect(within(screen.getByText('可继续会话知识库').parentElement!).getByText('--')).toBeInTheDocument();
-    expect(within(row).getByRole('link', { name: '新建问答' })).toHaveAttribute(
+    expect(within(row).getByRole('link', { name: '新建对话' })).toHaveAttribute(
       'href',
       '/chat/new?knowledgeBaseId=kb1',
     );
@@ -117,7 +118,7 @@ describe('ChatLandingPage', () => {
     const error = await screen.findByRole('alert');
     expect(error).toHaveTextContent('最近会话加载失败');
     expect(within(screen.getByRole('article', { name: '制度库' })).getByText('最近会话不可用')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '新建问答' })).toHaveAttribute(
+    expect(within(screen.getByRole('article', { name: '制度库' })).getByRole('link', { name: '新建对话' })).toHaveAttribute(
       'href',
       '/chat/new?knowledgeBaseId=kb1',
     );

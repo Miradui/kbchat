@@ -1,5 +1,5 @@
 import { StrictMode } from 'react';
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
@@ -36,6 +36,13 @@ describe('HomePage', () => {
       'href',
       '/knowledge-bases?intent=create',
     );
+  });
+
+  it('starts a new conversation directly from the quick actions', async () => {
+    renderWithRouter(<HomePage sources={createSources()} />);
+
+    const quickActions = await screen.findByRole('region', { name: '快捷入口' });
+    expect(within(quickActions).getByRole('link', { name: /新建对话/ })).toHaveAttribute('href', '/chat/new');
   });
 
   it('links document activity directly to the document detail', async () => {

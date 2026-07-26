@@ -897,8 +897,8 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
       <div className="chat-workspace-page">
       <header className="page-header workspace-heading chat-workspace-header">
         <div>
-          <p className="breadcrumb">知识库 / {currentKnowledgeBase?.name ?? '问答'} / 聊天</p>
-          <h1>聊天问答</h1>
+          <p className="breadcrumb">知识库 / {currentKnowledgeBase?.name ?? 'AI 问答'} / {isDraftSession ? '新建对话' : '对话'}</p>
+          <h1>{isDraftSession ? '新建对话' : 'AI 问答'}</h1>
           <p className="page-description">围绕当前知识库提问，有依据时会在回答旁展示来源。</p>
         </div>
         <div className="toolbar">
@@ -918,7 +918,7 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
             </Link>
           )}
           <button type="button" onClick={() => handleCreateSession()} disabled={chatMutationBusy}>
-            新建会话
+            新建对话
           </button>
         </div>
       </header>

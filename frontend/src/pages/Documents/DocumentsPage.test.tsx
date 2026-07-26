@@ -159,10 +159,11 @@ describe('DocumentsPage', () => {
     renderPage();
     await screen.findByRole('heading', { name: '制度库' });
 
-    expect(screen.getByRole('link', { name: '概览' })).toHaveAttribute('href', '/knowledge-bases/kb1?tab=overview');
-    expect(screen.getByRole('link', { name: '文档' })).toHaveAttribute('aria-current', 'page');
-    expect(screen.getByRole('link', { name: 'AI 问答' })).toHaveAttribute('href', '/knowledge-bases/kb1?tab=qa');
-    expect(screen.getByRole('link', { name: '设置' })).toHaveAttribute('href', '/knowledge-bases/kb1?tab=settings');
+    const sectionNav = screen.getByRole('navigation', { name: '知识库功能' });
+    expect(within(sectionNav).getByRole('link', { name: '概览' })).toHaveAttribute('href', '/knowledge-bases/kb1?tab=overview');
+    expect(within(sectionNav).getByRole('link', { name: '文档' })).toHaveAttribute('aria-current', 'page');
+    expect(within(sectionNav).getByRole('link', { name: 'AI 问答' })).toHaveAttribute('href', '/knowledge-bases/kb1?tab=qa');
+    expect(within(sectionNav).getByRole('link', { name: '设置' })).toHaveAttribute('href', '/knowledge-bases/kb1?tab=settings');
     expect(screen.queryByRole('link', { name: '返回详情' })).not.toBeInTheDocument();
     expect(listKnowledgeBaseCategories).not.toHaveBeenCalled();
     expect(getWorkspacePreference).not.toHaveBeenCalled();
@@ -300,7 +301,7 @@ describe('DocumentsPage', () => {
 
     expect(screen.getByText('product.md')).toBeInTheDocument();
     expect(screen.queryByText('handbook.pdf')).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: '开始问答' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '基于此知识库提问' })).not.toBeInTheDocument();
   });
 
   it('does not let an old upload unlock a newer knowledge-base upload', async () => {
@@ -517,7 +518,7 @@ describe('DocumentsPage', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(screen.queryByRole('link', { name: '开始问答' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '基于此知识库提问' })).not.toBeInTheDocument();
     await waitFor(() => expect(poll).toBeTypeOf('function'));
 
     await act(async () => {
@@ -528,7 +529,7 @@ describe('DocumentsPage', () => {
     });
     await waitFor(() => expect(listDocuments).toHaveBeenCalledTimes(2));
 
-    expect(await screen.findByRole('link', { name: '开始问答' })).toHaveAttribute(
+    expect(await screen.findByRole('link', { name: '基于此知识库提问' })).toHaveAttribute(
       'href',
       '/chat/new?knowledgeBaseId=kb1',
     );
@@ -559,6 +560,6 @@ describe('DocumentsPage', () => {
 
     expect(await screen.findByRole('status', { name: '文档导入进度' })).toHaveTextContent('文档处理失败');
     expect(screen.getByRole('status', { name: '文档导入进度' })).toHaveTextContent('请查看处理提示并重试');
-    expect(screen.queryByRole('link', { name: '开始问答' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '基于此知识库提问' })).not.toBeInTheDocument();
   });
 });

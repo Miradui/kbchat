@@ -60,7 +60,7 @@ export function HomePage({ sources }: HomePageProps) {
         <section className="home-quick-actions" aria-label="快捷入口">
           <QuickAction icon={Library} title="新建知识库" description="创建新的知识空间" to="/knowledge-bases?intent=create" />
           <QuickAction icon={Upload} title="导入文档" description="上传并处理企业资料" to="/documents" />
-          <QuickAction icon={MessageSquareText} title="开始问答" description="基于可信来源生成回答" to="/chat" />
+          <QuickAction icon={MessageSquareText} title="新建对话" description="基于可信来源生成回答" to="/chat/new" />
         </section>
 
         <DashboardRegion

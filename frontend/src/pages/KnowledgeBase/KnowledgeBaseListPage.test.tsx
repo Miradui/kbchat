@@ -195,6 +195,12 @@ function LocationProbe() {
 }
 
 describe('KnowledgeBaseListPage', () => {
+  it('keeps tag administration discoverable from the knowledge-base context', async () => {
+    renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
+
+    expect(await screen.findByRole('link', { name: '管理标签' })).toHaveAttribute('href', '/tags');
+  });
+
   it('keeps statistics unknown when loading fails and retries statistics independently', async () => {
     vi.mocked(getKnowledgeBaseStats)
       .mockRejectedValueOnce(new Error('offline'))

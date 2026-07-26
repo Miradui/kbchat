@@ -490,7 +490,7 @@ export function DocumentsPage() {
             )}
             {trackedDocument?.status === 'completed' && id && (
               <Link className="button-link" to={`/chat/new?knowledgeBaseId=${id}`}>
-                开始问答
+                基于此知识库提问
               </Link>
             )}
           </section>
