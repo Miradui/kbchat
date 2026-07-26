@@ -37,6 +37,17 @@ beforeEach(() => {
 });
 
 describe('TagsPage', () => {
+  it('provides a stable breadcrumb back to knowledge bases', async () => {
+    renderWithRouter(<TagsPage />, ['/tags']);
+
+    const breadcrumb = screen.getByRole('navigation', { name: '面包屑' });
+    expect(within(breadcrumb).getByRole('link', { name: '返回知识库' })).toHaveAttribute(
+      'href',
+      '/knowledge-bases',
+    );
+    expect(within(breadcrumb).getByText('标签管理')).toHaveAttribute('aria-current', 'page');
+  });
+
   it('shows a first-use empty state when no tags exist', async () => {
     vi.mocked(listKnowledgeBaseTags).mockResolvedValue({ items: [] });
     renderWithRouter(<TagsPage />);

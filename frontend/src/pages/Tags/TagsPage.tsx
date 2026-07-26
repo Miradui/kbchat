@@ -1,5 +1,6 @@
 import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 
 import {
   createKnowledgeBaseTag,
@@ -92,6 +93,11 @@ export function TagsPage() {
       <div className="tags-page">
         <header className="page-header workspace-heading tags-header">
           <div>
+            <nav aria-label="面包屑" className="breadcrumb tags-breadcrumb">
+              <Link to="/knowledge-bases">返回知识库</Link>
+              <span aria-hidden="true">/</span>
+              <span aria-current="page">标签管理</span>
+            </nav>
             <h1>标签管理</h1>
             <p className="page-description">维护知识库可绑定的标签。</p>
           </div>
