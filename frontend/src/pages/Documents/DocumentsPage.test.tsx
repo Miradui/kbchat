@@ -5,13 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   batchReprocessDocuments,
+  deleteKnowledgeBase,
   deleteDocument,
   getKnowledgeBase,
   getWorkspacePreference,
   listDocuments,
   listKnowledgeBaseCategories,
+  listKnowledgeBaseTags,
   listKnowledgeBases,
   reprocessDocument,
+  updateKnowledgeBase,
   uploadDocument,
 } from '../../api/resources';
 import { ApiError } from '../../api/client';
@@ -22,14 +25,17 @@ import { DocumentsPage } from './DocumentsPage';
 vi.mock('../../api/resources', () => ({
   batchDeleteDocuments: vi.fn(),
   batchReprocessDocuments: vi.fn(),
+  deleteKnowledgeBase: vi.fn(),
   deleteDocument: vi.fn(),
   getKnowledgeBase: vi.fn(),
   getWorkspacePreference: vi.fn(),
   listDocuments: vi.fn(),
   listKnowledgeBaseCategories: vi.fn(),
+  listKnowledgeBaseTags: vi.fn(),
   listKnowledgeBases: vi.fn(),
   logout: vi.fn(),
   reprocessDocument: vi.fn(),
+  updateKnowledgeBase: vi.fn(),
   uploadDocument: vi.fn(),
 }));
 
@@ -101,13 +107,22 @@ beforeEach(() => {
   vi.mocked(listDocuments).mockReset().mockResolvedValue({ items: [] });
   vi.mocked(listKnowledgeBases).mockReset().mockResolvedValue({ items: [knowledgeBase] });
   vi.mocked(listKnowledgeBaseCategories).mockReset().mockResolvedValue({ items: [] });
+  vi.mocked(listKnowledgeBaseTags).mockReset().mockResolvedValue({ items: [] });
   vi.mocked(getWorkspacePreference).mockReset().mockResolvedValue({
     viewMode: 'table', scope: 'all', sort: 'updatedAt_desc', visibility: 'all', expandedCategoryIds: [],
   });
   vi.mocked(uploadDocument).mockReset();
+  vi.mocked(deleteKnowledgeBase).mockReset().mockResolvedValue(undefined);
   vi.mocked(deleteDocument).mockReset();
   vi.mocked(reprocessDocument).mockReset();
   vi.mocked(batchReprocessDocuments).mockReset();
+  vi.mocked(updateKnowledgeBase).mockReset().mockImplementation(async (_, input) => ({
+    ...knowledgeBase,
+    name: input.name,
+    description: input.description,
+    categoryId: input.categoryId,
+    visibility: input.visibility,
+  }));
 });
 
 afterEach(() => {
@@ -155,6 +170,47 @@ async function uploadThroughDialog(user: ReturnType<typeof userEvent.setup>, fil
 }
 
 describe('DocumentsPage', () => {
+  it('offers knowledge-base actions without eagerly loading edit metadata', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const actions = await screen.findByRole('button', { name: '制度库的更多操作' });
+    expect(listKnowledgeBaseCategories).not.toHaveBeenCalled();
+    expect(listKnowledgeBaseTags).not.toHaveBeenCalled();
+    await user.click(actions);
+
+    const menu = screen.getByRole('menu', { name: '制度库的更多操作' });
+    expect(within(menu).getByRole('menuitem', { name: '编辑知识库' })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', { name: '删除知识库' })).toBeInTheDocument();
+  });
+
+  it('keeps the document heading and knowledge-base selector in sync after editing', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: '制度库的更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '编辑知识库' }));
+    const drawer = await screen.findByRole('dialog', { name: '编辑知识库' });
+    const name = within(drawer).getByRole('textbox', { name: '名称' });
+    await user.clear(name);
+    await user.type(name, '员工制度库');
+    await user.click(within(drawer).getByRole('button', { name: '保存修改' }));
+
+    expect(await screen.findByRole('heading', { name: '员工制度库' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: '当前知识库' })).toHaveDisplayValue('员工制度库');
+  });
+
+  it('keeps the current knowledge base selectable when it is absent from the workspace page', async () => {
+    vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [secondKnowledgeBase] });
+    renderPage();
+
+    await screen.findByRole('heading', { name: '制度库' });
+    const selector = screen.getByRole('combobox', { name: '当前知识库' });
+    expect(selector).toHaveValue('kb1');
+    expect(selector).toHaveDisplayValue('制度库');
+    expect(within(selector).getByRole('option', { name: '产品库' })).toBeInTheDocument();
+  });
+
   it('does not load knowledge-base category workspace data', async () => {
     renderPage();
     await screen.findByRole('heading', { name: '制度库' });

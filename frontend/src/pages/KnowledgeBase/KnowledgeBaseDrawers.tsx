@@ -24,9 +24,12 @@ type KnowledgeBaseFormOverlayProps = {
   categories: { id: string; label: string }[];
   error: string;
   form: KnowledgeBaseFormState;
+  optionsError?: string;
+  optionsLoading?: boolean;
   tags: KnowledgeBaseTag[];
   onChange: (form: KnowledgeBaseFormState) => void;
   onClose: () => void;
+  onRetryOptions?: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 };
 
@@ -35,9 +38,12 @@ export function KnowledgeBaseFormOverlay({
   categories,
   error,
   form,
+  optionsError = '',
+  optionsLoading = false,
   tags,
   onChange,
   onClose,
+  onRetryOptions,
   onSubmit,
 }: KnowledgeBaseFormOverlayProps) {
   const initialFormRef = useRef(form);
@@ -62,9 +68,12 @@ export function KnowledgeBaseFormOverlay({
       categories={categories}
       error={error}
       form={form}
+      optionsError={optionsError}
+      optionsLoading={optionsLoading}
       tags={tags}
       onChange={onChange}
       onClose={requestClose}
+      onRetryOptions={onRetryOptions}
       onSubmit={onSubmit}
     />
   );
@@ -128,9 +137,12 @@ function KnowledgeBaseFormFields({
   categories,
   error,
   form,
+  optionsError = '',
+  optionsLoading = false,
   tags,
   onChange,
   onClose,
+  onRetryOptions,
   onSubmit,
 }: KnowledgeBaseFormOverlayProps) {
   const editing = Boolean(form.id);
@@ -176,7 +188,7 @@ function KnowledgeBaseFormFields({
             <label>
               分类
               <select
-                disabled={busy}
+                disabled={busy || optionsLoading || Boolean(optionsError)}
                 value={form.categoryId}
                 onChange={(event) => onChange({ ...form, categoryId: event.target.value })}
               >
@@ -197,7 +209,7 @@ function KnowledgeBaseFormFields({
                     <label className="kb-tag-option" key={tag.id}>
                       <input
                         checked={form.tagIds.includes(tag.id)}
-                        disabled={busy}
+                        disabled={busy || optionsLoading || Boolean(optionsError)}
                         type="checkbox"
                         onChange={() => toggleTag(tag.id)}
                       />
@@ -223,11 +235,26 @@ function KnowledgeBaseFormFields({
         </details>
       </div>
 
+      {optionsLoading && <p className="muted-text" role="status">正在加载分类和标签...</p>}
+      {optionsError && (
+        <div className={editing ? 'drawer-error-text' : 'ui-dialog__error'} role="alert">
+          <p>{optionsError}</p>
+          {onRetryOptions && (
+            <Button variant="secondary" onClick={onRetryOptions}>重试加载</Button>
+          )}
+        </div>
+      )}
+
       {error && <p className={editing ? 'drawer-error-text' : 'ui-dialog__error'} role="alert">{error}</p>}
 
       <div className={editing ? 'form-actions drawer-form-actions' : 'ui-dialog__actions'}>
         <Button variant="secondary" disabled={busy} onClick={onClose}>取消</Button>
-        <Button loading={busy} loadingLabel="保存中" type="submit">
+        <Button
+          disabled={optionsLoading || Boolean(optionsError)}
+          loading={busy}
+          loadingLabel="保存中"
+          type="submit"
+        >
           {editing ? '保存修改' : '创建并导入文档'}
         </Button>
       </div>

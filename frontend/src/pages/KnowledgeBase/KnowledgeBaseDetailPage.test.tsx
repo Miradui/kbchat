@@ -6,15 +6,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addKnowledgeBaseMember,
   createChatSession,
+  deleteKnowledgeBase,
   deleteKnowledgeBaseMember,
   getKnowledgeBase,
   getKnowledgeBasePermissions,
   getWorkspacePreference,
   listDocuments,
   listKnowledgeBaseCategories,
+  listKnowledgeBaseTags,
   recordKnowledgeBaseView,
   searchKnowledgeBase,
   searchUsers,
+  updateKnowledgeBase,
   updateKnowledgeBasePermissions,
 } from '../../api/resources';
 import { renderWithRouter } from '../../test/render';
@@ -24,16 +27,19 @@ import { KnowledgeBaseDetailPage } from './KnowledgeBaseDetailPage';
 vi.mock('../../api/resources', () => ({
   addKnowledgeBaseMember: vi.fn(),
   createChatSession: vi.fn(),
+  deleteKnowledgeBase: vi.fn(),
   deleteKnowledgeBaseMember: vi.fn(),
   getKnowledgeBase: vi.fn(),
   getKnowledgeBasePermissions: vi.fn(),
   getWorkspacePreference: vi.fn(),
   listDocuments: vi.fn(),
   listKnowledgeBaseCategories: vi.fn(),
+  listKnowledgeBaseTags: vi.fn(),
   logout: vi.fn(),
   recordKnowledgeBaseView: vi.fn(),
   searchKnowledgeBase: vi.fn(),
   searchUsers: vi.fn(),
+  updateKnowledgeBase: vi.fn(),
   updateKnowledgeBaseMember: vi.fn(),
   updateKnowledgeBasePermissions: vi.fn(),
 }));
@@ -102,13 +108,350 @@ beforeEach(() => {
   vi.mocked(recordKnowledgeBaseView).mockReset().mockResolvedValue(undefined);
   vi.mocked(addKnowledgeBaseMember).mockReset().mockResolvedValue(undefined);
   vi.mocked(createChatSession).mockReset();
+  vi.mocked(deleteKnowledgeBase).mockReset().mockResolvedValue(undefined);
   vi.mocked(deleteKnowledgeBaseMember).mockReset().mockResolvedValue(undefined);
+  vi.mocked(listKnowledgeBaseTags).mockReset().mockResolvedValue({ items: [] });
   vi.mocked(searchKnowledgeBase).mockReset().mockResolvedValue({ items: [], rerankFallback: null });
   vi.mocked(searchUsers).mockReset().mockResolvedValue({ items: [] });
+  vi.mocked(updateKnowledgeBase).mockReset().mockImplementation(async (_, input) => ({
+    ...knowledgeBase,
+    name: input.name,
+    description: input.description,
+    categoryId: input.categoryId,
+    visibility: input.visibility,
+  }));
   vi.mocked(updateKnowledgeBasePermissions).mockReset();
 });
 
 describe('KnowledgeBaseDetailPage', () => {
+  it('keeps knowledge-base edit and delete actions available across detail tabs', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1?tab=settings'],
+    );
+
+    const actions = await screen.findByRole('button', { name: '制度库的更多操作' });
+    await user.click(actions);
+
+    const menu = screen.getByRole('menu', { name: '制度库的更多操作' });
+    expect(within(menu).getByRole('menuitem', { name: '编辑知识库' })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', { name: '删除知识库' })).toBeInTheDocument();
+  });
+
+  it('prefills and saves the complete knowledge-base form from detail', async () => {
+    const tags = [
+      { id: 'tag-a', name: '制度', createdAt: '2026-07-01T00:00:00Z', updatedAt: '2026-07-01T00:00:00Z' },
+      { id: 'tag-b', name: '人事', createdAt: '2026-07-01T00:00:00Z', updatedAt: '2026-07-01T00:00:00Z' },
+    ];
+    const editableKnowledgeBase = {
+      ...knowledgeBase,
+      categoryId: 'category-a',
+      tags: [tags[0]],
+    } satisfies KnowledgeBase;
+    vi.mocked(getKnowledgeBase).mockResolvedValue(editableKnowledgeBase);
+    vi.mocked(listKnowledgeBaseCategories).mockResolvedValue({
+      items: [{
+        id: 'category-a', parentId: null, name: '制度分类', sortOrder: 1,
+        createdAt: '2026-07-01T00:00:00Z', updatedAt: '2026-07-01T00:00:00Z',
+      }],
+    });
+    vi.mocked(listKnowledgeBaseTags).mockResolvedValue({ items: tags });
+    vi.mocked(updateKnowledgeBase).mockImplementation(async (_, input) => ({
+      ...editableKnowledgeBase,
+      name: input.name,
+      description: input.description,
+      categoryId: input.categoryId,
+      visibility: input.visibility,
+      tags,
+    }));
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    await user.click(await screen.findByRole('button', { name: '制度库的更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '编辑知识库' }));
+    const drawer = screen.getByRole('dialog', { name: '编辑知识库' });
+    const name = within(drawer).getByRole('textbox', { name: '名称' });
+    expect(name).toHaveValue('制度库');
+    expect(within(drawer).getByRole('textbox', { name: '描述' })).toHaveValue('制度说明');
+    expect(within(drawer).getByRole('combobox', { name: '分类' })).toHaveValue('category-a');
+    expect(within(drawer).getByRole('checkbox', { name: '制度' })).toBeChecked();
+    expect(within(drawer).getByRole('checkbox', { name: '人事' })).not.toBeChecked();
+    expect(within(drawer).getByRole('combobox', { name: '访问权限' })).toHaveValue('private');
+
+    await user.clear(name);
+    await user.type(name, '员工制度库');
+    await user.click(within(drawer).getByRole('checkbox', { name: '人事' }));
+    await user.selectOptions(within(drawer).getByRole('combobox', { name: '访问权限' }), 'public');
+    await user.click(within(drawer).getByRole('button', { name: '保存修改' }));
+
+    await waitFor(() => expect(updateKnowledgeBase).toHaveBeenCalledWith('kb1', {
+      name: '员工制度库',
+      description: '制度说明',
+      categoryId: 'category-a',
+      visibility: 'public',
+      retrievalConfig: knowledgeBase.retrievalConfig,
+      tagIds: ['tag-a', 'tag-b'],
+    }));
+    expect(await screen.findByRole('heading', { name: '员工制度库' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: '编辑知识库' })).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('知识库更新成功');
+  });
+
+  it('uses the latest loaded tag name when opening the knowledge-base editor', async () => {
+    const staleTag = {
+      id: 'tag-a', name: '旧标签名', createdAt: '2026-07-01T00:00:00Z', updatedAt: '2026-07-01T00:00:00Z',
+    };
+    const currentTag = { ...staleTag, name: '制度' };
+    vi.mocked(getKnowledgeBase).mockResolvedValue({
+      ...knowledgeBase,
+      tags: [staleTag],
+    });
+    vi.mocked(listKnowledgeBaseTags).mockResolvedValue({ items: [currentTag] });
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    await user.click(await screen.findByRole('button', { name: '制度库的更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '编辑知识库' }));
+    const drawer = screen.getByRole('dialog', { name: '编辑知识库' });
+
+    expect(await within(drawer).findByRole('checkbox', { name: '制度' })).toBeChecked();
+    expect(within(drawer).queryByRole('checkbox', { name: '旧标签名' })).not.toBeInTheDocument();
+  });
+
+  it('keeps detail edits and the inline error when saving fails', async () => {
+    vi.mocked(updateKnowledgeBase).mockRejectedValue(new Error('offline'));
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    await user.click(await screen.findByRole('button', { name: '制度库的更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '编辑知识库' }));
+    const drawer = screen.getByRole('dialog', { name: '编辑知识库' });
+    const name = within(drawer).getByRole('textbox', { name: '名称' });
+    await user.type(name, '更新');
+    await user.click(within(drawer).getByRole('button', { name: '保存修改' }));
+
+    expect(await within(drawer).findByRole('alert')).toHaveTextContent('知识库保存失败');
+    expect(name).toHaveValue('制度库更新');
+    expect(screen.getByRole('dialog', { name: '编辑知识库' })).toBeInTheDocument();
+  });
+
+  it('keeps loaded permission state in sync after editing visibility', async () => {
+    vi.mocked(updateKnowledgeBase).mockImplementation(async (_, input) => ({
+      ...knowledgeBase,
+      visibility: input.visibility,
+    }));
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1?tab=settings'],
+    );
+
+    const permissionVisibility = await screen.findByRole('combobox', { name: '可见性' });
+    expect(permissionVisibility).toHaveValue('private');
+    await user.click(screen.getByRole('button', { name: '制度库的更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '编辑知识库' }));
+    const drawer = screen.getByRole('dialog', { name: '编辑知识库' });
+    await user.selectOptions(within(drawer).getByRole('combobox', { name: '访问权限' }), 'public');
+    await user.click(within(drawer).getByRole('button', { name: '保存修改' }));
+
+    await waitFor(() => expect(permissionVisibility).toHaveValue('public'));
+    expect(screen.getByText('公开', { selector: '.visibility-pill' })).toBeInTheDocument();
+  });
+
+  it('does not let an older permission read revert visibility edited from settings', async () => {
+    const initialPermissions = deferred<Awaited<ReturnType<typeof getKnowledgeBasePermissions>>>();
+    vi.mocked(getKnowledgeBasePermissions)
+      .mockReturnValueOnce(initialPermissions.promise)
+      .mockResolvedValueOnce({
+        knowledgeBaseId: 'kb1',
+        visibility: 'public',
+        owner: { id: 'u1', username: 'admin', displayName: '管理员' },
+        managers: [],
+        members: [],
+      });
+    vi.mocked(updateKnowledgeBase).mockImplementation(async (_, input) => ({
+      ...knowledgeBase,
+      visibility: input.visibility,
+    }));
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1?tab=settings'],
+    );
+
+    await user.click(await screen.findByRole('button', { name: '制度库的更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '编辑知识库' }));
+    const drawer = screen.getByRole('dialog', { name: '编辑知识库' });
+    await user.selectOptions(within(drawer).getByRole('combobox', { name: '访问权限' }), 'public');
+    await user.click(within(drawer).getByRole('button', { name: '保存修改' }));
+
+    await waitFor(() => expect(getKnowledgeBasePermissions).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole('combobox', { name: '可见性' })).toHaveValue('public');
+    await act(async () => {
+      initialPermissions.resolve({
+        knowledgeBaseId: 'kb1',
+        visibility: 'private',
+        owner: { id: 'u1', username: 'admin', displayName: '管理员' },
+        managers: [],
+        members: [],
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('combobox', { name: '可见性' })).toHaveValue('public');
+    expect(screen.getByText('公开', { selector: '.visibility-pill' })).toBeInTheDocument();
+  });
+
+  it('keeps current metadata visible and requires recovery when edit options fail to load', async () => {
+    const currentTag = {
+      id: 'tag-a', name: '制度', createdAt: '2026-07-01T00:00:00Z', updatedAt: '2026-07-01T00:00:00Z',
+    };
+    vi.mocked(getKnowledgeBase).mockResolvedValue({
+      ...knowledgeBase,
+      categoryId: 'category-a',
+      tags: [currentTag],
+    });
+    vi.mocked(listKnowledgeBaseCategories)
+      .mockResolvedValueOnce({ items: [] })
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({
+        items: [{
+          id: 'category-a', parentId: null, name: '制度分类', sortOrder: 1,
+          createdAt: '2026-07-01T00:00:00Z', updatedAt: '2026-07-01T00:00:00Z',
+        }],
+      });
+    vi.mocked(listKnowledgeBaseTags)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({ items: [currentTag] });
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes>
+        <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+      </Routes>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    await user.click(await screen.findByRole('button', { name: '制度库的更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '编辑知识库' }));
+    const drawer = screen.getByRole('dialog', { name: '编辑知识库' });
+    expect(await within(drawer).findByRole('alert')).toHaveTextContent('分类和标签加载失败');
+    expect(within(drawer).getByRole('combobox', { name: '分类' })).toHaveValue('category-a');
+    expect(within(drawer).getByRole('checkbox', { name: '制度' })).toBeChecked();
+    expect(within(drawer).getByRole('button', { name: '保存修改' })).toBeDisabled();
+
+    await user.click(within(drawer).getByRole('button', { name: '重试加载' }));
+    await waitFor(() => expect(within(drawer).getByRole('button', { name: '保存修改' })).toBeEnabled());
+    expect(within(drawer).queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('confirms detail deletion and returns to the knowledge-base list on success', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(
+      <>
+        <Routes>
+          <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+          <Route path="/knowledge-bases" element={<div>知识库列表</div>} />
+        </Routes>
+        <LocationProbe />
+      </>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    await user.click(await screen.findByRole('button', { name: '制度库的更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '删除知识库' }));
+    const firstConfirmation = screen.getByRole('dialog', { name: '删除知识库' });
+    expect(firstConfirmation).toHaveTextContent('回收站');
+    await user.click(within(firstConfirmation).getByRole('button', { name: '取消' }));
+    expect(deleteKnowledgeBase).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: '制度库的更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '删除知识库' }));
+    await user.click(within(screen.getByRole('dialog', { name: '删除知识库' })).getByRole('button', { name: '删除' }));
+
+    await waitFor(() => expect(deleteKnowledgeBase).toHaveBeenCalledWith('kb1'));
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/knowledge-bases');
+    expect(within(screen.getByRole('region', { name: '通知' })).getByRole('status')).toHaveTextContent(
+      '知识库已移入回收站',
+    );
+  });
+
+  it('keeps a failed detail deletion inside its confirmation', async () => {
+    vi.mocked(deleteKnowledgeBase).mockRejectedValue(new Error('offline'));
+    const user = userEvent.setup();
+    renderWithRouter(
+      <>
+        <Routes>
+          <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+        </Routes>
+        <LocationProbe />
+      </>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    await user.click(await screen.findByRole('button', { name: '制度库的更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '删除知识库' }));
+    const confirmation = screen.getByRole('dialog', { name: '删除知识库' });
+    await user.click(within(confirmation).getByRole('button', { name: '删除' }));
+
+    expect(await within(confirmation).findByRole('alert')).toHaveTextContent('知识库删除失败');
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/knowledge-bases/kb1');
+  });
+
+  it('ignores stale detail mutations after switching knowledge bases', async () => {
+    const updateResult = deferred<KnowledgeBase>();
+    const secondKnowledgeBase = { ...knowledgeBase, id: 'kb2', name: '产品库' };
+    vi.mocked(getKnowledgeBase).mockImplementation((id) => Promise.resolve(
+      id === 'kb2' ? secondKnowledgeBase : knowledgeBase,
+    ));
+    vi.mocked(updateKnowledgeBase).mockReturnValue(updateResult.promise);
+    const user = userEvent.setup();
+    renderWithRouter(
+      <>
+        <Routes>
+          <Route path="/knowledge-bases/:id" element={<KnowledgeBaseDetailPage />} />
+        </Routes>
+        <RouteControl />
+      </>,
+      ['/knowledge-bases/kb1'],
+    );
+
+    await user.click(await screen.findByRole('button', { name: '制度库的更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '编辑知识库' }));
+    await user.click(screen.getByRole('button', { name: '保存修改' }));
+    await waitFor(() => expect(updateKnowledgeBase).toHaveBeenCalledWith('kb1', expect.any(Object)));
+    act(() => screen.getByText('切换知识库').click());
+    expect(await screen.findByRole('heading', { name: '产品库' })).toBeInTheDocument();
+
+    await act(async () => {
+      updateResult.resolve({ ...knowledgeBase, name: '旧知识库更新' });
+      await Promise.resolve();
+    });
+    expect(screen.getByRole('heading', { name: '产品库' })).toBeInTheDocument();
+    expect(screen.queryByText('知识库更新成功')).not.toBeInTheDocument();
+  });
+
   it('keeps overview focused and loads permissions only after entering settings', async () => {
     const user = userEvent.setup();
     renderWithRouter(

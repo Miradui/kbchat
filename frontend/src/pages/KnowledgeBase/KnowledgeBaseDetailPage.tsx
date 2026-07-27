@@ -36,6 +36,7 @@ import type {
   UserSummary,
 } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
+import { KnowledgeBaseEntityActions } from './KnowledgeBaseEntityActions';
 import { KnowledgeBaseSectionNav, type KnowledgeBaseSection } from './KnowledgeBaseSectionNav';
 
 const terminalStatuses: DocumentStatus[] = ['completed', 'failed'];
@@ -602,6 +603,24 @@ export function KnowledgeBaseDetailPage() {
             <Link className="secondary-link" to="/knowledge-bases">
               返回列表
             </Link>
+            <KnowledgeBaseEntityActions
+              disabled={permissionMutationBusy}
+              knowledgeBase={knowledgeBase}
+              onDeleted={() => navigate('/knowledge-bases', { replace: true })}
+              onUpdated={(updated) => {
+                const shouldReloadPermissions = permissions === null;
+                permissionRequestRef.current += 1;
+                setKnowledgeBase(updated);
+                setPermissions((current) => current ? {
+                  ...current,
+                  visibility: updated.visibility ?? current.visibility,
+                } : current);
+                if (shouldReloadPermissions) {
+                  setPermissionsLoaded(false);
+                  setPermissionsLoading(false);
+                }
+              }}
+            />
             {activeTab === 'overview' && (
               completedCount > 0 ? (
                 <button type="button" onClick={handleStartChat}>基于此知识库提问</button>

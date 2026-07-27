@@ -34,6 +34,7 @@ import type {
   KnowledgeBase,
 } from '../../types/api';
 import { getDocumentProcessingErrorMessage, getErrorMessage } from '../../utils/errors';
+import { KnowledgeBaseEntityActions } from '../KnowledgeBase/KnowledgeBaseEntityActions';
 
 const statusOptions: Array<DocumentStatus | 'all'> = [
   'all',
@@ -140,7 +141,7 @@ export function DocumentsPage() {
         setDocuments(docs.items);
         setSelectedIds((current) => current.filter((docId) => docs.items.some((doc) => doc.id === docId)));
       }
-      setKnowledgeBases(kbList.items);
+        setKnowledgeBases(mergeCurrentKnowledgeBase(kbList.items, kb));
     } catch (err) {
       if (
         activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
@@ -436,6 +437,7 @@ export function DocumentsPage() {
             <span className="document-aside-label">当前知识库</span>
             <label className="document-target-select">
               <select
+                aria-label="当前知识库"
                 value={id ?? ''}
                 disabled={documentMutationBusy}
                 onChange={(event) => navigate(`/knowledge-bases/${event.target.value}/documents`)}
@@ -448,6 +450,17 @@ export function DocumentsPage() {
               </select>
             </label>
             <div className="document-command-actions">
+              {knowledgeBase && (
+                <KnowledgeBaseEntityActions
+                  disabled={documentMutationBusy}
+                  knowledgeBase={knowledgeBase}
+                  onDeleted={() => navigate('/knowledge-bases', { replace: true })}
+                  onUpdated={(updated) => {
+                    setKnowledgeBase(updated);
+                    setKnowledgeBases((current) => mergeCurrentKnowledgeBase(current, updated));
+                  }}
+                />
+              )}
               <button
                 type="button"
                 onClick={() => setImportOpen(true)}
@@ -735,6 +748,14 @@ export function DocumentsPage() {
       </div>
     </WorkspaceShell>
   );
+}
+
+function mergeCurrentKnowledgeBase(items: KnowledgeBase[], current: KnowledgeBase): KnowledgeBase[] {
+  const currentIndex = items.findIndex((item) => item.id === current.id);
+  if (currentIndex === -1) {
+    return [current, ...items];
+  }
+  return items.map((item, index) => index === currentIndex ? current : item);
 }
 
 function MetricCard({ label, value, tone }: { label: string; value: number | string; tone?: 'success' | 'warning' | 'danger' }) {
