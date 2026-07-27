@@ -245,6 +245,7 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
   }, []);
 
   useEffect(() => {
+    const switchingDraftKnowledgeBase = activeSessionIdRef.current === 'new' && isDraftSession;
     activeSessionIdRef.current = sessionId;
     sendCheckRequestRef.current += 1;
     const continuingDraftSend = draftSendSessionIdRef.current === sessionId;
@@ -258,7 +259,9 @@ export function ChatPage({ draftSession = false }: ChatPageProps) {
     setRerankFallback(null);
     if (!continuingDraftSend) {
       sendOperationRef.current = null;
-      setDraft('');
+      if (!switchingDraftKnowledgeBase) {
+        setDraft('');
+      }
       setPendingQuestion('');
       setFailedQuestion('');
       setUncertainSend(null);

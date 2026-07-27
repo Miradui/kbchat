@@ -80,6 +80,7 @@ export function KnowledgeBaseFormOverlay({
 
   const overlay = !form.id ? (
       <Dialog
+        className="kb-create-dialog"
         open
         title="新建知识库"
         description="仅名称必填，创建后可直接导入文档。"

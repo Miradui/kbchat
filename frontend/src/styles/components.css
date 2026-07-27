@@ -180,6 +180,7 @@ button.ui-icon-button--danger:disabled { background: transparent; border-color: 
   padding: var(--space-5);
   width: 100%;
 }
+.ui-dialog.kb-create-dialog { max-width: 560px; }
 .ui-dialog > h2 { font-size: 20px; margin: 0; }
 .ui-dialog > p { color: var(--color-text-secondary); margin: var(--space-2) 0 0; }
 .ui-dialog > .ui-dialog__error {

@@ -294,6 +294,14 @@
     width: 100%;
   }
 
+  .chat-title-form > button,
+  .chat-thread-actions > button,
+  .chat-thread-actions > .table-actions > button,
+  .message-actions .secondary-button,
+  .chat-composer > button {
+    min-height: 44px;
+  }
+
   .chat-title-form,
   .chat-composer {
     grid-template-columns: 1fr;

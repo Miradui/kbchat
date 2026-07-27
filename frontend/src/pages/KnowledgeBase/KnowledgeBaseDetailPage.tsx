@@ -982,7 +982,9 @@ function SearchDebugPanel({ debug }: { debug: KnowledgeBaseSearchDebug }) {
           <strong>检索调试</strong>
           <span>查询：{debug.rewrittenQuery || debug.query}</span>
         </div>
-        <span className={`debug-stage-status is-${debug.rerankStage.status}`}>{debug.rerankStage.status}</span>
+        <span className={`debug-stage-status is-${debug.rerankStage.status}`}>
+          {retrievalStageStatusLabel(debug.rerankStage.status)}
+        </span>
       </header>
       <div className="semantic-debug-grid">
         <section>
@@ -994,7 +996,7 @@ function SearchDebugPanel({ debug }: { debug: KnowledgeBaseSearchDebug }) {
               {debug.vectorStage.items.map((item) => (
                 <li key={item.chunkId}>
                   <strong>#{item.rank} {item.filename}</strong>
-                  <span>vector {formatScore(item.vectorScore)}</span>
+                  <span>向量分 {formatScore(item.vectorScore)}</span>
                   {item.pageNumber !== null && <span>第 {item.pageNumber} 页</span>}
                   <p>{item.content}</p>
                 </li>
@@ -1003,13 +1005,13 @@ function SearchDebugPanel({ debug }: { debug: KnowledgeBaseSearchDebug }) {
           )}
         </section>
         <section>
-          <h3>Rerank 阶段</h3>
-          <p className="muted-text">状态：{debug.rerankStage.status} · 输入 {debug.rerankStage.input.length} 条</p>
+          <h3>精排阶段</h3>
+          <p className="muted-text">状态：{retrievalStageStatusLabel(debug.rerankStage.status)} · 输入 {debug.rerankStage.input.length} 条</p>
           {debug.rerankStage.input.length > 0 && (
-            <ol aria-label="Rerank 输入映射">
+            <ol aria-label="精排输入映射">
               {debug.rerankStage.input.map((item) => (
                 <li key={`${item.chunkId}-input`}>
-                  <strong>#{item.rank} {item.chunkId}</strong>
+                  <strong>候选 #{item.rank}</strong>
                   {item.pageNumber !== null && <span>第 {item.pageNumber} 页</span>}
                 </li>
               ))}
@@ -1019,8 +1021,8 @@ function SearchDebugPanel({ debug }: { debug: KnowledgeBaseSearchDebug }) {
             <ol>
               {debug.rerankStage.output.map((item) => (
                 <li key={item.chunkId}>
-                  <strong>#{item.rank} {item.chunkId}</strong>
-                  <span>rerank {item.rerankScore === null ? '未精排' : formatScore(item.rerankScore)}</span>
+                  <strong>精排 #{item.rank}</strong>
+                  <span>精排分 {item.rerankScore === null ? '无' : formatScore(item.rerankScore)}</span>
                   {item.pageNumber !== null && <span>第 {item.pageNumber} 页</span>}
                 </li>
               ))}
@@ -1035,10 +1037,10 @@ function SearchDebugPanel({ debug }: { debug: KnowledgeBaseSearchDebug }) {
             <ol>
               {debug.finalStage.items.map((item) => (
                 <li key={item.chunkId}>
-                  <strong>#{item.rank} {item.chunkId}</strong>
+                  <strong>结果 #{item.rank}</strong>
                   {item.pageNumber !== null && <span>第 {item.pageNumber} 页</span>}
                   <span>
-                    vector {formatScore(item.vectorScore)} · rerank {item.rerankScore === null ? '未精排' : formatScore(item.rerankScore)}
+                    向量分 {formatScore(item.vectorScore)} · 精排分 {item.rerankScore === null ? '无' : formatScore(item.rerankScore)}
                   </span>
                 </li>
               ))}
@@ -1048,6 +1050,17 @@ function SearchDebugPanel({ debug }: { debug: KnowledgeBaseSearchDebug }) {
       </div>
     </section>
   );
+}
+
+function retrievalStageStatusLabel(status: KnowledgeBaseSearchDebug['rerankStage']['status']): string {
+  switch (status) {
+    case 'completed':
+      return '已完成';
+    case 'disabled':
+      return '未启用';
+    case 'fallback':
+      return '已降级';
+  }
 }
 
 function PermissionList({

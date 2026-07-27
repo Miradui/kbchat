@@ -48,10 +48,13 @@ describe('HomePage', () => {
   it('links document activity directly to the document detail', async () => {
     renderWithRouter(<HomePage sources={createSources()} />);
 
-    expect(await screen.findByRole('link', { name: /handbook\.pdf/ })).toHaveAttribute(
+    const activity = await screen.findByRole('link', { name: /handbook\.pdf/ });
+    expect(activity).toHaveAttribute(
       'href',
       '/knowledge-bases/kb1/documents?documentId=d1',
     );
+    expect(activity).toHaveTextContent('已完成');
+    expect(activity).not.toHaveTextContent('completed');
   });
 
   it('keeps successful regions visible beside a failed document region', async () => {

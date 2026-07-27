@@ -69,6 +69,21 @@ function DocumentSwitchHarness({
   );
 }
 
+function DocumentScopeHarness() {
+  const [knowledgeBaseId, setKnowledgeBaseId] = useState('kb1');
+  return (
+    <>
+      <button type="button" onClick={() => setKnowledgeBaseId('kb2')}>切换知识库范围</button>
+      <DocumentDetailDrawer
+        chunkId={knowledgeBaseId === 'kb1' ? 'chunk1' : 'chunk2'}
+        documentId="doc1"
+        knowledgeBaseId={knowledgeBaseId}
+        onClose={vi.fn()}
+      />
+    </>
+  );
+}
+
 beforeEach(() => {
   vi.mocked(deleteDocument).mockReset().mockResolvedValue(undefined);
   vi.mocked(downloadDocument).mockReset().mockResolvedValue(new Blob(['document']));
@@ -144,6 +159,31 @@ describe('DocumentDetailDrawer', () => {
     reprocessResult.resolve({ ...document, status: 'uploaded' });
   });
 
+  it('announces successful reprocessing from the detail drawer', async () => {
+    vi.mocked(reprocessDocument).mockResolvedValue({ ...document, status: 'uploaded' });
+    vi.mocked(listDocumentChunks).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
+    const user = userEvent.setup();
+    renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
+
+    await user.click(await screen.findByRole('button', { name: '重处理' }));
+
+    expect(await within(screen.getByRole('region', { name: '通知' })).findByRole('status'))
+      .toHaveTextContent('已开始重新处理文档');
+  });
+
+  it('announces successful deletion from the detail drawer', async () => {
+    vi.mocked(listDocumentChunks).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
+    const user = userEvent.setup();
+    renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
+
+    await screen.findByText('制度.pdf');
+    await user.click(screen.getByRole('button', { name: '删除' }));
+    await user.click(within(screen.getByRole('dialog', { name: '删除文档' })).getByRole('button', { name: '删除' }));
+
+    expect(await within(screen.getByRole('region', { name: '通知' })).findByRole('status'))
+      .toHaveTextContent('文档已移入回收站');
+  });
+
   it('synchronously blocks opening delete confirmation after another document operation starts', async () => {
     const reprocessResult = deferred<DocumentItem>();
     vi.mocked(reprocessDocument).mockReturnValue(reprocessResult.promise);
@@ -177,6 +217,8 @@ describe('DocumentDetailDrawer', () => {
     );
 
     const close = screen.getByRole('button', { name: '关闭' });
+    const dialog = screen.getByRole('dialog', { name: '文档详情' });
+    expect(dialog.closest('.drawer-backdrop')?.parentElement).toBe(window.document.body);
     expect(close.querySelector('svg')).toBeInTheDocument();
     expect(close).toHaveFocus();
     expect(window.document.body.style.overflow).toBe('hidden');
@@ -242,25 +284,11 @@ describe('DocumentDetailDrawer', () => {
       .mockResolvedValueOnce(document)
       .mockReturnValueOnce(new Promise<DocumentItem>(() => undefined));
 
-    const { rerender } = renderWithRouter(
-      <DocumentDetailDrawer
-        chunkId="chunk1"
-        documentId="doc1"
-        knowledgeBaseId="kb1"
-        onClose={vi.fn()}
-      />,
-    );
+    renderWithRouter(<DocumentScopeHarness />);
 
     await waitFor(() => expect(listDocumentChunks).toHaveBeenCalledOnce());
 
-    rerender(
-      <DocumentDetailDrawer
-        chunkId="chunk2"
-        documentId="doc1"
-        knowledgeBaseId="kb2"
-        onClose={vi.fn()}
-      />,
-    );
+    fireEvent.click(screen.getByText('切换知识库范围'));
 
     await waitFor(() => expect(getDocument).toHaveBeenCalledTimes(2));
     expect(listDocumentChunks).toHaveBeenCalledOnce();

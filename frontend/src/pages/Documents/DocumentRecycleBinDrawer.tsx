@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 
 import { ApiError } from '../../api/client';
@@ -11,6 +12,7 @@ import {
 } from '../../api/resources';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
+import { useToast } from '../../components/feedback/ToastProvider';
 import { IconButton } from '../../components/ui/IconButton';
 import { useModalFocus } from '../../components/ui/useModalFocus';
 import type { RecycleBinItem } from '../../types/api';
@@ -25,6 +27,7 @@ export function DocumentRecycleBinDrawer({
   onChanged,
   onClose,
 }: DocumentRecycleBinDrawerProps) {
+  const toast = useToast();
   const loadRequestRef = useRef(0);
   const mutationOperationRef = useRef<symbol | null>(null);
   const explicitRefreshInFlightRef = useRef(false);
@@ -91,7 +94,7 @@ export function DocumentRecycleBinDrawer({
     }
   }, [loadPage]);
 
-  const refreshAfterMutation = useCallback(async (successLabel: string) => {
+  const refreshAfterMutation = useCallback(async () => {
     if (!mountedRef.current) {
       return;
     }
@@ -99,13 +102,7 @@ export function DocumentRecycleBinDrawer({
     if (!mountedRef.current) {
       return;
     }
-    try {
-      await loadPage();
-    } catch (err) {
-      if (mountedRef.current) {
-        setError(`${successLabel}，但回收站刷新失败：${errorMessage(err, '请求失败')}`);
-      }
-    }
+    await loadPage();
   }, [loadPage, onChanged]);
 
   useEffect(() => {
@@ -138,10 +135,8 @@ export function DocumentRecycleBinDrawer({
       if (mutationOperationRef.current !== operation) {
         return;
       }
-      await loadPage();
-      if (mutationOperationRef.current === operation) {
-        onChanged();
-      }
+      toast.success('文档恢复成功');
+      await refreshAfterMutation();
     } catch (err) {
       if (mutationOperationRef.current === operation) {
         setError(errorMessage(err, '文档恢复失败'));
@@ -169,10 +164,8 @@ export function DocumentRecycleBinDrawer({
       if (mutationOperationRef.current !== operation) {
         return;
       }
-      await loadPage();
-      if (mutationOperationRef.current === operation) {
-        onChanged();
-      }
+      toast.success('本页文档恢复成功');
+      await refreshAfterMutation();
     } catch (err) {
       if (mutationOperationRef.current === operation) {
         setError(errorMessage(err, '批量恢复失败'));
@@ -201,10 +194,8 @@ export function DocumentRecycleBinDrawer({
         return;
       }
       setDeleteTarget(null);
-      await loadPage();
-      if (mutationOperationRef.current === operation) {
-        onChanged();
-      }
+      toast.success('文档已永久删除');
+      await refreshAfterMutation();
     } catch (err) {
       if (mutationOperationRef.current === operation) {
         setConfirmError(errorMessage(err, '文档永久删除失败'));
@@ -232,10 +223,8 @@ export function DocumentRecycleBinDrawer({
         return;
       }
       setConfirmEmpty(false);
-      await loadPage();
-      if (mutationOperationRef.current === operation) {
-        onChanged();
-      }
+      toast.success('文档回收站已清空');
+      await refreshAfterMutation();
     } catch (err) {
       if (mutationOperationRef.current === operation) {
         setConfirmError(errorMessage(err, '清空失败，未删除任何文档。'));
@@ -250,7 +239,7 @@ export function DocumentRecycleBinDrawer({
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-  return (
+  return createPortal(
     <>
     <aside className="drawer-backdrop" role="presentation">
       <section
@@ -364,7 +353,8 @@ export function DocumentRecycleBinDrawer({
         onConfirm={handleEmptyRecycleBin}
       />
     )}
-    </>
+    </>,
+    document.body,
   );
 }
 

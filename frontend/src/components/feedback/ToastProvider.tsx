@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
 
 type ToastTone = 'success' | 'error';
@@ -37,18 +38,21 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div aria-label="通知" className="ui-toast-region" data-modal-live-region="true" role="region">
-        {items.map((item) => (
-          <div
-            aria-atomic="true"
-            className={'ui-toast ui-toast--' + item.tone}
-            key={item.id}
-            role={item.tone === 'error' ? 'alert' : 'status'}
-          >
-            {item.message}
-          </div>
-        ))}
-      </div>
+      {createPortal(
+        <div aria-label="通知" className="ui-toast-region" data-modal-live-region="true" role="region">
+          {items.map((item) => (
+            <div
+              aria-atomic="true"
+              className={'ui-toast ui-toast--' + item.tone}
+              key={item.id}
+              role={item.tone === 'error' ? 'alert' : 'status'}
+            >
+              {item.message}
+            </div>
+          ))}
+        </div>,
+        window.document.body,
+      )}
     </ToastContext.Provider>
   );
 }

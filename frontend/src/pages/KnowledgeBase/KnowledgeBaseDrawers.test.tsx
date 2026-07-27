@@ -35,7 +35,35 @@ function FormHarness() {
   );
 }
 
+function CreateFormHarness() {
+  const [form, setForm] = useState<KnowledgeBaseFormState>({
+    name: '',
+    description: '',
+    categoryId: '',
+    visibility: 'private',
+    tagIds: [],
+  });
+  return (
+    <KnowledgeBaseFormOverlay
+      busy={false}
+      categories={[]}
+      error=""
+      form={form}
+      onChange={setForm}
+      onClose={() => undefined}
+      onSubmit={(event) => event.preventDefault()}
+      tags={[]}
+    />
+  );
+}
+
 describe('KnowledgeBaseFormOverlay', () => {
+  it('uses the wider dialog intended for knowledge-base creation', () => {
+    render(<CreateFormHarness />);
+
+    expect(screen.getByRole('dialog', { name: '新建知识库' })).toHaveClass('kb-create-dialog');
+  });
+
   it('owns dirty-form protection for every page that reuses it', async () => {
     const user = userEvent.setup();
     render(<FormHarness />);

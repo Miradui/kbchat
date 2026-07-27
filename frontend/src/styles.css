@@ -3707,6 +3707,11 @@ button.citation-summary-button[aria-pressed="true"] {
   .drawer-pagination .pager {
     width: 100%;
   }
+
+  .document-detail-actions > *,
+  .document-recycle-drawer .drawer-actions > button {
+    min-height: 44px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

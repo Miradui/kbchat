@@ -35,6 +35,43 @@ describe('mobile interaction target styles', () => {
     );
   });
 
+  it('gives compact chat commands 44px mobile touch targets', () => {
+    for (const selector of [
+      '.chat-title-form > button',
+      '.chat-thread-actions > button',
+      '.chat-thread-actions > .table-actions > button',
+      '.message-actions .secondary-button',
+      '.chat-composer > button',
+    ]) {
+      expect(chatStyles).toMatch(new RegExp(
+        `@media \\(max-width: 680px\\).*?${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^}]*min-height:\\s*44px`,
+      ));
+    }
+  });
+
+  it('gives document drawer commands 44px mobile touch targets', () => {
+    for (const selector of [
+      '.document-detail-actions > *',
+      '.document-recycle-drawer .drawer-actions > button',
+    ]) {
+      expect(legacyStyles).toMatch(new RegExp(
+        `@media \\(max-width: 680px\\).*?${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^}]*min-height:\\s*44px`,
+      ));
+    }
+  });
+
+  it('wraps category management actions without mobile horizontal overflow', () => {
+    expect(layoutStyles).toMatch(
+      /@media \(max-width: 680px\).*?\.category-tree[^}]*overflow-x:\s*hidden/,
+    );
+    expect(layoutStyles).toMatch(
+      /@media \(max-width: 680px\).*?\.category-row[^}]*grid-template-columns:\s*44px minmax\(0,\s*1fr\)/,
+    );
+    expect(layoutStyles).toMatch(
+      /@media \(max-width: 680px\).*?\.category-actions[^}]*grid-column:\s*1\s*\/\s*-1[^}]*flex-wrap:\s*wrap/,
+    );
+  });
+
   it('gives link-style actions a 44px target at the mobile breakpoint', () => {
     for (const selector of ['.link-button']) {
       expect(legacyStyles).toMatch(new RegExp(

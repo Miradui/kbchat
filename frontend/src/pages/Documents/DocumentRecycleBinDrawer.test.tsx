@@ -3,7 +3,13 @@ import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { deleteDocumentPermanently, listDocumentRecycleBin, restoreDocument } from '../../api/resources';
+import {
+  batchRestoreDocuments,
+  deleteDocumentPermanently,
+  emptyDocumentRecycleBin,
+  listDocumentRecycleBin,
+  restoreDocument,
+} from '../../api/resources';
 import { renderWithRouter } from '../../test/render';
 import { DocumentRecycleBinDrawer } from './DocumentRecycleBinDrawer';
 
@@ -17,13 +23,17 @@ function deferred<T>() {
 
 vi.mock('../../api/resources', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../api/resources')>(),
+  batchRestoreDocuments: vi.fn(),
   deleteDocumentPermanently: vi.fn(),
+  emptyDocumentRecycleBin: vi.fn(),
   listDocumentRecycleBin: vi.fn(),
   restoreDocument: vi.fn(),
 }));
 
 beforeEach(() => {
+  vi.mocked(batchRestoreDocuments).mockReset().mockResolvedValue({ processedCount: 1 });
   vi.mocked(deleteDocumentPermanently).mockReset().mockResolvedValue(undefined);
+  vi.mocked(emptyDocumentRecycleBin).mockReset().mockResolvedValue(undefined);
   vi.mocked(restoreDocument).mockReset().mockResolvedValue(undefined);
   vi.mocked(listDocumentRecycleBin).mockReset().mockResolvedValue({
     items: [], total: 0, page: 1, pageSize: 20,
@@ -48,6 +58,7 @@ describe('DocumentRecycleBinDrawer', () => {
 
     await user.click(opener);
     const dialog = await screen.findByRole('dialog', { name: '文档回收站' });
+    expect(dialog.closest('.drawer-backdrop')?.parentElement).toBe(document.body);
     await waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement));
     expect(document.body).toHaveStyle({ overflow: 'hidden' });
 
@@ -175,6 +186,53 @@ describe('DocumentRecycleBinDrawer', () => {
 
     restoreResult.resolve();
     await waitFor(() => expect(restoreDocument).toHaveBeenCalledWith('doc1'));
+  });
+
+  it('announces a successful single restore', async () => {
+    vi.mocked(listDocumentRecycleBin).mockResolvedValue({
+      items: [{ resourceType: 'document', id: 'doc1', name: '制度.pdf', deletedAt: '2026-07-01T00:00:00Z' }],
+      total: 1, page: 1, pageSize: 20,
+    });
+    const user = userEvent.setup();
+    renderWithRouter(<Harness />);
+    await user.click(screen.getByRole('button', { name: '打开回收站' }));
+    await user.click(await screen.findByRole('button', { name: /^恢复 / }));
+
+    expect(await within(screen.getByRole('region', { name: '通知' })).findByRole('status'))
+      .toHaveTextContent('文档恢复成功');
+  });
+
+  it('announces a successful page restore', async () => {
+    vi.mocked(listDocumentRecycleBin).mockResolvedValue({
+      items: [{ resourceType: 'document', id: 'doc1', name: '制度.pdf', deletedAt: '2026-07-01T00:00:00Z' }],
+      total: 1, page: 1, pageSize: 20,
+    });
+    const user = userEvent.setup();
+    renderWithRouter(<Harness />);
+    await user.click(screen.getByRole('button', { name: '打开回收站' }));
+    await user.click(await screen.findByRole('button', { name: '恢复本页' }));
+
+    expect(await within(screen.getByRole('region', { name: '通知' })).findByRole('status'))
+      .toHaveTextContent('本页文档恢复成功');
+  });
+
+  it('announces successful permanent deletion and emptying', async () => {
+    vi.mocked(listDocumentRecycleBin).mockResolvedValue({
+      items: [{ resourceType: 'document', id: 'doc1', name: '制度.pdf', deletedAt: '2026-07-01T00:00:00Z' }],
+      total: 1, page: 1, pageSize: 20,
+    });
+    const user = userEvent.setup();
+    renderWithRouter(<Harness />);
+    await user.click(screen.getByRole('button', { name: '打开回收站' }));
+    await user.click(await screen.findByRole('button', { name: /^永久删除 / }));
+    await user.click(within(screen.getByRole('dialog', { name: '永久删除文档' })).getByRole('button', { name: '永久删除' }));
+    expect(await within(screen.getByRole('region', { name: '通知' })).findByRole('status'))
+      .toHaveTextContent('文档已永久删除');
+
+    await user.click(screen.getByRole('button', { name: '清空回收站' }));
+    await user.click(within(screen.getByRole('dialog', { name: '清空文档回收站' })).getByRole('button', { name: '清空' }));
+    expect(await within(screen.getByRole('region', { name: '通知' })).findByText('文档回收站已清空'))
+      .toBeInTheDocument();
   });
 
   it('uses icon controls for closing and pagination', async () => {

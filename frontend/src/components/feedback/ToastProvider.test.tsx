@@ -20,6 +20,12 @@ afterEach(() => {
 });
 
 describe('ToastProvider', () => {
+  it('mounts the live region beside portaled modal layers', () => {
+    render(<ToastProvider><Probe /></ToastProvider>);
+
+    expect(screen.getByRole('region', { name: '通知' }).parentElement).toBe(document.body);
+  });
+
   it('queues success feedback and announces errors assertively', async () => {
     const user = userEvent.setup();
     render(<ToastProvider><Probe /></ToastProvider>);

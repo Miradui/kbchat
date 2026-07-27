@@ -17,6 +17,7 @@ import type {
 import { createHomeLoaders } from './homeData';
 import type { HomeSources } from './homeData';
 import { getDocumentProcessingErrorMessage, getErrorMessage } from '../../utils/errors';
+import { documentStatusLabel } from '../Documents/documentDisplay';
 
 type RegionState<T> = {
   data: T;
@@ -233,7 +234,7 @@ function DocumentActivity({ document }: { document: GlobalDocumentItem }) {
   return (
     <Link className="home-list-row" to={`/knowledge-bases/${document.knowledgeBaseId}/documents?documentId=${encodeURIComponent(document.id)}`}>
       <strong>{document.filename}</strong>
-      <small>{document.knowledgeBaseName} · {document.status} · {formatDateTime(document.updatedAt ?? document.createdAt)}</small>
+      <small>{document.knowledgeBaseName} · {documentStatusLabel(document.status)} · {formatDateTime(document.updatedAt ?? document.createdAt)}</small>
     </Link>
   );
 }

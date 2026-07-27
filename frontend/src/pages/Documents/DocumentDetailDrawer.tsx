@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -13,6 +14,7 @@ import {
 } from '../../api/resources';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
+import { useToast } from '../../components/feedback/ToastProvider';
 import { IconButton } from '../../components/ui/IconButton';
 import { useModalFocus } from '../../components/ui/useModalFocus';
 import type { DocumentChunk, DocumentItem, DocumentPreviewResponse } from '../../types/api';
@@ -44,10 +46,12 @@ export function DocumentDetailDrawer({
   onChanged,
   onClose,
 }: DocumentDetailDrawerProps) {
+  const toast = useToast();
   const activeDocumentIdRef = useRef(documentId);
   const mountedRef = useRef(false);
   const mutationRef = useRef<symbol | null>(null);
   const [document, setDocument] = useState<DocumentItem | null>(null);
+  const [documentScope, setDocumentScope] = useState<string | null>(null);
   const [preview, setPreview] = useState<DocumentPreviewResponse | null>(null);
   const [previewUrl, setPreviewUrl] = useState('');
   const [chunks, setChunks] = useState<DocumentChunk[]>([]);
@@ -87,6 +91,7 @@ export function DocumentDetailDrawer({
     setLoading(true);
     setError('');
     setDocument(null);
+    setDocumentScope(null);
     setPreview(null);
     setPreviewUrl('');
     setPreviewError('');
@@ -108,6 +113,7 @@ export function DocumentDetailDrawer({
         }
 
         setDocument(documentResponse);
+        setDocumentScope(knowledgeBaseId ?? '');
         const previewResponse = await getDocumentPreview(documentId).catch((err) => {
         if (mounted) {
           setPreviewError(errorMessage(err, '文档预览加载失败'));
@@ -148,7 +154,11 @@ export function DocumentDetailDrawer({
   }, [documentId, knowledgeBaseId]);
 
   useEffect(() => {
-    if (!document || document.id !== documentId) {
+    if (
+      !document
+      || document.id !== documentId
+      || documentScope !== (knowledgeBaseId ?? '')
+    ) {
       setChunks([]);
       setChunkTotal(0);
       setChunksLoading(false);
@@ -188,7 +198,7 @@ export function DocumentDetailDrawer({
     return () => {
       mounted = false;
     };
-  }, [chunkId, chunkPage, chunkPageSize, chunkQuery, document, documentId]);
+  }, [chunkId, chunkPage, chunkPageSize, chunkQuery, document, documentId, documentScope, knowledgeBaseId]);
 
   useEffect(() => {
     return () => {
@@ -231,6 +241,7 @@ export function DocumentDetailDrawer({
       setPreview(null);
       setPreviewUrl('');
       setPreviewError('');
+      toast.success('已开始重新处理文档');
       onChanged?.();
     } catch (err) {
       if (
@@ -273,6 +284,7 @@ export function DocumentDetailDrawer({
         return;
       }
       setConfirmDelete(false);
+      toast.success('文档已移入回收站');
       onChanged?.();
       onClose();
     } catch (err) {
@@ -359,7 +371,7 @@ export function DocumentDetailDrawer({
 
   const chunkTotalPages = Math.max(1, Math.ceil(chunkTotal / chunkPageSize));
 
-  return (
+  return createPortal(
     <>
       <aside
         className="drawer-backdrop"
@@ -594,7 +606,8 @@ export function DocumentDetailDrawer({
           onConfirm={handleDelete}
         />
       )}
-    </>
+    </>,
+    window.document.body,
   );
 }
 

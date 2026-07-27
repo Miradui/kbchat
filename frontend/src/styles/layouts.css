@@ -57,4 +57,7 @@ button.category-name:not(:disabled):hover { background: var(--color-surface-hove
   .app-content { padding: 16px 16px 32px; }
   .app-global-search { min-width: 0; }
   .app-global-search input::placeholder { color: transparent; }
+  .category-tree { overflow-x: hidden; }
+  .category-row { grid-template-columns: 44px minmax(0, 1fr); min-width: 0; }
+  .category-actions { grid-column: 1 / -1; flex-wrap: wrap; justify-content: flex-end; opacity: 1; padding-right: 0; }
 }

@@ -1165,6 +1165,17 @@ describe('KnowledgeBaseListPage', () => {
     expect(screen.getByRole('button', { name: '下一页' }).querySelector('svg')).not.toBeNull();
   });
 
+  it('places update time before secondary document and updater columns', async () => {
+    vi.mocked(listKnowledgeBases).mockResolvedValue({
+      items: [createdKnowledgeBase], total: 1, page: 1, pageSize: 10,
+    });
+    renderWithRouter(<KnowledgeBaseListPage />, ['/knowledge-bases']);
+
+    const headers = within(await screen.findByRole('table')).getAllByRole('columnheader')
+      .map((header) => header.textContent?.trim() ?? '');
+    expect(headers).toEqual(['', '名称', '状态', '可见性', '更新时间', '文档数', '更新人', '操作']);
+  });
+
   it('shows a knowledge-base recycle-bin refresh failure inside the drawer', async () => {
     vi.mocked(listKnowledgeBaseRecycleBin)
       .mockResolvedValueOnce({ items: [], total: 0, page: 1, pageSize: 20 })

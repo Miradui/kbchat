@@ -6,6 +6,7 @@ import { useModalFocus } from './useModalFocus';
 export { useModalFocus as useDialogModal } from './useModalFocus';
 
 type DialogProps = {
+  className?: string;
   open: boolean;
   title: string;
   description?: string;
@@ -13,7 +14,7 @@ type DialogProps = {
   children: ReactNode;
 };
 
-export function Dialog({ open, title, description, onClose, children }: DialogProps) {
+export function Dialog({ className = '', open, title, description, onClose, children }: DialogProps) {
   const titleId = useId();
   const descriptionId = useId();
   const panelRef = useModalFocus<HTMLDivElement>(open, onClose);
@@ -32,7 +33,7 @@ export function Dialog({ open, title, description, onClose, children }: DialogPr
         aria-describedby={description ? descriptionId : undefined}
         aria-labelledby={titleId}
         aria-modal="true"
-        className="ui-dialog"
+        className={`ui-dialog ${className}`.trim()}
         ref={panelRef}
         role="dialog"
         tabIndex={-1}

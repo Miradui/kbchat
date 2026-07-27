@@ -1064,9 +1064,18 @@ describe('KnowledgeBaseDetailPage', () => {
       debug: {
         query: '制度',
         rewrittenQuery: '公司制度',
-        vectorStage: { status: 'completed', items: [] },
-        rerankStage: { status: 'completed', input: [], output: [] },
-        finalStage: { items: [] },
+        vectorStage: { status: 'completed', items: [{
+          chunkId: 'chunk-1', documentId: 'doc-1', filename: '制度.md', content: '制度内容',
+          pageNumber: 1, vectorScore: 0.91, rerankScore: 0.82, rank: 1,
+        }] },
+        rerankStage: {
+          status: 'completed',
+          input: [{ chunkId: 'chunk-1', pageNumber: 1, rank: 1 }],
+          output: [{ chunkId: 'chunk-1', pageNumber: 1, rerankScore: 0.82, rank: 1 }],
+        },
+        finalStage: { items: [{
+          chunkId: 'chunk-1', pageNumber: 1, vectorScore: 0.91, rerankScore: 0.82, rank: 1,
+        }] },
         rerankFallback: null,
       },
     });
@@ -1082,6 +1091,13 @@ describe('KnowledgeBaseDetailPage', () => {
     await user.type(screen.getByRole('textbox', { name: '知识库内检索问题' }), '制度');
     await user.click(screen.getByRole('button', { name: '检索' }));
 
-    expect(await screen.findByRole('region', { name: '检索调试信息' })).toHaveTextContent('公司制度');
+    const debugPanel = await screen.findByRole('region', { name: '检索调试信息' });
+    expect(debugPanel).toHaveTextContent('公司制度');
+    expect(debugPanel).toHaveTextContent('已完成');
+    expect(debugPanel).toHaveTextContent('向量分');
+    expect(debugPanel).toHaveTextContent('精排阶段');
+    expect(debugPanel).toHaveTextContent('精排分');
+    expect(debugPanel).not.toHaveTextContent('completed');
+    expect(debugPanel).not.toHaveTextContent('chunk-1');
   });
 });

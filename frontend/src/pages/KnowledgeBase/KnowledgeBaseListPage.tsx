@@ -1578,9 +1578,9 @@ function KnowledgeBaseTable({
             <th>名称</th>
             <th>状态</th>
             <th>可见性</th>
+            <th>更新时间</th>
             <th>文档数</th>
             <th>更新人</th>
-            <th>更新时间</th>
             <th>操作</th>
           </tr>
         </thead>
@@ -1630,11 +1630,11 @@ function KnowledgeBaseTable({
                     {item.visibility === 'public' ? '公开' : '私有'}
                   </span>
                 </td>
+                <td data-label="更新时间">{formatDateTime(item.updatedAt || item.createdAt)}</td>
                 <td data-label="文档数">{formatOptionalCount(item.documentCount)}</td>
                 <td data-label="更新人">
                   <UserCell user={item.updatedBy} />
                 </td>
-                <td data-label="更新时间">{formatDateTime(item.updatedAt || item.createdAt)}</td>
                 <td data-label="操作">
                   <RowActions
                     item={item}

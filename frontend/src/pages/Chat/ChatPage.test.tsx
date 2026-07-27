@@ -1333,7 +1333,7 @@ describe('ChatPage', () => {
     expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat/new?knowledgeBaseId=kb2');
   });
 
-  it('keeps a draft blank when switching to a knowledge base with existing sessions', async () => {
+  it('keeps the typed draft when switching to a knowledge base with existing sessions', async () => {
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
     vi.mocked(listChatSessions).mockResolvedValue({ items: [session, secondSession] });
     const user = userEvent.setup();
@@ -1349,10 +1349,12 @@ describe('ChatPage', () => {
       ['/chat/new?knowledgeBaseId=kb1'],
     );
 
+    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    await user.type(input, '请对比两份制度');
     await user.selectOptions(await screen.findByLabelText('当前知识库'), secondKnowledgeBase.id);
 
     expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat/new?knowledgeBaseId=kb2');
-    expect(screen.getByRole('textbox', { name: '继续追问当前知识库' })).toHaveValue('');
+    expect(screen.getByRole('textbox', { name: '继续追问当前知识库' })).toHaveValue('请对比两份制度');
     expect(createChatSession).not.toHaveBeenCalled();
     expect(listChatMessages).not.toHaveBeenCalled();
   });
