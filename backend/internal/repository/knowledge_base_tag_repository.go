@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"rag/backend/internal/dto"
 	"rag/backend/internal/model"
 )
 
@@ -61,13 +62,46 @@ func (r *KnowledgeBaseTagRepository) Delete(ctx context.Context, tag *model.Know
 	return r.db.WithContext(ctx).Delete(tag).Error
 }
 
-func (r *KnowledgeBaseTagRepository) CountBindings(ctx context.Context, tagID uuid.UUID) (int64, error) {
+// CountBindings and CountBindingsByOwner intentionally share the same scope:
+// every knowledge base owned by the tag owner that references the tag, including
+// soft-deleted ones still sitting in the recycle bin. The list count therefore
+// predicts the TAG_NOT_EMPTY guard exactly.
+func (r *KnowledgeBaseTagRepository) CountBindings(ctx context.Context, ownerID, tagID uuid.UUID) (int64, error) {
 	var count int64
 	err := r.db.WithContext(ctx).
 		Model(&model.KnowledgeBaseTagBinding{}).
-		Where("tag_id = ?", tagID).
+		Joins("JOIN knowledge_bases ON knowledge_bases.id = knowledge_base_tag_bindings.knowledge_base_id").
+		Where("knowledge_base_tag_bindings.tag_id = ?", tagID).
+		Where("knowledge_bases.owner_id = ?", ownerID).
 		Count(&count).Error
 	return count, err
+}
+
+func (r *KnowledgeBaseTagRepository) CountBindingsByOwner(ctx context.Context, ownerID uuid.UUID) (map[uuid.UUID]int64, error) {
+	type row struct {
+		TagID uuid.UUID
+		Total int64
+	}
+
+	var rows []row
+	err := r.db.WithContext(ctx).
+		Table("knowledge_base_tag_bindings").
+		Select("knowledge_base_tag_bindings.tag_id AS tag_id, COUNT(*) AS total").
+		Joins("JOIN knowledge_bases ON knowledge_bases.id = knowledge_base_tag_bindings.knowledge_base_id").
+		Joins("JOIN knowledge_base_tags ON knowledge_base_tags.id = knowledge_base_tag_bindings.tag_id").
+		Where("knowledge_base_tags.owner_id = ?", ownerID).
+		Where("knowledge_bases.owner_id = ?", ownerID).
+		Group("knowledge_base_tag_bindings.tag_id").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	counts := make(map[uuid.UUID]int64, len(rows))
+	for _, item := range rows {
+		counts[item.TagID] = item.Total
+	}
+	return counts, nil
 }
 
 type KnowledgeBaseTagBindingRepository struct {
@@ -95,6 +129,63 @@ func (r *KnowledgeBaseTagBindingRepository) ReplaceForKnowledgeBase(ctx context.
 		}
 		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&items).Error
 	})
+}
+
+// ApplyForKnowledgeBases applies one tag mutation across several knowledge bases
+// inside a single transaction, matching the all-or-nothing semantics of the other
+// batch endpoints. Ownership of both the knowledge bases and the tags must already
+// be verified by the caller. Knowledge base updated_at/updated_by are touched in
+// the same transaction so a rollback cannot leave a bare timestamp bump behind.
+func (r *KnowledgeBaseTagBindingRepository) ApplyForKnowledgeBases(ctx context.Context, kbIDs, tagIDs []uuid.UUID, mode string, actorID uuid.UUID) error {
+	if len(kbIDs) == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		switch mode {
+		case dto.KnowledgeBaseBatchTagModeRemove:
+			if len(tagIDs) > 0 {
+				if err := tx.Where("knowledge_base_id IN ? AND tag_id IN ?", kbIDs, tagIDs).
+					Delete(&model.KnowledgeBaseTagBinding{}).Error; err != nil {
+					return err
+				}
+			}
+		case dto.KnowledgeBaseBatchTagModeReplace:
+			if err := tx.Where("knowledge_base_id IN ?", kbIDs).
+				Delete(&model.KnowledgeBaseTagBinding{}).Error; err != nil {
+				return err
+			}
+			if err := insertTagBindings(tx, kbIDs, tagIDs); err != nil {
+				return err
+			}
+		default:
+			if err := insertTagBindings(tx, kbIDs, tagIDs); err != nil {
+				return err
+			}
+		}
+
+		return tx.Model(&model.KnowledgeBase{}).
+			Where("id IN ?", kbIDs).
+			Updates(map[string]any{
+				"updated_by_id": actorID,
+				"updated_at":    time.Now(),
+			}).Error
+	})
+}
+
+func insertTagBindings(tx *gorm.DB, kbIDs, tagIDs []uuid.UUID) error {
+	if len(tagIDs) == 0 {
+		return nil
+	}
+	items := make([]model.KnowledgeBaseTagBinding, 0, len(kbIDs)*len(tagIDs))
+	for _, kbID := range kbIDs {
+		for _, tagID := range tagIDs {
+			items = append(items, model.KnowledgeBaseTagBinding{
+				KnowledgeBaseID: kbID,
+				TagID:           tagID,
+			})
+		}
+	}
+	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&items).Error
 }
 
 func (r *KnowledgeBaseTagBindingRepository) ListByKnowledgeBaseIDs(ctx context.Context, kbIDs []uuid.UUID) (map[uuid.UUID][]model.KnowledgeBaseTag, error) {

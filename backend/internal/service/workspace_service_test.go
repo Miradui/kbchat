@@ -30,6 +30,7 @@ import (
 type workspaceTestServices struct {
 	db         *gorm.DB
 	uploadRoot string
+	auth       *AuthService
 	users      *UserService
 	kbs        *KnowledgeBaseService
 	chats      *ChatService
@@ -84,6 +85,7 @@ func newWorkspaceTestServices(t *testing.T) workspaceTestServices {
 	return workspaceTestServices{
 		db:         db,
 		uploadRoot: uploadRoot,
+		auth:       NewAuthService(config.Config{JWTSecret: strings.Repeat("test-secret-", 4), JWTExpiresIn: "24h"}, userRepo),
 		users:      NewUserService(userRepo),
 		kbs:        kbService,
 		chats:      NewChatService(config.Config{ChatHistoryLimit: 10}, chatRepo, kbRepo, nil, nil, nil),
@@ -1077,7 +1079,7 @@ func TestRecycleBinHidesDeletedDocumentAndAllowsRestore(t *testing.T) {
 		t.Fatalf("soft delete document: %v", err)
 	}
 
-	documentList, err := services.documents.List(ctx, owner.ID, ownKB.ID)
+	documentList, err := services.documents.List(ctx, owner.ID, ownKB.ID, dto.GlobalDocumentListQuery{})
 	if err != nil {
 		t.Fatalf("list documents after delete: %v", err)
 	}
@@ -1118,7 +1120,7 @@ func TestRecycleBinHidesDeletedDocumentAndAllowsRestore(t *testing.T) {
 		t.Fatalf("restore document: %v", err)
 	}
 
-	restoredList, err := services.documents.List(ctx, owner.ID, ownKB.ID)
+	restoredList, err := services.documents.List(ctx, owner.ID, ownKB.ID, dto.GlobalDocumentListQuery{})
 	if err != nil {
 		t.Fatalf("list documents after restore: %v", err)
 	}
@@ -1175,7 +1177,7 @@ func TestDocumentBatchDeleteRestoreAndReprocess(t *testing.T) {
 		t.Fatalf("expected 2 processed deletes, got %#v", deleteRes)
 	}
 
-	activeList, err := services.documents.List(ctx, owner.ID, kb.ID)
+	activeList, err := services.documents.List(ctx, owner.ID, kb.ID, dto.GlobalDocumentListQuery{})
 	if err != nil {
 		t.Fatalf("list documents after batch delete: %v", err)
 	}
@@ -1201,7 +1203,7 @@ func TestDocumentBatchDeleteRestoreAndReprocess(t *testing.T) {
 		t.Fatalf("expected 2 processed restores, got %#v", restoreRes)
 	}
 
-	restoredList, err := services.documents.List(ctx, owner.ID, kb.ID)
+	restoredList, err := services.documents.List(ctx, owner.ID, kb.ID, dto.GlobalDocumentListQuery{})
 	if err != nil {
 		t.Fatalf("list documents after batch restore: %v", err)
 	}
@@ -1561,7 +1563,7 @@ func TestDocumentBatchOperationsRejectForeignIDsWithoutPartialMutation(t *testin
 	}); err == nil {
 		t.Fatalf("expected batch delete with foreign document to fail")
 	}
-	activeList, err := services.documents.List(ctx, owner.ID, ownKB.ID)
+	activeList, err := services.documents.List(ctx, owner.ID, ownKB.ID, dto.GlobalDocumentListQuery{})
 	if err != nil {
 		t.Fatalf("list own documents after rejected batch delete: %v", err)
 	}
@@ -1618,7 +1620,7 @@ func TestChatSessionManagementRequiresOwnedSessionAndKnowledgeBase(t *testing.T)
 	foreignKB := createWorkspaceKB(t, services.db, other.ID, uuid.Nil, "foreign-kb", "private", time.Now())
 	createWorkspaceChatSession(t, services.db, owner.ID, foreignKB.ID, "foreign knowledge base")
 
-	list, err := services.chats.ListSessions(ctx, owner.ID)
+	list, err := services.chats.ListSessions(ctx, owner.ID, dto.ChatSessionListQuery{})
 	if err != nil {
 		t.Fatalf("list owned sessions: %v", err)
 	}
@@ -1651,7 +1653,7 @@ func TestChatSessionManagementRequiresOwnedSessionAndKnowledgeBase(t *testing.T)
 	if _, err := services.chats.GetSession(ctx, owner.ID, session.ID); err == nil {
 		t.Fatalf("expected session with deleted knowledge base to be rejected")
 	}
-	list, err = services.chats.ListSessions(ctx, owner.ID)
+	list, err = services.chats.ListSessions(ctx, owner.ID, dto.ChatSessionListQuery{})
 	if err != nil {
 		t.Fatalf("list sessions after knowledge base deletion: %v", err)
 	}
@@ -1660,7 +1662,9 @@ func TestChatSessionManagementRequiresOwnedSessionAndKnowledgeBase(t *testing.T)
 	}
 }
 
-func TestChatSessionDeleteHidesSessionAndMessages(t *testing.T) {
+// G15: deleting a session hides it but keeps the messages, so a restore from the
+// recycle bin brings back the real conversation rather than an empty shell.
+func TestChatSessionDeleteHidesSessionAndKeepsMessages(t *testing.T) {
 	ctx := context.Background()
 	services := newWorkspaceTestServices(t)
 	owner := createWorkspaceUser(t, services.db, "owner")
@@ -1681,8 +1685,8 @@ func TestChatSessionDeleteHidesSessionAndMessages(t *testing.T) {
 	if err := services.db.Model(&model.ChatMessage{}).Where("session_id = ?", session.ID).Count(&messageCount).Error; err != nil {
 		t.Fatalf("count messages: %v", err)
 	}
-	if messageCount != 0 {
-		t.Fatalf("expected hard deleted session to cascade messages, got %d", messageCount)
+	if messageCount != 1 {
+		t.Fatalf("expected soft delete to keep messages, got %d", messageCount)
 	}
 }
 
@@ -1711,7 +1715,7 @@ func TestChatSessionArchiveHidesFromListButKeepsDetail(t *testing.T) {
 	if idempotent.ArchivedAt == nil || !idempotent.ArchivedAt.Equal(*archived.ArchivedAt) {
 		t.Fatalf("expected stable idempotent archive response, first=%#v second=%#v", archived, idempotent)
 	}
-	list, err := services.chats.ListSessions(ctx, owner.ID)
+	list, err := services.chats.ListSessions(ctx, owner.ID, dto.ChatSessionListQuery{})
 	if err != nil {
 		t.Fatalf("list sessions after archive: %v", err)
 	}
@@ -1932,7 +1936,7 @@ func TestDocumentResponsesExposeLatestJobProgress(t *testing.T) {
 		t.Fatalf("unexpected retry fields on detail: %#v", detail)
 	}
 
-	kbList, err := services.documents.List(ctx, owner.ID, kb.ID)
+	kbList, err := services.documents.List(ctx, owner.ID, kb.ID, dto.GlobalDocumentListQuery{})
 	if err != nil {
 		t.Fatalf("list knowledge base documents: %v", err)
 	}

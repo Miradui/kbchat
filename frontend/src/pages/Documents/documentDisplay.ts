@@ -1,3 +1,4 @@
+import type { BadgeTone } from '../../components/ui/Badge';
 import type { DocumentStatus } from '../../types/api';
 
 export const documentStatuses: DocumentStatus[] = [
@@ -26,26 +27,14 @@ export function documentStatusLabel(status: DocumentStatus): string {
   return statusLabels[status];
 }
 
+export function documentStatusTone(status: DocumentStatus): BadgeTone {
+  if (status === 'completed') return 'ok';
+  if (status === 'failed') return 'danger';
+  return 'warn';
+}
+
 export function isTerminalDocumentStatus(status: DocumentStatus): boolean {
   return status === 'completed' || status === 'failed';
 }
 
-export function formatDocumentBytes(value: number): string {
-  if (value < 1024) {
-    return `${value} B`;
-  }
-  if (value < 1024 * 1024) {
-    return `${(value / 1024).toFixed(1)} KB`;
-  }
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
-}
-
-export function formatDocumentDateTime(value: string): string {
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value));
-}
+export { formatBytes as formatDocumentBytes, formatDateTime as formatDocumentDateTime } from '../../utils/format';

@@ -103,7 +103,15 @@ func (h *DocumentHandler) List(c *gin.Context) {
 		return
 	}
 
-	res, err := h.documents.List(c.Request.Context(), userID, kbID)
+	// Same query surface as ListGlobal; knowledgeBaseId comes from the path.
+	res, err := h.documents.List(c.Request.Context(), userID, kbID, dto.GlobalDocumentListQuery{
+		Q:        c.Query("q"),
+		Status:   c.Query("status"),
+		FileType: c.Query("fileType"),
+		Sort:     c.Query("sort"),
+		Page:     queryInt(c, "page", 1),
+		PageSize: queryInt(c, "pageSize", 20),
+	})
 	if err != nil {
 		RespondError(c, err)
 		return
@@ -227,6 +235,42 @@ func (h *DocumentHandler) Reprocess(c *gin.Context) {
 	}
 
 	res, err := h.documents.Reprocess(c.Request.Context(), userID, documentID)
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, res)
+}
+
+func (h *DocumentHandler) Update(c *gin.Context) {
+	userID, documentID, ok := userAndDocumentID(c)
+	if !ok {
+		return
+	}
+
+	var req dto.DocumentUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
+		return
+	}
+
+	res, err := h.documents.Update(c.Request.Context(), userID, documentID, req)
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, res)
+}
+
+func (h *DocumentHandler) Cancel(c *gin.Context) {
+	userID, documentID, ok := userAndDocumentID(c)
+	if !ok {
+		return
+	}
+
+	res, err := h.documents.CancelJob(c.Request.Context(), userID, documentID)
 	if err != nil {
 		RespondError(c, err)
 		return

@@ -37,22 +37,19 @@ beforeEach(() => {
 });
 
 describe('TagsPage', () => {
-  it('provides a stable breadcrumb back to knowledge bases', async () => {
+  it('marks the tags breadcrumb as the current page', async () => {
     renderWithRouter(<TagsPage />, ['/tags']);
 
     const breadcrumb = screen.getByRole('navigation', { name: '面包屑' });
-    expect(within(breadcrumb).getByRole('link', { name: '返回知识库' })).toHaveAttribute(
-      'href',
-      '/knowledge-bases',
-    );
-    expect(within(breadcrumb).getByText('标签管理')).toHaveAttribute('aria-current', 'page');
+    expect(within(breadcrumb).getByText('标签')).toHaveAttribute('aria-current', 'page');
+    expect(within(breadcrumb).queryByRole('link')).not.toBeInTheDocument();
   });
 
   it('shows a first-use empty state when no tags exist', async () => {
     vi.mocked(listKnowledgeBaseTags).mockResolvedValue({ items: [] });
     renderWithRouter(<TagsPage />);
 
-    expect(await screen.findByText('尚未创建标签')).toBeInTheDocument();
+    expect(await screen.findByText('还没有标签')).toBeInTheDocument();
     expect(screen.queryByText('没有匹配的标签')).not.toBeInTheDocument();
   });
 
@@ -64,7 +61,7 @@ describe('TagsPage', () => {
     await user.type(screen.getByLabelText('搜索标签'), '产品');
 
     expect(screen.getByText('没有匹配的标签')).toBeInTheDocument();
-    expect(screen.queryByText('尚未创建标签')).not.toBeInTheDocument();
+    expect(screen.queryByText('还没有标签')).not.toBeInTheDocument();
   });
 
   it('creates locally without refetching', async () => {

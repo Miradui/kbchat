@@ -134,7 +134,11 @@ describe('DocumentImportDialog', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('不能为空');
 
     await user.click(screen.getByRole('button', { name: '开始导入' }));
-    await waitFor(() => expect(onUpload).toHaveBeenCalledWith('kb1', expect.objectContaining({ name: 'notes.txt' })));
+    await waitFor(() => expect(onUpload).toHaveBeenCalledWith(
+      'kb1',
+      expect.objectContaining({ name: 'notes.txt' }),
+      expect.any(Function),
+    ));
   });
 
   it('keeps selected files when the global target changes while the dialog is open', async () => {
@@ -183,7 +187,8 @@ describe('DocumentImportDialog', () => {
     await user.upload(screen.getByLabelText('选择文档文件'), [goodFile, failedFile]);
     await user.click(screen.getByRole('button', { name: '开始导入' }));
 
-    expect(await screen.findByText('格式不受支持')).toBeInTheDocument();
+    const failedRow = (await screen.findByText('bad.pdf')).closest('article');
+    expect(failedRow).toHaveTextContent('格式不受支持');
     expect(screen.getByText('已上传')).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
 
@@ -192,6 +197,32 @@ describe('DocumentImportDialog', () => {
     await waitFor(() => expect(onUpload).toHaveBeenCalledTimes(3));
     expect(onUpload.mock.calls.map(([, file]) => file.name)).toEqual(['good.md', 'bad.pdf', 'bad.pdf']);
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('shows real per-file upload progress reported by the transport', async () => {
+    const user = userEvent.setup();
+    const result = deferred<DocumentItem>();
+    let reportProgress: ((progress: number) => void) | undefined;
+    renderDialog({
+      onUpload: vi.fn((_knowledgeBaseId, _file, onProgress) => {
+        reportProgress = onProgress;
+        return result.promise;
+      }),
+    });
+
+    const file = new File(['policy'], 'policy.md', { type: 'text/markdown' });
+    await user.upload(screen.getByLabelText('选择文档文件'), file);
+    await user.click(screen.getByRole('button', { name: '开始导入' }));
+
+    act(() => reportProgress?.(37));
+    const progress = screen.getByRole('progressbar', { name: 'policy.md 上传进度' });
+    expect(progress).toHaveAttribute('aria-valuenow', '37');
+    expect(screen.getByText('37%')).toBeInTheDocument();
+
+    await act(async () => {
+      result.resolve(documentFor(file));
+      await result.promise;
+    });
   });
 
   it('ignores a late upload result after the dialog is externally closed', async () => {

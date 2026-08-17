@@ -258,6 +258,116 @@ func TestArchiveChatSessionReturnsArchivedSession(t *testing.T) {
 	}
 }
 
+func TestFeedbackAndExportEndpointsReturnHTTPContracts(t *testing.T) {
+	cfg := config.Config{AppEnv: "test", ServerPort: "0", JWTSecret: "this-is-a-long-router-test-secret-1234", JWTExpiresIn: "1h"}
+	db := testDB(t)
+	if err := db.AutoMigrate(
+		&model.User{},
+		&model.KnowledgeBase{},
+		&model.Document{},
+		&model.DocumentChunk{},
+		&model.ChatSession{},
+		&model.ChatMessage{},
+	); err != nil {
+		t.Fatalf("migrate gap endpoint test tables: %v", err)
+	}
+	user := model.User{Username: "gap-contract-owner", PasswordHash: "hash"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("create gap contract user: %v", err)
+	}
+	kb := model.KnowledgeBase{Name: "contract kb", OwnerID: user.ID, Visibility: "private"}
+	if err := db.Create(&kb).Error; err != nil {
+		t.Fatalf("create gap contract knowledge base: %v", err)
+	}
+	document := model.Document{
+		KnowledgeBaseID: kb.ID,
+		UploaderID:      user.ID,
+		Filename:        "contract.pdf",
+		StoragePath:     "contract.pdf",
+		Status:          "completed",
+	}
+	if err := db.Create(&document).Error; err != nil {
+		t.Fatalf("create gap contract document: %v", err)
+	}
+	chunk := model.DocumentChunk{
+		DocumentID:      document.ID,
+		KnowledgeBaseID: kb.ID,
+		ChunkIndex:      0,
+		Content:         "export-contract content",
+	}
+	if err := db.Create(&chunk).Error; err != nil {
+		t.Fatalf("create gap contract chunk: %v", err)
+	}
+	session := model.ChatSession{UserID: user.ID, KnowledgeBaseID: kb.ID, Title: "contract chat"}
+	if err := db.Create(&session).Error; err != nil {
+		t.Fatalf("create gap contract session: %v", err)
+	}
+	message := model.ChatMessage{SessionID: session.ID, Role: "assistant", Content: "contract answer"}
+	if err := db.Create(&message).Error; err != nil {
+		t.Fatalf("create gap contract message: %v", err)
+	}
+	token, err := auth.GenerateToken(cfg, user.ID)
+	if err != nil {
+		t.Fatalf("generate gap contract token: %v", err)
+	}
+	r := New(cfg, db, logger.New(cfg))
+
+	t.Run("feedback", func(t *testing.T) {
+		req := httptest.NewRequest(
+			http.MethodPost,
+			"/api/v1/chat/messages/"+message.ID.String()+"/feedback",
+			strings.NewReader(`{"rating":"positive"}`),
+		)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected feedback status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+		}
+		var response dto.ChatMessageFeedbackResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode feedback response: %v", err)
+		}
+		if response.MessageID != message.ID.String() || response.Rating != "positive" || response.UpdatedAt.IsZero() {
+			t.Fatalf("unexpected feedback response: %#v", response)
+		}
+	})
+
+	t.Run("chat markdown export", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/chat/sessions/"+session.ID.String()+"/export", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected chat export status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("Content-Type"); got != "text/markdown; charset=utf-8" {
+			t.Fatalf("unexpected chat export content type %q", got)
+		}
+		wantDisposition := `attachment; filename="chat-` + session.ID.String() + `.md"`
+		if got := rec.Header().Get("Content-Disposition"); got != wantDisposition {
+			t.Fatalf("unexpected chat export disposition %q", got)
+		}
+	})
+
+	t.Run("search csv export", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/search/export?q=export-contract&type=chunk", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected search export status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("Content-Type"); got != "text/csv; charset=utf-8" {
+			t.Fatalf("unexpected search export content type %q", got)
+		}
+		if got := rec.Header().Get("Content-Disposition"); got != `attachment; filename="search-results.csv"` {
+			t.Fatalf("unexpected search export disposition %q", got)
+		}
+	})
+}
+
 func archiveSessionRequest(t *testing.T, handler http.Handler, token, sessionID string) dto.ChatSessionResponse {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/sessions/"+sessionID+"/archive", nil)

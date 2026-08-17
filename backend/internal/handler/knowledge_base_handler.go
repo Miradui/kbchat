@@ -129,6 +129,24 @@ func (h *KnowledgeBaseHandler) BatchMoveCategory(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
+func (h *KnowledgeBaseHandler) BatchTag(c *gin.Context) {
+	userID, ok := currentUserIDOrError(c)
+	if !ok {
+		return
+	}
+	var req dto.KnowledgeBaseBatchTagRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
+		return
+	}
+	res, err := h.knowledgeBases.BatchTag(c.Request.Context(), userID, req)
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
 func (h *KnowledgeBaseHandler) BatchDelete(c *gin.Context) {
 	userID, ok := currentUserIDOrError(c)
 	if !ok {
@@ -171,6 +189,19 @@ func (h *KnowledgeBaseHandler) Stats(c *gin.Context) {
 		return
 	}
 	res, err := h.knowledgeBases.Stats(c.Request.Context(), userID, c.Query("period"))
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+func (h *KnowledgeBaseHandler) DetailStats(c *gin.Context) {
+	userID, id, ok := userAndKnowledgeBaseID(c)
+	if !ok {
+		return
+	}
+	res, err := h.knowledgeBases.DetailStats(c.Request.Context(), userID, id, c.Query("period"))
 	if err != nil {
 		RespondError(c, err)
 		return

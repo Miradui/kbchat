@@ -23,6 +23,10 @@ CREATE TABLE users (
 );
 ```
 
+资料字段的接口上限按 Unicode 码点（Go rune）计数，不能按 UTF-16 code unit
+或 UTF-8 字节误算。密码明文不落库；登录和改密在进入 bcrypt 前按 UTF-8
+编码检查 72 字节上限。
+
 ## knowledge_bases
 
 ```sql
@@ -199,7 +203,17 @@ pending
 running
 completed
 failed
+cancelled
 ```
+
+`cancelled` 由文档取消接口写入。既有数据库通过
+`backend/migrations/013_document_job_cancelled_status.sql` 更新
+`document_jobs_status_check`；仅依赖 SQLite `AutoMigrate` 的测试不会重建这条
+PostgreSQL CHECK 约束，因此不能代替该 migration。
+
+真实 PostgreSQL 行锁集成测试只读取显式的 `RAG_TEST_POSTGRES_DSN`；未设置时
+测试跳过。设置后测试会创建独立的 `rag_it_<uuid>` schema，并在结束时删除，
+因此该 DSN 应指向允许创建和删除 schema 的专用测试数据库。
 
 ## chat_sessions
 
@@ -216,7 +230,7 @@ CREATE TABLE chat_sessions (
 );
 ```
 
-当前 `POST /chat/sessions/:id/archive` 设置 `archived_at`，默认会话列表过滤已归档会话；`GET /chat/sessions/:id` 仍可查看归档会话。当前 `DELETE /chat/sessions/:id` 采用硬删除并级联删除消息；`deleted_at` 保留给软删除扩展。
+当前 `POST /chat/sessions/:id/archive` 设置 `archived_at`，默认会话列表过滤已归档会话；`GET /chat/sessions/:id` 仍可查看归档会话。`DELETE /chat/sessions/:id` 设置 `deleted_at` 进行软删除并保留全部消息；默认列表、详情和消息查询过滤已删除会话。聊天回收站支持列表、恢复、单项永久删除和清空，只有永久删除才会物理删除会话并级联删除消息。
 
 ## chat_messages
 
@@ -229,11 +243,18 @@ CREATE TABLE chat_messages (
     citations JSONB,
     client_request_id UUID,
     rerank_fallback JSONB,
+    feedback_rating VARCHAR(16),
+    feedback_updated_at TIMESTAMP NULL,
     created_at TIMESTAMP DEFAULT now()
 );
 ```
 
 `client_request_id` 和 `rerank_fallback` 对历史消息及 regenerate 消息保持 nullable。发送消息时，user/assistant 消息对共享同一个 `client_request_id`；assistant 消息保存本次 `rerank_fallback`，以便重复请求重建原响应。
+
+既有数据库通过 `backend/migrations/014_chat_message_feedback.sql` 增加
+`feedback_rating` 和 `feedback_updated_at`。`feedback_rating` 允许 `NULL`、
+`positive`、`negative`，并由 `chat_messages_feedback_rating_check` 约束；service
+另行限制只有当前用户可见会话中的 assistant 消息可以提交反馈。
 
 允许 role：
 

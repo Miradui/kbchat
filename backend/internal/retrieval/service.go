@@ -21,8 +21,14 @@ const (
 	rerankFallbackProviderError = "provider_unavailable"
 	defaultVectorTopN           = 30
 	defaultRerankTopK           = 5
-	maxVectorTopN               = 100
-	maxRerankTopK               = 20
+)
+
+// MaxVectorTopN and MaxRerankTopK are the hard ceilings applied to every
+// retrieval request. GET /api/v1/system/capabilities publishes them so the
+// frontend retrieval form validates against the same numbers.
+const (
+	MaxVectorTopN = 100
+	MaxRerankTopK = 20
 )
 
 type searchOptions struct {
@@ -155,13 +161,13 @@ func (s *Service) resolveSearchOptions(kb *model.KnowledgeBase, req dto.SearchRe
 	if req.VectorTopN > 0 {
 		vectorTopN = req.VectorTopN
 	}
-	vectorTopN = cappedPositive(vectorTopN, positiveOrDefault(s.cfg.VectorTopN, defaultVectorTopN), maxVectorTopN)
+	vectorTopN = cappedPositive(vectorTopN, positiveOrDefault(s.cfg.VectorTopN, defaultVectorTopN), MaxVectorTopN)
 
 	rerankTopK := kbConfig.RerankTopK
 	if req.RerankTopK > 0 {
 		rerankTopK = req.RerankTopK
 	}
-	rerankTopK = cappedPositive(rerankTopK, positiveOrDefault(s.cfg.RerankTopK, defaultRerankTopK), maxRerankTopK)
+	rerankTopK = cappedPositive(rerankTopK, positiveOrDefault(s.cfg.RerankTopK, defaultRerankTopK), MaxRerankTopK)
 	if rerankTopK > vectorTopN {
 		rerankTopK = vectorTopN
 	}

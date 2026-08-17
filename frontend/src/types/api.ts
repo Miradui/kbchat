@@ -95,6 +95,13 @@ export type KnowledgeBaseCategory = {
   children?: KnowledgeBaseCategory[];
   createdAt: string;
   updatedAt: string;
+  /**
+   * Knowledge bases filed directly under this category. Only the category tree
+   * endpoint returns it; create/update responses leave it undefined.
+   */
+  directCount?: number;
+  /** directCount plus every descendant category's directCount. */
+  totalCount?: number;
 };
 
 export type KnowledgeBaseCategoryListResponse = {
@@ -118,6 +125,12 @@ export type KnowledgeBaseTag = {
   name: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Knowledge bases referencing this tag, including ones sitting in the recycle
+   * bin. A non-zero value means deletion will be rejected with TAG_NOT_EMPTY.
+   * Tag summaries embedded on knowledge base payloads leave it undefined.
+   */
+  knowledgeBaseCount?: number;
 };
 
 export type KnowledgeBaseTagInput = {
@@ -141,6 +154,59 @@ export type KnowledgeBaseStatsResponse = {
   questions: WorkspaceMetric;
 };
 
+/**
+ * Single knowledge base trends. Deliberately has no `knowledgeBases` metric —
+ * that count is always 0 or 1 for one knowledge base and carries no trend.
+ */
+export type KnowledgeBaseDetailStatsResponse = {
+  knowledgeBaseId: string;
+  period: 'day' | 'month';
+  documents: WorkspaceMetric;
+  views: WorkspaceMetric;
+  questions: WorkspaceMetric;
+};
+
+export type KnowledgeBaseBatchTagMode = 'add' | 'remove' | 'replace';
+
+/**
+ * One recorded workspace event. `resourceName` / `knowledgeBaseName` are stored
+ * with the event, so an entry still reads correctly after the resource it refers
+ * to is permanently deleted. See docs/14-frontend-api-gaps.md G18.
+ */
+export type ActivityItemResponse = {
+  id: string;
+  action: string;
+  resourceType: 'knowledgeBase' | 'document' | 'chatSession' | 'member';
+  resourceId: string;
+  resourceName: string;
+  knowledgeBaseId?: string;
+  knowledgeBaseName?: string;
+  createdAt: string;
+};
+
+export type ActivityListResponse = {
+  items: ActivityItemResponse[];
+};
+
+/**
+ * The whole workspace landing page in one response. List lengths are chosen by
+ * the server; each is paired with the unfiltered total so the page can show
+ * "5 of 42" without guessing a pageSize.
+ * See docs/14-frontend-api-gaps.md G17.
+ */
+export type HomeSummaryResponse = {
+  period: 'day' | 'month';
+  stats: KnowledgeBaseStatsResponse;
+  knowledgeBases: KnowledgeBase[];
+  knowledgeBaseTotal: number;
+  documents: GlobalDocumentItem[];
+  documentTotal: number;
+  failedDocuments: GlobalDocumentItem[];
+  failedDocumentTotal: number;
+  sessions: ChatSession[];
+  sessionTotal: number;
+};
+
 export type KnowledgeBaseWorkspacePreference = {
   viewMode: WorkspaceViewMode;
   scope: KnowledgeBaseScope;
@@ -154,7 +220,7 @@ export type BatchResultResponse = {
 };
 
 export type RecycleBinItem = {
-  resourceType: 'knowledgeBase' | 'document';
+  resourceType: 'knowledgeBase' | 'document' | 'chatSession';
   id: string;
   name: string;
   knowledgeBaseId?: string;
@@ -195,7 +261,7 @@ export type DocumentStatus =
   | 'completed'
   | 'failed';
 
-export type DocumentJobStatus = 'pending' | 'running' | 'completed' | 'failed';
+export type DocumentJobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export type DocumentItem = {
   id: string;
@@ -215,12 +281,23 @@ export type DocumentItem = {
   updatedAt?: string;
 };
 
-export type DocumentListResponse = {
-  items: DocumentItem[];
-};
+/**
+ * GET /knowledge-bases/:id/documents is the knowledge-base-scoped view of
+ * GET /documents and returns the same paginated shape. See docs/14-frontend-api-gaps.md G20.
+ */
+export type DocumentListResponse = GlobalDocumentListResponse;
 
 export type GlobalDocumentItem = DocumentItem & {
   knowledgeBaseName: string;
+};
+
+/**
+ * Rename and/or move. The extension must stay the same — `fileType` is derived
+ * from it at upload and picks the parser used on the next reprocess.
+ */
+export type DocumentUpdateInput = {
+  filename?: string;
+  knowledgeBaseId?: string;
 };
 
 export type DocumentChunk = {
@@ -275,7 +352,48 @@ export type GlobalDocumentListResponse = {
   pageSize: number;
 };
 
+export type SystemCapabilities = {
+  rerankEnabled: boolean;
+  upload: {
+    maxFileBytes: number;
+    allowedExtensions: string[];
+  };
+  retrieval: {
+    maxVectorTopN: number;
+    maxRerankTopK: number;
+  };
+  account: {
+    minPasswordLength: number;
+    maxPasswordBytes: number;
+    maxDisplayNameLength: number;
+    maxAvatarUrlLength: number;
+  };
+};
+
+export type UpdateProfileInput = {
+  displayName: string;
+  avatarUrl?: string;
+};
+
+export type ChangePasswordInput = {
+  currentPassword: string;
+  newPassword: string;
+};
+
 export type GlobalSearchResultType = 'knowledgeBase' | 'document' | 'chunk';
+
+/**
+ * One match position inside a result field.
+ *
+ * `start`/`end` are **UTF-16 code units** — plain JavaScript string indices, so
+ * `text.slice(start, end)` is the matched text. They are not byte offsets and
+ * not code-point indices; with CJK content those three disagree.
+ */
+export type SearchHighlight = {
+  field: 'title' | 'snippet';
+  start: number;
+  end: number;
+};
 
 export type GlobalSearchResult = {
   type: GlobalSearchResultType;
@@ -286,6 +404,20 @@ export type GlobalSearchResult = {
   filename?: string;
   title: string;
   snippet: string;
+  highlights?: SearchHighlight[];
+};
+
+export type SearchSuggestItem = {
+  type: 'knowledgeBase' | 'document';
+  id: string;
+  knowledgeBaseId: string;
+  knowledgeBaseName: string;
+  documentId?: string;
+  title: string;
+};
+
+export type SearchSuggestResponse = {
+  items: SearchSuggestItem[];
 };
 
 export type GlobalSearchResponse = {
@@ -362,10 +494,28 @@ export type ChatSession = {
   createdAt: string;
   updatedAt: string;
   archivedAt: string | null;
+  /**
+   * The three fields below only come back from the session list endpoint.
+   * Single-session responses (create/get/rename/archive/unarchive) omit them.
+   */
+  knowledgeBaseName?: string;
+  messageCount?: number;
+  lastMessagePreview?: string;
+};
+
+export type ChatSessionListParams = {
+  knowledgeBaseId?: string;
+  archived?: boolean;
+  q?: string;
+  page?: number;
+  pageSize?: number;
 };
 
 export type ChatSessionListResponse = {
   items: ChatSession[];
+  total: number;
+  page: number;
+  pageSize: number;
 };
 
 export type Citation = {
@@ -385,7 +535,16 @@ export type ChatMessage = {
   role: 'user' | 'assistant';
   content: string;
   citations: Citation[];
+  feedback?: ChatMessageFeedback | null;
   createdAt: string;
+};
+
+export type ChatFeedbackRating = 'positive' | 'negative';
+
+export type ChatMessageFeedback = {
+  messageId: string;
+  rating: ChatFeedbackRating;
+  updatedAt: string;
 };
 
 export type ChatMessageListResponse = {

@@ -3,16 +3,19 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useLocation, useNavigate } from 'react-router-dom';
 
-import { globalSearch } from '../../api/resources';
+import { exportGlobalSearch, globalSearch } from '../../api/resources';
 import { renderWithRouter } from '../../test/render';
 import type { GlobalSearchResponse } from '../../types/api';
+import { downloadBlob } from '../../utils/download';
 import { SearchPage } from './SearchPage';
 
 vi.mock('../../api/resources', () => ({
   getCurrentUser: vi.fn().mockResolvedValue({ id: 'user-1', username: 'admin', displayName: '管理员' }),
+  exportGlobalSearch: vi.fn(),
   globalSearch: vi.fn(),
   logout: vi.fn(),
 }));
+vi.mock('../../utils/download', () => ({ downloadBlob: vi.fn() }));
 
 const mockedSearch = vi.mocked(globalSearch);
 const knowledgeBaseResult = {
@@ -76,6 +79,8 @@ function deferred<T>() {
 
 beforeEach(() => {
   mockedSearch.mockReset();
+  vi.mocked(exportGlobalSearch).mockReset();
+  vi.mocked(downloadBlob).mockReset();
 });
 
 afterEach(() => vi.useRealTimers());
@@ -117,7 +122,7 @@ describe('SearchPage', () => {
 			['/search?q=policy&type=document&page=2'],
 		);
 
-		expect(await screen.findByText(/第 2 \/ 3 页/)).toBeInTheDocument();
+		expect(await screen.findByRole('button', { name: '第 2 页' })).toHaveAttribute('aria-current', 'page');
 		await user.click(screen.getByRole('button', { name: '下一页' }));
 
 		expect(screen.getByLabelText('当前位置')).toHaveTextContent('/search?q=policy&type=document&page=3');
@@ -283,5 +288,23 @@ describe('SearchPage', () => {
 
     expect(screen.getByRole('heading', { name: '输入关键词开始搜索' })).toBeInTheDocument();
     expect(mockedSearch).not.toHaveBeenCalled();
+  });
+
+  it('exports the current query and type as CSV with busy feedback', async () => {
+    const exported = deferred<Blob>();
+    mockedSearch.mockResolvedValue(searchResponse([documentResult]));
+    vi.mocked(exportGlobalSearch).mockReturnValue(exported.promise);
+    const user = userEvent.setup();
+    renderWithRouter(<SearchPage />, ['/search?q=policy&type=document']);
+
+    await screen.findByText('员工手册文档');
+    await user.click(screen.getByRole('button', { name: '导出 CSV' }));
+
+    expect(exportGlobalSearch).toHaveBeenCalledWith({ query: 'policy', type: 'document' });
+    expect(screen.getByRole('button', { name: '正在导出' })).toBeDisabled();
+
+    const blob = new Blob(['csv'], { type: 'text/csv' });
+    await act(async () => exported.resolve(blob));
+    expect(downloadBlob).toHaveBeenCalledWith(blob, '搜索结果.csv');
   });
 });

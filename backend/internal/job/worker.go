@@ -2,6 +2,7 @@ package job
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"rag/backend/internal/model"
+	"rag/backend/internal/repository"
 )
 
 const (
@@ -152,6 +154,17 @@ func (w *Worker) process(ctx context.Context, job *model.DocumentJob) {
 	)
 
 	if err := w.processor.Process(ctx, job); err != nil {
+		// A cancel already wrote the terminal state for both the job and the
+		// document. RetryJob and FailJob are guarded on status='running' and
+		// would no-op anyway; returning here keeps the log honest.
+		if errors.Is(err, repository.ErrDocumentJobCancelled) {
+			w.logger.Info("document job cancelled",
+				zap.String("job_id", job.ID.String()),
+				zap.String("document_id", job.DocumentID.String()),
+			)
+			return
+		}
+
 		message := err.Error()
 		if job.RetryCount < w.maxRetries {
 			nextRetryCount := job.RetryCount + 1

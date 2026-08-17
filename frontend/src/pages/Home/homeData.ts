@@ -1,35 +1,55 @@
-import {
-  getKnowledgeBaseStats,
-  listChatSessions,
-  listGlobalDocuments,
-  listKnowledgeBases,
-} from '../../api/resources';
+import { getHomeSummary, listActivities } from '../../api/resources';
 import type {
-  ChatSessionListResponse,
-  GlobalDocumentListResponse,
-  KnowledgeBaseListResponse,
+  ActivityItemResponse,
+  ChatSession,
+  GlobalDocumentItem,
+  HomeSummaryResponse,
+  KnowledgeBase,
   KnowledgeBaseStatsResponse,
 } from '../../types/api';
 
 export type HomeSources = {
-  loadStats: () => Promise<KnowledgeBaseStatsResponse>;
-  loadKnowledgeBases: () => Promise<KnowledgeBaseListResponse>;
-  loadDocuments: () => Promise<GlobalDocumentListResponse>;
-  loadSessions: () => Promise<ChatSessionListResponse>;
+  loadSummary: () => Promise<HomeSummaryResponse>;
+  /** Kept separate from the summary: the timeline is its own resource. */
+  loadActivities: () => Promise<ActivityItemResponse[]>;
 };
 
 const defaultSources: HomeSources = {
-  loadStats: () => getKnowledgeBaseStats('month'),
-  loadKnowledgeBases: () => listKnowledgeBases({ sort: 'updatedAt_desc', pageSize: 5 }),
-  loadDocuments: () => listGlobalDocuments({ sort: 'updatedAt_desc', pageSize: 5 }),
-  loadSessions: () => listChatSessions(),
+  loadSummary: () => getHomeSummary('month'),
+  loadActivities: async () => (await listActivities(20)).items,
 };
 
+/**
+ * One request behind five regions.
+ *
+ * `GET /home/summary` replaced the four concurrent list calls plus a pageSize
+ * guess (see docs/14-frontend-api-gaps.md G17). The page still renders each
+ * region with its own loading and retry state, so the loaders coalesce: calls
+ * made while a request is in flight share it, which turns the five regions
+ * mounting together into a single request.
+ *
+ * The shared promise is dropped as soon as it settles, so a later retry issues a
+ * fresh request instead of replaying the old result — or the old rejection.
+ */
 export function createHomeLoaders(sources: HomeSources = defaultSources) {
+  let inFlight: Promise<HomeSummaryResponse> | null = null;
+
+  const summary = () => {
+    if (!inFlight) {
+      const pending = sources.loadSummary().finally(() => {
+        if (inFlight === pending) inFlight = null;
+      });
+      inFlight = pending;
+    }
+    return inFlight;
+  };
+
   return {
-    stats: () => sources.loadStats(),
-    knowledgeBases: async () => (await sources.loadKnowledgeBases()).items,
-    documents: async () => (await sources.loadDocuments()).items,
-    sessions: async () => (await sources.loadSessions()).items,
+    stats: async (): Promise<KnowledgeBaseStatsResponse> => (await summary()).stats,
+    knowledgeBases: async (): Promise<KnowledgeBase[]> => (await summary()).knowledgeBases,
+    documents: async (): Promise<GlobalDocumentItem[]> => (await summary()).documents,
+    failedDocuments: async (): Promise<GlobalDocumentItem[]> => (await summary()).failedDocuments,
+    sessions: async (): Promise<ChatSession[]> => (await summary()).sessions,
+    activities: (): Promise<ActivityItemResponse[]> => sources.loadActivities(),
   };
 }

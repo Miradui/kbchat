@@ -41,6 +41,9 @@ func New(
 }
 
 func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	document, err := p.documents.FindByID(ctx, job.DocumentID)
 	if err != nil {
 		return err
@@ -49,28 +52,41 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 		return fmt.Errorf("document %s not found", job.DocumentID)
 	}
 
-	if err := p.documents.UpdateStatus(ctx, document.ID, "parsing", ""); err != nil {
+	if err := p.documents.UpdateStatus(ctx, document.ID, job.ID, "parsing", ""); err != nil {
 		return err
 	}
 	parsedDocument, err := p.parser.ParseDocument(document.StoragePath, document.FileType)
 	if err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
-	if err := p.documents.UpdateStatus(ctx, document.ID, "chunking", ""); err != nil {
+	if err := p.documents.UpdateStatus(ctx, document.ID, job.ID, "chunking", ""); err != nil {
 		return err
 	}
 	parts := p.splitter.SplitDocument(parsedDocument)
 	if len(parts) == 0 {
 		return fmt.Errorf("document contains no extractable text")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
-	if err := p.documents.UpdateStatus(ctx, document.ID, "embedding", ""); err != nil {
+	if err := p.documents.UpdateStatus(ctx, document.ID, job.ID, "embedding", ""); err != nil {
 		return err
 	}
 
 	rows := make([]model.DocumentChunk, 0, len(parts))
 	for start := 0; start < len(parts); start += embeddingBatchSize {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := p.documents.EnsureJobRunning(ctx, document.ID, job.ID); err != nil {
+			return err
+		}
+
 		end := start + embeddingBatchSize
 		if end > len(parts) {
 			end = len(parts)
@@ -86,6 +102,12 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 			return err
 		}
 		if err := validateEmbeddingCount(len(texts), len(embeddings)); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := p.documents.EnsureJobRunning(ctx, document.ID, job.ID); err != nil {
 			return err
 		}
 
@@ -108,7 +130,10 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 		}
 
 	}
-	if err := p.chunks.ReplaceByDocument(ctx, document.ID, rows); err != nil {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := p.chunks.PublishByDocument(ctx, document.ID, job.ID, rows); err != nil {
 		return err
 	}
 	return nil

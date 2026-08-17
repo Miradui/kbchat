@@ -1,10 +1,12 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 
-import { Button } from '../../components/ui/Button';
-import { Dialog } from '../../components/ui/Dialog';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { useUnsavedChangesWarning } from '../../components/feedback/useUnsavedChangesWarning';
+import { Button } from '../../components/ui/Button';
+import { Dialog } from '../../components/ui/Dialog';
+import { Field, Input, Select } from '../../components/ui/Field';
+import type { CategoryOption } from './categoryTreeUtils';
 
 export type CategoryDialogValue = {
   id?: string;
@@ -13,14 +15,9 @@ export type CategoryDialogValue = {
   sortOrder: number;
 };
 
-type CategoryParentOption = {
-  id: string;
-  label: string;
-};
-
 type CategoryDialogProps = {
   value: CategoryDialogValue | null;
-  parentOptions: CategoryParentOption[];
+  parentOptions: CategoryOption[];
   error: string;
   submitting: boolean;
   onChange: (value: CategoryDialogValue) => void;
@@ -39,21 +36,22 @@ export function CategoryDialog({
   onParentChange,
   onSubmit,
 }: CategoryDialogProps) {
-  const errorId = useId();
-  const initialValueRef = useRef<CategoryDialogValue | null>(null);
+  const nameId = useId();
+  const parentId = useId();
+  const initialRef = useRef<CategoryDialogValue | null>(null);
   const wasOpenRef = useRef(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
-  const dirty = Boolean(value && initialValueRef.current && !categoryValuesEqual(value, initialValueRef.current));
+  const dirty = Boolean(value && initialRef.current && !equal(value, initialRef.current));
 
   useEffect(() => {
     if (value && !wasOpenRef.current) {
-      initialValueRef.current = { ...value };
+      initialRef.current = { ...value };
       wasOpenRef.current = true;
       setConfirmDiscard(false);
       return;
     }
     if (!value) {
-      initialValueRef.current = null;
+      initialRef.current = null;
       wasOpenRef.current = false;
       setConfirmDiscard(false);
     }
@@ -62,9 +60,7 @@ export function CategoryDialog({
   useUnsavedChangesWarning(dirty);
 
   function requestClose() {
-    if (submitting) {
-      return;
-    }
+    if (submitting) return;
     if (dirty) {
       setConfirmDiscard(true);
       return;
@@ -75,37 +71,36 @@ export function CategoryDialog({
   return (
     <>
       <Dialog
-        open={Boolean(value)}
-        title={value?.id ? '编辑分类' : '新建分类'}
         description="分类用于组织和筛选知识库。"
         onClose={requestClose}
+        open={Boolean(value)}
+        title={value?.id ? '编辑分类' : '新建分类'}
       >
         {value && (
-          <form className="category-dialog-form" onSubmit={onSubmit}>
-          <label htmlFor="category-name">分类名称</label>
-          <input
-            aria-describedby={error ? errorId : undefined}
-            aria-invalid={Boolean(error)}
-            data-autofocus
-            id="category-name"
-            required
-            value={value.name}
-            onChange={(event) => onChange({ ...value, name: event.target.value })}
-          />
+          <form className="ui-dialog__form" onSubmit={onSubmit}>
+            <Field error={error} htmlFor={nameId} label="分类名称">
+              <Input
+                aria-invalid={Boolean(error)}
+                data-autofocus
+                id={nameId}
+                onChange={(event) => onChange({ ...value, name: event.target.value })}
+                required
+                value={value.name}
+              />
+            </Field>
 
-          <label htmlFor="category-parent">父分类</label>
-          <select
-            id="category-parent"
-            value={value.parentId}
-            onChange={(event) => onParentChange(event.target.value)}
-          >
-            <option value="">根分类</option>
-            {parentOptions.map((category) => (
-              <option key={category.id} value={category.id}>{category.label}</option>
-            ))}
-          </select>
-
-          {error && <p className="field-error" id={errorId} role="alert">{error}</p>}
+            <Field htmlFor={parentId} label="父分类">
+              <Select
+                id={parentId}
+                onChange={(event) => onParentChange(event.target.value)}
+                value={value.parentId}
+              >
+                <option value="">根分类</option>
+                {parentOptions.map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </Select>
+            </Field>
 
             <div className="ui-dialog__actions">
               <Button variant="secondary" disabled={submitting} onClick={requestClose}>取消</Button>
@@ -114,6 +109,7 @@ export function CategoryDialog({
           </form>
         )}
       </Dialog>
+
       {confirmDiscard && (
         <ConfirmDialog
           cancelLabel="继续编辑"
@@ -131,7 +127,7 @@ export function CategoryDialog({
   );
 }
 
-function categoryValuesEqual(left: CategoryDialogValue, right: CategoryDialogValue): boolean {
+function equal(left: CategoryDialogValue, right: CategoryDialogValue): boolean {
   return left.id === right.id
     && left.name === right.name
     && left.parentId === right.parentId

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
@@ -48,23 +49,95 @@ func (r *ChunkRepository) CreateBatch(ctx context.Context, chunks []model.Docume
 }
 
 func (r *ChunkRepository) ReplaceByDocument(ctx context.Context, documentID uuid.UUID, chunks []model.DocumentChunk) error {
-	for index := range chunks {
-		if chunks[index].DocumentID != documentID {
-			return fmt.Errorf("replacement chunk %d belongs to document %s, expected %s", index, chunks[index].DocumentID, documentID)
-		}
+	if err := validateReplacementChunks(documentID, chunks); err != nil {
+		return err
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := validateChunkOwnership(tx, chunks); err != nil {
 			return err
 		}
-		if err := tx.Where("document_id = ?", documentID).Delete(&model.DocumentChunk{}).Error; err != nil {
+		return replaceDocumentChunks(tx, documentID, chunks)
+	})
+}
+
+// PublishByDocument atomically publishes a complete replacement index and the
+// successful terminal state of the exact job that produced it. It linearizes
+// against CancelActiveJob on the document row: cancellation that committed
+// first prevents all chunk writes, while a publication that commits first makes
+// a later cancel non-cancellable because the job is already completed.
+func (r *ChunkRepository) PublishByDocument(
+	ctx context.Context,
+	documentID uuid.UUID,
+	jobID uuid.UUID,
+	chunks []model.DocumentChunk,
+) error {
+	if err := validateReplacementChunks(documentID, chunks); err != nil {
+		return err
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := guardRunningDocumentJob(tx, documentID, jobID); err != nil {
 			return err
 		}
-		if len(chunks) == 0 {
-			return nil
+		if err := validateChunkOwnership(tx, chunks); err != nil {
+			return err
 		}
-		return tx.CreateInBatches(chunks, 50).Error
+		if err := replaceDocumentChunks(tx, documentID, chunks); err != nil {
+			return err
+		}
+
+		now := time.Now()
+		documentResult := tx.Model(&model.Document{}).
+			Where("id = ?", documentID).
+			Updates(map[string]any{
+				"status":        "completed",
+				"error_message": "",
+				"updated_at":    now,
+			})
+		if documentResult.Error != nil {
+			return documentResult.Error
+		}
+		if documentResult.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+
+		jobResult := tx.Model(&model.DocumentJob{}).
+			Where(
+				"id = ? AND document_id = ? AND status = ? AND job_type = ?",
+				jobID, documentID, "running", "process_document",
+			).
+			Updates(map[string]any{
+				"status":        "completed",
+				"error_message": "",
+				"locked_at":     nil,
+				"updated_at":    now,
+			})
+		if jobResult.Error != nil {
+			return jobResult.Error
+		}
+		if jobResult.RowsAffected != 1 {
+			return ErrDocumentJobCancelled
+		}
+		return nil
 	})
+}
+
+func validateReplacementChunks(documentID uuid.UUID, chunks []model.DocumentChunk) error {
+	for index := range chunks {
+		if chunks[index].DocumentID != documentID {
+			return fmt.Errorf("replacement chunk %d belongs to document %s, expected %s", index, chunks[index].DocumentID, documentID)
+		}
+	}
+	return nil
+}
+
+func replaceDocumentChunks(tx *gorm.DB, documentID uuid.UUID, chunks []model.DocumentChunk) error {
+	if err := tx.Where("document_id = ?", documentID).Delete(&model.DocumentChunk{}).Error; err != nil {
+		return err
+	}
+	if len(chunks) == 0 {
+		return nil
+	}
+	return tx.CreateInBatches(chunks, 50).Error
 }
 
 func validateChunkOwnership(tx *gorm.DB, chunks []model.DocumentChunk) error {

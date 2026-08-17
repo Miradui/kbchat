@@ -50,6 +50,10 @@ func (s *KnowledgeBaseCategoryService) ListTree(ctx context.Context, ownerID uui
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
+	directCounts, err := s.knowledgeBases.CountByCategoryGrouped(ctx, ownerID)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
 
 	byParent := make(map[uuid.UUID][]dto.KnowledgeBaseCategoryResponse)
 	roots := make([]dto.KnowledgeBaseCategoryResponse, 0)
@@ -61,10 +65,21 @@ func (s *KnowledgeBaseCategoryService) ListTree(ctx context.Context, ownerID uui
 		}
 		byParent[*items[i].ParentID] = append(byParent[*items[i].ParentID], res)
 	}
+	// Attach children bottom-up so each node's total can absorb its subtree in
+	// the same pass.
 	var attach func([]dto.KnowledgeBaseCategoryResponse) []dto.KnowledgeBaseCategoryResponse
 	attach = func(nodes []dto.KnowledgeBaseCategoryResponse) []dto.KnowledgeBaseCategoryResponse {
 		for i := range nodes {
 			nodes[i].Children = attach(byParent[nodes[i].ID])
+			direct := directCounts[nodes[i].ID]
+			total := direct
+			for j := range nodes[i].Children {
+				if nodes[i].Children[j].TotalCount != nil {
+					total += *nodes[i].Children[j].TotalCount
+				}
+			}
+			nodes[i].DirectCount = &direct
+			nodes[i].TotalCount = &total
 		}
 		return nodes
 	}

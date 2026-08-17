@@ -1,14 +1,17 @@
 import { readdirSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
+/**
+ * Route-level pages must stay in their own lazily loaded chunks. Keep this list
+ * in sync with the lazy imports in `src/router/index.tsx`.
+ */
 const expectedRouteChunks = [
   'LoginPage',
   'HomePage',
   'KnowledgeBaseListPage',
-  'KnowledgeBaseDetailPage',
-  'DocumentsLandingPage',
+  'KnowledgeBaseOverviewPage',
+  'KnowledgeBaseSettingsPage',
   'DocumentsPage',
-  'ChatLandingPage',
   'ChatPage',
   'SearchPage',
   'TagsPage',

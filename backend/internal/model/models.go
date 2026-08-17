@@ -185,15 +185,17 @@ func (s *ChatSession) BeforeCreate(_ *gorm.DB) error {
 }
 
 type ChatMessage struct {
-	ID              uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
-	SessionID       uuid.UUID      `gorm:"type:uuid;not null;index;uniqueIndex:idx_chat_messages_session_client_role,where:client_request_id IS NOT NULL AND role IN ('user'\,'assistant')" json:"sessionId"`
-	Session         ChatSession    `gorm:"foreignKey:SessionID" json:"-"`
-	ClientRequestID *uuid.UUID     `gorm:"type:uuid;uniqueIndex:idx_chat_messages_session_client_role,where:client_request_id IS NOT NULL AND role IN ('user'\,'assistant')" json:"clientRequestId"`
-	Role            string         `gorm:"size:32;not null;uniqueIndex:idx_chat_messages_session_client_role,where:client_request_id IS NOT NULL AND role IN ('user'\,'assistant')" json:"role"`
-	Content         string         `gorm:"not null" json:"content"`
-	Citations       datatypes.JSON `gorm:"type:jsonb" json:"citations"`
-	RerankFallback  datatypes.JSON `gorm:"type:jsonb" json:"rerankFallback"`
-	CreatedAt       time.Time      `json:"createdAt"`
+	ID                uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
+	SessionID         uuid.UUID      `gorm:"type:uuid;not null;index;uniqueIndex:idx_chat_messages_session_client_role,where:client_request_id IS NOT NULL AND (role = 'user' OR role = 'assistant')" json:"sessionId"`
+	Session           ChatSession    `gorm:"foreignKey:SessionID" json:"-"`
+	ClientRequestID   *uuid.UUID     `gorm:"type:uuid;uniqueIndex:idx_chat_messages_session_client_role,where:client_request_id IS NOT NULL AND (role = 'user' OR role = 'assistant')" json:"clientRequestId"`
+	Role              string         `gorm:"size:32;not null;uniqueIndex:idx_chat_messages_session_client_role,where:client_request_id IS NOT NULL AND (role = 'user' OR role = 'assistant')" json:"role"`
+	Content           string         `gorm:"not null" json:"content"`
+	Citations         datatypes.JSON `gorm:"type:jsonb" json:"citations"`
+	RerankFallback    datatypes.JSON `gorm:"type:jsonb" json:"rerankFallback"`
+	FeedbackRating    *string        `gorm:"size:16" json:"feedbackRating"`
+	FeedbackUpdatedAt *time.Time     `json:"feedbackUpdatedAt"`
+	CreatedAt         time.Time      `json:"createdAt"`
 }
 
 func (m *ChatMessage) BeforeCreate(_ *gorm.DB) error {
@@ -272,6 +274,35 @@ func (p *KnowledgeBaseWorkspacePreference) BeforeCreate(_ *gorm.DB) error {
 	}
 	if len(p.ExpandedCategoryIDs) == 0 {
 		p.ExpandedCategoryIDs = datatypes.JSON([]byte("[]"))
+	}
+	return nil
+}
+
+// Activity is one entry in the workspace timeline.
+//
+// ResourceName and KnowledgeBaseName are denormalised deliberately: an entry has
+// to stay readable after its resource is permanently deleted, which is exactly
+// when the delete event matters most. For the same reason there is no foreign
+// key to the resource tables.
+type Activity struct {
+	ID                uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	UserID            uuid.UUID  `gorm:"type:uuid;not null;index" json:"userId"`
+	User              User       `gorm:"foreignKey:UserID" json:"-"`
+	Action            string     `gorm:"size:64;not null" json:"action"`
+	ResourceType      string     `gorm:"size:32;not null" json:"resourceType"`
+	ResourceID        uuid.UUID  `gorm:"type:uuid;not null" json:"resourceId"`
+	ResourceName      string     `gorm:"size:255" json:"resourceName"`
+	KnowledgeBaseID   *uuid.UUID `gorm:"type:uuid;index" json:"knowledgeBaseId"`
+	KnowledgeBaseName string     `gorm:"size:128" json:"knowledgeBaseName"`
+	CreatedAt         time.Time  `json:"createdAt"`
+}
+
+func (a *Activity) BeforeCreate(_ *gorm.DB) error {
+	if a.ID == uuid.Nil {
+		a.ID = uuid.New()
+	}
+	if a.CreatedAt.IsZero() {
+		a.CreatedAt = time.Now()
 	}
 	return nil
 }

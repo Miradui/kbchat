@@ -1,1398 +1,786 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
-import { createPortal } from 'react-dom';
-import { BookOpen, PanelLeft, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Download, Library, MessageSquareText, PanelLeft, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
-import { ApiError } from '../../api/client';
 import {
   archiveChatSession,
-  createChatSession,
   deleteChatSession,
-  getChatSession,
-  listChatMessages,
-  listChatSessions,
-  listKnowledgeBases,
-  regenerateChatMessage,
-  sendChatMessage,
+  exportChatSession,
+  setChatMessageFeedback,
+  unarchiveChatSession,
   updateChatSessionTitle,
 } from '../../api/resources';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
-import { LoadingSkeleton } from '../../components/LoadingSkeleton';
-import { WorkspaceShell } from '../../components/WorkspaceShell';
+import { EmptyState } from '../../components/feedback/EmptyState';
 import { RerankFallbackNotice } from '../../components/feedback/RerankFallbackNotice';
-import { useModalFocus } from '../../components/ui/useModalFocus';
-import type {
-  ChatMessage,
-  ChatSession,
-  KnowledgeBase,
-  KnowledgeBaseRerankFallback,
-} from '../../types/api';
+import { useToast } from '../../components/feedback/ToastProvider';
+import { LoadingSkeleton } from '../../components/LoadingSkeleton';
+import { Badge } from '../../components/ui/Badge';
+import { Button } from '../../components/ui/Button';
+import { IconButton } from '../../components/ui/IconButton';
+import { InlineEdit } from '../../components/ui/InlineEdit';
+import { OverflowMenu } from '../../components/ui/OverflowMenu';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
+import { AppShell } from '../../layouts/AppShell';
+import type { ChatFeedbackRating } from '../../types/api';
+import { downloadBlob } from '../../utils/download';
+import { formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
-import { CitationCard, MessageBubble } from './ChatMessage';
-import { pendingChatRequestStore } from './pendingChatRequestStore';
-import type { PendingChatRequest } from './pendingChatRequestStore';
-import { pendingRegenerationStore } from './pendingRegenerationStore';
+import { ChatComposer } from './ChatComposer';
+import { MessageBubble } from './ChatMessage';
+import { ChatSessionRail } from './ChatSessionRail';
+import type { ChatSessionScope } from './ChatSessionRail';
+import { useChatSessions } from './useChatSessions';
+import { useChatThread } from './useChatThread';
 
-type ChatPageProps = {
-  draftSession?: boolean;
-};
-
-export function ChatPage({ draftSession = false }: ChatPageProps) {
-  const { sessionId: routedSessionId } = useParams();
-  const sessionId = draftSession ? 'new' : routedSessionId;
-  const [searchParams] = useSearchParams();
+/**
+ * `/chat` is the draft state and `/chat/:sessionId` is a thread.
+ *
+ * There used to be three routes: a landing page, a `/chat/new` draft and the
+ * thread itself. The landing page's content is now this page's empty state, so
+ * choosing a knowledge base and asking a question never changes screens.
+ */
+export function ChatPage() {
+  const { sessionId } = useParams();
   const navigate = useNavigate();
-  const messagesRef = useRef<HTMLDivElement | null>(null);
-  const composerRef = useRef<HTMLTextAreaElement | null>(null);
-  const activeSessionIdRef = useRef<string | undefined>(sessionId);
-  const mountedRef = useRef(false);
-  const draftSendSessionIdRef = useRef<string | null>(null);
-  const sendOperationRef = useRef<symbol | null>(null);
-  const sendCheckOperationRef = useRef<symbol | null>(null);
-  const sessionMutationRef = useRef<symbol | null>(null);
-  const regenerateOperationRef = useRef<symbol | null>(null);
-  const messageLoadRequestRef = useRef(0);
-  const sendCheckRequestRef = useRef(0);
-  const sessionListRequestRef = useRef(0);
-  const knowledgeBaseListRequestRef = useRef(0);
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [currentSessionDetail, setCurrentSessionDetail] = useState<ChatSession | null>(null);
+  const toast = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const isNarrow = useMediaQuery('(max-width: 1080px)');
+  const [railOpen, setRailOpen] = useState(false);
   const [draft, setDraft] = useState('');
-  const [titleDraft, setTitleDraft] = useState('');
-  const [pendingQuestion, setPendingQuestion] = useState('');
-  const [failedQuestion, setFailedQuestion] = useState('');
-  const [sessionsLoading, setSessionsLoading] = useState(true);
-  const [knowledgeBasesLoading, setKnowledgeBasesLoading] = useState(true);
-  const [messagesLoading, setMessagesLoading] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [checkingSendResult, setCheckingSendResult] = useState(false);
-  const [regeneratingMessageId, setRegeneratingMessageId] = useState<string | null>(null);
-  const [rerankFallback, setRerankFallback] = useState<KnowledgeBaseRerankFallback | null>(null);
-  const [updatingSession, setUpdatingSession] = useState(false);
+  const [focusedCitation, setFocusedCitation] = useState<{ messageId: string; index: number | null } | null>(null);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [sessionConfirmError, setSessionConfirmError] = useState('');
-  const [error, setError] = useState('');
-  const [sessionListError, setSessionListError] = useState('');
-  const [knowledgeBaseListError, setKnowledgeBaseListError] = useState('');
-  const [messageLoadError, setMessageLoadError] = useState('');
-  const [activeCitationMessageId, setActiveCitationMessageId] = useState<string | null>(null);
-  const [activeCitationIndex, setActiveCitationIndex] = useState<number | null>(null);
-  const [regenerationError, setRegenerationError] = useState<{
-    messageId: string;
-    message: string;
-    kind: 'failed' | 'uncertain';
-    baselineMessageIds: string[];
-    checked: boolean;
-  } | null>(null);
-  const [uncertainSend, setUncertainSend] = useState<PendingChatRequest | null>(null);
-  const [auxiliaryPanel, setAuxiliaryPanel] = useState<'sessions' | 'citations' | null>(null);
-  const isCompact = useMediaQuery('(max-width: 1439px)');
-  const sessionsPanelRef = useModalFocus<HTMLElement>(auxiliaryPanel === 'sessions', () => setAuxiliaryPanel(null));
-  const citationsPanelRef = useModalFocus<HTMLElement>(auxiliaryPanel === 'citations', () => setAuxiliaryPanel(null));
-  const isDraftSession = sessionId === 'new';
-  const draftKnowledgeBaseId = searchParams.get('knowledgeBaseId');
+  const [sessionActionError, setSessionActionError] = useState('');
+  const [sessionBusy, setSessionBusy] = useState(false);
+  const [sessionExporting, setSessionExporting] = useState(false);
+  const [feedbackSavingId, setFeedbackSavingId] = useState<string | null>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const activeSessionIdRef = useRef(sessionId);
+  const sessionActionOperationRef = useRef<symbol | null>(null);
+  const sessionBusyRef = useRef(false);
+  const sessionExportOperationRef = useRef<symbol | null>(null);
+  const feedbackOperationRef = useRef<symbol | null>(null);
+
+  const urlKnowledgeBaseId = searchParams.get('knowledgeBaseId') ?? '';
+  const [railScope, setRailScope] = useState<ChatSessionScope>('active');
+
+  activeSessionIdRef.current = sessionId;
+
+  const sessionStore = useChatSessions({
+    archived: railScope === 'archived',
+    knowledgeBaseId: urlKnowledgeBaseId,
+  });
+  const {
+    sessions,
+    sessionTotal,
+    knowledgeBases,
+    mergeSession,
+    removeSession,
+    reloadKnowledgeBases,
+    reloadSessions,
+  } = sessionStore;
+
+  const thread = useChatThread({
+    sessionId,
+    draftKnowledgeBaseId: urlKnowledgeBaseId || knowledgeBases[0]?.id,
+    onSessionCreated: (session) => {
+      mergeSession(session);
+      navigate(`/chat/${session.id}`, { replace: true });
+    },
+    onSessionsChanged: () => void reloadSessions(),
+  });
+
+  const currentSession = sessionId
+    ? (
+      thread.session?.id === sessionId
+        ? thread.session
+        : sessions.find((session) => session.id === sessionId) ?? null
+    )
+    : null;
+
+  const activeKnowledgeBaseId = currentSession?.knowledgeBaseId
+    ?? urlKnowledgeBaseId
+    ?? '';
+  const activeKnowledgeBase = knowledgeBases.find((item) => item.id === activeKnowledgeBaseId);
+
+  // The rail is scoped to the conversation you are in, and that scope is now a
+  // server-side filter, so the URL has to carry it. Opening a session from
+  // another knowledge base re-points the filter instead of silently disagreeing
+  // with the list. See docs/14-frontend-api-gaps.md G1.
+  useEffect(() => {
+    const sessionKnowledgeBaseId = currentSession?.knowledgeBaseId;
+    if (!sessionKnowledgeBaseId || sessionKnowledgeBaseId === urlKnowledgeBaseId) return;
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set('knowledgeBaseId', sessionKnowledgeBaseId);
+      return next;
+    }, { replace: true });
+  }, [currentSession?.knowledgeBaseId, setSearchParams, urlKnowledgeBaseId]);
 
   useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      messageLoadRequestRef.current += 1;
-      sendCheckRequestRef.current += 1;
-      sessionListRequestRef.current += 1;
-      knowledgeBaseListRequestRef.current += 1;
-      sendOperationRef.current = null;
-      sendCheckOperationRef.current = null;
-      sessionMutationRef.current = null;
-      regenerateOperationRef.current = null;
-    };
-  }, []);
-
-  const loadSessions = useCallback(async () => {
-    const request = ++sessionListRequestRef.current;
-    setSessionsLoading(true);
-    setSessionListError('');
-    try {
-      const response = await listChatSessions();
-      if (mountedRef.current && sessionListRequestRef.current === request) {
-        setSessions(response.items);
-      }
-    } catch (err) {
-      if (mountedRef.current && sessionListRequestRef.current === request) {
-        setSessionListError(errorMessage(err, '会话列表加载失败'));
-      }
-    } finally {
-      if (mountedRef.current && sessionListRequestRef.current === request) {
-        setSessionsLoading(false);
-      }
-    }
-  }, []);
-
-  const loadKnowledgeBases = useCallback(async () => {
-    const request = ++knowledgeBaseListRequestRef.current;
-    setKnowledgeBasesLoading(true);
-    setKnowledgeBaseListError('');
-    try {
-      const response = await listKnowledgeBases({ pageSize: 100 });
-      if (mountedRef.current && knowledgeBaseListRequestRef.current === request) {
-        setKnowledgeBases(response.items);
-      }
-    } catch (err) {
-      if (mountedRef.current && knowledgeBaseListRequestRef.current === request) {
-        setKnowledgeBaseListError(errorMessage(err, '知识库列表加载失败'));
-      }
-    } finally {
-      if (mountedRef.current && knowledgeBaseListRequestRef.current === request) {
-        setKnowledgeBasesLoading(false);
-      }
-    }
-  }, []);
+    if (!isNarrow) setRailOpen(false);
+  }, [isNarrow]);
 
   useEffect(() => {
-    void loadSessions();
-    void loadKnowledgeBases();
-  }, [loadKnowledgeBases, loadSessions]);
-
-  const loadSessionMessages = useCallback(async (requestedSessionId: string) => {
-    const request = ++messageLoadRequestRef.current;
-    setCurrentSessionDetail(null);
-    setTitleDraft('');
-    setMessages([]);
-    setActiveCitationMessageId(null);
-    setActiveCitationIndex(null);
-    setRegenerationError(null);
-    setMessageLoadError('');
-    setMessagesLoading(true);
-
-    try {
-      const [sessionResponse, messageResponse] = await Promise.all([
-        getChatSession(requestedSessionId),
-        listChatMessages(requestedSessionId),
-      ]);
-      if (
-        mountedRef.current
-        && activeSessionIdRef.current === requestedSessionId
-        && messageLoadRequestRef.current === request
-      ) {
-        setCurrentSessionDetail(sessionResponse);
-        setTitleDraft(sessionResponse.title || '');
-        setMessages(messageResponse.items);
-        setSessions((current) => mergeSession(current, sessionResponse));
-        const pendingRegeneration = pendingRegenerationStore.get(requestedSessionId);
-        if (pendingRegeneration && !regenerateOperationRef.current) {
-          const regeneratedAnswer = findNewAssistantMessage(
-            messageResponse.items,
-            pendingRegeneration.baselineMessageIds,
-          );
-          const targetMessage = messageResponse.items.find(
-            (message) => message.id === pendingRegeneration.messageId && message.role === 'assistant',
-          );
-          if (regeneratedAnswer) {
-            pendingRegenerationStore.clear(requestedSessionId, pendingRegeneration.messageId);
-          } else if (targetMessage) {
-            setRegenerationError({
-              messageId: pendingRegeneration.messageId,
-              message: pendingRegeneration.checked
-                ? '检查后仍未发现新的回答。你可以继续检查，或确认重新生成。'
-                : '重新生成结果暂时无法确认。请先检查会话，避免重复生成。',
-              kind: 'uncertain',
-              baselineMessageIds: pendingRegeneration.baselineMessageIds,
-              checked: pendingRegeneration.checked,
-            });
-          } else {
-            pendingRegenerationStore.clear(requestedSessionId, pendingRegeneration.messageId);
-          }
-        }
-        const persistedRequest = pendingChatRequestStore.get(requestedSessionId);
-        if (persistedRequest && !sendOperationRef.current) {
-          const requestWasAccepted = messageResponse.items.some(
-            (message) => message.clientRequestId === persistedRequest.clientRequestId,
-          );
-          if (requestWasAccepted) {
-            pendingChatRequestStore.clear(requestedSessionId, persistedRequest.clientRequestId);
-            setUncertainSend(null);
-            setDraft('');
-            setError('');
-          } else {
-            setUncertainSend(persistedRequest);
-            setDraft(persistedRequest.question);
-            setError('发送结果暂时无法确认。请先再次检查；如仍未显示，再确认是否重新发送。');
-          }
-        }
-      }
-    } catch (err) {
-      if (
-        mountedRef.current
-        && activeSessionIdRef.current === requestedSessionId
-        && messageLoadRequestRef.current === request
-      ) {
-        setMessageLoadError(errorMessage(err, '消息加载失败'));
-        setCurrentSessionDetail(null);
-        setMessages([]);
-      }
-    } finally {
-      if (
-        mountedRef.current
-        && activeSessionIdRef.current === requestedSessionId
-        && messageLoadRequestRef.current === request
-      ) {
-        setMessagesLoading(false);
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    const switchingDraftKnowledgeBase = activeSessionIdRef.current === 'new' && isDraftSession;
-    activeSessionIdRef.current = sessionId;
-    sendCheckRequestRef.current += 1;
-    const continuingDraftSend = draftSendSessionIdRef.current === sessionId;
+    setDraft('');
+    setFocusedCitation(null);
     setConfirmArchive(false);
     setConfirmDelete(false);
-    setSessionConfirmError('');
-    regenerateOperationRef.current = null;
-    setRegeneratingMessageId(null);
-    setRegenerationError(null);
-    setActiveCitationIndex(null);
-    setRerankFallback(null);
-    if (!continuingDraftSend) {
-      sendOperationRef.current = null;
-      if (!switchingDraftKnowledgeBase) {
-        setDraft('');
-      }
-      setPendingQuestion('');
-      setFailedQuestion('');
-      setUncertainSend(null);
-      setSending(false);
-    }
-    if (!sessionId || isDraftSession) {
-      messageLoadRequestRef.current += 1;
-      setCurrentSessionDetail(null);
-      setTitleDraft('');
-      setMessages([]);
-      setFailedQuestion('');
-      setUncertainSend(null);
-      setMessagesLoading(false);
-      setMessageLoadError('');
-      return;
-    }
+    setSessionActionError('');
+    sessionActionOperationRef.current = null;
+    sessionBusyRef.current = false;
+    setSessionBusy(false);
+    sessionExportOperationRef.current = null;
+    setSessionExporting(false);
+    feedbackOperationRef.current = null;
+    setFeedbackSavingId(null);
+  }, [sessionId]);
 
-    setError('');
-    void loadSessionMessages(sessionId);
-  }, [draftKnowledgeBaseId, isDraftSession, loadSessionMessages, sessionId]);
+  // The home page hands a question over via `?q=`; consume it into the composer.
+  useEffect(() => {
+    const seeded = searchParams.get('q');
+    if (!seeded) return;
+    setDraft(seeded);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete('q');
+      return next;
+    }, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
-    if (!isCompact) {
-      setAuxiliaryPanel(null);
-    }
-  }, [isCompact]);
-
-  useEffect(() => {
+    // `auto` while streaming: a smooth scroll per token never settles.
     messagesRef.current?.scrollTo({
       top: messagesRef.current.scrollHeight,
-      behavior: 'smooth',
+      behavior: thread.streamingAnswer ? 'auto' : 'smooth',
     });
-  }, [messages, pendingQuestion]);
+  }, [thread.messages, thread.pendingQuestion, thread.streamingAnswer]);
 
-  useEffect(() => {
-    setActiveCitationMessageId((current) => {
-      if (current && messages.some((message) => message.id === current && message.role === 'assistant')) {
-        return current;
-      }
-      return [...messages].reverse().find((message) => message.role === 'assistant')?.id ?? null;
-    });
-  }, [messages]);
-
-  const sessionDetailsReady = !isDraftSession
-    && currentSessionDetail?.id === sessionId
-    && !messagesLoading;
-  const currentSession = isDraftSession
-    ? null
-    : sessionDetailsReady
-      ? currentSessionDetail
-      : sessions.find((session) => session.id === sessionId) ?? null;
-  const currentKnowledgeBase = knowledgeBases.find(
-    (kb) => kb.id === (currentSession?.knowledgeBaseId ?? draftKnowledgeBaseId),
-  );
-  const sessionsForCurrentKnowledgeBase = useMemo(() => {
-    if (!currentKnowledgeBase) {
-      return sessions;
-    }
-    return sessions.filter((session) => session.knowledgeBaseId === currentKnowledgeBase.id);
-  }, [currentKnowledgeBase, sessions]);
-
-  const activeCitations = useMemo(() => {
-    return messages.find((message) => message.id === activeCitationMessageId)?.citations ?? [];
-  }, [activeCitationMessageId, messages]);
-
-  useEffect(() => {
-    setActiveCitationIndex((current) => (
-      current !== null && activeCitations[current] ? current : null
-    ));
-  }, [activeCitations]);
-  const latestAssistantMessageId = useMemo(
-    () => [...messages].reverse().find((message) => message.role === 'assistant')?.id ?? null,
-    [messages],
+  const latestAssistantId = useMemo(
+    () => [...thread.messages].reverse().find((message) => message.role === 'assistant')?.id ?? null,
+    [thread.messages],
   );
 
-  const questionCount = messages.filter((message) => message.role === 'user').length;
-  const citationCount = messages.reduce((sum, message) => sum + message.citations.length, 0);
-  const messageStatsKnown = isDraftSession || (sessionDetailsReady && !messageLoadError);
   const archived = Boolean(currentSession?.archivedAt);
-  const chatMutationBusy = sending || checkingSendResult || updatingSession || regeneratingMessageId !== null;
-  const canSend = !archived
-    && Boolean(currentKnowledgeBase)
-    && Boolean(sessionId)
-    && (isDraftSession || sessionDetailsReady)
-    && !messagesLoading;
+  const threadInteractionPending = thread.sending
+    || Boolean(thread.regeneratingId)
+    || Boolean(thread.unconfirmedSend?.checking)
+    || Boolean(thread.regeneration?.checking);
+  const interactionLocked = thread.loading || sessionBusy || threadInteractionPending;
+  const canSend = Boolean(activeKnowledgeBase)
+    && !archived
+    && !thread.loading
+    && !sessionBusy
+    && !thread.unconfirmedSend;
 
-  async function handleUpdateTitle(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  const composerHint = !activeKnowledgeBase
+    ? knowledgeBases.length === 0
+      ? '还没有知识库。先创建一个知识库并导入文档。'
+      : '先在左侧选择一个知识库。'
+    : archived
+      ? '这个会话已归档，内容仍可查看。'
+      : undefined;
+
+  const selectKnowledgeBase = useCallback((knowledgeBaseId: string) => {
+    // From a thread, switching knowledge base starts a new draft rather than
+    // silently jumping into some other session.
+    if (knowledgeBaseId) navigate(`/chat?knowledgeBaseId=${encodeURIComponent(knowledgeBaseId)}`);
+    else navigate('/chat');
+  }, [navigate]);
+
+  async function runSessionAction(action: () => Promise<void>, failure: string) {
+    if (sessionBusyRef.current || thread.hasPendingWrite()) return;
+    const operation = Symbol('session-action');
+    const operationSessionId = sessionId;
+    sessionActionOperationRef.current = operation;
+    sessionBusyRef.current = true;
+    setSessionBusy(true);
+    setSessionActionError('');
+    try {
+      await action();
+    } catch (caught) {
+      if (
+        sessionActionOperationRef.current === operation
+        && activeSessionIdRef.current === operationSessionId
+      ) {
+        setSessionActionError(getErrorMessage(caught, failure));
+      }
+    } finally {
+      if (sessionActionOperationRef.current === operation) {
+        sessionActionOperationRef.current = null;
+        sessionBusyRef.current = false;
+        setSessionBusy(false);
+      }
+    }
+  }
+
+  async function handleMessageFeedback(messageId: string, rating: ChatFeedbackRating) {
+    if (feedbackOperationRef.current) return;
+    const operation = Symbol('chat-feedback');
+    feedbackOperationRef.current = operation;
+    setFeedbackSavingId(messageId);
+    try {
+      const feedback = await setChatMessageFeedback(messageId, rating);
+      if (feedbackOperationRef.current !== operation) return;
+      thread.updateMessageFeedback(messageId, feedback);
+      toast.success(rating === 'positive' ? '已记录“有帮助”' : '已记录“没有帮助”');
+    } catch (caught) {
+      if (feedbackOperationRef.current === operation) {
+        toast.error(getErrorMessage(caught, '回答反馈保存失败'));
+      }
+    } finally {
+      if (feedbackOperationRef.current === operation) {
+        feedbackOperationRef.current = null;
+        setFeedbackSavingId(null);
+      }
+    }
+  }
+
+  async function handleSessionExport() {
     if (
       !currentSession
-      || !sessionDetailsReady
-      || !titleDraft.trim()
-      || sendOperationRef.current
-      || sendCheckOperationRef.current
-      || sessionMutationRef.current
-      || regenerateOperationRef.current
-    ) {
-      return;
-    }
-
-    const targetSessionId = currentSession.id;
-    const operation = Symbol('update-session-title');
-    sessionMutationRef.current = operation;
-    setUpdatingSession(true);
-    setError('');
-
+      || sessionExportOperationRef.current
+      || sessionBusyRef.current
+      || thread.hasPendingWrite()
+    ) return;
+    const targetSession = currentSession;
+    const operation = Symbol('chat-session-export');
+    sessionExportOperationRef.current = operation;
+    setSessionExporting(true);
+    setSessionActionError('');
     try {
-      const nextSession = await updateChatSessionTitle(targetSessionId, titleDraft.trim());
-      if (
-        mountedRef.current
-        && activeSessionIdRef.current === targetSessionId
-        && sessionMutationRef.current === operation
-      ) {
-        setSessions((current) => mergeSession(current, nextSession));
-        setCurrentSessionDetail(nextSession);
-      }
-    } catch (err) {
-      if (
-        mountedRef.current
-        && activeSessionIdRef.current === targetSessionId
-        && sessionMutationRef.current === operation
-      ) {
-        setError(errorMessage(err, '会话标题更新失败'));
+      const blob = await exportChatSession(targetSession.id);
+      if (sessionExportOperationRef.current !== operation) return;
+      downloadBlob(blob, chatExportFilename(targetSession.title));
+      toast.success('会话已导出');
+    } catch (caught) {
+      if (sessionExportOperationRef.current === operation) {
+        setSessionActionError(getErrorMessage(caught, '会话导出失败'));
       }
     } finally {
-      if (
-        mountedRef.current
-        && sessionMutationRef.current === operation
-      ) {
-        sessionMutationRef.current = null;
-        setUpdatingSession(false);
+      if (sessionExportOperationRef.current === operation) {
+        sessionExportOperationRef.current = null;
+        setSessionExporting(false);
       }
     }
   }
 
-  async function handleArchiveSession() {
-    if (!currentSession || !sessionDetailsReady || sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
-      return;
-    }
+  const topbarActions = currentSession ? (
+    <OverflowMenu
+      disabled={interactionLocked || sessionExporting}
+      label="会话操作"
+      items={[
+        archived
+          ? {
+            label: '取消归档',
+            icon: <ArchiveRestore aria-hidden="true" />,
+            onSelect: () => void runSessionAction(async () => {
+              const target = currentSession;
+              const restored = await unarchiveChatSession(target.id);
+              removeSession(target.id);
+              if (activeSessionIdRef.current === target.id) {
+                thread.setSession(restored);
+                void reloadSessions();
+              }
+              // The rail only holds one scope at a time, so refetch instead of
+              // guessing which list the session now belongs to.
+              toast.success('会话已取消归档');
+            }, '取消归档失败'),
+          }
+          : {
+            label: '归档会话',
+            icon: <Archive aria-hidden="true" />,
+            onSelect: () => {
+              if (sessionBusyRef.current || thread.hasPendingWrite()) return;
+              setSessionActionError('');
+              setConfirmArchive(true);
+            },
+          },
+        {
+          label: '导出会话',
+          icon: <Download aria-hidden="true" />,
+          onSelect: () => void handleSessionExport(),
+        },
+        {
+          label: '删除会话',
+          icon: <Trash2 aria-hidden="true" />,
+          tone: 'danger',
+          onSelect: () => {
+            if (sessionBusyRef.current || thread.hasPendingWrite()) return;
+            setSessionActionError('');
+            setConfirmDelete(true);
+          },
+        },
+      ]}
+    />
+  ) : undefined;
 
-    const targetSessionId = currentSession.id;
-    const operation = Symbol('archive-session');
-    sessionMutationRef.current = operation;
-    setUpdatingSession(true);
-    setError('');
+  return (
+    <AppShell
+      active="chat"
+      breadcrumbs={[
+        { label: 'AI 问答', to: '/chat' },
+        ...(activeKnowledgeBase ? [{ label: activeKnowledgeBase.name }] : []),
+      ]}
+      flush
+      topbarActions={topbarActions}
+    >
+      <div className={railOpen ? 'chat-layout is-rail-open' : 'chat-layout'}>
+        {isNarrow && railOpen && (
+          <button aria-hidden="true" className="chat-layout__scrim" onClick={() => setRailOpen(false)} tabIndex={-1} type="button" />
+        )}
 
-    try {
-      const archivedSession = await archiveChatSession(targetSessionId);
-      if (activeSessionIdRef.current === targetSessionId && sessionMutationRef.current === operation) {
-        sessionListRequestRef.current += 1;
-        setSessionsLoading(false);
-        setSessionListError('');
-        setSessions((current) => current.filter((session) => session.id !== targetSessionId));
-        setCurrentSessionDetail(archivedSession);
-        setSessionConfirmError('');
-        setConfirmArchive(false);
-      }
-    } catch (err) {
-      if (activeSessionIdRef.current === targetSessionId && sessionMutationRef.current === operation) {
-        setSessionConfirmError(errorMessage(err, '会话归档失败'));
-      }
-    } finally {
-      if (sessionMutationRef.current === operation) {
-        sessionMutationRef.current = null;
-        setUpdatingSession(false);
-      }
-    }
-  }
+        <ChatSessionRail
+          activeSessionId={sessionId}
+          disabled={interactionLocked}
+          error={sessionStore.sessionsError}
+          knowledgeBaseId={activeKnowledgeBaseId}
+          knowledgeBases={knowledgeBases}
+          knowledgeBasesError={sessionStore.knowledgeBasesError}
+          loading={sessionStore.sessionsLoading}
+          onCollapse={isNarrow ? () => setRailOpen(false) : undefined}
+          onKnowledgeBaseChange={(knowledgeBaseId) => {
+            if (!sessionBusyRef.current && !thread.hasPendingWrite()) {
+              selectKnowledgeBase(knowledgeBaseId);
+            }
+          }}
+          onNavigate={() => setRailOpen(false)}
+          onNewChat={() => {
+            if (sessionBusyRef.current || thread.hasPendingWrite()) return;
+            setRailOpen(false);
+            selectKnowledgeBase(activeKnowledgeBaseId);
+          }}
+          onRetry={() => void reloadSessions()}
+          onRetryKnowledgeBases={() => void reloadKnowledgeBases()}
+          onScopeChange={setRailScope}
+          scope={railScope}
+          sessions={sessions}
+          sessionTotal={sessionTotal}
+        />
 
-  async function handleDeleteSession() {
-    if (!currentSession || !sessionDetailsReady || sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
-      return;
-    }
+        <section aria-label="问答会话" className="chat-main">
+          <header className="chat-main__head">
+            {isNarrow && (
+              <IconButton label="打开会话列表" onClick={() => setRailOpen(true)}>
+                <PanelLeft aria-hidden="true" />
+              </IconButton>
+            )}
+            <div className="chat-main__title">
+              {currentSession ? (
+                <InlineEdit
+                  busy={sessionBusy}
+                  disabled={interactionLocked}
+                  label="重命名会话"
+                  onSubmit={(title) => void runSessionAction(async () => {
+                    const target = currentSession;
+                    const updated = await updateChatSessionTitle(target.id, title);
+                    mergeSession(updated);
+                    if (activeSessionIdRef.current === target.id) thread.setSession(updated);
+                  }, '会话标题更新失败')}
+                  value={currentSession.title || ''}
+                />
+              ) : (
+                <span className="chat-main__title-text">新对话</span>
+              )}
+              {archived && currentSession?.archivedAt && (
+                <Badge tone="neutral">已归档 {formatDateTime(currentSession.archivedAt)}</Badge>
+              )}
+            </div>
+            {activeKnowledgeBase && (
+              <Link className="chat-main__kb" to={`/knowledge-bases/${activeKnowledgeBase.id}`}>
+                <Library aria-hidden="true" />
+                <span className="ui-truncate">{activeKnowledgeBase.name}</span>
+              </Link>
+            )}
+          </header>
 
-    const targetSessionId = currentSession.id;
-    const operation = Symbol('delete-session');
-    sessionMutationRef.current = operation;
-    setUpdatingSession(true);
-    setError('');
+          {sessionActionError && <p className="ui-inline-error" role="alert">{sessionActionError}</p>}
+          <RerankFallbackNotice fallback={thread.rerankFallback} />
+          {thread.loadError && (
+            <div className="ui-inline-notice" role="status">
+              <span>{thread.loadError}</span>
+              <Button variant="link" onClick={() => void thread.reload()}>重试</Button>
+            </div>
+          )}
 
-    try {
-      await deleteChatSession(targetSessionId);
-      if (activeSessionIdRef.current === targetSessionId && sessionMutationRef.current === operation) {
-        sessionListRequestRef.current += 1;
-        setSessionsLoading(false);
-        setSessionListError('');
-        setSessions((current) => current.filter((session) => session.id !== targetSessionId));
-        setSessionConfirmError('');
-        setConfirmDelete(false);
-        navigate('/chat', { replace: true });
-      }
-    } catch (err) {
-      if (activeSessionIdRef.current === targetSessionId && sessionMutationRef.current === operation) {
-        setSessionConfirmError(errorMessage(err, '会话删除失败'));
-      }
-    } finally {
-      if (sessionMutationRef.current === operation) {
-        sessionMutationRef.current = null;
-        setUpdatingSession(false);
-      }
-    }
-  }
+          <div className="chat-thread" ref={messagesRef}>
+            {thread.loading ? (
+              <LoadingSkeleton announce columns={1} compact rows={5} />
+            ) : thread.messages.length === 0 && !thread.pendingQuestion && !thread.failedSend && !thread.unconfirmedSend ? (
+              sessionId ? null : (
+                <ChatEmptyState
+                  knowledgeBases={knowledgeBases}
+                  loading={sessionStore.knowledgeBasesLoading}
+                  onSelect={selectKnowledgeBase}
+                  selectedId={activeKnowledgeBaseId}
+                />
+              )
+            ) : (
+              <>
+                {thread.messages.map((message) => (
+                  <MessageBubble
+                    canRegenerate={
+                      message.id === latestAssistantId
+                      && thread.regeneration?.messageId !== message.id
+                      && !archived
+                    }
+                    focusedCitationIndex={
+                      focusedCitation?.messageId === message.id ? focusedCitation.index : null
+                    }
+                    key={message.id}
+                    knowledgeBaseId={activeKnowledgeBaseId || undefined}
+                    message={message}
+                    feedbackSaving={feedbackSavingId === message.id}
+                    onFeedback={(messageId, rating) => void handleMessageFeedback(messageId, rating)}
+                    onFocusCitation={(messageId, index) => setFocusedCitation({ messageId, index })}
+                    onRegenerate={(id) => {
+                      if (!sessionBusyRef.current) void thread.regenerate(id);
+                    }}
+                    recovery={
+                      thread.regeneration?.messageId === message.id
+                        ? (
+                          <RegenerationNotice
+                            allowWrite={!archived}
+                            blocked={sessionBusy}
+                            onCheck={() => {
+                              if (!sessionBusyRef.current) void thread.checkRegeneration();
+                            }}
+                            onRegenerate={(messageId) => {
+                              if (!sessionBusyRef.current) void thread.regenerate(messageId);
+                            }}
+                            thread={thread}
+                          />
+                        )
+                        : undefined
+                    }
+                    regenerating={thread.regeneratingId === message.id}
+                  />
+                ))}
 
-  function handleCreateSession(knowledgeBaseId = currentKnowledgeBase?.id) {
-    if (sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
-      return;
-    }
-    const targetKnowledgeBase =
-      knowledgeBases.find((knowledgeBase) => knowledgeBase.id === knowledgeBaseId) ?? knowledgeBases[0];
-    if (!targetKnowledgeBase) {
-      setError('请先创建知识库，再开始新的问答会话。');
-      return;
-    }
+                {thread.pendingQuestion && (
+                  <>
+                    <article className="chat-msg chat-msg--user is-pending">
+                      <div className="chat-msg__body"><p className="chat-msg__content">{thread.pendingQuestion}</p></div>
+                    </article>
+                    <article className="chat-msg chat-msg--assistant is-pending">
+                      <div className="chat-msg__body">
+                        {/*
+                          Once the first token lands the answer replaces the
+                          skeleton, so the wait is only unexplained for as long
+                          as retrieval actually takes.
+                          See docs/14-frontend-api-gaps.md G2.
+                        */}
+                        {thread.streamingAnswer ? (
+                          <p className="chat-msg__content">
+                            {thread.streamingAnswer}
+                            <span aria-hidden="true" className="chat-msg__caret" />
+                          </p>
+                        ) : (
+                          <>
+                            <p className="chat-msg__content" role="status">
+                              {thread.streamingCitations.length > 0
+                                ? '正在生成回答…'
+                                : '正在检索知识库并生成回答…'}
+                            </p>
+                            <LoadingSkeleton columns={1} compact rows={2} />
+                          </>
+                        )}
+                      </div>
+                    </article>
+                  </>
+                )}
 
-    setError('');
-    navigate(`/chat/new?knowledgeBaseId=${encodeURIComponent(targetKnowledgeBase.id)}`);
-  }
+                {thread.failedSend && (
+                  <>
+                    <article className="chat-msg chat-msg--user">
+                      <div className="chat-msg__body"><p className="chat-msg__content">{thread.failedSend.question}</p></div>
+                    </article>
+                    <article className="chat-msg chat-msg--assistant" role="alert">
+                      <div className="chat-msg__body">
+                        <div className="chat-recovery chat-recovery--failed">
+                          <strong>回答生成失败</strong>
+                          <p>{thread.failedSend.message}</p>
+                          <div className="chat-recovery__actions">
+                            <Button
+                              variant="secondary"
+                              onClick={() => {
+                                const question = thread.failedSend?.question ?? '';
+                                thread.dismissFailedSend();
+                                void thread.send(question);
+                              }}
+                            >
+                              重试
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              onClick={() => {
+                                setDraft(thread.failedSend?.question ?? '');
+                                thread.dismissFailedSend();
+                              }}
+                            >
+                              修改问题
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  </>
+                )}
 
-  function handleKnowledgeBaseChange(knowledgeBaseId: string) {
-    if (sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
-      return;
-    }
-    if (isDraftSession) {
-      navigate(`/chat/new?knowledgeBaseId=${encodeURIComponent(knowledgeBaseId)}`, { replace: true });
-      return;
-    }
-    const targetSessions = sessions
-      .filter((session) => session.knowledgeBaseId === knowledgeBaseId)
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-    if (targetSessions[0]) {
-      navigate(`/chat/${targetSessions[0].id}`);
-      return;
-    }
+                {thread.unconfirmedSend && (
+                  <>
+                    <article className="chat-msg chat-msg--user">
+                      <div className="chat-msg__body">
+                        <p className="chat-msg__content">{thread.unconfirmedSend.request.question}</p>
+                      </div>
+                    </article>
+                    <article className="chat-msg chat-msg--assistant">
+                      <div className="chat-msg__body">
+                        <UnconfirmedSendNotice
+                          blocked={sessionBusy}
+                          checking={thread.unconfirmedSend.checking}
+                          needsDecision={thread.needsResendDecision}
+                          onCheck={() => {
+                            if (!sessionBusyRef.current) void thread.checkSendNow();
+                          }}
+                          onResend={() => {
+                            if (!sessionBusyRef.current) {
+                              void thread.send(thread.unconfirmedSend?.request.question ?? '', { resend: true });
+                            }
+                          }}
+                        />
+                      </div>
+                    </article>
+                  </>
+                )}
+              </>
+            )}
+          </div>
 
-    handleCreateSession(knowledgeBaseId);
-  }
+          <ChatComposer
+            disabled={!canSend || thread.sending || sessionBusy}
+            hint={composerHint}
+            onChange={setDraft}
+            onSubmit={() => {
+              if (sessionBusyRef.current) return;
+              const question = draft.trim();
+              if (!question) return;
+              setDraft('');
+              // A draft thread needs the knowledge base pinned in the URL before
+              // the session is created.
+              if (!sessionId && !urlKnowledgeBaseId && activeKnowledgeBaseId) {
+                setSearchParams({ knowledgeBaseId: activeKnowledgeBaseId }, { replace: true });
+              }
+              void thread.send(question);
+            }}
+            placeholder={activeKnowledgeBase ? `向「${activeKnowledgeBase.name}」提问…` : '选择知识库后开始提问…'}
+            sending={thread.sending}
+            value={draft}
+          />
+        </section>
+      </div>
 
-  async function submitQuestion(question: string, confirmedResend = false) {
-    const requestToRetry = confirmedResend ? uncertainSend : null;
-    if (
-      !question
-      || sending
-      || sendOperationRef.current
-      || sendCheckOperationRef.current
-      || sessionMutationRef.current
-      || !canSend
-      || (uncertainSend && !confirmedResend)
-    ) {
-      return;
-    }
+      {confirmArchive && currentSession && (
+        <ConfirmDialog
+          busy={sessionBusy}
+          confirmLabel="归档"
+          description={`归档后“${currentSession.title || '未命名会话'}”默认不再出现在会话列表中，内容仍可通过链接查看。`}
+          error={sessionActionError}
+          onCancel={() => {
+            setSessionActionError('');
+            setConfirmArchive(false);
+          }}
+          onConfirm={() => void runSessionAction(async () => {
+            const target = currentSession;
+            const archivedSession = await archiveChatSession(target.id);
+            removeSession(target.id);
+            if (activeSessionIdRef.current === target.id) thread.setSession(archivedSession);
+            setConfirmArchive(false);
+            toast.success('会话已归档');
+          }, '会话归档失败')}
+          title="归档会话"
+        />
+      )}
 
-    const operation = Symbol('send-message');
-    sendOperationRef.current = operation;
-    setSending(true);
-    setError('');
-    setRerankFallback(null);
-    setFailedQuestion('');
-    setUncertainSend(null);
-    setPendingQuestion(question);
-    const clientRequestId = requestToRetry?.clientRequestId ?? crypto.randomUUID();
+      {confirmDelete && currentSession && (
+        <ConfirmDialog
+          busy={sessionBusy}
+          confirmLabel="删除"
+          description={`确认删除“${currentSession.title || '未命名会话'}”？会话和消息将移入回收站，可在永久删除前恢复。`}
+          error={sessionActionError}
+          onCancel={() => {
+            setSessionActionError('');
+            setConfirmDelete(false);
+          }}
+          onConfirm={() => void runSessionAction(async () => {
+            const target = currentSession;
+            await deleteChatSession(target.id);
+            removeSession(target.id);
+            setConfirmDelete(false);
+            toast.success('会话已删除');
+            if (activeSessionIdRef.current === target.id) navigate('/chat', { replace: true });
+          }, '会话删除失败')}
+          title="删除会话"
+        />
+      )}
+    </AppShell>
+  );
+}
 
-    let activeSessionId = sessionId as string;
-    let messageRequestStarted = false;
-    try {
-      if (isDraftSession) {
-        if (!currentKnowledgeBase) {
-          throw new Error('知识库不存在');
-        }
-        const session = await createChatSession(currentKnowledgeBase.id, '');
-        if (
-          !mountedRef.current
-          || sendOperationRef.current !== operation
-          || activeSessionIdRef.current !== activeSessionId
-        ) {
-          return;
-        }
-        activeSessionId = session.id;
-        activeSessionIdRef.current = session.id;
-        draftSendSessionIdRef.current = session.id;
-        setCurrentSessionDetail(session);
-        setSessions((current) => mergeSession(current, session));
-        navigate(`/chat/${session.id}`, { replace: true });
-      }
+/**
+ * Draft-state body. Absorbs what used to be a separate `/chat` landing page.
+ */
+function ChatEmptyState({
+  knowledgeBases,
+  loading,
+  selectedId,
+  onSelect,
+}: {
+  knowledgeBases: Array<{ id: string; name: string; description: string }>;
+  loading: boolean;
+  selectedId: string;
+  onSelect: (id: string) => void;
+}) {
+  if (loading) return <LoadingSkeleton announce columns={2} rows={3} />;
 
-      messageRequestStarted = true;
-      const pendingRequest: PendingChatRequest = {
-        sessionId: activeSessionId,
-        question,
-        clientRequestId,
-        createdAt: requestToRetry?.createdAt ?? new Date().toISOString(),
-      };
-      pendingChatRequestStore.set(pendingRequest);
-      const response = await sendChatMessage(activeSessionId, { content: question, clientRequestId });
-      pendingChatRequestStore.clear(activeSessionId, clientRequestId);
-      setUncertainSend(null);
-      if (
-        mountedRef.current
-        && sendOperationRef.current === operation
-        && activeSessionIdRef.current === activeSessionId
-      ) {
-        setRerankFallback(response.rerankFallback?.used ? response.rerankFallback : null);
-      }
-    } catch (err) {
-      if (
-        !mountedRef.current
-        || sendOperationRef.current !== operation
-        || activeSessionIdRef.current !== activeSessionId
-      ) {
-        return;
-      }
-      sendOperationRef.current = null;
-      if (draftSendSessionIdRef.current === activeSessionId) {
-        draftSendSessionIdRef.current = null;
-      }
-      setDraft(question);
-      if (err instanceof ApiError && isDefinitiveSendFailure(err)) {
-        pendingChatRequestStore.clear(activeSessionId, clientRequestId);
-        setError(errorMessage(err, '消息发送失败，请稍后重试。'));
-        setFailedQuestion(question);
-      } else if (messageRequestStarted) {
-        setError('发送结果暂时无法确认。请先再次检查；如仍未显示，再确认是否重新发送。');
-        setUncertainSend({
-          sessionId: activeSessionId,
-          question,
-          clientRequestId,
-          createdAt: requestToRetry?.createdAt ?? new Date().toISOString(),
-        });
-      } else {
-        setError('会话创建结果暂时无法确认，请刷新会话列表后再试。');
-      }
-      setSending(false);
-      setPendingQuestion('');
-      return;
-    }
-
-    if (
-      !mountedRef.current
-      || sendOperationRef.current !== operation
-      || activeSessionIdRef.current !== activeSessionId
-    ) {
-      if (draftSendSessionIdRef.current === activeSessionId) {
-        draftSendSessionIdRef.current = null;
-      }
-      return;
-    }
-    setDraft('');
-    setFailedQuestion('');
-    const messageRefreshRequest = ++messageLoadRequestRef.current;
-    try {
-      const [messageResponse] = await Promise.all([listChatMessages(activeSessionId), loadSessions()]);
-      if (
-        mountedRef.current
-        && activeSessionIdRef.current === activeSessionId
-        && messageLoadRequestRef.current === messageRefreshRequest
-      ) {
-        setMessages(messageResponse.items);
-        setMessageLoadError('');
-      }
-    } catch (err) {
-      if (
-        mountedRef.current
-        && activeSessionIdRef.current === activeSessionId
-        && messageLoadRequestRef.current === messageRefreshRequest
-      ) {
-        setError('问题已发送，但消息列表刷新失败，请刷新页面查看。');
-      }
-    } finally {
-      if (
-        mountedRef.current
-        && activeSessionIdRef.current === activeSessionId
-        && messageLoadRequestRef.current === messageRefreshRequest
-      ) {
-        setMessagesLoading(false);
-      }
-      if (
-        mountedRef.current
-        && sendOperationRef.current === operation
-        && activeSessionIdRef.current === activeSessionId
-      ) {
-        sendOperationRef.current = null;
-        if (draftSendSessionIdRef.current === activeSessionId) {
-          draftSendSessionIdRef.current = null;
-        }
-        setSending(false);
-        setPendingQuestion('');
-      }
-    }
-  }
-
-  async function handleCheckSendResult() {
-    if (
-      !uncertainSend
-      || checkingSendResult
-      || sendOperationRef.current
-      || sendCheckOperationRef.current
-      || sessionMutationRef.current
-      || regenerateOperationRef.current
-    ) {
-      return;
-    }
-
-    const operation = Symbol('check-send-result');
-    sendCheckOperationRef.current = operation;
-    setCheckingSendResult(true);
-    const request = ++sendCheckRequestRef.current;
-    const messageLoadRequest = messageLoadRequestRef.current;
-    const uncertainSnapshot = uncertainSend;
-    const checkedSessionId = uncertainSnapshot.sessionId;
-    const requestIsCurrent = () => (
-      mountedRef.current
-      && activeSessionIdRef.current === checkedSessionId
-      && sendCheckOperationRef.current === operation
-      && sendCheckRequestRef.current === request
-      && messageLoadRequestRef.current === messageLoadRequest
+  if (knowledgeBases.length === 0) {
+    return (
+      <EmptyState
+        action={<Link className="ui-button ui-button--primary" to="/knowledge-bases?intent=create"><span>新建知识库</span></Link>}
+        description="AI 问答基于知识库中的文档作答。先创建一个知识库并导入文档。"
+        title="还没有可提问的知识库"
+      />
     );
-    try {
-      const response = await listChatMessages(checkedSessionId);
-      if (!requestIsCurrent()) {
-        return;
-      }
-      setMessages(response.items);
-      const submittedMessageExists = response.items
-        .some((message) => message.clientRequestId === uncertainSnapshot.clientRequestId);
-      if (submittedMessageExists) {
-        pendingChatRequestStore.clear(checkedSessionId, uncertainSnapshot.clientRequestId);
-        setDraft('');
-        setError('');
-        setUncertainSend(null);
-        void loadSessions();
-      } else {
-        setError('暂未发现这条问题。你可以稍后再次检查，或确认重新发送。');
-      }
-    } catch {
-      if (requestIsCurrent()) {
-        setError('暂时无法检查发送结果，请稍后再次检查。');
-      }
-    } finally {
-      if (sendCheckOperationRef.current === operation) {
-        sendCheckOperationRef.current = null;
-        if (mountedRef.current) {
-          setCheckingSendResult(false);
-        }
-      }
-    }
-  }
-
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    void submitQuestion(draft.trim());
-  }
-
-  async function handleRegenerateMessage(messageId: string) {
-    if (
-      !sessionId
-      || isDraftSession
-      || !sessionDetailsReady
-      || archived
-      || sendOperationRef.current
-      || sendCheckOperationRef.current
-      || sessionMutationRef.current
-      || regenerateOperationRef.current
-    ) {
-      return;
-    }
-
-    const targetSessionId = sessionId;
-    const baselineMessageIds = messages.map((message) => message.id);
-    const pendingStored = pendingRegenerationStore.set({
-      sessionId: targetSessionId,
-      messageId,
-      baselineMessageIds,
-      checked: false,
-      createdAt: new Date().toISOString(),
-    });
-    if (!pendingStored) {
-      setRegenerationError({
-        messageId,
-        message: '无法安全发起重新生成，请检查浏览器存储设置后重试。',
-        kind: 'failed',
-        baselineMessageIds,
-        checked: false,
-      });
-      return;
-    }
-    const operation = Symbol('regenerate-message');
-    regenerateOperationRef.current = operation;
-    setRegeneratingMessageId(messageId);
-    setRegenerationError(null);
-    setError('');
-    setRerankFallback(null);
-    try {
-      const response = await regenerateChatMessage(targetSessionId, messageId);
-      pendingRegenerationStore.clear(targetSessionId, messageId);
-      if (
-        !mountedRef.current
-        || activeSessionIdRef.current !== targetSessionId
-        || regenerateOperationRef.current !== operation
-      ) {
-        return;
-      }
-      setRerankFallback(response.rerankFallback?.used ? response.rerankFallback : null);
-      setMessages((current) => (
-        current.some((message) => message.id === response.message.id)
-          ? current.map((message) => (message.id === response.message.id ? response.message : message))
-          : [...current, response.message]
-      ));
-      setMessageLoadError('');
-      setActiveCitationMessageId(response.message.id);
-      setActiveCitationIndex(null);
-      setRegenerationError(null);
-      void loadSessions();
-    } catch (err) {
-      const definitiveFailure = err instanceof ApiError && isDefinitiveSendFailure(err);
-      if (definitiveFailure) {
-        pendingRegenerationStore.clear(targetSessionId, messageId);
-      }
-      if (
-        mountedRef.current
-        && activeSessionIdRef.current === targetSessionId
-        && regenerateOperationRef.current === operation
-      ) {
-        const recovery = {
-          messageId,
-          message: definitiveFailure
-            ? errorMessage(err, '重新生成回答失败')
-            : '重新生成结果暂时无法确认。请先检查会话，避免重复生成。',
-          kind: definitiveFailure ? 'failed' as const : 'uncertain' as const,
-          baselineMessageIds,
-          checked: false,
-        };
-        setRegenerationError(recovery);
-      }
-    } finally {
-      if (regenerateOperationRef.current === operation) {
-        regenerateOperationRef.current = null;
-        if (mountedRef.current) {
-          setRegeneratingMessageId(null);
-        }
-      }
-    }
-  }
-
-  async function handleCheckRegeneration(messageId: string) {
-    if (
-      !sessionId
-      || isDraftSession
-      || !sessionDetailsReady
-      || regenerationError?.messageId !== messageId
-      || regenerationError.kind !== 'uncertain'
-      || sendOperationRef.current
-      || sendCheckOperationRef.current
-      || sessionMutationRef.current
-      || regenerateOperationRef.current
-    ) {
-      return;
-    }
-
-    const targetSessionId = sessionId;
-    const recoverySnapshot = regenerationError;
-    const operation = Symbol('check-regeneration');
-    regenerateOperationRef.current = operation;
-    setRegeneratingMessageId(messageId);
-    try {
-      const response = await listChatMessages(targetSessionId);
-      if (
-        !mountedRef.current
-        || activeSessionIdRef.current !== targetSessionId
-        || regenerateOperationRef.current !== operation
-      ) {
-        return;
-      }
-
-      const regeneratedAnswer = findNewAssistantMessage(
-        response.items,
-        recoverySnapshot.baselineMessageIds,
-      );
-      setMessages(response.items);
-      setMessageLoadError('');
-      if (regeneratedAnswer) {
-        pendingRegenerationStore.clear(targetSessionId, messageId);
-        setActiveCitationMessageId(regeneratedAnswer.id);
-        setActiveCitationIndex(null);
-        setRegenerationError(null);
-        void loadSessions();
-      } else {
-        const checkedRecovery = {
-          ...recoverySnapshot,
-          message: '检查后仍未发现新的回答。你可以继续检查，或确认重新生成。',
-          checked: true,
-        };
-        pendingRegenerationStore.set({
-          sessionId: targetSessionId,
-          messageId,
-          baselineMessageIds: recoverySnapshot.baselineMessageIds,
-          checked: true,
-          createdAt: new Date().toISOString(),
-        });
-        setRegenerationError(checkedRecovery);
-      }
-    } catch {
-      if (
-        mountedRef.current
-        && activeSessionIdRef.current === targetSessionId
-        && regenerateOperationRef.current === operation
-      ) {
-        setRegenerationError({
-          ...recoverySnapshot,
-          message: '暂时无法检查重新生成结果，请稍后再次检查。',
-        });
-      }
-    } finally {
-      if (regenerateOperationRef.current === operation) {
-        regenerateOperationRef.current = null;
-        if (mountedRef.current) {
-          setRegeneratingMessageId(null);
-        }
-      }
-    }
-  }
-
-  function handleConfirmRegeneration(messageId: string) {
-    if (
-      !sessionId
-      || archived
-      || regenerationError?.messageId !== messageId
-      || regenerationError.kind !== 'uncertain'
-      || !regenerationError.checked
-    ) {
-      return;
-    }
-    void handleRegenerateMessage(messageId);
   }
 
   return (
-    <WorkspaceShell active="chat">
-      <div className="chat-workspace-page">
-      <header className="page-header workspace-heading chat-workspace-header">
-        <div>
-          <p className="breadcrumb">知识库 / {currentKnowledgeBase?.name ?? 'AI 问答'} / {isDraftSession ? '新建对话' : '对话'}</p>
-          <h1>{isDraftSession ? '新建对话' : 'AI 问答'}</h1>
-          <p className="page-description">围绕当前知识库提问，有依据时会在回答旁展示来源。</p>
-        </div>
-        <div className="toolbar">
-          {currentKnowledgeBase && (
-            <Link
-              aria-disabled={chatMutationBusy || undefined}
-              className="secondary-link"
-              tabIndex={chatMutationBusy ? -1 : undefined}
-              to={`/knowledge-bases/${currentKnowledgeBase.id}`}
-              onClick={(event) => {
-                if (sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
-                  event.preventDefault();
-                }
-              }}
-            >
-              返回知识库
-            </Link>
-          )}
-          <button type="button" onClick={() => handleCreateSession()} disabled={chatMutationBusy}>
-            新建对话
+    <div className="chat-launcher">
+      <MessageSquareText aria-hidden="true" />
+      <h2>选择一个知识库开始提问</h2>
+      <p>回答只依据所选知识库中的文档，并在下方标注来源。</p>
+      <div className="chat-launcher__list">
+        {knowledgeBases.map((knowledgeBase) => (
+          <button
+            aria-pressed={selectedId === knowledgeBase.id}
+            className={selectedId === knowledgeBase.id ? 'chat-launcher__item is-selected' : 'chat-launcher__item'}
+            key={knowledgeBase.id}
+            onClick={() => onSelect(knowledgeBase.id)}
+            type="button"
+          >
+            <Library aria-hidden="true" />
+            <span className="ui-cell-stack">
+              <strong>{knowledgeBase.name}</strong>
+              <small>{knowledgeBase.description || '未填写描述'}</small>
+            </span>
           </button>
-        </div>
-      </header>
-
-      {error && !failedQuestion && !uncertainSend && (
-        <div className="error-text" role="alert">
-          <span>{error}</span>
-        </div>
-      )}
-
-      <div className="chat-shell">
-        <PortalWhenOpen active={auxiliaryPanel === 'sessions'}>
-        <div
-          className={`chat-aux chat-sessions-aux${auxiliaryPanel === 'sessions' ? ' is-open' : ''}`}
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setAuxiliaryPanel(null);
-          }}
-        >
-        <aside
-          aria-label={auxiliaryPanel === 'sessions' ? '会话列表' : undefined}
-          aria-modal={auxiliaryPanel === 'sessions' ? 'true' : undefined}
-          className="chat-sidebar-panel"
-          ref={sessionsPanelRef}
-          role={auxiliaryPanel === 'sessions' ? 'dialog' : undefined}
-          tabIndex={auxiliaryPanel === 'sessions' ? -1 : undefined}
-        >
-          <div className="chat-aux__header">
-            <strong>会话列表</strong>
-            <button aria-label="关闭会话列表" className="chat-aux__close" type="button" onClick={() => setAuxiliaryPanel(null)}>
-              <X aria-hidden="true" size={18} />
-            </button>
-          </div>
-          {knowledgeBaseListError && (
-            <div className="empty-state" role="alert">
-              <p>{knowledgeBaseListError}</p>
-              <button className="secondary-button" type="button" onClick={() => void loadKnowledgeBases()}>
-                重试知识库列表
-              </button>
-            </div>
-          )}
-          <label className="field-label">
-            当前知识库
-            <select
-              value={currentKnowledgeBase?.id ?? ''}
-              disabled={chatMutationBusy || knowledgeBasesLoading || knowledgeBases.length === 0}
-              onChange={(event) => handleKnowledgeBaseChange(event.target.value)}
-            >
-              {!currentKnowledgeBase && <option value="">请选择知识库</option>}
-              {knowledgeBases.map((knowledgeBase) => (
-                <option key={knowledgeBase.id} value={knowledgeBase.id}>
-                  {knowledgeBase.name}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <div className="chat-kb-card">
-            <span className={`kb-icon ${currentKnowledgeBase?.visibility === 'public' ? 'public' : 'private'}`} aria-hidden="true" />
-            <div>
-              <strong>{currentKnowledgeBase?.name ?? '未选择知识库'}</strong>
-              <p>{currentKnowledgeBase?.description || '选择知识库后开始会话。'}</p>
-            </div>
-          </div>
-
-          <button type="button" onClick={() => handleCreateSession()} disabled={chatMutationBusy}>
-            基于此知识库提问
-          </button>
-
-          <div className="session-section-title">
-            <strong>会话</strong>
-            <span>{sessionsLoading || sessionListError ? '--' : sessionsForCurrentKnowledgeBase.length}</span>
-          </div>
-
-          <div className="session-list chat-session-list">
-            {sessionsLoading ? (
-              <LoadingSkeleton rows={4} columns={1} compact announce label="正在加载会话" />
-            ) : sessionListError ? (
-              <div className="empty-state" role="alert">
-                <p>{sessionListError}</p>
-                <button className="secondary-button" type="button" onClick={() => void loadSessions()}>
-                  重试会话列表
-                </button>
-              </div>
-            ) : sessionsForCurrentKnowledgeBase.length === 0 ? (
-              <div className="empty-state">当前知识库暂无会话。</div>
-            ) : (
-              sessionsForCurrentKnowledgeBase.map((session) => (
-                <Link
-                  aria-disabled={chatMutationBusy || undefined}
-                  aria-current={session.id === sessionId ? 'page' : undefined}
-                  className={session.id === sessionId ? 'session-card active' : 'session-card'}
-                  key={session.id}
-                  tabIndex={chatMutationBusy ? -1 : undefined}
-                  to={`/chat/${session.id}`}
-                  onClick={(event) => {
-                    if (sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
-                      event.preventDefault();
-                      return;
-                    }
-                    setAuxiliaryPanel(null);
-                  }}
-                >
-                  <strong>{session.title || '未命名会话'}</strong>
-                  <span>{formatDateTime(session.updatedAt || session.createdAt)}</span>
-                </Link>
-              ))
-            )}
-          </div>
-        </aside>
-        </div>
-        </PortalWhenOpen>
-
-        <section className="chat-main-panel" aria-label="问答会话">
-          <header className="chat-thread-head">
-            <div>
-              <h2>{currentSession?.title ?? '问答会话'}</h2>
-              <p className="muted-text">
-                {archived
-                  ? `已归档于 ${formatDateTime(currentSession?.archivedAt ?? '')}，详情仍可查看。`
-                  : '回答会根据当前知识库内容生成，并在有依据时展示来源。'}
-              </p>
-            </div>
-            <div className="chat-thread-actions">
-              <div className="chat-panel-controls">
-                <button
-                  aria-label="打开会话列表"
-                  className="secondary-button chat-drawer-trigger chat-sessions-trigger"
-                  type="button"
-                  onClick={() => setAuxiliaryPanel('sessions')}
-                >
-                  <PanelLeft aria-hidden="true" size={18} />
-                  <span>会话</span>
-                </button>
-                <button
-                  aria-label="打开引用来源"
-                  className="secondary-button chat-drawer-trigger chat-citations-trigger"
-                  type="button"
-                  onClick={() => setAuxiliaryPanel('citations')}
-                >
-                  <BookOpen aria-hidden="true" size={18} />
-                  <span>引用</span>
-                </button>
-              </div>
-              {!isDraftSession && (
-                <>
-                  <form className="chat-title-form" onSubmit={handleUpdateTitle}>
-                    <input
-                      aria-label="会话标题"
-                      value={titleDraft}
-                      onChange={(event) => setTitleDraft(event.target.value)}
-                      disabled={!sessionDetailsReady || chatMutationBusy}
-                    />
-                    <button className="secondary-button" type="submit" disabled={!sessionDetailsReady || chatMutationBusy || !titleDraft.trim()}>
-                      改名
-                    </button>
-                  </form>
-                  <div className="chat-thread-stats" aria-label="会话统计">
-                    <span>{messageStatsKnown ? questionCount : '--'} 问</span>
-                    <span>{messageStatsKnown ? citationCount : '--'} 引用</span>
-                  </div>
-                  <div className="table-actions">
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={() => {
-                        if (sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
-                          return;
-                        }
-                        setSessionConfirmError('');
-                        setConfirmArchive(true);
-                      }}
-                      disabled={!sessionDetailsReady || chatMutationBusy || archived}
-                    >
-                      归档
-                    </button>
-                    <button
-                      className="danger-button"
-                      type="button"
-                      onClick={() => {
-                        if (sendOperationRef.current || sendCheckOperationRef.current || sessionMutationRef.current) {
-                          return;
-                        }
-                        setSessionConfirmError('');
-                        setConfirmDelete(true);
-                      }}
-                      disabled={!sessionDetailsReady || chatMutationBusy}
-                    >
-                      删除
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          </header>
-
-          <RerankFallbackNotice fallback={rerankFallback} />
-
-          <div ref={messagesRef} className={messagesLoading ? 'messages chat-thread is-switching' : 'messages chat-thread'}>
-            {messagesLoading ? (
-              <div className="message-loading-state">
-                <LoadingSkeleton rows={5} columns={1} compact announce label="正在加载消息" />
-              </div>
-            ) : messageLoadError ? (
-              <div className="chat-empty-state" role="alert">
-                <strong>无法显示会话消息</strong>
-                <p>{messageLoadError}</p>
-                <button className="secondary-button" type="button" onClick={() => sessionId && void loadSessionMessages(sessionId)}>
-                  重试消息
-                </button>
-              </div>
-            ) : messages.length === 0 && !pendingQuestion && !failedQuestion && !uncertainSend ? (
-              <div className="chat-empty-state">
-                <strong>开始提问</strong>
-                <p>围绕当前知识库提问，回答会在右侧展示可追踪引用。</p>
-              </div>
-            ) : (
-              messages.map((message) => (
-                <MessageBubble
-                  activeCitationIndex={message.id === activeCitationMessageId ? activeCitationIndex : null}
-                  activeCitations={message.id === activeCitationMessageId}
-                  message={message}
-                  key={message.id}
-                  onSelectCitation={(index) => {
-                    setActiveCitationMessageId(message.id);
-                    setActiveCitationIndex(index);
-                    if (isCompact) setAuxiliaryPanel('citations');
-                  }}
-                  onSelectCitations={() => {
-                    setActiveCitationMessageId(message.id);
-                    setActiveCitationIndex(null);
-                    if (isCompact) setAuxiliaryPanel('citations');
-                  }}
-                  onRegenerate={message.id === latestAssistantMessageId && !archived ? handleRegenerateMessage : undefined}
-                  onCheckRegeneration={handleCheckRegeneration}
-                  onConfirmRegeneration={!archived ? handleConfirmRegeneration : undefined}
-                  regenerating={regeneratingMessageId === message.id}
-                  regenerationDisabled={chatMutationBusy}
-                  regenerationChecked={regenerationError?.messageId === message.id && regenerationError.checked}
-                  regenerationError={regenerationError?.messageId === message.id ? regenerationError.message : undefined}
-                  regenerationUncertain={regenerationError?.messageId === message.id && regenerationError.kind === 'uncertain'}
-                />
-              ))
-            )}
-            {pendingQuestion && (
-              <>
-                <article className="message-bubble user pending">
-                  <span className="message-role">用户</span>
-                  <p>{pendingQuestion}</p>
-                </article>
-                <article className="message-bubble assistant pending">
-                  <span className="message-role">助手</span>
-                  <p role="status">正在检索知识库并生成回答...</p>
-                  <LoadingSkeleton rows={2} columns={1} compact />
-                </article>
-              </>
-            )}
-            {failedQuestion && (
-              <>
-                <article className="message-bubble user">
-                  <span className="message-role">用户</span>
-                  <p>{failedQuestion}</p>
-                </article>
-                <article className="message-bubble assistant chat-recovery-card" role="alert">
-                  <span className="message-role">助手</span>
-                  <strong>回答生成失败</strong>
-                  <p>{error}</p>
-                  <div className="message-actions chat-recovery-actions">
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={() => void submitQuestion(draft.trim())}
-                      disabled={chatMutationBusy || !draft.trim()}
-                    >
-                      重新生成
-                    </button>
-                    <button className="link-button" type="button" onClick={() => composerRef.current?.focus()}>
-                      修改问题
-                    </button>
-                  </div>
-                </article>
-              </>
-            )}
-            {uncertainSend && (
-              <>
-                <article className="message-bubble user">
-                  <span className="message-role">用户</span>
-                  <p>{uncertainSend.question}</p>
-                </article>
-                <article className="message-bubble assistant chat-recovery-card" role="alert">
-                  <span className="message-role">助手</span>
-                  <strong>发送结果待确认</strong>
-                  <p>{error}</p>
-                  <div className="message-actions chat-recovery-actions">
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={() => void handleCheckSendResult()}
-                      disabled={checkingSendResult}
-                    >
-                      {checkingSendResult ? '检查中...' : '再次检查'}
-                    </button>
-                    <button
-                      className="link-button"
-                      type="button"
-                      onClick={() => void submitQuestion(uncertainSend.question, true)}
-                      disabled={chatMutationBusy || checkingSendResult || !uncertainSend.question}
-                    >
-                      确认重新发送
-                    </button>
-                  </div>
-                </article>
-              </>
-            )}
-          </div>
-
-          <form className="composer chat-composer" onSubmit={handleSubmit}>
-            <textarea
-              ref={composerRef}
-              aria-label="继续追问当前知识库"
-              placeholder="继续追问当前知识库..."
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              disabled={chatMutationBusy || !canSend || Boolean(uncertainSend)}
-              rows={2}
-            />
-            <button type="submit" disabled={chatMutationBusy || !draft.trim() || !canSend || Boolean(uncertainSend)}>
-              {sending ? '发送中...' : '发送'}
-            </button>
-          </form>
-        </section>
-
-        <PortalWhenOpen active={auxiliaryPanel === 'citations'}>
-        <div
-          className={`chat-aux chat-citations-aux${auxiliaryPanel === 'citations' ? ' is-open' : ''}`}
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setAuxiliaryPanel(null);
-          }}
-        >
-        <aside
-          aria-label="引用来源"
-          aria-modal={auxiliaryPanel === 'citations' ? 'true' : undefined}
-          className="citation-panel chat-citation-panel"
-          ref={citationsPanelRef}
-          role={auxiliaryPanel === 'citations' ? 'dialog' : undefined}
-          tabIndex={auxiliaryPanel === 'citations' ? -1 : undefined}
-        >
-          <div className="chat-aux__header">
-            <strong>引用来源</strong>
-            <button aria-label="关闭引用来源" className="chat-aux__close" type="button" onClick={() => setAuxiliaryPanel(null)}>
-              <X aria-hidden="true" size={18} />
-            </button>
-          </div>
-          <div className="chat-citation-intro">
-            <h2>引用来源</h2>
-            <p className="muted-text">回答有依据时会在这里列出来源。</p>
-            <p aria-live="polite" className="sr-only" role="status">
-              {activeCitationIndex !== null && activeCitations[activeCitationIndex]
-                ? `已定位到来源 ${activeCitationIndex + 1}：${activeCitations[activeCitationIndex].filename}`
-                : ''}
-            </p>
-          </div>
-
-          <div className="citation-list" id="chat-citation-list">
-            {messagesLoading ? (
-              <LoadingSkeleton rows={3} columns={1} compact />
-            ) : messageLoadError ? (
-              <div className="empty-state">消息加载失败，引用暂不可用。</div>
-            ) : pendingQuestion ? (
-              <div className="empty-state">回答生成完成后会在这里显示引用。</div>
-            ) : messages.length === 0 ? (
-              <div className="empty-state">回答产生引用后会在这里显示。</div>
-            ) : activeCitations.length === 0 ? (
-              <div className="empty-state">当前知识库中未找到足够依据。</div>
-            ) : (
-              activeCitations.map((citation, index) => (
-                <CitationCard
-                  active={activeCitationIndex === index}
-                  citation={citation}
-                  index={index + 1}
-                  key={`${citation.documentId}-${citation.chunkId}-${index}`}
-                  knowledgeBaseId={currentKnowledgeBase?.id}
-                />
-              ))
-            )}
-          </div>
-        </aside>
-        </div>
-        </PortalWhenOpen>
+        ))}
       </div>
-      </div>
-      {confirmArchive && currentSession && (
-        <ConfirmDialog
-          title="归档会话"
-          description={`确认归档“${currentSession.title || '未命名会话'}”？归档后默认不再出现在会话列表中。`}
-          confirmLabel="归档"
-          busy={chatMutationBusy}
-          error={sessionConfirmError}
-          onCancel={() => {
-            setSessionConfirmError('');
-            setConfirmArchive(false);
-          }}
-          onConfirm={handleArchiveSession}
-        />
-      )}
-      {confirmDelete && currentSession && (
-        <ConfirmDialog
-          title="删除会话"
-          description={`确认删除“${currentSession.title || '未命名会话'}”？消息会一并删除且不可恢复。`}
-          confirmLabel="删除"
-          busy={chatMutationBusy}
-          error={sessionConfirmError}
-          onCancel={() => {
-            setSessionConfirmError('');
-            setConfirmDelete(false);
-          }}
-          onConfirm={handleDeleteSession}
-        />
-      )}
-    </WorkspaceShell>
+    </div>
   );
 }
 
-function PortalWhenOpen({ active, children }: { active: boolean; children: ReactNode }) {
-  return active ? createPortal(children, document.body) : children;
-}
-
-function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(
-    () => typeof window.matchMedia === 'function' && window.matchMedia(query).matches,
-  );
-
-  useEffect(() => {
-    if (typeof window.matchMedia !== 'function') return;
-    const media = window.matchMedia(query);
-    const update = () => setMatches(media.matches);
-    update();
-    media.addEventListener('change', update);
-    return () => media.removeEventListener('change', update);
-  }, [query]);
-
-  return matches;
-}
-
-function mergeSession(sessions: ChatSession[], nextSession: ChatSession): ChatSession[] {
-  const exists = sessions.some((session) => session.id === nextSession.id);
-  if (!exists) {
-    return [nextSession, ...sessions];
+/**
+ * Shown while a send whose outcome is unknown reconciles itself. The user is
+ * only asked to decide after the automatic checks are exhausted.
+ */
+function UnconfirmedSendNotice({
+  blocked,
+  checking,
+  needsDecision,
+  onCheck,
+  onResend,
+}: {
+  blocked: boolean;
+  checking: boolean;
+  needsDecision: boolean;
+  onCheck: () => void;
+  onResend: () => void;
+}) {
+  if (!needsDecision) {
+    return (
+      <div className="chat-recovery" role="status">
+        <strong>正在确认这条消息…</strong>
+        <p>网络结果暂时未知，正在自动核对。这条问题不会被重复发送。</p>
+      </div>
+    );
   }
-  return sessions.map((session) => (session.id === nextSession.id ? nextSession : session));
+
+  return (
+    <div className="chat-recovery chat-recovery--decision" role="alert">
+      <strong>没有找到这条消息</strong>
+      <p>自动核对后仍未看到这条问题。你可以再检查一次，或确认重新发送。</p>
+      <div className="chat-recovery__actions">
+        <Button disabled={checking || blocked} loading={checking} loadingLabel="检查中" variant="secondary" onClick={onCheck}>
+          再检查一次
+        </Button>
+        <Button disabled={checking || blocked} variant="ghost" onClick={onResend}>确认重新发送</Button>
+      </div>
+    </div>
+  );
 }
 
-function findNewAssistantMessage(messages: ChatMessage[], baselineMessageIds: string[]): ChatMessage | undefined {
-  const knownIds = new Set(baselineMessageIds);
-  return [...messages].reverse().find((message) => (
-    message.role === 'assistant' && !knownIds.has(message.id)
-  ));
+function RegenerationNotice({
+  allowWrite,
+  blocked,
+  onCheck,
+  onRegenerate,
+  thread,
+}: {
+  allowWrite: boolean;
+  blocked: boolean;
+  onCheck: () => void;
+  onRegenerate: (messageId: string) => void;
+  thread: ReturnType<typeof useChatThread>;
+}) {
+  const state = thread.regeneration;
+  if (!state) return null;
+
+  if (state.kind === 'failed') {
+    return (
+      <div className="chat-recovery chat-recovery--failed" role="alert">
+        <strong>重新生成失败</strong>
+        <p>{state.message}</p>
+        {allowWrite && (
+          <div className="chat-recovery__actions">
+            <Button disabled={blocked} variant="secondary" onClick={() => onRegenerate(state.messageId)}>重试</Button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const needsDecision = state.autoChecksDone > 0;
+  return (
+    <div className={needsDecision ? 'chat-recovery chat-recovery--decision' : 'chat-recovery'} role={needsDecision ? 'alert' : 'status'}>
+      <strong>{needsDecision ? '没有找到新的回答' : '正在确认重新生成结果…'}</strong>
+      <p>{state.message}</p>
+      <div className="chat-recovery__actions">
+        <Button
+          disabled={state.checking || blocked}
+          loading={state.checking}
+          loadingLabel="检查中"
+          variant="secondary"
+          onClick={onCheck}
+        >
+          再检查一次
+        </Button>
+        {needsDecision && allowWrite && (
+          <Button disabled={state.checking || blocked} variant="ghost" onClick={() => onRegenerate(state.messageId)}>
+            确认重新生成
+          </Button>
+        )}
+      </div>
+    </div>
+  );
 }
 
-function formatDateTime(value: string): string {
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value));
-}
-
-function errorMessage(err: unknown, fallback: string): string {
-  return getErrorMessage(err, fallback);
-}
-
-function isDefinitiveSendFailure(error: ApiError): boolean {
-  return error.status < 500 || error.code === 'CHAT_COMPLETION_FAILED' || error.code === 'RERANK_FAILED';
+function chatExportFilename(title: string): string {
+  const safeTitle = title
+    .trim()
+    .replace(/\.md$/i, '')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+    .slice(0, 80)
+    .trim();
+  return `${safeTitle || '会话记录'}.md`;
 }

@@ -133,3 +133,70 @@ LIMIT ? OFFSET ?`, queryArgs...).Scan(&results).Error
 	}
 	return results, total, nil
 }
+
+type SearchSuggestion struct {
+	Type              string
+	ID                uuid.UUID
+	KnowledgeBaseID   uuid.UUID
+	KnowledgeBaseName string
+	DocumentID        *uuid.UUID
+	Title             string
+}
+
+// Suggest is the title-only half of Search: knowledge base names and document
+// filenames, no chunk content and no snippet. That is what keeps a keystroke in
+// the command palette cheaper than a results page.
+func (r *GlobalSearchRepository) Suggest(
+	ctx context.Context,
+	ownerID uuid.UUID,
+	query string,
+	limit int,
+) ([]SearchSuggestion, error) {
+	like := "%" + strings.ToLower(query) + "%"
+	var results []SearchSuggestion
+	err := r.db.WithContext(ctx).Raw(`
+WITH matches AS (
+    SELECT 'knowledgeBase' AS result_type,
+        knowledge_bases.id AS id,
+        knowledge_bases.id AS knowledge_base_id,
+        knowledge_bases.name AS knowledge_base_name,
+        NULL AS document_id,
+        knowledge_bases.name AS title,
+        knowledge_bases.updated_at AS sort_at,
+        1 AS type_rank
+    FROM knowledge_bases
+    WHERE knowledge_bases.owner_id = ?
+      AND knowledge_bases.deleted_at IS NULL
+      AND LOWER(knowledge_bases.name) LIKE ?
+
+    UNION ALL
+
+    SELECT 'document' AS result_type,
+        documents.id AS id,
+        documents.knowledge_base_id AS knowledge_base_id,
+        knowledge_bases.name AS knowledge_base_name,
+        documents.id AS document_id,
+        documents.filename AS title,
+        documents.updated_at AS sort_at,
+        2 AS type_rank
+    FROM documents
+    JOIN knowledge_bases ON knowledge_bases.id = documents.knowledge_base_id
+    WHERE knowledge_bases.owner_id = ?
+      AND knowledge_bases.deleted_at IS NULL
+      AND documents.deleted_at IS NULL
+      AND LOWER(documents.filename) LIKE ?
+)
+SELECT result_type AS type,
+    id,
+    knowledge_base_id,
+    knowledge_base_name,
+    document_id,
+    title
+FROM matches
+ORDER BY type_rank ASC, sort_at DESC, id ASC
+LIMIT ?`, ownerID, like, ownerID, like, limit).Scan(&results).Error
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}

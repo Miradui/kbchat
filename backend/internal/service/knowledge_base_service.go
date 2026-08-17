@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -33,6 +34,14 @@ type KnowledgeBaseService struct {
 	tagBindings *repository.KnowledgeBaseTagBindingRepository
 	members     *repository.KnowledgeBaseMemberRepository
 	users       *repository.UserRepository
+	activities  *ActivityRecorder
+}
+
+// SetActivityRecorder wires the workspace timeline. It is optional on purpose:
+// a service without one records nothing, so every existing construction site and
+// test keeps working unchanged.
+func (s *KnowledgeBaseService) SetActivityRecorder(recorder *ActivityRecorder) {
+	s.activities = recorder
 }
 
 func NewKnowledgeBaseService(
@@ -105,6 +114,14 @@ func (s *KnowledgeBaseService) Create(ctx context.Context, ownerID uuid.UUID, re
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
+	s.activities.Record(ctx, ownerID, ActivityEntry{
+		Action:            ActivityKnowledgeBaseCreated,
+		ResourceType:      "knowledgeBase",
+		ResourceID:        created.ID,
+		ResourceName:      created.Name,
+		KnowledgeBaseID:   &created.ID,
+		KnowledgeBaseName: created.Name,
+	})
 	res := toKnowledgeBaseResponse(created, tags)
 	return &res, nil
 }
@@ -290,7 +307,18 @@ func (s *KnowledgeBaseService) Delete(ctx context.Context, ownerID, id uuid.UUID
 		return apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
 	}
 
-	return s.repo.Delete(ctx, kb)
+	if err := s.repo.Delete(ctx, kb); err != nil {
+		return err
+	}
+	s.activities.Record(ctx, ownerID, ActivityEntry{
+		Action:            ActivityKnowledgeBaseDeleted,
+		ResourceType:      "knowledgeBase",
+		ResourceID:        kb.ID,
+		ResourceName:      kb.Name,
+		KnowledgeBaseID:   &kb.ID,
+		KnowledgeBaseName: kb.Name,
+	})
+	return nil
 }
 
 func (s *KnowledgeBaseService) ListRecycleBin(ctx context.Context, ownerID uuid.UUID, page, pageSize int) (*dto.RecycleBinListResponse, error) {
@@ -325,8 +353,19 @@ func (s *KnowledgeBaseService) Restore(ctx context.Context, ownerID, id uuid.UUI
 		return apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
 	}
 	if err := s.repo.Restore(ctx, id); err != nil {
+		if errors.Is(err, repository.ErrKnowledgeBaseNotDeleted) {
+			return apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
+		}
 		return apperror.Internal(err)
 	}
+	s.activities.Record(ctx, ownerID, ActivityEntry{
+		Action:            ActivityKnowledgeBaseRestored,
+		ResourceType:      "knowledgeBase",
+		ResourceID:        kb.ID,
+		ResourceName:      kb.Name,
+		KnowledgeBaseID:   &kb.ID,
+		KnowledgeBaseName: kb.Name,
+	})
 	return nil
 }
 
@@ -384,6 +423,37 @@ func (s *KnowledgeBaseService) BatchMoveCategory(ctx context.Context, ownerID uu
 	return &dto.KnowledgeBaseBatchResultResponse{ProcessedCount: len(ids)}, nil
 }
 
+// BatchTag applies one tag mutation across several knowledge bases. Like the
+// other batch endpoints it is all-or-nothing: ownership of every knowledge base
+// and every tag is verified up front, and the mutation itself runs in a single
+// repository transaction.
+func (s *KnowledgeBaseService) BatchTag(ctx context.Context, ownerID uuid.UUID, req dto.KnowledgeBaseBatchTagRequest) (*dto.KnowledgeBaseBatchResultResponse, error) {
+	ids := normalizeUUIDs(req.KnowledgeBaseIDs)
+	if len(ids) == 0 {
+		return nil, apperror.Validation(map[string]any{"knowledgeBaseIds": "知识库 ID 不能为空"})
+	}
+	mode := normalizeBatchTagMode(req.Mode)
+	if err := validateBatchTagMode(mode); err != nil {
+		return nil, err
+	}
+	tagIDs := normalizeUUIDs(req.TagIDs)
+	// Only replace has a meaningful empty payload: it clears every tag. Add and
+	// remove with no tags would silently do nothing, so reject them instead.
+	if len(tagIDs) == 0 && mode != dto.KnowledgeBaseBatchTagModeReplace {
+		return nil, apperror.Validation(map[string]any{"tagIds": "标签 ID 不能为空"})
+	}
+	if err := s.ensureKnowledgeBasesOwner(ctx, ownerID, ids, false); err != nil {
+		return nil, err
+	}
+	if err := s.ensureTagsOwner(ctx, ownerID, tagIDs); err != nil {
+		return nil, err
+	}
+	if err := s.tagBindings.ApplyForKnowledgeBases(ctx, ids, tagIDs, mode, ownerID); err != nil {
+		return nil, apperror.Internal(err)
+	}
+	return &dto.KnowledgeBaseBatchResultResponse{ProcessedCount: len(ids)}, nil
+}
+
 func (s *KnowledgeBaseService) BatchDelete(ctx context.Context, ownerID uuid.UUID, req dto.KnowledgeBaseBatchRequest) (*dto.KnowledgeBaseBatchResultResponse, error) {
 	ids := normalizeUUIDs(req.KnowledgeBaseIDs)
 	if len(ids) == 0 {
@@ -415,10 +485,11 @@ func (s *KnowledgeBaseService) BatchRestore(ctx context.Context, ownerID uuid.UU
 	if err := s.ensureKnowledgeBasesOwner(ctx, ownerID, ids, true); err != nil {
 		return nil, err
 	}
-	for _, id := range ids {
-		if err := s.repo.Restore(ctx, id); err != nil {
-			return nil, apperror.Internal(err)
+	if err := s.repo.BatchRestore(ctx, ids); err != nil {
+		if errors.Is(err, repository.ErrKnowledgeBaseNotDeleted) {
+			return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
 		}
+		return nil, apperror.Internal(err)
 	}
 	return &dto.KnowledgeBaseBatchResultResponse{ProcessedCount: len(ids)}, nil
 }
@@ -510,6 +581,7 @@ func (s *KnowledgeBaseService) AddMember(ctx context.Context, actorID, kbID uuid
 	if err := s.members.Save(ctx, member); err != nil {
 		return nil, apperror.Internal(err)
 	}
+	s.recordMemberActivity(ctx, actorID, ActivityMemberAdded, kb, user)
 	res := permissionMemberFromUser(user, role)
 	return &res, nil
 }
@@ -544,6 +616,7 @@ func (s *KnowledgeBaseService) UpdateMember(ctx context.Context, actorID, kbID, 
 	if err := s.members.Save(ctx, member); err != nil {
 		return nil, apperror.Internal(err)
 	}
+	s.recordMemberActivity(ctx, actorID, ActivityMemberRoleChanged, kb, user)
 	res := permissionMemberFromUser(user, role)
 	return &res, nil
 }
@@ -566,7 +639,37 @@ func (s *KnowledgeBaseService) RemoveMember(ctx context.Context, actorID, kbID, 
 	if err := s.members.Delete(ctx, kb.ID, userID); err != nil {
 		return apperror.Internal(err)
 	}
+	removed, err := s.users.FindByID(ctx, userID)
+	if err == nil {
+		s.recordMemberActivity(ctx, actorID, ActivityMemberRemoved, kb, removed)
+	}
 	return nil
+}
+
+// recordMemberActivity names the affected member, not the knowledge base: the
+// knowledge base is already carried in its own fields.
+func (s *KnowledgeBaseService) recordMemberActivity(
+	ctx context.Context,
+	actorID uuid.UUID,
+	action string,
+	kb *model.KnowledgeBase,
+	member *model.User,
+) {
+	if s.activities == nil || member == nil {
+		return
+	}
+	name := member.DisplayName
+	if strings.TrimSpace(name) == "" {
+		name = member.Username
+	}
+	s.activities.Record(ctx, actorID, ActivityEntry{
+		Action:            action,
+		ResourceType:      "member",
+		ResourceID:        member.ID,
+		ResourceName:      name,
+		KnowledgeBaseID:   &kb.ID,
+		KnowledgeBaseName: kb.Name,
+	})
 }
 
 func (s *KnowledgeBaseService) PermanentDelete(ctx context.Context, ownerID, id uuid.UUID) error {
@@ -578,6 +681,9 @@ func (s *KnowledgeBaseService) PermanentDelete(ctx context.Context, ownerID, id 
 		return apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
 	}
 	if err := s.repo.PermanentDelete(ctx, id); err != nil {
+		if errors.Is(err, repository.ErrKnowledgeBaseNotDeleted) {
+			return apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
+		}
 		return apperror.Internal(err)
 	}
 	return nil
@@ -606,6 +712,34 @@ func (s *KnowledgeBaseService) Stats(ctx context.Context, ownerID uuid.UUID, per
 		Documents:      metric(current.DocumentCount, previous.DocumentCount),
 		Views:          metric(current.ViewCount, previous.ViewCount),
 		Questions:      metric(current.QuestionCount, previous.QuestionCount),
+	}, nil
+}
+
+// DetailStats is a standalone endpoint on purpose. Knowledge base create/update/
+// detail responses stay free of list-only aggregates (see
+// TestKnowledgeBaseMutationAndDetailResponsesOmitListOnlyDocumentReadinessCounts),
+// so trend data gets its own request rather than widening those payloads.
+func (s *KnowledgeBaseService) DetailStats(ctx context.Context, ownerID, id uuid.UUID, period string) (*dto.KnowledgeBaseDetailStatsResponse, error) {
+	kb, err := s.findKnowledgeBase(ctx, ownerID, id)
+	if err != nil {
+		return nil, err
+	}
+
+	period = normalizePeriod(period)
+	now := time.Now()
+	start := periodStart(now, period)
+	previousStart := previousPeriodStart(start, period)
+	current, previous, err := s.repo.StatsForKnowledgeBase(ctx, ownerID, kb.ID, start, previousStart)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+
+	return &dto.KnowledgeBaseDetailStatsResponse{
+		KnowledgeBaseID: kb.ID.String(),
+		Period:          period,
+		Documents:       metric(current.DocumentCount, previous.DocumentCount),
+		Views:           metric(current.ViewCount, previous.ViewCount),
+		Questions:       metric(current.QuestionCount, previous.QuestionCount),
 	}, nil
 }
 
@@ -979,6 +1113,25 @@ func validateAssignableMemberRole(value string) error {
 		return apperror.New(http.StatusBadRequest, "OWNER_MEMBER_IMMUTABLE", "owner 权限来自知识库 owner_id，不能通过成员接口分配")
 	default:
 		return apperror.New(http.StatusBadRequest, "INVALID_MEMBER_ROLE", "成员角色不合法")
+	}
+}
+
+func normalizeBatchTagMode(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return dto.KnowledgeBaseBatchTagModeAdd
+	}
+	return value
+}
+
+func validateBatchTagMode(value string) error {
+	switch value {
+	case dto.KnowledgeBaseBatchTagModeAdd,
+		dto.KnowledgeBaseBatchTagModeRemove,
+		dto.KnowledgeBaseBatchTagModeReplace:
+		return nil
+	default:
+		return apperror.New(http.StatusBadRequest, "INVALID_BATCH_TAG_MODE", "批量标签模式不合法")
 	}
 }
 

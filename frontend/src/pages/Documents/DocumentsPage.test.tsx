@@ -22,21 +22,56 @@ import { renderWithRouter } from '../../test/render';
 import type { DocumentItem, KnowledgeBase } from '../../types/api';
 import { DocumentsPage } from './DocumentsPage';
 
+const documentListMocks = vi.hoisted(() => ({
+  counts: vi.fn(),
+  primary: vi.fn(),
+}));
+
 vi.mock('../../api/resources', () => ({
   batchDeleteDocuments: vi.fn(),
   batchReprocessDocuments: vi.fn(),
   deleteKnowledgeBase: vi.fn(),
   deleteDocument: vi.fn(),
   getKnowledgeBase: vi.fn(),
+  getSystemCapabilities: vi.fn().mockResolvedValue({
+    rerankEnabled: false,
+    upload: { maxFileBytes: 50 * 1024 * 1024, allowedExtensions: ['txt', 'md', 'pdf'] },
+    retrieval: { maxVectorTopN: 100, maxRerankTopK: 20 },
+    account: {
+      minPasswordLength: 8,
+      maxPasswordBytes: 72,
+      maxDisplayNameLength: 128,
+      maxAvatarUrlLength: 512,
+    },
+  }),
   getWorkspacePreference: vi.fn(),
-  listDocuments: vi.fn(),
+  listDocuments: documentListMocks.primary,
+  listGlobalDocuments: vi.fn(async (params: {
+    knowledgeBaseId?: string;
+    page?: number;
+    pageSize?: number;
+    status?: string;
+  } = {}) => {
+    const response = params.pageSize === 1
+      ? await documentListMocks.counts(params)
+      : await documentListMocks.primary(params.knowledgeBaseId ?? '', params);
+    return {
+      ...response,
+      items: response.items ?? [],
+      total: response.total ?? response.items?.length ?? 0,
+      page: response.page ?? params.page ?? 1,
+      pageSize: response.pageSize ?? params.pageSize ?? 20,
+    };
+  }),
   listKnowledgeBaseCategories: vi.fn(),
   listKnowledgeBaseTags: vi.fn(),
   listKnowledgeBases: vi.fn(),
   logout: vi.fn(),
+  recordKnowledgeBaseView: vi.fn().mockResolvedValue(undefined),
   reprocessDocument: vi.fn(),
   updateKnowledgeBase: vi.fn(),
   uploadDocument: vi.fn(),
+  uploadGlobalDocument: vi.fn(),
 }));
 
 vi.mock('./DocumentDetailDrawer', () => ({
@@ -103,6 +138,7 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
+  documentListMocks.counts.mockReset().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 1 });
   vi.mocked(getKnowledgeBase).mockReset().mockResolvedValue(knowledgeBase);
   vi.mocked(listDocuments).mockReset().mockResolvedValue({ items: [] });
   vi.mocked(listKnowledgeBases).mockReset().mockResolvedValue({ items: [knowledgeBase] });
@@ -133,7 +169,8 @@ function renderPage(entry = '/knowledge-bases/kb1/documents') {
   return renderWithRouter(
     <>
       <Routes>
-        <Route path="/knowledge-bases/:id/documents" element={<DocumentsPage />} />
+        <Route path="/knowledge-bases/:id/documents" element={<DocumentsPage scoped />} />
+        <Route path="/chat" element={<div>问答页</div>} />
         <Route path="/chat/:sessionId" element={<div>问答页</div>} />
         <Route path="/away" element={<div>已离开文档页</div>} />
       </Routes>
@@ -162,11 +199,26 @@ function LeaveDocumentsButton() {
 
 async function uploadThroughDialog(user: ReturnType<typeof userEvent.setup>, file: File, open = true) {
   if (open) {
-    await user.click(screen.getByRole('button', { name: '导入文档' }));
+    await user.click(await screen.findByRole('button', { name: '导入文档' }));
   }
   const dialog = await screen.findByRole('dialog', { name: '导入文档' });
   await user.upload(within(dialog).getByLabelText('选择文档文件'), file);
   await user.click(within(dialog).getByRole('button', { name: '开始导入' }));
+}
+
+async function openDocumentMenu(user: ReturnType<typeof userEvent.setup>, filename: string) {
+  const label = `${filename} 的更多操作`;
+  await user.click(await screen.findByRole('button', { name: label }));
+  return screen.getByRole('menu', { name: label });
+}
+
+async function clickDocumentAction(
+  user: ReturnType<typeof userEvent.setup>,
+  filename: string,
+  action: string,
+) {
+  const menu = await openDocumentMenu(user, filename);
+  await user.click(within(menu).getByRole('menuitem', { name: action }));
 }
 
 describe('DocumentsPage', () => {
@@ -174,12 +226,12 @@ describe('DocumentsPage', () => {
     const user = userEvent.setup();
     renderPage();
 
-    const actions = await screen.findByRole('button', { name: '制度库的更多操作' });
+    const actions = await screen.findByRole('button', { name: '制度库 的更多操作' });
     expect(listKnowledgeBaseCategories).not.toHaveBeenCalled();
     expect(listKnowledgeBaseTags).not.toHaveBeenCalled();
     await user.click(actions);
 
-    const menu = screen.getByRole('menu', { name: '制度库的更多操作' });
+    const menu = screen.getByRole('menu', { name: '制度库 的更多操作' });
     expect(within(menu).getByRole('menuitem', { name: '编辑知识库' })).toBeInTheDocument();
     expect(within(menu).getByRole('menuitem', { name: '删除知识库' })).toBeInTheDocument();
   });
@@ -188,7 +240,7 @@ describe('DocumentsPage', () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.click(await screen.findByRole('button', { name: '制度库的更多操作' }));
+    await user.click(await screen.findByRole('button', { name: '制度库 的更多操作' }));
     await user.click(screen.getByRole('menuitem', { name: '编辑知识库' }));
     const drawer = await screen.findByRole('dialog', { name: '编辑知识库' });
     const name = within(drawer).getByRole('textbox', { name: '名称' });
@@ -197,18 +249,17 @@ describe('DocumentsPage', () => {
     await user.click(within(drawer).getByRole('button', { name: '保存修改' }));
 
     expect(await screen.findByRole('heading', { name: '员工制度库' })).toBeInTheDocument();
-    expect(screen.getByRole('combobox', { name: '当前知识库' })).toHaveDisplayValue('员工制度库');
+    expect(within(screen.getByRole('navigation', { name: '面包屑' })).getByText('员工制度库'))
+      .toHaveAttribute('aria-current', 'page');
   });
 
-  it('keeps the current knowledge base selectable when it is absent from the workspace page', async () => {
+  it('keeps the scoped knowledge base visible when it is absent from the workspace page', async () => {
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [secondKnowledgeBase] });
     renderPage();
 
-    await screen.findByRole('heading', { name: '制度库' });
-    const selector = screen.getByRole('combobox', { name: '当前知识库' });
-    expect(selector).toHaveValue('kb1');
-    expect(selector).toHaveDisplayValue('制度库');
-    expect(within(selector).getByRole('option', { name: '产品库' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '制度库' })).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: '知识库筛选' })).not.toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: '知识库功能' })).toBeInTheDocument();
   });
 
   it('does not load knowledge-base category workspace data', async () => {
@@ -216,10 +267,10 @@ describe('DocumentsPage', () => {
     await screen.findByRole('heading', { name: '制度库' });
 
     const sectionNav = screen.getByRole('navigation', { name: '知识库功能' });
-    expect(within(sectionNav).getByRole('link', { name: '概览' })).toHaveAttribute('href', '/knowledge-bases/kb1?tab=overview');
+    expect(within(sectionNav).getByRole('link', { name: '概览' })).toHaveAttribute('href', '/knowledge-bases/kb1');
     expect(within(sectionNav).getByRole('link', { name: '文档' })).toHaveAttribute('aria-current', 'page');
-    expect(within(sectionNav).getByRole('link', { name: 'AI 问答' })).toHaveAttribute('href', '/knowledge-bases/kb1?tab=qa');
-    expect(within(sectionNav).getByRole('link', { name: '设置' })).toHaveAttribute('href', '/knowledge-bases/kb1?tab=settings');
+    expect(within(sectionNav).queryByRole('link', { name: 'AI 问答' })).not.toBeInTheDocument();
+    expect(within(sectionNav).getByRole('link', { name: '设置' })).toHaveAttribute('href', '/knowledge-bases/kb1/settings');
     expect(screen.queryByRole('link', { name: '返回详情' })).not.toBeInTheDocument();
     expect(listKnowledgeBaseCategories).not.toHaveBeenCalled();
     expect(getWorkspacePreference).not.toHaveBeenCalled();
@@ -227,12 +278,13 @@ describe('DocumentsPage', () => {
 
   it('announces an asynchronous document-list failure', async () => {
     vi.mocked(listDocuments).mockRejectedValue(new Error('offline'));
+    documentListMocks.counts.mockRejectedValue(new Error('offline'));
     renderPage();
 
     expect(await screen.findByRole('alert')).toHaveTextContent('文档列表加载失败');
     expect(screen.queryByText('当前筛选下没有文档。上传 txt、md 或 pdf 后开始处理。')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '重试加载' })).toBeInTheDocument();
-    expect(within(screen.getByText('可用于问答').parentElement!).getByText('--')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument();
+    expect(within(screen.getByText('可用于问答').parentElement!).getByText('—')).toBeInTheDocument();
   });
 
   it('does not let a late reprocess failure affect a newer knowledge-base operation', async () => {
@@ -251,17 +303,17 @@ describe('DocumentsPage', () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.click(await screen.findByRole('button', { name: '重处理' }));
+    await clickDocumentAction(user, uploadedDocument.filename, '重新处理');
     await user.click(screen.getByRole('button', { name: '切换到产品库路由' }));
     expect(await screen.findByText('product.md')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '重处理' }));
+    await clickDocumentAction(user, secondDocument.filename, '重新处理');
 
     await act(async () => {
       firstReprocess.reject(new Error('offline'));
       await Promise.resolve();
     });
     expect(screen.queryByText('文档重处理失败')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '重处理' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: `${secondDocument.filename} 的更多操作` })).toBeDisabled();
 
     await act(async () => {
       secondReprocess.resolve(secondDocument);
@@ -286,17 +338,17 @@ describe('DocumentsPage', () => {
     renderPage();
 
     await user.click(await screen.findByRole('checkbox', { name: '选择 handbook.pdf' }));
-    await user.click(screen.getByRole('button', { name: '批量重处理' }));
+    await user.click(screen.getByRole('button', { name: '重新处理' }));
     await user.click(screen.getByRole('button', { name: '切换到产品库路由' }));
     await user.click(await screen.findByRole('checkbox', { name: '选择 product.md' }));
-    await user.click(screen.getByRole('button', { name: '批量重处理' }));
+    await user.click(screen.getByRole('button', { name: '重新处理' }));
 
     await act(async () => {
       firstBatch.reject(new Error('offline'));
       await Promise.resolve();
     });
     expect(screen.queryByText('批量重处理失败')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '批量重处理' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '重新处理' })).toBeDisabled();
 
     await act(async () => {
       secondBatch.resolve({ processedCount: 1 });
@@ -346,7 +398,11 @@ describe('DocumentsPage', () => {
     renderPage();
 
     await uploadThroughDialog(user, new File(['content'], 'handbook.pdf', { type: 'application/pdf' }));
-    await waitFor(() => expect(uploadDocument).toHaveBeenCalledWith(knowledgeBase.id, expect.any(File)));
+    await waitFor(() => expect(uploadDocument).toHaveBeenCalledWith(
+      knowledgeBase.id,
+      expect.any(File),
+      expect.any(Function),
+    ));
     act(() => screen.getByText('切换到产品库路由').click());
     expect(await screen.findByRole('heading', { name: '产品库' })).toBeInTheDocument();
 
@@ -357,7 +413,7 @@ describe('DocumentsPage', () => {
 
     expect(screen.getByText('product.md')).toBeInTheDocument();
     expect(screen.queryByText('handbook.pdf')).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: '基于此知识库提问' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '基于此知识库提问' })).toBeInTheDocument();
   });
 
   it('does not let an old upload unlock a newer knowledge-base upload', async () => {
@@ -409,7 +465,7 @@ describe('DocumentsPage', () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.click(await screen.findByRole('button', { name: '重处理' }));
+    await clickDocumentAction(user, uploadedDocument.filename, '重新处理');
     await user.click(screen.getByRole('button', { name: '离开文档页' }));
     expect(await screen.findByText('已离开文档页')).toBeInTheDocument();
     await act(async () => {
@@ -426,12 +482,12 @@ describe('DocumentsPage', () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.click(await screen.findByRole('button', { name: '重处理' }));
+    await clickDocumentAction(user, uploadedDocument.filename, '重新处理');
 
-    expect(await within(screen.getByRole('region', { name: '通知' })).findByRole('status')).toHaveTextContent('已开始重新处理文档');
+    expect(await within(screen.getByRole('region', { name: '通知' })).findByRole('status')).toHaveTextContent('已开始重新处理');
   });
 
-  it('locks every document mutation while one reprocess is pending', async () => {
+  it('locks the active document row while keeping unrelated page controls available', async () => {
     const reprocessResult = deferred<Awaited<ReturnType<typeof reprocessDocument>>>();
     vi.mocked(reprocessDocument).mockReturnValue(reprocessResult.promise);
     vi.mocked(listDocuments).mockResolvedValue({ items: [{ ...uploadedDocument, status: 'completed' }] });
@@ -439,14 +495,14 @@ describe('DocumentsPage', () => {
     renderPage();
 
     await user.click(await screen.findByRole('checkbox', { name: `选择 ${uploadedDocument.filename}` }));
-    await user.click(screen.getByRole('button', { name: '重处理' }));
+    await clickDocumentAction(user, uploadedDocument.filename, '重新处理');
 
-    expect(screen.getByRole('button', { name: '导入文档' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '批量重处理' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '批量删除' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '删除' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '导入文档' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '重新处理' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '删除' })).toBeEnabled();
     expect(screen.getByRole('button', { name: '查看' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '文档回收站' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: `${uploadedDocument.filename} 的更多操作` })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '更多文档操作' })).toBeEnabled();
 
     reprocessResult.resolve({ ...uploadedDocument, status: 'uploaded' });
     await waitFor(() => expect(screen.getByRole('button', { name: '导入文档' })).toBeEnabled());
@@ -458,7 +514,8 @@ describe('DocumentsPage', () => {
     vi.mocked(listDocuments).mockResolvedValue({ items: [{ ...uploadedDocument, status: 'completed' }] });
     renderPage();
 
-    const reprocessButton = await screen.findByRole('button', { name: '重处理' });
+    const rowMenu = await openDocumentMenu(userEvent.setup(), uploadedDocument.filename);
+    const reprocessButton = within(rowMenu).getByRole('menuitem', { name: '重新处理' });
     const detailButton = screen.getByRole('button', { name: '查看' });
     act(() => {
       reprocessButton.click();
@@ -484,7 +541,7 @@ describe('DocumentsPage', () => {
     renderPage();
 
     await uploadThroughDialog(user, new File(['content'], 'handbook.pdf', { type: 'application/pdf' }));
-    expect(await screen.findByText('上传失败', { selector: 'small' })).toBeInTheDocument();
+    expect(await screen.findByText(/上传失败/, { selector: 'small' })).toBeInTheDocument();
     act(() => screen.getByText('切换到产品库路由').click());
 
     expect(await screen.findByRole('heading', { name: '产品库' })).toBeInTheDocument();
@@ -512,7 +569,9 @@ describe('DocumentsPage', () => {
       if (typeof poll === 'function') poll();
     });
     await waitFor(() => expect(listDocuments).toHaveBeenCalledTimes(2));
-    await user.click(screen.getByRole('button', { name: '刷新' }));
+    await user.click(screen.getByRole('button', { name: '更多文档操作' }));
+    const toolbarMenu = screen.getByRole('menu', { name: '更多文档操作' });
+    await user.click(within(toolbarMenu).getByRole('menuitem', { name: '刷新列表' }));
     expect(await screen.findByText('latest.pdf')).toBeInTheDocument();
 
     await act(async () => {
@@ -531,7 +590,7 @@ describe('DocumentsPage', () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.click(await screen.findByRole('button', { name: '删除' }));
+    await clickDocumentAction(user, uploadedDocument.filename, '删除');
     const dialog = screen.getByRole('dialog', { name: '删除文档' });
     await user.click(within(dialog).getByRole('button', { name: '删除' }));
 
@@ -562,71 +621,54 @@ describe('DocumentsPage', () => {
     expect(uploadDocument).not.toHaveBeenCalled();
 
     await userEvent.setup().click(within(dialog).getByRole('button', { name: '取消' }));
-    expect(await screen.findByRole('status', { name: '文档导入进度' })).toHaveTextContent('上传第一个文档');
-  });
-
-  it('offers chat only after the document uploaded in this flow finishes processing', async () => {
-    const user = userEvent.setup();
-    let poll: TimerHandler | undefined;
-    vi.spyOn(window, 'setInterval').mockImplementation((handler, timeout) => {
-      if (timeout === 3000) {
-        poll = handler;
-      }
-      return 1;
-    });
-    vi.mocked(uploadDocument).mockResolvedValue(uploadedDocument);
-    vi.mocked(listDocuments)
-      .mockResolvedValueOnce({ items: [] })
-      .mockResolvedValueOnce({ items: [{ ...uploadedDocument, status: 'completed' }] });
-    renderPage('/knowledge-bases/kb1/documents?intent=upload');
-    await uploadThroughDialog(user, new File(['content'], 'handbook.pdf', { type: 'application/pdf' }), false);
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(screen.queryByRole('link', { name: '基于此知识库提问' })).not.toBeInTheDocument();
-    await waitFor(() => expect(poll).toBeTypeOf('function'));
-
-    await act(async () => {
-      if (typeof poll === 'function') {
-        poll();
-      }
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(listDocuments).toHaveBeenCalledTimes(2));
-
-    expect(await screen.findByRole('link', { name: '基于此知识库提问' })).toHaveAttribute(
-      'href',
-      '/chat/new?knowledgeBaseId=kb1',
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '导入文档' })).not.toBeInTheDocument());
+    expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent(
+      '/knowledge-bases/kb1/documents',
     );
   });
 
-  it('explains a failed upload flow without offering chat', async () => {
+  it('refreshes the list after upload and keeps the knowledge-base chat action available', async () => {
     const user = userEvent.setup();
-    let poll: TimerHandler | undefined;
-    vi.spyOn(window, 'setInterval').mockImplementation((handler, timeout) => {
-      if (timeout === 3000) {
-        poll = handler;
-      }
-      return 1;
+    let uploaded = false;
+    vi.mocked(uploadDocument).mockImplementation(async () => {
+      uploaded = true;
+      return uploadedDocument;
     });
-    vi.mocked(uploadDocument).mockResolvedValue(uploadedDocument);
-    vi.mocked(listDocuments)
-      .mockResolvedValueOnce({ items: [] })
-      .mockResolvedValueOnce({ items: [{ ...uploadedDocument, status: 'failed' }] });
+    vi.mocked(listDocuments).mockImplementation(async () => ({
+      items: uploaded ? [{ ...uploadedDocument, status: 'completed' }] : [],
+    }));
     renderPage('/knowledge-bases/kb1/documents?intent=upload');
     await uploadThroughDialog(user, new File(['content'], 'handbook.pdf', { type: 'application/pdf' }), false);
-    await waitFor(() => expect(poll).toBeTypeOf('function'));
-    await act(async () => {
-      if (typeof poll === 'function') {
-        poll();
-      }
-      await Promise.resolve();
-    });
 
-    expect(await screen.findByRole('status', { name: '文档导入进度' })).toHaveTextContent('文档处理失败');
-    expect(screen.getByRole('status', { name: '文档导入进度' })).toHaveTextContent('请查看处理提示并重试');
-    expect(screen.queryByRole('link', { name: '基于此知识库提问' })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '导入文档' })).not.toBeInTheDocument());
+    await waitFor(() => expect(vi.mocked(listDocuments).mock.calls.length).toBeGreaterThanOrEqual(2));
+    expect(await screen.findByText('handbook.pdf')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '基于此知识库提问' }));
+    expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent(
+      '/chat?knowledgeBaseId=kb1',
+    );
+  });
+
+  it('shows a failed processing result after the uploaded document is refreshed', async () => {
+    const user = userEvent.setup();
+    const failedDocument = { ...uploadedDocument, status: 'failed' as const, errorMessage: 'parse failed' };
+    let uploaded = false;
+    vi.mocked(uploadDocument).mockImplementation(async () => {
+      uploaded = true;
+      return uploadedDocument;
+    });
+    vi.mocked(listDocuments).mockImplementation(async () => ({
+      items: uploaded ? [failedDocument] : [],
+    }));
+    renderPage('/knowledge-bases/kb1/documents?intent=upload');
+    await uploadThroughDialog(user, new File(['content'], 'handbook.pdf', { type: 'application/pdf' }), false);
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '导入文档' })).not.toBeInTheDocument());
+    const row = (await screen.findByText('handbook.pdf')).closest('tr');
+    expect(row).not.toBeNull();
+    expect(within(row!).getByText('失败')).toBeInTheDocument();
+    expect(within(row!).getByText('文档处理失败，请检查文件内容或稍后重处理。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '基于此知识库提问' })).toBeInTheDocument();
   });
 });

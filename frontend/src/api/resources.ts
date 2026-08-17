@@ -1,23 +1,33 @@
-import { apiBlobRequest, apiRequest } from './client';
+import { ApiError, apiBlobRequest, apiEventStream, apiRequest, apiUploadRequest } from './client';
 import type {
+  ActivityListResponse,
   BatchResultResponse,
+  ChangePasswordInput,
+  ChatFeedbackRating,
+  ChatMessageFeedback,
   ChatMessageListResponse,
   ChatSession,
+  ChatSessionListParams,
+  Citation,
   ChatSessionListResponse,
   DocumentChunkListResponse,
   DocumentChunkListParams,
   DocumentItem,
   DocumentListResponse,
   DocumentPreviewResponse,
+  DocumentUpdateInput,
   GlobalDocumentListParams,
   GlobalDocumentListResponse,
   GlobalSearchResponse,
   GlobalSearchParams,
+  HomeSummaryResponse,
   KnowledgeBase,
   KnowledgeBaseCategory,
   KnowledgeBaseCategoryInput,
   KnowledgeBaseCategoryListResponse,
   KnowledgeBaseCategoryReorderItem,
+  KnowledgeBaseBatchTagMode,
+  KnowledgeBaseDetailStatsResponse,
   KnowledgeBaseInput,
   KnowledgeBaseListResponse,
   KnowledgeBaseListParams,
@@ -35,6 +45,9 @@ import type {
   RegenerateChatMessageResponse,
   SendChatMessageResponse,
   SendChatMessageRequest,
+  SearchSuggestResponse,
+  SystemCapabilities,
+  UpdateProfileInput,
   User,
   UserSearchResponse,
 } from '../types/api';
@@ -55,6 +68,42 @@ export function logout(): Promise<void> {
 
 export function getCurrentUser(): Promise<User> {
   return apiRequest<User>('/auth/me');
+}
+
+export function updateProfile(input: UpdateProfileInput): Promise<User> {
+  return apiRequest<User>('/auth/me', {
+    method: 'PUT',
+    body: { displayName: input.displayName, avatarUrl: input.avatarUrl ?? '' },
+  });
+}
+
+export function changePassword(input: ChangePasswordInput): Promise<void> {
+  return apiRequest<void>('/auth/change-password', {
+    method: 'POST',
+    body: input,
+  });
+}
+
+/**
+ * Server-side limits the UI used to hardcode: upload allow list and size cap,
+ * retrieval ceilings, and whether rerank is enabled.
+ */
+export function getSystemCapabilities(): Promise<SystemCapabilities> {
+  return apiRequest<SystemCapabilities>('/system/capabilities');
+}
+
+/** Everything the workspace landing page needs, in one request. */
+export function getHomeSummary(period: 'day' | 'month' = 'month'): Promise<HomeSummaryResponse> {
+  return apiRequest<HomeSummaryResponse>(withQuery('/home/summary', { period }));
+}
+
+/**
+ * Recorded workspace events, newest first. Unlike a merge of the three lists,
+ * this includes things that no longer exist: deletes, restores and membership
+ * changes. See docs/14-frontend-api-gaps.md G18.
+ */
+export function listActivities(limit = 20): Promise<ActivityListResponse> {
+  return apiRequest<ActivityListResponse>(withQuery('/activities', { limit }));
 }
 
 export function listKnowledgeBases(params: KnowledgeBaseListParams = {}): Promise<KnowledgeBaseListResponse> {
@@ -154,6 +203,19 @@ export function getKnowledgeBaseStats(period: 'day' | 'month' = 'month'): Promis
   return apiRequest<KnowledgeBaseStatsResponse>(`/knowledge-bases/stats?period=${period}`);
 }
 
+/**
+ * Trends for one knowledge base. Kept off `GET /knowledge-bases/:id` on purpose:
+ * detail responses stay free of list-only aggregates.
+ */
+export function getKnowledgeBaseDetailStats(
+  id: string,
+  period: 'day' | 'month' = 'month',
+): Promise<KnowledgeBaseDetailStatsResponse> {
+  return apiRequest<KnowledgeBaseDetailStatsResponse>(
+    withQuery(`/knowledge-bases/${id}/stats`, { period }),
+  );
+}
+
 export function getWorkspacePreference(): Promise<KnowledgeBaseWorkspacePreference> {
   return apiRequest<KnowledgeBaseWorkspacePreference>('/knowledge-bases/workspace-preference');
 }
@@ -222,6 +284,22 @@ export function batchMoveKnowledgeBases(
   });
 }
 
+/**
+ * All-or-nothing, like the other batch endpoints: one unowned knowledge base or
+ * tag rejects the whole call. `replace` with an empty `tagIds` clears every tag;
+ * `add` and `remove` require at least one tag.
+ */
+export function batchTagKnowledgeBases(
+  ids: string[],
+  tagIds: string[],
+  mode: KnowledgeBaseBatchTagMode = 'add',
+): Promise<BatchResultResponse> {
+  return apiRequest<BatchResultResponse>('/knowledge-bases/batch-tag', {
+    method: 'POST',
+    body: { knowledgeBaseIds: ids, tagIds, mode },
+  });
+}
+
 export function listKnowledgeBaseRecycleBin(page = 1, pageSize = 20): Promise<RecycleBinListResponse> {
   return apiRequest<RecycleBinListResponse>(
     withQuery('/knowledge-bases/recycle-bin', { page, pageSize }),
@@ -286,8 +364,17 @@ export function deleteKnowledgeBaseMember(id: string, userId: string): Promise<v
   });
 }
 
-export function listDocuments(knowledgeBaseId: string): Promise<DocumentListResponse> {
-  return apiRequest<DocumentListResponse>(`/knowledge-bases/${knowledgeBaseId}/documents`);
+/**
+ * Knowledge-base-scoped document list. Same query surface as
+ * {@link listGlobalDocuments}; knowledgeBaseId comes from the path.
+ */
+export function listDocuments(
+  knowledgeBaseId: string,
+  params: Omit<GlobalDocumentListParams, 'knowledgeBaseId'> = {},
+): Promise<DocumentListResponse> {
+  return apiRequest<DocumentListResponse>(
+    withQuery(`/knowledge-bases/${knowledgeBaseId}/documents`, params),
+  );
 }
 
 export function listGlobalDocuments(
@@ -317,25 +404,29 @@ export function listDocumentChunks(
   );
 }
 
-export function uploadDocument(knowledgeBaseId: string, file: File): Promise<DocumentItem> {
+export function uploadDocument(
+  knowledgeBaseId: string,
+  file: File,
+  onProgress?: (progress: number) => void,
+): Promise<DocumentItem> {
   const body = new FormData();
   body.append('file', file);
 
-  return apiRequest<DocumentItem>(`/knowledge-bases/${knowledgeBaseId}/documents`, {
-    method: 'POST',
-    body,
+  return apiUploadRequest<DocumentItem>(`/knowledge-bases/${knowledgeBaseId}/documents`, body, {
+    onProgress,
   });
 }
 
-export function uploadGlobalDocument(knowledgeBaseId: string, file: File): Promise<DocumentItem> {
+export function uploadGlobalDocument(
+  knowledgeBaseId: string,
+  file: File,
+  onProgress?: (progress: number) => void,
+): Promise<DocumentItem> {
   const body = new FormData();
   body.append('knowledgeBaseId', knowledgeBaseId);
   body.append('file', file);
 
-  return apiRequest<DocumentItem>('/documents', {
-    method: 'POST',
-    body,
-  });
+  return apiUploadRequest<DocumentItem>('/documents', body, { onProgress });
 }
 
 export function deleteDocument(id: string): Promise<void> {
@@ -346,6 +437,27 @@ export function deleteDocument(id: string): Promise<void> {
 
 export function reprocessDocument(id: string): Promise<DocumentItem> {
   return apiRequest<DocumentItem>(`/documents/${id}/reprocess`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * Rename and/or move a document. A move carries the document's chunks with it,
+ * and is rejected with `DOCUMENT_JOB_ACTIVE` while a job is queued or running.
+ */
+export function updateDocument(id: string, input: DocumentUpdateInput): Promise<DocumentItem> {
+  return apiRequest<DocumentItem>(`/documents/${id}`, {
+    method: 'PUT',
+    body: input,
+  });
+}
+
+/**
+ * Cancel a queued or running processing job. Returns `DOCUMENT_JOB_NOT_CANCELLABLE`
+ * when the document has no active job.
+ */
+export function cancelDocumentJob(id: string): Promise<DocumentItem> {
+  return apiRequest<DocumentItem>(`/documents/${id}/cancel`, {
     method: 'POST',
   });
 }
@@ -402,6 +514,28 @@ export function globalSearch(params: GlobalSearchParams, signal?: AbortSignal): 
   }), { signal });
 }
 
+export function exportGlobalSearch(
+  params: Pick<GlobalSearchParams, 'query' | 'type'>,
+): Promise<Blob> {
+  return apiBlobRequest(withQuery('/search/export', {
+    q: params.query,
+    type: params.type,
+  }));
+}
+
+/**
+ * Title-level results for the command palette. Searches knowledge base names and
+ * filenames only — no chunk content, no snippets — which is what makes it
+ * cheaper than a full `globalSearch` on every keystroke pause.
+ */
+export function searchSuggest(
+  query: string,
+  limit = 10,
+  signal?: AbortSignal,
+): Promise<SearchSuggestResponse> {
+  return apiRequest<SearchSuggestResponse>(withQuery('/search/suggest', { q: query, limit }), { signal });
+}
+
 export function searchKnowledgeBase(
   knowledgeBaseId: string,
   input: KnowledgeBaseSearchRequest,
@@ -419,12 +553,18 @@ export function createChatSession(knowledgeBaseId: string, title: string): Promi
   });
 }
 
-export function listChatSessions(): Promise<ChatSessionListResponse> {
-  return apiRequest<ChatSessionListResponse>('/chat/sessions');
+export function listChatSessions(
+  params: ChatSessionListParams = {},
+): Promise<ChatSessionListResponse> {
+  return apiRequest<ChatSessionListResponse>(withQuery('/chat/sessions', params));
 }
 
 export function getChatSession(sessionId: string): Promise<ChatSession> {
   return apiRequest<ChatSession>(`/chat/sessions/${sessionId}`);
+}
+
+export function exportChatSession(sessionId: string): Promise<Blob> {
+  return apiBlobRequest(`/chat/sessions/${sessionId}/export`);
 }
 
 export function updateChatSessionTitle(sessionId: string, title: string): Promise<ChatSession> {
@@ -434,9 +574,34 @@ export function updateChatSessionTitle(sessionId: string, title: string): Promis
   });
 }
 
+/** Soft delete: the session moves to the chat recycle bin and keeps its messages. */
 export function deleteChatSession(sessionId: string): Promise<void> {
   return apiRequest<void>(`/chat/sessions/${sessionId}`, {
     method: 'DELETE',
+  });
+}
+
+export function listChatSessionRecycleBin(page = 1, pageSize = 20): Promise<RecycleBinListResponse> {
+  return apiRequest<RecycleBinListResponse>(
+    withQuery('/chat/sessions/recycle-bin', { page, pageSize }),
+  );
+}
+
+export function restoreChatSession(sessionId: string): Promise<ChatSession> {
+  return apiRequest<ChatSession>(`/chat/sessions/${sessionId}/restore`, {
+    method: 'POST',
+  });
+}
+
+export function deleteChatSessionPermanently(sessionId: string): Promise<void> {
+  return apiRequest<void>(`/chat/sessions/recycle-bin/${sessionId}`, {
+    method: 'DELETE',
+  });
+}
+
+export function emptyChatSessionRecycleBin(): Promise<void> {
+  return apiRequest<void>('/chat/sessions/recycle-bin/empty', {
+    method: 'POST',
   });
 }
 
@@ -446,8 +611,24 @@ export function archiveChatSession(sessionId: string): Promise<ChatSession> {
   });
 }
 
+export function unarchiveChatSession(sessionId: string): Promise<ChatSession> {
+  return apiRequest<ChatSession>(`/chat/sessions/${sessionId}/unarchive`, {
+    method: 'POST',
+  });
+}
+
 export function listChatMessages(sessionId: string): Promise<ChatMessageListResponse> {
   return apiRequest<ChatMessageListResponse>(`/chat/sessions/${sessionId}/messages`);
+}
+
+export function setChatMessageFeedback(
+  messageId: string,
+  rating: ChatFeedbackRating,
+): Promise<ChatMessageFeedback> {
+  return apiRequest<ChatMessageFeedback>(`/chat/messages/${messageId}/feedback`, {
+    method: 'POST',
+    body: { rating },
+  });
 }
 
 export function sendChatMessage(
@@ -458,6 +639,75 @@ export function sendChatMessage(
     method: 'POST',
     body: input,
   });
+}
+
+export type ChatStreamHandlers = {
+  onCitations?: (citations: Citation[]) => void;
+  onDelta?: (text: string) => void;
+};
+
+/**
+ * Streaming send. Same idempotency contract as `sendChatMessage`: the caller
+ * still mints and persists the `clientRequestId`, and a resend reuses it.
+ *
+ * Resolves with the same payload the blocking endpoint returns. Rejects with an
+ * `ApiError` for both pre-stream failures (401/404/409 …) and mid-stream `error`
+ * events, so callers cannot tell the two apart by accident — which is correct,
+ * because both mean "this attempt did not complete".
+ *
+ * **A rejection never means the write definitely failed.** Nothing is persisted
+ * until generation finishes, but a connection that drops after the server
+ * committed still rejects here, so callers must reconcile by `clientRequestId`
+ * rather than assume. See docs/14-frontend-api-gaps.md G2.
+ */
+export async function sendChatMessageStream(
+  sessionId: string,
+  input: SendChatMessageRequest,
+  handlers: ChatStreamHandlers = {},
+  signal?: AbortSignal,
+): Promise<SendChatMessageResponse> {
+  const stream = apiEventStream(`/chat/sessions/${sessionId}/messages/stream`, {
+    method: 'POST',
+    body: input,
+    signal,
+  });
+
+  let done: SendChatMessageResponse | null = null;
+
+  for await (const event of stream) {
+    if (event.event === 'delta') {
+      const payload = parseStreamPayload<{ text?: string }>(event.data);
+      if (payload?.text) handlers.onDelta?.(payload.text);
+    } else if (event.event === 'citations') {
+      const payload = parseStreamPayload<{ citations?: Citation[] }>(event.data);
+      handlers.onCitations?.(payload?.citations ?? []);
+    } else if (event.event === 'done') {
+      done = parseStreamPayload<SendChatMessageResponse>(event.data);
+      break;
+    } else if (event.event === 'error') {
+      const payload = parseStreamPayload<{ status?: number; code?: string; message?: string; details?: Record<string, unknown> }>(event.data);
+      throw new ApiError(payload?.status ?? 500, {
+        code: payload?.code ?? 'INTERNAL_ERROR',
+        message: payload?.message ?? '回答生成失败，请稍后重试。',
+        details: payload?.details,
+      });
+    }
+  }
+
+  if (!done) {
+    // The stream ended without `done`: the answer was not committed, and the
+    // caller has to reconcile rather than treat this as a clean failure.
+    throw new ApiError(0, { code: 'STREAM_INCOMPLETE', message: '回答尚未完成，连接已中断。' });
+  }
+  return done;
+}
+
+function parseStreamPayload<T>(data: string): T | null {
+  try {
+    return JSON.parse(data) as T;
+  } catch {
+    return null;
+  }
 }
 
 export function regenerateChatMessage(

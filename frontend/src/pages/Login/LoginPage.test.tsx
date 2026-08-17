@@ -82,6 +82,49 @@ describe('LoginPage', () => {
     expect(alert).toHaveFocus();
   });
 
+  it('rejects a password over the bcrypt UTF-8 byte limit before login', async () => {
+    const user = userEvent.setup();
+    renderLogin();
+    const password = screen.getByLabelText('密码');
+
+    await user.type(screen.getByLabelText('用户名'), 'admin');
+    await user.type(password, '界'.repeat(25));
+    await user.click(screen.getByRole('button', { name: '登录' }));
+
+    expect(mockedLogin).not.toHaveBeenCalled();
+    expect(password).toHaveFocus();
+    expect(screen.getByRole('alert')).toHaveTextContent('密码不能超过 72 个 UTF-8 字节');
+    expect(password).toHaveAccessibleDescription('密码不能超过 72 个 UTF-8 字节');
+  });
+
+  it('shows the custom required error on the password input', async () => {
+    const user = userEvent.setup();
+    renderLogin();
+    const password = screen.getByLabelText('密码');
+
+    await user.type(screen.getByLabelText('用户名'), 'admin');
+    await user.click(screen.getByRole('button', { name: '登录' }));
+
+    expect(mockedLogin).not.toHaveBeenCalled();
+    expect(password).toHaveFocus();
+    expect(password).toHaveAccessibleDescription('请输入密码');
+  });
+
+  it('submits a non-empty whitespace password without trimming it', async () => {
+    mockedLogin.mockResolvedValue({
+      token: 'token-value',
+      user: { id: 'u1', username: 'admin', displayName: '管理员' },
+    });
+    const user = userEvent.setup();
+    renderLogin();
+
+    await user.type(screen.getByLabelText('用户名'), 'admin');
+    await user.type(screen.getByLabelText('密码'), '        ');
+    await user.click(screen.getByRole('button', { name: '登录' }));
+
+    expect(mockedLogin).toHaveBeenCalledWith('admin', '        ');
+  });
+
   it('returns to the protected location after login', async () => {
     mockedLogin.mockResolvedValue({
       token: 'token-value',

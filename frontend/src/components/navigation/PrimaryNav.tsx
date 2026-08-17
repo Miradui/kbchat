@@ -1,38 +1,80 @@
-import { Home, Library, MessageSquareText, Sparkles } from 'lucide-react';
+import {
+  FileText,
+  Home,
+  Library,
+  MessageSquareText,
+  Plus,
+  Tags,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
-export type AppSection = 'home' | 'knowledge-bases' | 'documents' | 'chat' | 'search' | 'tags';
+export type AppSection =
+  | 'home'
+  | 'chat'
+  | 'knowledge-bases'
+  | 'documents'
+  | 'tags'
+  | 'search';
 
-const items: Array<{ to: string; label: string; section: AppSection; icon: LucideIcon }> = [
-  { to: '/home', label: '首页', section: 'home', icon: Home },
-  { to: '/knowledge-bases', label: '知识库', section: 'knowledge-bases', icon: Library },
-  { to: '/chat', label: 'AI 问答', section: 'chat', icon: MessageSquareText },
+type NavItem = { to: string; label: string; section: AppSection; icon: LucideIcon };
+
+/**
+ * Every section has its own top-level entry.
+ *
+ * The previous rail listed three items and mapped `documents` and `tags` onto the
+ * knowledge-base entry, so those two pages highlighted a link that did not lead
+ * back to them.
+ */
+const groups: Array<{ label: string; items: NavItem[] }> = [
+  {
+    label: '工作台',
+    items: [
+      { to: '/home', label: '首页', section: 'home', icon: Home },
+      { to: '/chat', label: 'AI 问答', section: 'chat', icon: MessageSquareText },
+    ],
+  },
+  {
+    label: '知识',
+    items: [
+      { to: '/knowledge-bases', label: '知识库', section: 'knowledge-bases', icon: Library },
+      { to: '/documents', label: '文档', section: 'documents', icon: FileText },
+      { to: '/tags', label: '标签', section: 'tags', icon: Tags },
+    ],
+  },
 ];
 
-export function PrimaryNav({ active, onNavigate }: { active: AppSection; onNavigate: () => void }) {
-  const currentSection = active === 'documents' || active === 'tags' ? 'knowledge-bases' : active;
+type PrimaryNavProps = {
+  active: AppSection;
+  onNavigate: () => void;
+};
+
+export function PrimaryNav({ active, onNavigate }: PrimaryNavProps) {
   return (
-    <nav className="primary-nav" aria-label="主导航">
-      <Link className="primary-nav__cta" onClick={onNavigate} to="/chat/new">
-        <Sparkles aria-hidden="true" />
+    <>
+      <Link className="rail__cta" onClick={onNavigate} to="/chat">
+        <Plus aria-hidden="true" />
         <span>新建对话</span>
       </Link>
-      <p className="primary-nav__label">工作空间</p>
-      <div className="primary-nav__items">
-        {items.map(({ to, label, section, icon: Icon }) => (
-          <Link
-            aria-current={currentSection === section ? 'page' : undefined}
-            className={currentSection === section ? 'primary-nav__item is-active' : 'primary-nav__item'}
-            key={to}
-            onClick={onNavigate}
-            to={to}
-          >
-            <Icon aria-hidden="true" />
-            <span>{label}</span>
-          </Link>
+      <nav aria-label="主导航" className="rail__nav">
+        {groups.map((group) => (
+          <div className="rail__group" key={group.label}>
+            <p className="rail__group-label">{group.label}</p>
+            {group.items.map(({ to, label, section, icon: Icon }) => (
+              <Link
+                aria-current={active === section ? 'page' : undefined}
+                className={active === section ? 'rail__item is-active' : 'rail__item'}
+                key={to}
+                onClick={onNavigate}
+                to={to}
+              >
+                <Icon aria-hidden="true" />
+                <span>{label}</span>
+              </Link>
+            ))}
+          </div>
         ))}
-      </div>
-    </nav>
+      </nav>
+    </>
   );
 }

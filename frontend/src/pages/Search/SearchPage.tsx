@@ -1,21 +1,25 @@
-import { Search } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import type { FormEvent } from 'react';
+import { Download, FileText, Library, Search, TextQuote } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import type { FormEvent, ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 
-import { globalSearch } from '../../api/resources';
+import { exportGlobalSearch, globalSearch } from '../../api/resources';
 import { EmptyState } from '../../components/feedback/EmptyState';
 import { ErrorState } from '../../components/feedback/ErrorState';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
-import { WorkspaceShell } from '../../components/WorkspaceShell';
 import { Button } from '../../components/ui/Button';
-import type { GlobalSearchResult, GlobalSearchResultType } from '../../types/api';
+import { Pagination } from '../../components/ui/Pagination';
+import { SearchInput } from '../../components/ui/Field';
+import { AppShell } from '../../layouts/AppShell';
+import type { GlobalSearchResult, GlobalSearchResultType, SearchHighlight } from '../../types/api';
+import { downloadBlob } from '../../utils/download';
 import { getErrorMessage } from '../../utils/errors';
 
 type SearchType = 'all' | GlobalSearchResultType;
 
-const SEARCH_DEBOUNCE_MS = 300;
+const DEBOUNCE_MS = 300;
 const DEFAULT_PAGE_SIZE = 20;
+
 const typeOptions: Array<{ value: SearchType; label: string }> = [
   { value: 'all', label: '全部' },
   { value: 'knowledgeBase', label: '知识库' },
@@ -23,16 +27,20 @@ const typeOptions: Array<{ value: SearchType; label: string }> = [
   { value: 'chunk', label: '内容片段' },
 ];
 
+const typeLabels: Record<GlobalSearchResultType, string> = {
+  knowledgeBase: '知识库',
+  document: '文档',
+  chunk: '内容片段',
+};
+
 function readType(value: string | null): SearchType {
-  return typeOptions.some((option) => option.value === value) ? value as SearchType : 'all';
+  return typeOptions.some((option) => option.value === value) ? (value as SearchType) : 'all';
 }
 
-function readPositiveInteger(value: string | null, fallback: number, maximum?: number): number {
+function readPositive(value: string | null, fallback: number, max?: number): number {
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    return fallback;
-  }
-  return maximum ? Math.min(parsed, maximum) : parsed;
+  if (!Number.isInteger(parsed) || parsed <= 0) return fallback;
+  return max ? Math.min(parsed, max) : parsed;
 }
 
 export function SearchPage() {
@@ -40,17 +48,22 @@ export function SearchPage() {
   const rawQuery = searchParams.get('q') ?? '';
   const submittedQuery = rawQuery.trim();
   const selectedType = readType(searchParams.get('type'));
-  const selectedPage = readPositiveInteger(searchParams.get('page'), 1);
-  const selectedPageSize = readPositiveInteger(searchParams.get('pageSize'), DEFAULT_PAGE_SIZE, 100);
+  const selectedPage = readPositive(searchParams.get('page'), 1);
+  const selectedPageSize = readPositive(searchParams.get('pageSize'), DEFAULT_PAGE_SIZE, 100);
   const [draft, setDraft] = useState(submittedQuery);
   const [items, setItems] = useState<GlobalSearchResult[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [exportError, setExportError] = useState('');
+  const [exporting, setExporting] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => setDraft(submittedQuery), [submittedQuery]);
 
+  useEffect(() => setExportError(''), [selectedType, submittedQuery]);
+
+  // Normalise the URL so defaults never linger as explicit parameters.
   useEffect(() => {
     const normalizedType = selectedType === 'all' ? null : selectedType;
     const normalizedPage = selectedPage === 1 ? null : String(selectedPage);
@@ -63,22 +76,21 @@ export function SearchPage() {
     ) {
       return;
     }
-    setSearchParams((current) => (
-      updateParams(current, submittedQuery, selectedType, selectedPage, selectedPageSize)
-    ), { replace: true });
+    setSearchParams(
+      (current) => updateParams(current, submittedQuery, selectedType, selectedPage, selectedPageSize),
+      { replace: true },
+    );
   }, [rawQuery, searchParams, selectedPage, selectedPageSize, selectedType, setSearchParams, submittedQuery]);
 
   useEffect(() => {
     const query = draft.trim();
-    if (query === submittedQuery) {
-      return;
-    }
-
+    if (query === submittedQuery) return;
     const timer = window.setTimeout(() => {
-      setSearchParams((current) => (
-        updateParams(current, query, selectedType, 1, selectedPageSize)
-      ), { replace: true });
-    }, SEARCH_DEBOUNCE_MS);
+      setSearchParams(
+        (current) => updateParams(current, query, selectedType, 1, selectedPageSize),
+        { replace: true },
+      );
+    }, DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [draft, selectedPageSize, selectedType, setSearchParams, submittedQuery]);
 
@@ -91,6 +103,7 @@ export function SearchPage() {
       return;
     }
 
+    // Aborting stops a slower earlier query from overwriting newer results.
     const controller = new AbortController();
     setLoading(true);
     setError('');
@@ -109,27 +122,28 @@ export function SearchPage() {
       .catch((caught: unknown) => {
         const aborted = controller.signal.aborted
           || (caught instanceof DOMException && caught.name === 'AbortError');
-        if (!aborted) {
-          setError(getErrorMessage(caught, '全局搜索失败'));
-        }
+        if (!aborted) setError(getErrorMessage(caught, '全局搜索失败'));
       })
       .finally(() => {
-        if (!controller.signal.aborted) {
-          setLoading(false);
-        }
+        if (!controller.signal.aborted) setLoading(false);
       });
 
     return () => controller.abort();
   }, [reloadKey, selectedPage, selectedPageSize, selectedType, submittedQuery]);
 
-  const totalPages = Math.max(1, Math.ceil(total / selectedPageSize));
-  const resultStatus = loading
+  // In `all` mode the backend interleaves types, so group them for scanning.
+  const groups = useMemo(() => {
+    if (selectedType !== 'all') return [{ type: null, items }];
+    return (['knowledgeBase', 'document', 'chunk'] as GlobalSearchResultType[])
+      .map((type) => ({ type, items: items.filter((item) => item.type === type) }))
+      .filter((group) => group.items.length > 0);
+  }, [items, selectedType]);
+
+  const status = loading
     ? '正在搜索'
     : error || !submittedQuery
       ? ''
-      : items.length === 0
-        ? '没有匹配结果'
-        : `找到 ${total} 条结果`;
+      : items.length === 0 ? '没有匹配结果' : `找到 ${total} 条结果`;
 
   function writeParams(query: string, type: SearchType, page = 1) {
     setSearchParams((current) => updateParams(current, query, type, page, selectedPageSize));
@@ -140,90 +154,100 @@ export function SearchPage() {
     writeParams(draft.trim(), selectedType, 1);
   }
 
-  return (
-    <WorkspaceShell active="search">
-      <div className="search-page">
-        <header className="page-header workspace-heading">
-          <div>
-            <h1>全局搜索</h1>
-            <p className="page-description">搜索当前用户可访问的知识库、文档和内容片段。</p>
-          </div>
-        </header>
+  async function handleExport() {
+    if (!submittedQuery || exporting) return;
+    setExportError('');
+    setExporting(true);
+    try {
+      const blob = await exportGlobalSearch({ query: submittedQuery, type: selectedType });
+      downloadBlob(blob, '搜索结果.csv');
+    } catch (caught) {
+      setExportError(getErrorMessage(caught, '搜索结果导出失败'));
+    } finally {
+      setExporting(false);
+    }
+  }
 
-        <form className="search-command" onSubmit={handleSubmit}>
-          <Search aria-hidden="true" />
-          <label className="sr-only" htmlFor="global-search-query">搜索关键词</label>
-          <input
-            id="global-search-query"
-            placeholder="输入知识库、文件名或内容关键词"
-            value={draft}
+  return (
+    <AppShell active="search" breadcrumbs={[{ label: '搜索' }]}>
+      <div className="search-page">
+        <form className="search-page__form" onSubmit={handleSubmit} role="search">
+          <SearchInput
+            aria-label="搜索关键词"
+            autoFocus
+            icon={<Search aria-hidden="true" />}
             onChange={(event) => setDraft(event.target.value)}
+            placeholder="搜索知识库、文件名或内容"
+            value={draft}
           />
           <Button type="submit">搜索</Button>
+          <Button
+            disabled={!submittedQuery || loading}
+            leadingIcon={<Download aria-hidden="true" />}
+            loading={exporting}
+            loadingLabel="正在导出"
+            onClick={() => void handleExport()}
+            variant="secondary"
+          >
+            导出 CSV
+          </Button>
         </form>
 
-        <div className="search-type-tabs" aria-label="结果类型" role="group">
+        {exportError && <p className="ui-inline-error" role="alert">{exportError}</p>}
+
+        <div className="ui-segmented search-page__types" role="group" aria-label="结果类型">
           {typeOptions.map((option) => (
             <button
               aria-pressed={selectedType === option.value}
-              className={selectedType === option.value ? 'is-active' : ''}
               key={option.value}
               onClick={() => writeParams(submittedQuery, option.value, 1)}
               type="button"
             >
-              {option.label}
+              <span>{option.label}</span>
             </button>
           ))}
         </div>
 
-        <section aria-busy={loading} className="search-results" aria-labelledby="search-results-title">
-          <header>
-            <h2 id="search-results-title">搜索结果</h2>
-            <span>{submittedQuery ? `关键词：${submittedQuery}` : '等待输入关键词'}</span>
-          </header>
-          <p
-            aria-atomic="true"
-            aria-label={loading ? '正在加载' : '搜索状态'}
-            className="sr-only"
-            role="status"
-          >
-            {resultStatus}
-          </p>
+        <p
+          aria-atomic="true"
+          aria-label={loading ? '正在加载' : '搜索状态'}
+          className="sr-only"
+          role="status"
+        >
+          {status}
+        </p>
+
+        <section aria-busy={loading} aria-label="搜索结果" className="search-page__results">
           {loading ? (
-            <LoadingSkeleton rows={5} columns={3} />
+            <LoadingSkeleton columns={3} rows={5} />
           ) : error ? (
-            <ErrorState title="搜索失败" description={error} onRetry={() => setReloadKey((value) => value + 1)} />
+            <ErrorState description={error} onRetry={() => setReloadKey((value) => value + 1)} title="搜索失败" />
           ) : !submittedQuery ? (
-            <EmptyState title="输入关键词开始搜索" description="可搜索知识库名称、文件名与内容片段。" />
+            <EmptyState description="可搜索知识库名称、文件名与内容片段。" title="输入关键词开始搜索" />
           ) : items.length === 0 ? (
-            <EmptyState title="没有匹配结果" description="尝试更短的关键词或切换结果类型。" />
+            <EmptyState description="尝试更短的关键词，或切换结果类型。" title="没有匹配结果" />
           ) : (
-            <div className="search-result-list">
-              {items.map((item) => <SearchResult item={item} key={`${item.type}-${item.id}`} />)}
-            </div>
-          )}
-          {!loading && !error && submittedQuery && total > 0 && (
-            <nav aria-label="搜索结果分页" className="workspace-pagination">
-              <Button
-                variant="secondary"
-                disabled={selectedPage <= 1}
-                onClick={() => writeParams(submittedQuery, selectedType, selectedPage - 1)}
-              >
-                上一页
-              </Button>
-              <span>第 {selectedPage} / {totalPages} 页 · 共 {total} 条</span>
-              <Button
-                variant="secondary"
-                disabled={selectedPage >= totalPages}
-                onClick={() => writeParams(submittedQuery, selectedType, selectedPage + 1)}
-              >
-                下一页
-              </Button>
-            </nav>
+            groups.map((group) => (
+              <div className="search-group" key={group.type ?? 'flat'}>
+                {group.type && <p className="search-group__label">{typeLabels[group.type]}</p>}
+                {group.items.map((item) => (
+                  <SearchResultRow item={item} key={`${item.type}-${item.id}`} />
+                ))}
+              </div>
+            ))
           )}
         </section>
+
+        {!loading && !error && submittedQuery && (
+          <Pagination
+            onPageChange={(page) => writeParams(submittedQuery, selectedType, page)}
+            page={selectedPage}
+            pageSize={selectedPageSize}
+            total={total}
+          />
+        )}
       </div>
-    </WorkspaceShell>
+    </AppShell>
   );
 }
 
@@ -235,59 +259,66 @@ function updateParams(
   pageSize = DEFAULT_PAGE_SIZE,
 ) {
   const next = new URLSearchParams(current);
-  if (query) {
-    next.set('q', query);
-  } else {
-    next.delete('q');
-  }
-  if (type === 'all') {
-    next.delete('type');
-  } else {
-    next.set('type', type);
-  }
-  if (page <= 1) {
-    next.delete('page');
-  } else {
-    next.set('page', String(page));
-  }
-  if (pageSize === DEFAULT_PAGE_SIZE) {
-    next.delete('pageSize');
-  } else {
-    next.set('pageSize', String(pageSize));
-  }
+  if (query) next.set('q', query); else next.delete('q');
+  if (type === 'all') next.delete('type'); else next.set('type', type);
+  if (page <= 1) next.delete('page'); else next.set('page', String(page));
+  if (pageSize === DEFAULT_PAGE_SIZE) next.delete('pageSize'); else next.set('pageSize', String(pageSize));
   return next;
 }
 
-function SearchResult({ item }: { item: GlobalSearchResult }) {
-  const href = searchResultHref(item);
-  const label = item.type === 'knowledgeBase' ? '知识库' : item.type === 'document' ? '文档' : '内容片段';
+function SearchResultRow({ item }: { item: GlobalSearchResult }) {
+  const Icon = item.type === 'knowledgeBase' ? Library : item.type === 'document' ? FileText : TextQuote;
   return (
-    <Link className="search-result-row" to={href}>
-      <span className="search-result-type">{label}</span>
-      <span>
-        <strong>{item.title}</strong>
+    <Link className="search-result" to={resultHref(item)}>
+      <span className="search-result__icon" aria-hidden="true"><Icon /></span>
+      <span className="search-result__body">
+        <strong>{highlight(item.title, item.highlights, 'title')}</strong>
         <small>{item.knowledgeBaseName}{item.filename ? ` · ${item.filename}` : ''}</small>
+        <p>{item.snippet ? highlight(item.snippet, item.highlights, 'snippet') : '暂无摘要'}</p>
       </span>
-      <p>{item.snippet || '暂无摘要'}</p>
     </Link>
   );
 }
 
-function searchResultHref(item: GlobalSearchResult): string {
-  if (item.type === 'knowledgeBase') {
-    return `/knowledge-bases/${item.knowledgeBaseId}`;
-  }
+/**
+ * Renders the server's match positions. `start`/`end` are UTF-16 code units,
+ * which is exactly what `String.prototype.slice` takes, so they are used as-is —
+ * no re-matching on the client, which used to miss whatever the server matched
+ * under a different tokenisation or case-folding rule.
+ * See docs/14-frontend-api-gaps.md G9.
+ */
+function highlight(text: string, highlights: SearchHighlight[] | undefined, field: string): ReactNode {
+  const ranges = (highlights ?? [])
+    .filter((range) => range.field === field && range.start < range.end && range.start >= 0)
+    .sort((a, b) => a.start - b.start);
+  if (ranges.length === 0) return text;
+
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  ranges.forEach((range, index) => {
+    // Defensive against overlapping or stale ranges: never walk backwards.
+    const start = Math.max(cursor, Math.min(range.start, text.length));
+    const end = Math.max(start, Math.min(range.end, text.length));
+    if (start >= end) return;
+    if (start > cursor) parts.push(text.slice(cursor, start));
+    parts.push(<mark className="hl" key={`${field}-${index}`}>{text.slice(start, end)}</mark>);
+    cursor = end;
+  });
+
+  if (parts.length === 0) return text;
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts;
+}
+
+function resultHref(item: GlobalSearchResult): string {
+  if (item.type === 'knowledgeBase') return `/knowledge-bases/${item.knowledgeBaseId}`;
 
   const params = new URLSearchParams();
   const documentId = item.documentId ?? (item.type === 'document' ? item.id : '');
-  if (documentId) {
-    params.set('documentId', documentId);
-  }
-  if (item.type === 'chunk') {
-    params.set('chunkId', item.id);
-  }
+  if (documentId) params.set('documentId', documentId);
+  if (item.type === 'chunk') params.set('chunkId', item.id);
 
   const query = params.toString();
-  const documentsPath = `/knowledge-bases/${item.knowledgeBaseId}/documents`;
-  return query ? `${documentsPath}?${query}` : documentsPath;
+  const base = `/knowledge-bases/${item.knowledgeBaseId}/documents`;
+  return query ? `${base}?${query}` : base;
 }

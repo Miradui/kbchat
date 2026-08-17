@@ -99,12 +99,45 @@ type GlobalSearchRequest struct {
 }
 
 type GlobalSearchResultResponse struct {
+	Type              string            `json:"type"`
+	ID                string            `json:"id"`
+	KnowledgeBaseID   string            `json:"knowledgeBaseId"`
+	KnowledgeBaseName string            `json:"knowledgeBaseName"`
+	DocumentID        string            `json:"documentId,omitempty"`
+	Filename          string            `json:"filename,omitempty"`
+	Title             string            `json:"title"`
+	Snippet           string            `json:"snippet"`
+	Highlights        []SearchHighlight `json:"highlights"`
+}
+
+// SearchHighlight marks one match inside a result field.
+//
+// Start and End are **UTF-16 code unit** offsets, i.e. plain JavaScript string
+// indices, so the frontend can slice with them directly. They are not UTF-8 byte
+// offsets and not rune indices — with CJK text those three disagree, and picking
+// the wrong one misaligns silently.
+type SearchHighlight struct {
+	Field string `json:"field"`
+	Start int    `json:"start"`
+	End   int    `json:"end"`
+}
+
+type SearchSuggestRequest struct {
+	Query string `form:"q"`
+	Limit int    `form:"limit"`
+}
+
+// SearchSuggestItem is title-level only: no chunk content is searched and no
+// snippet is built, which is what makes suggest cheaper than a full search.
+type SearchSuggestItem struct {
 	Type              string `json:"type"`
 	ID                string `json:"id"`
 	KnowledgeBaseID   string `json:"knowledgeBaseId"`
 	KnowledgeBaseName string `json:"knowledgeBaseName"`
 	DocumentID        string `json:"documentId,omitempty"`
-	Filename          string `json:"filename,omitempty"`
 	Title             string `json:"title"`
-	Snippet           string `json:"snippet"`
+}
+
+type SearchSuggestResponse struct {
+	Items []SearchSuggestItem `json:"items"`
 }

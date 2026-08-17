@@ -24,10 +24,6 @@ type DocumentResponse struct {
 	UpdatedAt       time.Time  `json:"updatedAt"`
 }
 
-type DocumentListResponse struct {
-	Items []DocumentResponse `json:"items"`
-}
-
 type GlobalDocumentListQuery struct {
 	Q               string
 	KnowledgeBaseID *string
@@ -106,6 +102,13 @@ type DocumentPreviewResponse struct {
 
 type DocumentBatchRequest struct {
 	DocumentIDs []uuid.UUID `json:"documentIds" binding:"required"`
+}
+
+// DocumentUpdateRequest carries a rename, a move, or both. Both fields are
+// optional; omitting one leaves that side untouched.
+type DocumentUpdateRequest struct {
+	Filename        string     `json:"filename"`
+	KnowledgeBaseID *uuid.UUID `json:"knowledgeBaseId"`
 }
 
 type DocumentBatchResultResponse struct {

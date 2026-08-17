@@ -33,6 +33,7 @@
 | Environment config | `docs/08-env-config.md` |
 | Error format | `docs/09-error-codes.md` |
 | Frontend behavior | `docs/10-frontend-spec.md` |
+| Frontend API gaps | `docs/14-frontend-api-gaps.md` |
 | AI task order | `docs/11-ai-task-prompts.md` |
 | Current handoff | `docs/12-handoff.md` |
 

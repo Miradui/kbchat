@@ -2,15 +2,68 @@ package repository
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"rag/backend/internal/model"
 )
+
+func TestEmptyDeletedSessionsLocksVisibleSessionsBeforeDeleting(t *testing.T) {
+	db := newChatRepositoryTestDB(t)
+	repository := NewChatRepository(db)
+	user, _, session := createDeletedChatRepositorySession(t, db)
+	lockTargets := recordChatRepositoryLockTargets(t, db)
+
+	if err := repository.EmptyDeletedSessions(context.Background(), user.ID); err != nil {
+		t.Fatalf("empty deleted sessions: %v", err)
+	}
+
+	if len(*lockTargets) != 1 || (*lockTargets)[0] != "chat_sessions" {
+		t.Fatalf("expected chat session rows to be locked before bulk deletion, got %v", *lockTargets)
+	}
+	var remaining int64
+	if err := db.Unscoped().Model(&model.ChatSession{}).Where("id = ?", session.ID).Count(&remaining).Error; err != nil {
+		t.Fatalf("count deleted session: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("expected session to be permanently deleted, got %d rows", remaining)
+	}
+}
+
+func TestPermanentDeleteSessionLocksDeletedSessionBeforeDeleting(t *testing.T) {
+	db := newChatRepositoryTestDB(t)
+	repository := NewChatRepository(db)
+	_, _, session := createDeletedChatRepositorySession(t, db)
+	lockTargets := recordChatRepositoryLockTargets(t, db)
+
+	if err := repository.PermanentDeleteSession(context.Background(), session.ID); err != nil {
+		t.Fatalf("permanently delete session: %v", err)
+	}
+
+	if len(*lockTargets) != 1 || (*lockTargets)[0] != "chat_sessions" {
+		t.Fatalf("expected deleted session row to be locked before deletion, got %v", *lockTargets)
+	}
+}
+
+func TestRestoreSessionRequiresSessionToRemainDeleted(t *testing.T) {
+	db := newChatRepositoryTestDB(t)
+	repository := NewChatRepository(db)
+	_, _, session := createDeletedChatRepositorySession(t, db)
+
+	if err := repository.RestoreSession(context.Background(), session.ID); err != nil {
+		t.Fatalf("restore deleted session: %v", err)
+	}
+	if err := repository.RestoreSession(context.Background(), session.ID); !errors.Is(err, ErrChatSessionNotDeleted) {
+		t.Fatalf("expected a stale restore to fail with record not found, got %v", err)
+	}
+}
 
 func TestArchiveSessionDoesNotOverwriteExistingTimestamp(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -46,4 +99,90 @@ func TestArchiveSessionDoesNotOverwriteExistingTimestamp(t *testing.T) {
 	if stored.ArchivedAt == nil || !stored.ArchivedAt.Equal(first) {
 		t.Fatalf("expected first archive timestamp to remain, got %#v", stored.ArchivedAt)
 	}
+}
+
+func newChatRepositoryTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", uuid.NewString())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open chat repository test database: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get chat repository sql database: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := db.AutoMigrate(
+		&model.User{},
+		&model.KnowledgeBase{},
+		&model.ChatSession{},
+		&model.ChatMessage{},
+	); err != nil {
+		t.Fatalf("migrate chat repository fixture: %v", err)
+	}
+	return db
+}
+
+func createDeletedChatRepositorySession(
+	t *testing.T,
+	db *gorm.DB,
+) (model.User, model.KnowledgeBase, model.ChatSession) {
+	t.Helper()
+	user := model.User{Username: "chat-" + uuid.NewString(), PasswordHash: "hash"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("create chat repository user: %v", err)
+	}
+	knowledgeBase := model.KnowledgeBase{Name: "Chat Recycle Bin", OwnerID: user.ID}
+	if err := db.Create(&knowledgeBase).Error; err != nil {
+		t.Fatalf("create chat repository knowledge base: %v", err)
+	}
+	session := model.ChatSession{
+		UserID:          user.ID,
+		KnowledgeBaseID: knowledgeBase.ID,
+		Title:           "deleted session",
+	}
+	if err := db.Create(&session).Error; err != nil {
+		t.Fatalf("create chat repository session: %v", err)
+	}
+	message := model.ChatMessage{
+		SessionID: session.ID,
+		Role:      "assistant",
+		Content:   "kept until permanent deletion",
+	}
+	if err := db.Create(&message).Error; err != nil {
+		t.Fatalf("create chat repository message: %v", err)
+	}
+	if err := db.Delete(&session).Error; err != nil {
+		t.Fatalf("soft delete chat repository session: %v", err)
+	}
+	return user, knowledgeBase, session
+}
+
+func recordChatRepositoryLockTargets(t *testing.T, db *gorm.DB) *[]string {
+	t.Helper()
+	lockTargets := make([]string, 0, 1)
+	callbackName := "test:record-chat-repository-lock-targets"
+	if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		forClause, ok := tx.Statement.Clauses["FOR"]
+		if !ok {
+			return
+		}
+		locking, ok := forClause.Expression.(clause.Locking)
+		if !ok || locking.Strength == "" {
+			return
+		}
+		target := locking.Table.Name
+		if target == "" || target == clause.CurrentTable {
+			target = tx.Statement.Table
+		}
+		lockTargets = append(lockTargets, target)
+	}); err != nil {
+		t.Fatalf("register chat lock callback: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Callback().Query().Remove(callbackName)
+	})
+	return &lockTargets
 }

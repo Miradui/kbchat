@@ -11,7 +11,11 @@ import { renderWithRouter } from '../test/render';
 import { Dialog } from '../components/ui/Dialog';
 import { AppShell, completeLogout, finishLocalLogout } from './AppShell';
 
-vi.mock('../api/resources', () => ({ getCurrentUser: vi.fn(), logout: vi.fn() }));
+vi.mock('../api/resources', () => ({
+  getCurrentUser: vi.fn(),
+  logout: vi.fn(),
+  searchSuggest: vi.fn().mockResolvedValue({ items: [] }),
+}));
 const mockedGetCurrentUser = vi.mocked(getCurrentUser);
 const mockedLogout = vi.mocked(logout);
 
@@ -158,15 +162,15 @@ describe('AppShell', () => {
   it('reacts to mobile and desktop media changes', async () => {
     const media = stubMatchMedia(false);
     renderWithRouter(<AppShell active="home"><p>内容</p></AppShell>);
-    expect(screen.queryByRole('button', { name: '打开主导航' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '打开导航' })).not.toBeInTheDocument();
 
     act(() => media.setMatches(true));
-    const opener = screen.getByRole('button', { name: '打开主导航' });
+    const opener = screen.getByRole('button', { name: '打开导航' });
     await userEvent.click(opener);
     expect(screen.getByRole('navigation', { name: '主导航' }).closest('aside')).toHaveClass('is-open');
 
     act(() => media.setMatches(false));
-    expect(screen.queryByRole('button', { name: '打开主导航' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '打开导航' })).not.toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: '主导航' }).closest('aside')).not.toHaveClass('is-open');
   });
 
@@ -181,19 +185,19 @@ describe('AppShell', () => {
     stubMatchMedia(true);
     const user = userEvent.setup();
     renderWithRouter(<AppShell active="home"><button type="button">背景操作</button></AppShell>);
-    const opener = screen.getByRole('button', { name: '打开主导航' });
+    const opener = screen.getByRole('button', { name: '打开导航' });
     await user.click(opener);
 
-    expect(screen.getByRole('button', { name: '关闭主导航' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: '关闭导航' })).toHaveFocus();
     expect(document.body.style.overflow).toBe('hidden');
-    const applicationMain = opener.closest('.app-main');
+    const applicationMain = opener.closest('.app__main');
     expect(applicationMain).toHaveAttribute('inert');
     expect(applicationMain).toHaveAttribute('aria-hidden', 'true');
     expect(screen.getByRole('main', { hidden: true })).toBeInTheDocument();
-    expect(screen.getByRole('textbox', { name: '全局搜索', hidden: true }).closest('.app-main')).toBe(applicationMain);
+    expect(screen.getByRole('button', { name: /搜索/ , hidden: true }).closest('.app__main')).toBe(applicationMain);
 
     const first = screen.getByRole('link', { name: 'RAG Console' });
-    const last = screen.getByRole('link', { name: 'AI 问答' });
+    const last = screen.getByRole('button', { name: '管理员' });
     last.focus();
     await user.tab();
     expect(first).toHaveFocus();
@@ -211,7 +215,7 @@ describe('AppShell', () => {
     stubMatchMedia(true);
     const user = userEvent.setup();
     renderWithRouter(<><AppShell active="home"><p>内容</p></AppShell><LocationProbe /></>);
-    await user.click(screen.getByRole('button', { name: '打开主导航' }));
+    await user.click(screen.getByRole('button', { name: '打开导航' }));
     await user.click(screen.getByRole('link', { name: '知识库' }));
 
     expect(screen.getByLabelText('当前位置')).toHaveTextContent('/knowledge-bases');
@@ -219,34 +223,24 @@ describe('AppShell', () => {
     expect(document.body.style.overflow).toBe('');
   });
 
-  it('closes the mobile drawer before opening a modal from its context actions', async () => {
+  it('closes the mobile drawer with its close control', async () => {
     stubMatchMedia(true);
     const user = userEvent.setup();
-    renderWithRouter(<ShellWithContextDialog />);
+    renderWithRouter(<AppShell active="knowledge-bases"><p>内容</p></AppShell>);
 
-    await user.click(screen.getByRole('button', { name: '打开主导航' }));
-    await user.click(screen.getByRole('button', { name: '编辑制度分类' }));
-
-    const dialog = screen.getByRole('dialog', { name: '编辑分类' });
-    expect(dialog.closest('.app-main')).not.toHaveAttribute('inert');
-    expect(dialog.closest('.app-main')).not.toHaveAttribute('aria-hidden');
-    expect(screen.getByRole('button', { name: '保存分类' })).toHaveFocus();
-
-    await user.keyboard('{Escape}');
-    expect(screen.queryByRole('dialog', { name: '编辑分类' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '打开主导航' })).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: '打开导航' }));
+    await user.click(screen.getByRole('button', { name: '关闭导航' }));
+    expect(screen.getByRole('navigation', { name: '主导航', hidden: true }).closest('aside')).not.toHaveClass('is-open');
+    expect(screen.getByRole('button', { name: '打开导航' })).toHaveFocus();
   });
 
-  it('keeps the mobile drawer open for context actions that stay inside the drawer', async () => {
+  it('keeps the mobile drawer open while focus moves within navigation', async () => {
     stubMatchMedia(true);
     const user = userEvent.setup();
-    renderWithRouter(<ShellWithContextDialog />);
+    renderWithRouter(<AppShell active="knowledge-bases"><p>内容</p></AppShell>);
 
-    await user.click(screen.getByRole('button', { name: '打开主导航' }));
-    const expand = screen.getByRole('button', { name: '展开制度分类' });
-    await user.click(expand);
-
-    expect(expand).toHaveAttribute('aria-expanded', 'true');
+    await user.click(screen.getByRole('button', { name: '打开导航' }));
+    await user.tab();
     expect(screen.getByRole('navigation', { name: '主导航' }).closest('aside')).toHaveClass('is-open');
   });
 
@@ -254,15 +248,17 @@ describe('AppShell', () => {
     stubMatchMedia(false);
     const user = userEvent.setup();
     renderWithRouter(<><AppShell active="home"><p>内容</p></AppShell><LocationProbe /></>);
-    const input = screen.getByRole('textbox', { name: '全局搜索' });
+    await user.click(screen.getByRole('button', { name: /搜索⌘K/ }));
+    const input = screen.getByRole('textbox', { name: '搜索知识库、文档和内容' });
 
     await user.type(input, ' handbook & 中文 ');
     await user.keyboard('{Enter}');
     expect(screen.getByLabelText('当前位置')).toHaveTextContent('/search?q=handbook%20%26%20%E4%B8%AD%E6%96%87');
 
-    await user.clear(input);
-    await user.type(input, '   ');
-    await user.keyboard('{Enter}');
+    await user.click(screen.getByRole('button', { name: /搜索⌘K/ }));
+    const emptyInput = screen.getByRole('textbox', { name: '搜索知识库、文档和内容' });
+    await user.type(emptyInput, '   ');
+    await user.keyboard('{Escape}');
     expect(screen.getByLabelText('当前位置')).toHaveTextContent('/search?q=handbook%20%26%20%E4%B8%AD%E6%96%87');
   });
 
@@ -278,7 +274,8 @@ describe('AppShell', () => {
     const user = userEvent.setup();
     renderWithRouter(<><AppShell active="home" logoutRequest={() => Promise.reject(new Error('offline'))}><p>内容</p></AppShell><LocationProbe /></>);
 
-    await user.click(screen.getByRole('button', { name: '退出登录' }));
+    await user.click(await screen.findByRole('button', { name: '管理员' }));
+    await user.click(screen.getByRole('menuitem', { name: '退出登录' }));
     await waitFor(() => expect(tokenStore.getToken()).toBeNull());
     await waitFor(() => expect(screen.getByLabelText('当前位置')).toHaveTextContent('/login'));
   });
@@ -303,7 +300,9 @@ describe('AppShell', () => {
       <AppShell active="home" logoutRequest={() => result.promise}><p>内容</p></AppShell>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '退出登录' }));
+    await userEvent.click(await screen.findByRole('button', { name: '管理员' }));
+    const logoutButton = screen.getByRole('menuitem', { name: '退出登录' });
+    fireEvent.click(logoutButton);
     unmount();
     await act(async () => result.resolve());
 
@@ -315,7 +314,8 @@ describe('AppShell', () => {
     const result = deferred<void>();
     const request = vi.fn(() => result.promise);
     renderWithRouter(<AppShell active="home" logoutRequest={request}><p>内容</p></AppShell>);
-    const button = screen.getByRole('button', { name: '退出登录' });
+    await userEvent.click(await screen.findByRole('button', { name: '管理员' }));
+    const button = screen.getByRole('menuitem', { name: '退出登录' });
 
     act(() => {
       fireEvent.click(button);
@@ -323,7 +323,7 @@ describe('AppShell', () => {
     });
 
     expect(request).toHaveBeenCalledOnce();
-    expect(button).toBeDisabled();
+    expect(screen.queryByRole('menuitem', { name: '退出登录' })).not.toBeInTheDocument();
     result.resolve();
   });
 });

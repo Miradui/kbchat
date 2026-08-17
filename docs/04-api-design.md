@@ -49,6 +49,9 @@ Authorization: Bearer <token>
 }
 ```
 
+密码字段不做 trim，只有真正的空字符串才视为未填写；非空密码在认证前按
+UTF-8 编码检查 `account.maxPasswordBytes`，当前上限为 72 字节。
+
 ### GET /auth/me
 
 响应：
@@ -62,6 +65,40 @@ Authorization: Bearer <token>
   "role": "user"
 }
 ```
+
+### PUT /auth/me
+
+更新当前用户资料。只接受这两个展示字段：`username` 和 `role` 属于身份，不能通过该接口修改。
+
+```json
+{
+  "displayName": "Admin",
+  "avatarUrl": "https://example.com/avatar.png"
+}
+```
+
+- `displayName` 必填，两端空白会被去除，长度按 **Unicode 码点（Go rune）** 计，上限见 `GET /system/capabilities` 的 `account.maxDisplayNameLength`
+- `avatarUrl` 可为空字符串表示清除。非空时只接受 `http://`、`https://` 绝对地址，或以单个 `/` 开头的站内相对路径；`javascript:`、`data:` 以及 `//host` 协议相对地址一律返回 `VALIDATION_ERROR`。长度同样按 Unicode 码点计数
+
+响应与 `GET /auth/me` 相同。
+
+### POST /auth/change-password
+
+```json
+{
+  "currentPassword": "old-secret",
+  "newPassword": "new-secret"
+}
+```
+
+成功返回 `204 No Content`。
+
+- 即使已登录也必须提供 `currentPassword`：仅凭泄露的 token 不足以顶掉账号密码。校验失败返回 `INVALID_CURRENT_PASSWORD`
+- `newPassword` 的最小长度按 Unicode 码点（Go rune）计，见 `account.minPasswordLength`
+- bcrypt 最多接受 72 个字节，因此新密码的 UTF-8 编码长度不得超过 `account.maxPasswordBytes`；超限返回 `400 VALIDATION_ERROR`，不会进入 bcrypt 后变成 500
+- 新密码与当前密码相同返回 `PASSWORD_UNCHANGED`
+- 两个并发改密请求即使都携带同一个旧密码，也只有最先完成条件更新的请求成功；后续请求因旧密码哈希已变化返回 `INVALID_CURRENT_PASSWORD`
+- **改密不会吊销已签发的 token**：当前没有服务端会话存储，旧 token 会一直有效到自然过期
 
 ### POST /auth/logout
 
@@ -93,11 +130,134 @@ limit=20
 }
 ```
 
+## System
+
+### GET /system/capabilities
+
+返回前端需要遵守的服务端限制，避免前端复刻常量后与服务端配置脱钩。需要登录。
+
+```json
+{
+  "rerankEnabled": false,
+  "upload": {
+    "maxFileBytes": 52428800,
+    "allowedExtensions": ["txt", "md", "pdf"]
+  },
+  "retrieval": {
+    "maxVectorTopN": 100,
+    "maxRerankTopK": 20
+  },
+  "account": {
+    "minPasswordLength": 8,
+    "maxPasswordBytes": 72,
+    "maxDisplayNameLength": 128,
+    "maxAvatarUrlLength": 512
+  }
+}
+```
+
+各字段与请求路径实际执行的限制同源：
+
+- `rerankEnabled` 来自 `RERANK_ENABLED`
+- `upload.maxFileBytes` 来自 `MAX_UPLOAD_SIZE_MB`
+- `upload.allowedExtensions` 就是文档上传校验使用的白名单
+- `retrieval.*` 就是检索服务对 `vectorTopN` / `rerankTopK` 的硬上限
+- `account.minPasswordLength`、`account.maxDisplayNameLength` 与 `account.maxAvatarUrlLength` 按 Unicode 码点（Go rune）计；前端不能用 JavaScript `string.length` 或 HTML `maxLength` 代替
+- `account.maxPasswordBytes` 是密码 UTF-8 编码后的字节上限，与 bcrypt 的 72 字节硬限制同源；前端不能用 JavaScript `string.length` 或 HTML `maxLength` 代替
+
+该接口只读，不反映单个知识库的 `retrievalConfig`。
+
+## Activities
+
+### GET /activities
+
+工作台时间线。查询参数 `limit`，默认 `20`，最大 `100`（超出按上限截断，不报错）。按时间倒序返回当前用户自己的事件。
+
+```json
+{
+  "items": [
+    {
+      "id": "uuid",
+      "action": "document.deleted",
+      "resourceType": "knowledgeBase|document|chatSession|member",
+      "resourceId": "uuid",
+      "resourceName": "manual.pdf",
+      "knowledgeBaseId": "uuid",
+      "knowledgeBaseName": "产品知识库",
+      "createdAt": "2026-08-09T10:00:00Z"
+    }
+  ]
+}
+```
+
+`action` 是一个封闭集合，前端据此渲染文案：
+
+```text
+knowledgeBase.created / knowledgeBase.deleted / knowledgeBase.restored
+document.uploaded / document.deleted / document.restored / document.moved / document.cancelled
+member.added / member.roleChanged / member.removed
+chatSession.deleted / chatSession.restored
+```
+
+设计要点：
+
+- **`resourceName` 与 `knowledgeBaseName` 随事件一起存下来，不在读取时反查**。删除事件恰恰是在资源已经不存在时最需要可读，所以这张表刻意不对资源表建外键
+- 这正是前端合并三个列表做不到的部分：删除、恢复、成员变更都没有可供合并的行
+- **记录是尽力而为的**：写入失败不会让触发它的操作失败。时间线是便利视图，不是审计日志，丢一条记录远好过让用户已经确认的删除操作报错
+- 表结构见 `backend/migrations/012_activities.sql`
+
+## Home
+
+### GET /home/summary
+
+工作台首页所需的全部聚合数据，一次返回。查询参数 `period=month|day`（默认 `month`，仅作用于 `stats`）。
+
+```json
+{
+  "period": "month",
+  "stats": { "period": "month", "knowledgeBases": {}, "documents": {}, "views": {}, "questions": {} },
+  "knowledgeBases": [],
+  "knowledgeBaseTotal": 42,
+  "documents": [],
+  "documentTotal": 128,
+  "failedDocuments": [],
+  "failedDocumentTotal": 3,
+  "sessions": [],
+  "sessionTotal": 17
+}
+```
+
+- 每个列表的条数由**服务端**决定（`service.HomeSummaryItemLimit`，当前为 5），前端不再靠 `pageSize` 猜
+- 每个列表都配一个未截断的 `*Total`，因此「最近 5 条 / 共 42 条」不需要第二次请求
+- 各列表元素结构分别与 `GET /knowledge-bases`、`GET /documents`、`GET /chat/sessions` 的列表项一致
+- 该接口只做聚合，复用上述各资源的 service：归属校验和软删除过滤规则仍然只有一份
+
 ## Knowledge Bases
 
 ### GET /knowledge-base-categories
 
-返回当前用户的知识库分类树。
+返回当前用户的知识库分类树。每个节点带两个计数：
+
+```json
+{
+  "items": [
+    {
+      "id": "category_uuid_a",
+      "parentId": null,
+      "name": "产品文档",
+      "sortOrder": 10,
+      "directCount": 2,
+      "totalCount": 5,
+      "children": []
+    }
+  ]
+}
+```
+
+- `directCount`：直接挂在该分类下的知识库数量
+- `totalCount`：`directCount` 加上所有子孙分类的 `directCount`
+
+两者都不含已软删除的知识库，也不含未分类（`categoryId=null`）的知识库。这两个字段仅由本接口返回；`POST` / `PUT` 返回的单节点不含子树，因此不带这两个字段。
 
 ### POST /knowledge-base-categories
 
@@ -260,6 +420,30 @@ period=month|day
 
 返回知识库数、文档数、浏览量和问答数，以及相对上一周期变化比例。上一周期值为 0 时 `changeRatio` 返回 `null`，前端应展示“本月新增”或“暂无可比数据”，不得显示为 100%。
 
+### GET /knowledge-bases/:id/stats
+
+查询参数：
+
+```text
+period=month|day
+```
+
+单个知识库的趋势。响应结构与全局统计一致，但**没有 `knowledgeBases` 指标** —— 单个知识库的知识库数恒为 0 或 1，没有趋势含义。
+
+```json
+{
+  "knowledgeBaseId": "uuid",
+  "period": "month",
+  "documents": { "value": 12, "changeRatio": 0.2 },
+  "views": { "value": 34, "changeRatio": null },
+  "questions": { "value": 8, "changeRatio": -0.1 }
+}
+```
+
+统计口径与全局统计相同（排除软删除的文档与会话，浏览量和问答数只算当前用户），只是把范围收窄到这一个知识库。非当前用户 owner 的知识库返回 `KNOWLEDGE_BASE_NOT_FOUND`。
+
+**这些聚合刻意不放进 `GET /knowledge-bases/:id`**：知识库的 create / update / detail 响应不返回 list-only 聚合字段，需要趋势数据就单独请求本接口。
+
 ### POST /knowledge-bases/:id/favorite
 
 收藏当前用户拥有的知识库，幂等。
@@ -299,6 +483,27 @@ period=month|day
   "categoryId": "category_uuid"
 }
 ```
+
+### POST /knowledge-bases/batch-tag
+
+批量给知识库打标签，与其他批量接口一样是 all-or-nothing：知识库和标签都必须属于当前用户，混入任何一个不属于自己的资源则整批失败且不产生部分变更。
+
+```json
+{
+  "knowledgeBaseIds": ["uuid_a", "uuid_b"],
+  "tagIds": ["tag_uuid"],
+  "mode": "add"
+}
+```
+
+- `mode` 取 `add` | `remove` | `replace`，缺省为 `add`；其他值返回 `INVALID_BATCH_TAG_MODE`
+- `add` 幂等：已绑定的标签重复提交不会报错
+- `remove` 只解绑给定标签，不影响其他标签
+- `replace` 先清空这些知识库的全部标签再写入 `tagIds`
+- **只有 `replace` 接受空 `tagIds`**，语义是清空标签；`add` / `remove` 传空返回 `VALIDATION_ERROR`，因为那只会静默地什么都不做
+- 绑定变更与这些知识库的 `updatedAt` / `updatedBy` 在同一个事务内完成
+
+响应与其他批量接口一致：`{ "processedCount": 2 }`。
 
 ### POST /knowledge-bases/batch-delete
 
@@ -451,7 +656,7 @@ pageSize
 
 ```json
 {
-  "jobStatus": "pending|running|failed|completed",
+  "jobStatus": "pending|running|failed|completed|cancelled",
   "progress": 75,
   "stage": "uploaded|parsing|chunking|embedding|completed|failed",
   "retryCount": 1,
@@ -537,25 +742,48 @@ field: file
 
 上传成功后必须创建文档处理任务。
 
+上传传输进度由前端通过 `XMLHttpRequest.upload.onprogress` 的 `loaded / total`
+字节计算真实百分比；接口本身不新增进度字段。传输达到 100% 只表示 multipart
+请求体上传完成，后续解析、切片和 Embedding 仍以文档的 `status`、`jobStatus`、
+`progress`、`stage` 为准。
+
 ### GET /knowledge-bases/:kbId/documents
 
-响应：
+`GET /documents` 的知识库限定视图。查询参数与响应结构与 `GET /documents` 完全一致，唯一区别是 `knowledgeBaseId` 来自路径而不是 query，请求里再传 `knowledgeBaseId` 会被路径值覆盖。
+
+查询参数：`q`、`status`、`fileType`、`sort`、`page`、`pageSize`（默认 `page=1`、`pageSize=20`，上限 100）。
 
 ```json
 {
   "items": [
     {
       "id": "uuid",
+      "knowledgeBaseId": "kb_uuid",
+      "knowledgeBaseName": "产品文档库",
       "filename": "manual.pdf",
       "fileType": "pdf",
       "fileSize": 102400,
       "status": "completed",
       "errorMessage": null,
-      "createdAt": "2026-06-08T00:00:00Z"
+      "jobStatus": "completed",
+      "progress": 100,
+      "stage": "completed",
+      "retryCount": 0,
+      "maxRetries": 3,
+      "nextRetryAt": null,
+      "createdAt": "2026-06-08T00:00:00Z",
+      "updatedAt": "2026-06-08T00:00:00Z"
     }
-  ]
+  ],
+  "total": 1,
+  "page": 1,
+  "pageSize": 20
 }
 ```
+
+不属于当前用户的知识库返回 `KNOWLEDGE_BASE_NOT_FOUND`，不会返回空列表。
+
+**兼容性变更**：该接口此前不接受任何查询参数，一次返回该知识库的全部文档且响应只有 `items`。现在它默认分页，并返回 `total` / `page` / `pageSize` 以及 `knowledgeBaseName` 和任务进度字段。需要全部文档的调用方必须显式翻页。
 
 ### GET /documents/:id
 
@@ -600,6 +828,44 @@ Content-Disposition: attachment
   "downloadUrl": "/api/v1/documents/document_uuid/download"
 }
 ```
+
+### PUT /documents/:id
+
+重命名文档，或把文档移动到另一个知识库。两个字段都可选，省略哪个就不改哪个；两个都省略是空操作，返回当前状态。
+
+```json
+{
+  "filename": "季度报告.pdf",
+  "knowledgeBaseId": "target_kb_uuid"
+}
+```
+
+响应与 `GET /documents/:id` 相同。
+
+**重命名**
+
+- 两端空白会被去除，长度按 rune 计，上限 255（`documents.filename` 列宽）
+- 文件名不能包含 `/` 或 `\`
+- **扩展名不能改**：`fileType` 是上传时按扩展名确定的，并决定重处理时选哪个 parser。把 `.pdf` 改成 `.txt` 会让 parser 去按文本读一个真正的 PDF。违反时返回 `DOCUMENT_EXTENSION_IMMUTABLE`
+
+**移动**
+
+- 目标知识库必须属于当前用户，否则返回 `KNOWLEDGE_BASE_NOT_FOUND`
+- 文档的 chunks 会**在同一个事务里**一起迁移 `knowledge_base_id`。`document_chunks` 上的复合外键 `(document_id, knowledge_base_id)` 让两侧不可分割：单独改任何一侧都会违反约束，因此 `011_document_chunk_kb_move.sql` 把该约束改为 `DEFERRABLE INITIALLY IMMEDIATE`，只有移动事务会 `SET CONSTRAINTS ... DEFERRED`
+- **文档存在 pending 或 running 的处理任务时拒绝移动**，返回 `DOCUMENT_JOB_ACTIVE`（409）。已领取的 processor 会按它启动时读到的知识库写入 chunks，中途移动会让它把 chunks 写进旧知识库
+- 重命名不受此限制：processor 不读文件名
+- 移动会同时 touch 源知识库和目标知识库的 `updatedAt` / `updatedBy`
+
+### POST /documents/:id/cancel
+
+取消文档的处理任务。响应与 `GET /documents/:id` 相同。
+
+- 只能取消 `pending` 或 `running` 的任务；没有可取消的任务时返回 `DOCUMENT_JOB_NOT_CANCELLABLE`（409）
+- 取消后 `jobStatus` 为 `cancelled`，文档 `status` 为 `failed`，`errorMessage` 为「文档处理已取消。」。`failed` 与 `cancelled` 的区别只体现在 `jobStatus` 上
+- **已完成的 Embedding 批次不回滚**。processor 在批次前后检查 context 与 job 状态；取消已生效时停止后续 Provider 调用
+- 新 chunks 的发布、文档 `completed` 与 job `completed` 在同一个事务内完成，并与取消共享 document 行锁。取消先提交时发布返回 `ErrDocumentJobCancelled`、旧 chunks 保持不变；发布先提交时 job 已完成，后续取消返回 `DOCUMENT_JOB_NOT_CANCELLABLE`
+- 阶段状态写入也在同一 document/job guard 下执行；任务不再 `running` 时写入被拒绝，processor 随即中止。worker 随后的 `CompleteJob` 对已经原子发布的 completed job 幂等，但不会覆盖 cancelled/failed 状态
+- 被取消的文档可以照常 `POST /documents/:id/reprocess` 重新排队
 
 ### DELETE /documents/:id
 
@@ -677,7 +943,10 @@ pageSize=20
       "documentId": "uuid",
       "filename": "manual.pdf",
       "title": "manual.pdf",
-      "snippet": "匹配摘要"
+      "snippet": "匹配摘要",
+      "highlights": [
+        { "field": "snippet", "start": 3, "end": 5 }
+      ]
     }
   ],
   "total": 123,
@@ -687,6 +956,73 @@ pageSize=20
 ```
 
 `total` 是当前 `type` 筛选下的总命中数。`type=all` 时，知识库和文档按更新时间、chunk 按创建时间排序，并以 ID 作为稳定次序键，再按知识库、文档、chunk 轮转输出，避免单一类型占满分页。越界页返回空 `items`，但保留真实 `total/page/pageSize`。该接口为关键词搜索；语义检索仍使用知识库内 `POST /knowledge-bases/:kbId/search`。
+
+**highlights 的偏移量口径**
+
+`highlights` 标记命中在结果字段内的位置，`field` 取 `title` 或 `snippet`；没有命中位置时为 `null`。
+
+- **`start` / `end` 一律是 UTF-16 code unit 偏移量**，也就是 JavaScript 字符串下标，前端可以直接 `text.slice(start, end)` 取出命中文本
+- **不是** UTF-8 字节偏移，**也不是** 码点（rune）下标。三者在纯 ASCII 下相同，一旦出现中文就会分叉：`"本季度退货政策"` 里 `退货` 的字节偏移是 `9..15`，码点下标是 `3..5`，UTF-16 是 `3..5`；emoji 等增补平面字符占 2 个 code unit，此时码点下标与 UTF-16 也不再相同。口径选错会静默错位
+- 命中判定与 SQL 的 `LOWER(...) LIKE '%q%'` 同源：大小写不敏感的子串匹配，逐字符折叠，不做分词
+- 同一字段内的多次命中都会返回，互不重叠；单字段最多返回 50 个区间，避免单字符关键词在长 chunk 上产生上千个区间
+
+前端因此不再需要自己做子串匹配（原 `SearchPage.tsx` 的 `highlight()` 已删除）。
+
+### GET /search/export
+
+按当前用户权限导出关键词搜索结果，只使用与 `GET /search` 相同的 `q` 和
+`type`：
+
+```text
+GET /search/export?q=退货&type=document
+```
+
+`type` 缺省为 `all`；空白 `q` 或非法 `type` 返回 `VALIDATION_ERROR`。导出全部
+匹配项，不接收分页参数。结果总数不超过 5000 条（含 5000）时允许导出；从
+5001 条起返回 `400 EXPORT_TOO_LARGE`。
+
+成功响应为带 UTF-8 BOM 的 CSV：
+
+```text
+Content-Type: text/csv; charset=utf-8
+Content-Disposition: attachment; filename="search-results.csv"
+```
+
+表头固定为：
+
+```text
+类型,知识库,标题,摘要,知识库ID,文档ID,结果ID
+```
+
+### GET /search/suggest
+
+命令面板（⌘K）用的轻量建议。只搜索**标题级别**内容：知识库名称和文档文件名，不检索 chunk 内容，也不构造摘要 —— 这正是它比 `GET /search` 便宜的原因。
+
+查询参数：
+
+```text
+q=关键词
+limit=10
+```
+
+`limit` 默认 `10`，最大 `20`（超出按上限截断，不报错）。空白关键词返回 `VALIDATION_ERROR`。
+
+```json
+{
+  "items": [
+    {
+      "type": "knowledgeBase|document",
+      "id": "uuid",
+      "knowledgeBaseId": "uuid",
+      "knowledgeBaseName": "产品知识库",
+      "documentId": "uuid",
+      "title": "manual.pdf"
+    }
+  ]
+}
+```
+
+知识库在前、文档在后，各自按更新时间倒序。由于不检索 chunk 内容，命令面板应始终保留「在搜索页查看全部结果」的入口。
 
 ### POST /knowledge-bases/:kbId/search
 
@@ -811,6 +1147,44 @@ pageSize=20
 
 只返回当前用户会话，并要求关联知识库仍存在且归当前用户所有。
 
+查询参数：
+
+```text
+GET /chat/sessions?knowledgeBaseId=&archived=false&q=&page=1&pageSize=20
+```
+
+- `knowledgeBaseId`：限定某个知识库，缺省返回全部
+- `archived`：`false`（默认）只返回未归档会话，`true` 只返回已归档会话；不支持一次返回两者
+- `q`：按会话标题模糊匹配，不检索消息内容（消息内容检索走 `GET /search`）
+- `page` / `pageSize`：默认 `1` / `20`，`pageSize` 上限 100
+
+响应按 `updatedAt` 倒序：
+
+```json
+{
+  "items": [
+    {
+      "id": "session_uuid",
+      "knowledgeBaseId": "kb_uuid",
+      "knowledgeBaseName": "产品文档库",
+      "title": "报销制度咨询",
+      "messageCount": 12,
+      "lastMessagePreview": "退货政策规定 30 天内…",
+      "createdAt": "2026-06-08T00:00:00Z",
+      "updatedAt": "2026-06-08T00:00:00Z",
+      "archivedAt": null
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "pageSize": 20
+}
+```
+
+`knowledgeBaseName`、`messageCount`、`lastMessagePreview` 仅由本接口返回；单会话响应（create / get / rename / archive / unarchive）不做 join 与聚合，因此不带这三个字段。
+
+`messageCount` 统计 user 与 assistant 全部消息。`lastMessagePreview` 取最新一条消息内容，服务端按字符截断到 120 个字符并追加省略号。
+
 ### GET /chat/sessions/:id
 
 返回当前用户的单个会话。必须校验 session 属于当前用户，且知识库属于当前用户。
@@ -826,6 +1200,21 @@ pageSize=20
 }
 ```
 
+### GET /chat/sessions/:id/export
+
+导出当前用户可见的单个会话。必须校验 session 属于当前用户，且关联知识库仍
+存在、未删除并属于当前用户；软删除会话返回 `RESOURCE_NOT_FOUND`，归档会话
+仍可导出。
+
+```text
+Content-Type: text/markdown; charset=utf-8
+Content-Disposition: attachment; filename="chat-<sessionId>.md"
+```
+
+Markdown 按消息创建时间升序包含会话标题、`知识库：<名称>`、全部用户/助手
+消息，以及 assistant 消息中已保存的 citations。来源段使用 `### 来源`，每条
+来源包含文件名、可选页码和缩进正文。
+
 ### PUT /chat/sessions/:id
 
 当前仅支持修改标题。
@@ -838,7 +1227,49 @@ pageSize=20
 
 ### DELETE /chat/sessions/:id
 
-硬删除当前用户会话，并级联删除消息。必须校验 session 属于当前用户，且知识库属于当前用户。
+**软删除**当前用户会话，会话进入聊天回收站。必须校验 session 属于当前用户，且知识库属于当前用户。
+
+**消息会保留**：恢复后应该拿回原来的对话，一个没有历史的会话与新建会话无法区分。消息只在永久删除时才清理。
+
+### GET /chat/sessions/recycle-bin
+
+分页列出当前用户已删除的会话，响应结构与知识库、文档回收站一致，`resourceType` 为 `chatSession`，`name` 为会话标题：
+
+```json
+{
+  "items": [
+    {
+      "resourceType": "chatSession",
+      "id": "session_uuid",
+      "name": "退货政策",
+      "knowledgeBaseId": "kb_uuid",
+      "knowledgeBaseName": "产品知识库",
+      "deletedAt": "2026-08-09T10:00:00Z"
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "pageSize": 20
+}
+```
+
+与另外两个回收站一样，会话所属知识库必须仍存在且属于当前用户；知识库本身被删除时，其会话不在这里单独提供恢复（恢复知识库即可）。
+
+### POST /chat/sessions/:id/restore
+
+从回收站恢复会话，连同全部消息。会话不在回收站中（未删除或不属于当前用户）时返回 `RESOURCE_NOT_FOUND`。
+
+恢复与永久删除/清空回收站通过会话行锁串行化：恢复先提交时，后续清空不会再选中该会话；永久删除或清空先提交时，等待中的恢复返回 `RESOURCE_NOT_FOUND`，不会出现恢复成功后会话和消息又被删除。
+
+### DELETE /chat/sessions/recycle-bin/:id
+
+永久删除一个已删除会话及其全部消息，不可恢复。
+
+### POST /chat/sessions/recycle-bin/empty
+
+清空当前用户**当前可见的**聊天回收站，采用 all-or-nothing 语义。范围与
+`GET /chat/sessions/recycle-bin` 完全一致：session 属于当前用户、关联知识库仍未删除，且
+`knowledge_bases.owner_id` 仍是当前用户。位于已删除知识库下的隐藏会话不会被提前永久删除；恢复知识库后它们会重新出现在聊天回收站。
 
 ### POST /chat/sessions/:id/archive
 
@@ -857,11 +1288,54 @@ pageSize=20
 }
 ```
 
+### POST /chat/sessions/:id/unarchive
+
+归档的反向操作，把会话放回默认列表。必须校验 session 属于当前用户，且知识库属于当前用户。该接口幂等：对未归档会话调用直接返回当前会话。
+
+成功响应为 `200 OK`，`archivedAt` 为 `null`：
+
+```json
+{
+  "id": "session_uuid",
+  "knowledgeBaseId": "kb_uuid",
+  "title": "报销制度咨询",
+  "createdAt": "2026-06-08T00:00:00Z",
+  "updatedAt": "2026-06-08T02:00:00Z",
+  "archivedAt": null
+}
+```
+
 ### GET /chat/sessions/:id/messages
 
 必须校验 session 属于当前用户，且知识库属于当前用户。
 
 消息项包含 `clientRequestId`；历史消息或 regenerate 产生的 assistant 消息可为 `null`。客户端用该字段确定性核对发送结果，不得按消息数量或文本相等推测。
+
+每条消息都固定返回 `feedback`。未评价消息和 user 消息为 `null`；已评价的
+assistant 消息为 `{ "messageId", "rating", "updatedAt" }`。消息列表、阻塞发送、
+流式 `done` 和 regenerate 返回的消息均使用同一结构。
+
+### POST /chat/messages/:messageId/feedback
+
+为当前用户可见的 assistant 回答保存评价：
+
+```json
+{
+  "rating": "positive"
+}
+```
+
+`rating` 只接受 `positive` 或 `negative`。user 消息返回 `VALIDATION_ERROR`；消息、
+会话或知识库不属于当前用户，或者会话/知识库已软删除时返回
+`RESOURCE_NOT_FOUND`。重复提交会覆盖原评价并刷新时间。
+
+```json
+{
+  "messageId": "assistant_message_uuid",
+  "rating": "positive",
+  "updatedAt": "2026-08-12T10:00:00Z"
+}
+```
 
 ### POST /chat/sessions/:id/messages
 
@@ -902,6 +1376,7 @@ pageSize=20
     "role": "user",
     "content": "差旅报销需要哪些材料？",
     "citations": [],
+    "feedback": null,
     "createdAt": "2026-07-26T10:00:00Z"
   },
   "assistantMessage": {
@@ -911,6 +1386,7 @@ pageSize=20
     "role": "assistant",
     "content": "差旅报销通常需要提交发票、行程单和审批单。",
     "citations": [],
+    "feedback": null,
     "createdAt": "2026-07-26T10:00:01Z"
   },
   "answer": "差旅报销通常需要提交发票、行程单和审批单。",
@@ -944,6 +1420,61 @@ pageSize=20
 
 strict 模式下 Rerank 失败仍返回 `RERANK_FAILED`，不调用最终回答 Chat Provider，不保存伪造 assistant 消息。
 
+### POST /chat/sessions/:id/messages/stream
+
+`POST /chat/sessions/:id/messages` 的流式版本。请求体完全相同，`done` 事件的 payload 与阻塞版响应体逐字段一致，因此前端可以复用同一套结果处理。
+
+响应为 `text/event-stream`，事件格式为标准 SSE（`event:` 行 + 单行 JSON 的 `data:` 行 + 空行分隔）：
+
+```text
+event: citations
+data: {"citations":[...]}
+
+event: delta
+data: {"text":"差旅报销"}
+
+event: delta
+data: {"text":"通常需要"}
+
+event: done
+data: { …与阻塞接口相同的响应体… }
+```
+
+**事件顺序是 `citations` → `delta`* → `done`**，而不是缺口文档最初建议的 `delta` → `citations` → `done`。原因是物理上的：citations 来自进入 prompt 的 chunks，是生成的**输入**而非产物，检索一结束就已经确定。把它压到最后只是把服务端已经掌握的信息扣住不发，而先发它能让前端在首个 token 之前就把来源渲染出来，并明确区分「还在检索」和「已在生成」两个阶段。
+
+- `citations` 恰好发送一次。conversation 意图不检索，此时发送空数组而不是不发 —— 「这个回答没有来源」同样是客户端需要的信息
+- 知识库中无足够依据时，那句固定的拒答文本也会作为 delta 发出，客户端不会一直等到 `done` 才看到内容
+- 若 Chat Provider 不支持流式，服务端回落到阻塞调用，并把整段回答作为**单个 delta** 发出。端点行为不变，只是没有逐字效果
+
+**错误处理分两个阶段**，这是整个设计的关键分界：
+
+- **首个事件发出之前**的失败仍然是普通 HTTP 错误（JSON body）：401、404、参数校验、`409 IDEMPOTENCY_KEY_REUSED` 都在这里返回。幂等检查刻意放在任何输出之前，就是为了保住这条路径
+- **首个事件发出之后**响应已经锁定为 200，失败只能作为 `error` 事件送出：
+
+```text
+event: error
+data: {"status":500,"code":"CHAT_COMPLETION_FAILED","message":"回答生成失败，请稍后重试","details":{}}
+```
+
+其中 `code` / `message` 与 JSON 错误走同一套映射（`handler.errorPayload`），前端按 `code` 分类的逻辑无需分叉。
+
+**中断语义（必须理解这一条）**
+
+**生成全部完成之前不写库。** 因此：
+
+- 流在中途断开 —— 客户端掉线、Provider 出错、进程重启 —— **不会留下任何痕迹**，不存在半条 assistant 消息
+- 客户端按同一 `clientRequestId` 到消息列表里对账：查不到就说明没落库，可以安全地用**同一个 ID** 重发
+- 反之，如果连接是在服务端已提交之后、`done` 送达之前断的，对账会查到那对消息，客户端直接采用，不会重发
+- 选择丢弃而不是落一条部分消息，是因为被截断的回答会进入历史，之后每一轮都会把它当成上下文读进去
+
+因此 `done` 事件是唯一的成功信号。流在没有 `done` 的情况下结束，客户端必须按「结果未知」处理，不能当作成功。
+
+幂等保证与阻塞接口共用同一套机制，没有第二条路径：
+
+- 仍然由 `chat_messages` 上的部分唯一索引 `(session_id, client_request_id, role)` 兜底
+- 同键同内容的重放直接回放已存的消息对，**完全不调用 Provider**，且只发 `citations` + `done`
+- 并发的同键请求中落败的一方会采用胜出者已写入的消息对，因此「至多一条 assistant 消息」在并发下同样成立
+
 ### POST /chat/sessions/:sessionId/messages/:messageId/regenerate
 
 重新生成指定 assistant 消息。必须校验 session 属于当前用户，且 session 所属知识库属于当前用户。
@@ -966,6 +1497,7 @@ MVP 语义：
     "role": "assistant",
     "content": "重新生成的回答",
     "citations": [],
+    "feedback": null,
     "createdAt": "2026-06-08T00:00:00Z"
   },
   "rerankFallback": null
@@ -992,7 +1524,25 @@ MVP 语义：
 
 ### GET /knowledge-base-tags
 
-返回当前用户的标签列表。
+返回当前用户的标签列表，每项带使用量：
+
+```json
+{
+  "items": [
+    {
+      "id": "tag_uuid_1",
+      "name": "product",
+      "knowledgeBaseCount": 2,
+      "createdAt": "2026-08-09T10:00:00Z",
+      "updatedAt": "2026-08-09T10:00:00Z"
+    }
+  ]
+}
+```
+
+`knowledgeBaseCount` 统计当前用户名下引用该标签的知识库数量，**包含回收站中的知识库**。这样它与 `DELETE` 的 `TAG_NOT_EMPTY` 判定口径一致：计数大于 0 就一定删不掉。
+
+`POST` 返回的新标签 `knowledgeBaseCount` 固定为 `0`；`PUT` 返回改名后的实际计数。知识库负载里内嵌的 `tags` 摘要不带该字段。
 
 ### POST /knowledge-base-tags
 

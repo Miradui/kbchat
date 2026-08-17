@@ -507,6 +507,17 @@ func newChatServiceTestDB(t *testing.T) *gorm.DB {
 	); err != nil {
 		t.Fatalf("auto migrate: %v", err)
 	}
+	// AutoMigrate does not reproduce the partial unique index from
+	// migrations/010_chat_message_idempotency.sql on SQLite, so without this the
+	// idempotency guarantee would be untested: the service-level lookup catches
+	// a sequential retry, but only the index catches a genuine concurrent race.
+	if err := db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_session_client_role
+		ON chat_messages(session_id, client_request_id, role)
+		WHERE client_request_id IS NOT NULL AND role IN ('user', 'assistant')
+	`).Error; err != nil {
+		t.Fatalf("create chat message idempotency index: %v", err)
+	}
 	return db
 }
 

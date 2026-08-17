@@ -20,7 +20,7 @@ describe('DocumentProgress', () => {
   it('does not present a failed legacy document as 100 percent complete', () => {
     render(<DocumentProgress document={document} />);
 
-    expect(screen.getByRole('progressbar', { name: '处理进度' })).toHaveAttribute('value', '0');
+    expect(screen.getByRole('progressbar', { name: '处理进度' })).toHaveAttribute('aria-valuenow', '0');
     expect(screen.getByText('任务 失败')).toBeInTheDocument();
   });
 

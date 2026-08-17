@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -32,6 +33,13 @@ type DocumentService struct {
 	chunks         *repository.ChunkRepository
 	knowledgeBases *repository.KnowledgeBaseRepository
 	storage        documentStorage
+	activities     *ActivityRecorder
+}
+
+// SetActivityRecorder wires the workspace timeline. Optional; see the
+// KnowledgeBaseService counterpart.
+func (s *DocumentService) SetActivityRecorder(recorder *ActivityRecorder) {
+	s.activities = recorder
 }
 
 type documentStorage interface {
@@ -88,30 +96,25 @@ func (s *DocumentService) Upload(ctx context.Context, ownerID, kbID uuid.UUID, f
 		return nil, apperror.Internal(err)
 	}
 
+	s.recordDocumentActivity(ctx, ownerID, ActivityDocumentUploaded, document)
 	res := toDocumentResponse(document, job, s.maxDocumentRetries())
 	return &res, nil
 }
 
-func (s *DocumentService) List(ctx context.Context, ownerID, kbID uuid.UUID) (*dto.DocumentListResponse, error) {
+// List is the knowledge-base-scoped view of the same ledger ListGlobal serves.
+// It pins knowledgeBaseId to the path parameter and otherwise accepts and
+// returns exactly what the global endpoint does, so the two cannot drift.
+// See docs/14-frontend-api-gaps.md G20.
+func (s *DocumentService) List(ctx context.Context, ownerID, kbID uuid.UUID, query dto.GlobalDocumentListQuery) (*dto.GlobalDocumentListResponse, error) {
+	// Checked up front so a knowledge base the caller does not own answers
+	// KNOWLEDGE_BASE_NOT_FOUND instead of an empty page.
 	if err := s.ensureKnowledgeBaseOwner(ctx, ownerID, kbID); err != nil {
 		return nil, err
 	}
 
-	items, err := s.documents.ListByKnowledgeBase(ctx, kbID)
-	if err != nil {
-		return nil, apperror.Internal(err)
-	}
-
-	jobsByDocumentID, err := s.latestJobsForDocuments(ctx, items)
-	if err != nil {
-		return nil, apperror.Internal(err)
-	}
-
-	res := dto.DocumentListResponse{Items: make([]dto.DocumentResponse, 0, len(items))}
-	for i := range items {
-		res.Items = append(res.Items, toDocumentResponse(&items[i], jobForDocument(jobsByDocumentID, items[i].ID), s.maxDocumentRetries()))
-	}
-	return &res, nil
+	scopedID := kbID.String()
+	query.KnowledgeBaseID = &scopedID
+	return s.ListGlobal(ctx, ownerID, query)
 }
 
 func (s *DocumentService) ListGlobal(ctx context.Context, ownerID uuid.UUID, query dto.GlobalDocumentListQuery) (*dto.GlobalDocumentListResponse, error) {
@@ -166,6 +169,7 @@ func (s *DocumentService) Delete(ctx context.Context, ownerID, documentID uuid.U
 	if err := s.documents.Delete(ctx, document); err != nil {
 		return apperror.Internal(err)
 	}
+	s.recordDocumentActivity(ctx, ownerID, ActivityDocumentDeleted, document)
 	return nil
 }
 
@@ -217,8 +221,12 @@ func (s *DocumentService) Restore(ctx context.Context, ownerID, documentID uuid.
 		return apperror.NotFound("DOCUMENT_NOT_FOUND", "document not found")
 	}
 	if err := s.documents.Restore(ctx, documentID); err != nil {
+		if errors.Is(err, repository.ErrDocumentNotDeleted) {
+			return apperror.NotFound("DOCUMENT_NOT_FOUND", "document not found")
+		}
 		return apperror.Internal(err)
 	}
+	s.recordDocumentActivity(ctx, ownerID, ActivityDocumentRestored, document)
 	return nil
 }
 
@@ -231,6 +239,9 @@ func (s *DocumentService) BatchRestore(ctx context.Context, ownerID uuid.UUID, r
 		return nil, err
 	}
 	if err := s.documents.BatchRestore(ctx, ids); err != nil {
+		if errors.Is(err, repository.ErrDocumentNotDeleted) {
+			return nil, apperror.NotFound("DOCUMENT_NOT_FOUND", "document not found")
+		}
 		return nil, apperror.Internal(err)
 	}
 	return &dto.DocumentBatchResultResponse{ProcessedCount: len(ids)}, nil
@@ -354,6 +365,9 @@ func (s *DocumentService) PermanentDelete(ctx context.Context, ownerID, document
 		return apperror.NotFound("DOCUMENT_NOT_FOUND", "document not found")
 	}
 	if err := s.documents.PermanentDelete(ctx, documentID); err != nil {
+		if errors.Is(err, repository.ErrDocumentNotDeleted) {
+			return apperror.NotFound("DOCUMENT_NOT_FOUND", "document not found")
+		}
 		return apperror.Internal(err)
 	}
 	_ = s.storage.Delete(document.StoragePath)
@@ -394,6 +408,121 @@ func toChunkResponse(chunk *model.DocumentChunk) dto.ChunkResponse {
 	}
 }
 
+// MaxDocumentFilenameLength matches the documents.filename column. Published by
+// GET /system/capabilities so the rename form validates against this same value.
+const MaxDocumentFilenameLength = 255
+
+// Update renames a document and optionally moves it to another knowledge base.
+//
+// The extension has to stay the same: fileType is derived from it at upload and
+// drives parser selection, so letting a rename change ".pdf" to ".txt" would
+// point the parser at a file it cannot read on the next reprocess.
+func (s *DocumentService) Update(ctx context.Context, ownerID, documentID uuid.UUID, req dto.DocumentUpdateRequest) (*dto.DocumentResponse, error) {
+	document, err := s.findDocument(ctx, ownerID, documentID)
+	if err != nil {
+		return nil, err
+	}
+
+	filename := strings.TrimSpace(req.Filename)
+	if filename != "" {
+		if utf8.RuneCountInString(filename) > MaxDocumentFilenameLength {
+			return nil, apperror.Validation(map[string]any{"filename": "文件名过长"})
+		}
+		if strings.ContainsAny(filename, "/\\") {
+			return nil, apperror.Validation(map[string]any{"filename": "文件名不能包含路径分隔符"})
+		}
+		if !strings.EqualFold(filepath.Ext(filename), filepath.Ext(document.Filename)) {
+			return nil, apperror.New(http.StatusBadRequest, "DOCUMENT_EXTENSION_IMMUTABLE", "重命名不能修改文件扩展名")
+		}
+	}
+
+	var target *uuid.UUID
+	if req.KnowledgeBaseID != nil && *req.KnowledgeBaseID != document.KnowledgeBaseID {
+		if err := s.ensureKnowledgeBaseOwner(ctx, ownerID, *req.KnowledgeBaseID); err != nil {
+			return nil, err
+		}
+		target = req.KnowledgeBaseID
+	}
+	if filename == "" && target == nil {
+		// Nothing to change; return the current state rather than touching rows.
+		job, err := s.latestJobForDocument(ctx, document.ID)
+		if err != nil {
+			return nil, apperror.Internal(err)
+		}
+		res := toDocumentResponse(document, job, s.maxDocumentRetries())
+		return &res, nil
+	}
+
+	if err := s.documents.UpdateMetadata(ctx, document.ID, filename, target, ownerID); err != nil {
+		if errors.Is(err, repository.ErrDocumentJobActive) {
+			return nil, apperror.New(http.StatusConflict, "DOCUMENT_JOB_ACTIVE", "文档正在处理中，处理完成后才能移动")
+		}
+		return nil, apperror.Internal(err)
+	}
+
+	updated, err := s.findDocument(ctx, ownerID, document.ID)
+	if err != nil {
+		return nil, err
+	}
+	job, err := s.latestJobForDocument(ctx, updated.ID)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	if target != nil {
+		// Only a move is worth a timeline entry; a rename is visible in place.
+		s.recordDocumentActivity(ctx, ownerID, ActivityDocumentMoved, updated)
+	}
+	res := toDocumentResponse(updated, job, s.maxDocumentRetries())
+	return &res, nil
+}
+
+// CancelJob stops a queued or running document job. Already embedded batches are
+// not rolled back, and the processor only swaps chunks in after every batch
+// succeeded, so a cancel never leaves half an index behind.
+func (s *DocumentService) CancelJob(ctx context.Context, ownerID, documentID uuid.UUID) (*dto.DocumentResponse, error) {
+	document, err := s.findDocument(ctx, ownerID, documentID)
+	if err != nil {
+		return nil, err
+	}
+
+	job, err := s.documents.CancelActiveJob(ctx, document.ID, ownerID)
+	if err != nil {
+		if errors.Is(err, repository.ErrDocumentJobNotCancellable) {
+			return nil, apperror.New(http.StatusConflict, "DOCUMENT_JOB_NOT_CANCELLABLE", "文档当前没有可取消的处理任务")
+		}
+		return nil, apperror.Internal(err)
+	}
+
+	updated, err := s.findDocument(ctx, ownerID, document.ID)
+	if err != nil {
+		return nil, err
+	}
+	s.recordDocumentActivity(ctx, ownerID, ActivityDocumentCancelled, updated)
+	res := toDocumentResponse(updated, job, s.maxDocumentRetries())
+	return &res, nil
+}
+
+// recordDocumentActivity resolves the knowledge base name so the entry stays
+// readable after the document or the knowledge base is gone.
+func (s *DocumentService) recordDocumentActivity(ctx context.Context, userID uuid.UUID, action string, document *model.Document) {
+	if s.activities == nil {
+		return
+	}
+	knowledgeBaseName := ""
+	if kb, err := s.knowledgeBases.FindByIDAndOwner(ctx, document.KnowledgeBaseID, userID); err == nil && kb != nil {
+		knowledgeBaseName = kb.Name
+	}
+	knowledgeBaseID := document.KnowledgeBaseID
+	s.activities.Record(ctx, userID, ActivityEntry{
+		Action:            action,
+		ResourceType:      "document",
+		ResourceID:        document.ID,
+		ResourceName:      document.Filename,
+		KnowledgeBaseID:   &knowledgeBaseID,
+		KnowledgeBaseName: knowledgeBaseName,
+	})
+}
+
 func (s *DocumentService) findDocument(ctx context.Context, ownerID, documentID uuid.UUID) (*model.Document, error) {
 	document, err := s.documents.FindByIDAndOwner(ctx, documentID, ownerID)
 	if err != nil {
@@ -426,6 +555,11 @@ func (s *DocumentService) ensureDocumentsOwner(ctx context.Context, ownerID uuid
 	return nil
 }
 
+// AllowedDocumentExtensions is the upload allow list enforced by validateFile.
+// GET /api/v1/system/capabilities publishes it so the import dialog offers the
+// same set instead of a frontend copy.
+var AllowedDocumentExtensions = []string{"txt", "md", "pdf"}
+
 func (s *DocumentService) validateFile(file *multipart.FileHeader) error {
 	if file == nil {
 		return apperror.Validation(map[string]any{"file": "file is required"})
@@ -438,20 +572,12 @@ func (s *DocumentService) validateFile(file *multipart.FileHeader) error {
 	}
 
 	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(file.Filename)), ".")
-	switch ext {
-	case "txt", "md", "pdf":
-		return nil
-	default:
-		return apperror.New(http.StatusBadRequest, "DOCUMENT_TYPE_UNSUPPORTED", "unsupported document type")
+	for _, allowed := range AllowedDocumentExtensions {
+		if ext == allowed {
+			return nil
+		}
 	}
-}
-
-func (s *DocumentService) latestJobsForDocuments(ctx context.Context, documents []model.Document) (map[uuid.UUID]model.DocumentJob, error) {
-	ids := make([]uuid.UUID, 0, len(documents))
-	for _, document := range documents {
-		ids = append(ids, document.ID)
-	}
-	return s.documents.LatestJobsByDocumentIDs(ctx, ids)
+	return apperror.New(http.StatusBadRequest, "DOCUMENT_TYPE_UNSUPPORTED", "unsupported document type")
 }
 
 func (s *DocumentService) latestJobForDocument(ctx context.Context, documentID uuid.UUID) (*model.DocumentJob, error) {
@@ -620,6 +746,9 @@ func progressForStage(stage string) int {
 
 func publicDocumentErrorMessage(raw string) string {
 	normalized := strings.ToLower(strings.TrimSpace(raw))
+	if normalized == repository.DocumentJobCancelledMessage {
+		return "文档处理已取消。"
+	}
 	if strings.Contains(normalized, "api_key is required") ||
 		strings.Contains(normalized, "api key is required") ||
 		strings.Contains(normalized, "base_url is required") ||

@@ -111,7 +111,7 @@ describe('DocumentDetailDrawer', () => {
     fireEvent.click(dialog);
     expect(onClose).not.toHaveBeenCalled();
 
-    fireEvent.click(dialog.parentElement!);
+    fireEvent.mouseDown(dialog.parentElement!);
     expect(onClose).toHaveBeenCalledOnce();
   });
 
@@ -122,8 +122,8 @@ describe('DocumentDetailDrawer', () => {
     const onClose = vi.fn();
     renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={onClose} />);
 
-    await userEvent.click(await screen.findByRole('button', { name: '重处理' }));
-    fireEvent.click(screen.getByRole('dialog', { name: '文档详情' }).parentElement!);
+    await userEvent.click(await screen.findByRole('button', { name: '重新处理' }));
+    fireEvent.mouseDown(screen.getByRole('dialog', { name: '文档详情' }).parentElement!);
 
     expect(onClose).not.toHaveBeenCalled();
     reprocessResult.resolve({ ...document, status: 'uploaded' });
@@ -137,9 +137,9 @@ describe('DocumentDetailDrawer', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: '下载' }));
 
-    expect(screen.getByRole('button', { name: '下载中...' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '重处理' })).toBeDisabled();
-    expect(screen.queryByRole('button', { name: '处理中...' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '下载中' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '重新处理' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '处理中' })).not.toBeInTheDocument();
     downloadResult.resolve(new Blob(['document']));
   });
 
@@ -149,7 +149,7 @@ describe('DocumentDetailDrawer', () => {
     vi.mocked(listDocumentChunks).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
     renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
 
-    const reprocessButton = await screen.findByRole('button', { name: '重处理' });
+    const reprocessButton = await screen.findByRole('button', { name: '重新处理' });
     act(() => {
       fireEvent.click(reprocessButton);
       fireEvent.click(reprocessButton);
@@ -165,7 +165,7 @@ describe('DocumentDetailDrawer', () => {
     const user = userEvent.setup();
     renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
 
-    await user.click(await screen.findByRole('button', { name: '重处理' }));
+    await user.click(await screen.findByRole('button', { name: '重新处理' }));
 
     expect(await within(screen.getByRole('region', { name: '通知' })).findByRole('status'))
       .toHaveTextContent('已开始重新处理文档');
@@ -190,7 +190,7 @@ describe('DocumentDetailDrawer', () => {
     vi.mocked(listDocumentChunks).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
     renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
 
-    const reprocessButton = await screen.findByRole('button', { name: '重处理' });
+    const reprocessButton = await screen.findByRole('button', { name: '重新处理' });
     const deleteButton = screen.getByRole('button', { name: '删除' });
     act(() => {
       fireEvent.click(reprocessButton);
@@ -218,13 +218,13 @@ describe('DocumentDetailDrawer', () => {
 
     const close = screen.getByRole('button', { name: '关闭' });
     const dialog = screen.getByRole('dialog', { name: '文档详情' });
-    expect(dialog.closest('.drawer-backdrop')?.parentElement).toBe(window.document.body);
+    expect(dialog.closest('.ui-drawer-backdrop')?.parentElement).toBe(window.document.body);
     expect(close.querySelector('svg')).toBeInTheDocument();
     expect(close).toHaveFocus();
     expect(window.document.body.style.overflow).toBe('hidden');
     await screen.findByText('制度.pdf');
     await user.tab({ shift: true });
-    expect(screen.getByRole('button', { name: '搜索' })).toHaveFocus();
+    expect(screen.getByRole('searchbox', { name: '搜索内容片段' })).toHaveFocus();
     await user.tab();
     expect(close).toHaveFocus();
     await user.keyboard('{Escape}');
@@ -317,9 +317,9 @@ describe('DocumentDetailDrawer', () => {
     const user = userEvent.setup();
     renderWithRouter(<DocumentSwitchHarness />);
 
-    const search = await screen.findByRole('textbox', { name: '搜索内容片段' });
+    const search = await screen.findByRole('searchbox', { name: '搜索内容片段' });
     await user.type(search, '旧查询');
-    await user.click(screen.getByRole('button', { name: '搜索' }));
+    await user.keyboard('{Enter}');
     await waitFor(() => expect(listDocumentChunks).toHaveBeenCalledWith('doc1', {
       chunkId: undefined,
       page: 1,
@@ -336,7 +336,7 @@ describe('DocumentDetailDrawer', () => {
 
     fireEvent.click(screen.getByText('打开另一文档'));
 
-    await waitFor(() => expect(screen.getByRole('textbox', { name: '搜索内容片段' })).toHaveValue(''));
+    await waitFor(() => expect(screen.getByRole('searchbox', { name: '搜索内容片段' })).toHaveValue(''));
     await waitFor(() => expect(vi.mocked(listDocumentChunks).mock.calls.at(-1)).toEqual([
       'doc2',
       { chunkId: undefined, page: 1, pageSize: 20, q: '' },
@@ -361,7 +361,7 @@ describe('DocumentDetailDrawer', () => {
     const user = userEvent.setup();
     renderWithRouter(<DocumentSwitchHarness onChanged={onChanged} onClose={onClose} />);
 
-    await user.click(await screen.findByRole('button', { name: '重处理' }));
+    await user.click(await screen.findByRole('button', { name: '重新处理' }));
     await waitFor(() => expect(reprocessDocument).toHaveBeenCalledWith('doc1'));
     fireEvent.click(screen.getByText('打开另一文档'));
     expect(await screen.findByText('产品.md')).toBeInTheDocument();
@@ -391,9 +391,9 @@ describe('DocumentDetailDrawer', () => {
       pageSize: 20,
       q: '',
     }));
-    expect(await screen.findByRole('article', { name: '引用来源片段' })).toHaveTextContent(
-      '这是回答使用的原始片段。',
-    );
+    const source = (await screen.findByText('这是回答使用的原始片段。')).closest('article');
+    expect(source).toHaveClass('is-source');
+    expect(source).toHaveTextContent('这是回答使用的原始片段。');
     expect(screen.getByText('引用来源')).toBeInTheDocument();
   });
 
@@ -404,9 +404,8 @@ describe('DocumentDetailDrawer', () => {
       <DocumentDetailDrawer chunkId="missing-chunk" documentId="doc1" onClose={vi.fn()} />,
     );
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      '未找到该引用片段，可能已重新处理或删除',
-    );
+    expect(await screen.findByText('未找到该引用片段')).toBeInTheDocument();
+    expect(screen.getByText('可能已重新处理或删除。你仍可查看当前文档内容。')).toBeInTheDocument();
   });
 
   it('announces preview and chunk loading failures', async () => {
@@ -414,7 +413,7 @@ describe('DocumentDetailDrawer', () => {
     vi.mocked(listDocumentChunks).mockRejectedValue(new Error('offline'));
     renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
 
-    expect(await screen.findByText('Chunks 加载失败')).toHaveAttribute('role', 'alert');
+    expect(await screen.findByText('内容片段加载失败')).toHaveAttribute('role', 'alert');
     expect(await screen.findByText('文档预览加载失败')).toHaveAttribute('role', 'alert');
   });
 

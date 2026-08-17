@@ -82,6 +82,12 @@ type KnowledgeBaseCategoryResponse struct {
 	Children  []KnowledgeBaseCategoryResponse `json:"children,omitempty"`
 	CreatedAt time.Time                       `json:"createdAt"`
 	UpdatedAt time.Time                       `json:"updatedAt"`
+	// DirectCount counts knowledge bases filed directly under this category.
+	// TotalCount adds every descendant category's direct count. Both are only
+	// populated by the category tree endpoint; single-node create/update
+	// responses leave them nil because a single node carries no subtree.
+	DirectCount *int64 `json:"directCount,omitempty"`
+	TotalCount  *int64 `json:"totalCount,omitempty"`
 }
 
 type KnowledgeBaseCategoryListResponse struct {
@@ -107,6 +113,9 @@ type KnowledgeBaseTagResponse struct {
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
+	// KnowledgeBaseCount is only populated by the tag list endpoint. Embedded tag
+	// summaries on knowledge base payloads leave it nil.
+	KnowledgeBaseCount *int64 `json:"knowledgeBaseCount,omitempty"`
 }
 
 type KnowledgeBaseTagListResponse struct {
@@ -140,6 +149,17 @@ type KnowledgeBaseStatsResponse struct {
 	Documents      WorkspaceMetric `json:"documents"`
 	Views          WorkspaceMetric `json:"views"`
 	Questions      WorkspaceMetric `json:"questions"`
+}
+
+// KnowledgeBaseDetailStatsResponse is the single knowledge base view of the same
+// metrics. It deliberately omits knowledgeBases: a per-knowledge-base count of
+// knowledge bases is always 0 or 1 and carries no trend.
+type KnowledgeBaseDetailStatsResponse struct {
+	KnowledgeBaseID string          `json:"knowledgeBaseId"`
+	Period          string          `json:"period"`
+	Documents       WorkspaceMetric `json:"documents"`
+	Views           WorkspaceMetric `json:"views"`
+	Questions       WorkspaceMetric `json:"questions"`
 }
 
 type KnowledgeBasePermissionUpdateRequest struct {
@@ -183,6 +203,21 @@ type KnowledgeBaseBatchFavoriteRequest struct {
 type KnowledgeBaseBatchMoveCategoryRequest struct {
 	KnowledgeBaseIDs []uuid.UUID `json:"knowledgeBaseIds" binding:"required"`
 	CategoryID       *uuid.UUID  `json:"categoryId"`
+}
+
+// Batch tag modes accepted by POST /knowledge-bases/batch-tag.
+const (
+	KnowledgeBaseBatchTagModeAdd     = "add"
+	KnowledgeBaseBatchTagModeRemove  = "remove"
+	KnowledgeBaseBatchTagModeReplace = "replace"
+)
+
+type KnowledgeBaseBatchTagRequest struct {
+	KnowledgeBaseIDs []uuid.UUID `json:"knowledgeBaseIds" binding:"required"`
+	// TagIDs deliberately skips binding:"required": replace mode accepts an empty
+	// list to clear every tag, and the required validator rejects empty slices.
+	TagIDs []uuid.UUID `json:"tagIds"`
+	Mode   string      `json:"mode"`
 }
 
 type KnowledgeBaseBatchResultResponse struct {

@@ -58,6 +58,7 @@
 | 500 | `RERANK_FAILED` | 检索精排失败 |
 | 500 | `CHAT_COMPLETION_FAILED` | 生成回答失败 |
 | 409 | `IDEMPOTENCY_KEY_REUSED` | 同一幂等键已用于不同的聊天内容 |
+| 400 | `EXPORT_TOO_LARGE` | 搜索结果过多，请缩小范围后再导出 |
 
 ## 字段校验错误示例
 

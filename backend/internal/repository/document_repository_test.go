@@ -3,14 +3,138 @@ package repository
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"rag/backend/internal/model"
 )
+
+func TestClaimPendingJobLocksDocumentBeforeJob(t *testing.T) {
+	db := newDocumentRepositoryTestDB(t)
+	repository := NewDocumentRepository(db)
+	document := createDocumentRepositoryTestDocument(t, db)
+	job := model.DocumentJob{DocumentID: document.ID, JobType: "process_document", Status: "pending"}
+	if err := db.Create(&job).Error; err != nil {
+		t.Fatalf("create pending job: %v", err)
+	}
+	lockTargets := recordDocumentRepositoryLockTargets(t, db)
+
+	claimed, err := repository.ClaimPendingJob(context.Background())
+	if err != nil {
+		t.Fatalf("claim pending job: %v", err)
+	}
+	if claimed == nil || claimed.ID != job.ID {
+		t.Fatalf("expected pending job to be claimed, got %#v", claimed)
+	}
+
+	want := []string{"documents", "document_jobs"}
+	if !reflect.DeepEqual(*lockTargets, want) {
+		t.Fatalf("expected aggregate lock order %v, got %v", want, *lockTargets)
+	}
+}
+
+func TestFinalizeJobLocksDocumentBeforeJob(t *testing.T) {
+	db := newDocumentRepositoryTestDB(t)
+	repository := NewDocumentRepository(db)
+	document := createDocumentRepositoryTestDocument(t, db)
+	job := model.DocumentJob{DocumentID: document.ID, JobType: "process_document", Status: "running"}
+	if err := db.Create(&job).Error; err != nil {
+		t.Fatalf("create running job: %v", err)
+	}
+	lockTargets := recordDocumentRepositoryLockTargets(t, db)
+
+	if err := repository.CompleteJob(context.Background(), job.ID); err != nil {
+		t.Fatalf("complete job: %v", err)
+	}
+
+	want := []string{"documents", "document_jobs"}
+	if !reflect.DeepEqual(*lockTargets, want) {
+		t.Fatalf("expected aggregate lock order %v, got %v", want, *lockTargets)
+	}
+}
+
+func TestPermanentDeleteLocksDocumentBeforeDeletingJobs(t *testing.T) {
+	db := newDocumentRepositoryTestDB(t)
+	repository := NewDocumentRepository(db)
+	document := createDocumentRepositoryTestDocument(t, db)
+	job := model.DocumentJob{DocumentID: document.ID, JobType: "process_document", Status: "running"}
+	if err := db.Create(&job).Error; err != nil {
+		t.Fatalf("create running job: %v", err)
+	}
+	if err := db.Delete(&document).Error; err != nil {
+		t.Fatalf("soft delete document: %v", err)
+	}
+	lockTargets := recordDocumentRepositoryLockTargets(t, db)
+
+	if err := repository.PermanentDelete(context.Background(), document.ID); err != nil {
+		t.Fatalf("permanently delete document: %v", err)
+	}
+
+	if len(*lockTargets) == 0 || (*lockTargets)[0] != "documents" {
+		t.Fatalf("expected document lock before child deletion, got %v", *lockTargets)
+	}
+}
+
+func TestEmptyDeletedByOwnerLocksDocumentsBeforeDeletingJobs(t *testing.T) {
+	db := newDocumentRepositoryTestDB(t)
+	repository := NewDocumentRepository(db)
+	document := createDocumentRepositoryTestDocument(t, db)
+	job := model.DocumentJob{DocumentID: document.ID, JobType: "process_document", Status: "running"}
+	if err := db.Create(&job).Error; err != nil {
+		t.Fatalf("create running job: %v", err)
+	}
+	if err := db.Delete(&document).Error; err != nil {
+		t.Fatalf("soft delete document: %v", err)
+	}
+	lockTargets := recordDocumentRepositoryLockTargets(t, db)
+
+	if err := repository.EmptyDeletedByOwner(context.Background(), document.UploaderID); err != nil {
+		t.Fatalf("empty document recycle bin: %v", err)
+	}
+
+	if len(*lockTargets) == 0 || (*lockTargets)[0] != "documents" {
+		t.Fatalf("expected document locks before child deletion, got %v", *lockTargets)
+	}
+}
+
+func TestKnowledgeBasePermanentDeleteLocksKnowledgeBaseThenDocumentsBeforeDeletingJobs(t *testing.T) {
+	db := newDocumentRepositoryTestDB(t)
+	if err := db.AutoMigrate(
+		&model.DocumentChunk{},
+		&model.ChatSession{},
+		&model.ChatMessage{},
+		&model.KnowledgeBaseMember{},
+		&model.KnowledgeBaseFavorite{},
+		&model.KnowledgeBaseViewEvent{},
+		&model.KnowledgeBaseTag{},
+		&model.KnowledgeBaseTagBinding{},
+	); err != nil {
+		t.Fatalf("migrate permanent-delete dependencies: %v", err)
+	}
+	document := createDocumentRepositoryTestDocument(t, db)
+	job := model.DocumentJob{DocumentID: document.ID, JobType: "process_document", Status: "running"}
+	if err := db.Create(&job).Error; err != nil {
+		t.Fatalf("create running job: %v", err)
+	}
+	if err := db.Delete(&model.KnowledgeBase{ID: document.KnowledgeBaseID}).Error; err != nil {
+		t.Fatalf("soft delete knowledge base: %v", err)
+	}
+	lockTargets := recordDocumentRepositoryLockTargets(t, db)
+
+	if err := NewKnowledgeBaseRepository(db).PermanentDelete(context.Background(), document.KnowledgeBaseID); err != nil {
+		t.Fatalf("permanently delete knowledge base: %v", err)
+	}
+
+	want := []string{"knowledge_bases", "documents"}
+	if !reflect.DeepEqual(*lockTargets, want) {
+		t.Fatalf("expected knowledge base then document locks before cascading job deletion, got %v", *lockTargets)
+	}
+}
 
 func TestClaimPendingJobWaitsForSameDocumentRunningJob(t *testing.T) {
 	db := newDocumentRepositoryTestDB(t)
@@ -108,6 +232,28 @@ func TestCompleteJobFinalizesDocumentAndJob(t *testing.T) {
 
 	if err := repository.CompleteJob(context.Background(), job.ID); err != nil {
 		t.Fatalf("complete job: %v", err)
+	}
+
+	assertDocumentJobTerminalState(t, db, document.ID, job.ID, "completed", "completed", "")
+}
+
+func TestCompleteJobIsIdempotentAfterAtomicPublish(t *testing.T) {
+	db := newDocumentRepositoryTestDB(t)
+	repository := NewDocumentRepository(db)
+	document := createDocumentRepositoryTestDocument(t, db)
+	if err := db.Model(&document).Updates(map[string]any{
+		"status":        "completed",
+		"error_message": "",
+	}).Error; err != nil {
+		t.Fatalf("prepare completed document: %v", err)
+	}
+	job := model.DocumentJob{DocumentID: document.ID, JobType: "process_document", Status: "completed"}
+	if err := db.Create(&job).Error; err != nil {
+		t.Fatalf("create completed job: %v", err)
+	}
+
+	if err := repository.CompleteJob(context.Background(), job.ID); err != nil {
+		t.Fatalf("complete an already-published job: %v", err)
 	}
 
 	assertDocumentJobTerminalState(t, db, document.ID, job.ID, "completed", "completed", "")
@@ -224,7 +370,13 @@ func newDocumentRepositoryTestDB(t *testing.T) *gorm.DB {
 	}
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&model.User{}, &model.KnowledgeBase{}, &model.Document{}, &model.DocumentJob{}); err != nil {
+	if err := db.AutoMigrate(
+		&model.User{},
+		&model.KnowledgeBase{},
+		&model.Document{},
+		&model.DocumentJob{},
+		&model.DocumentChunk{},
+	); err != nil {
 		t.Fatalf("auto migrate document repository fixture: %v", err)
 	}
 	return db
@@ -252,4 +404,31 @@ func createDocumentRepositoryTestDocument(t *testing.T, db *gorm.DB) model.Docum
 		t.Fatalf("create document: %v", err)
 	}
 	return document
+}
+
+func recordDocumentRepositoryLockTargets(t *testing.T, db *gorm.DB) *[]string {
+	t.Helper()
+	lockTargets := make([]string, 0, 2)
+	callbackName := "test:record-document-repository-lock-targets"
+	if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		forClause, ok := tx.Statement.Clauses["FOR"]
+		if !ok {
+			return
+		}
+		locking, ok := forClause.Expression.(clause.Locking)
+		if !ok || locking.Strength == "" {
+			return
+		}
+		target := locking.Table.Name
+		if target == "" || target == clause.CurrentTable {
+			target = tx.Statement.Table
+		}
+		lockTargets = append(lockTargets, target)
+	}); err != nil {
+		t.Fatalf("register lock-order callback: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Callback().Query().Remove(callbackName)
+	})
+	return &lockTargets
 }

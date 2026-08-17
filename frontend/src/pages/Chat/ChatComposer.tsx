@@ -1,0 +1,88 @@
+import { CornerDownLeft } from 'lucide-react';
+import { useEffect, useRef } from 'react';
+import type { FormEvent, KeyboardEvent } from 'react';
+
+import { Button } from '../../components/ui/Button';
+
+const MAX_HEIGHT = 200;
+
+type ChatComposerProps = {
+  value: string;
+  disabled: boolean;
+  sending: boolean;
+  placeholder: string;
+  /** Shown under the input, e.g. why sending is unavailable. */
+  hint?: string;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+};
+
+/**
+ * Auto-growing composer. Enter sends, Shift+Enter inserts a newline — the old
+ * build used a fixed two-row textarea with no keyboard submit at all.
+ */
+export function ChatComposer({
+  value,
+  disabled,
+  sending,
+  placeholder,
+  hint,
+  onChange,
+  onSubmit,
+}: ChatComposerProps) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    element.style.height = 'auto';
+    element.style.height = `${Math.min(element.scrollHeight, MAX_HEIGHT)}px`;
+  }, [value]);
+
+  function submit(event?: FormEvent) {
+    event?.preventDefault();
+    if (disabled || !value.trim()) return;
+    onSubmit();
+  }
+
+  function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Enter' || event.shiftKey) return;
+    // IME composition must not be interrupted mid-word.
+    if (event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    submit();
+  }
+
+  return (
+    <form className="chat-composer" onSubmit={submit}>
+      <div className="chat-composer__box">
+        <textarea
+          aria-label="输入问题"
+          className="chat-composer__input"
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder={placeholder}
+          ref={ref}
+          rows={1}
+          value={value}
+        />
+        <div className="chat-composer__actions">
+          <span className="chat-composer__hint">
+            <kbd className="ui-kbd">Enter</kbd> 发送 · <kbd className="ui-kbd">Shift + Enter</kbd> 换行
+          </span>
+          <Button
+            disabled={disabled || !value.trim()}
+            leadingIcon={<CornerDownLeft aria-hidden="true" />}
+            loading={sending}
+            loadingLabel="生成中"
+            type="submit"
+          >
+            发送
+          </Button>
+        </div>
+      </div>
+      {hint && <p className="chat-composer__note">{hint}</p>}
+    </form>
+  );
+}

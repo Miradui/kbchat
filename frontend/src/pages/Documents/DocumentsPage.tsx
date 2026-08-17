@@ -1,772 +1,682 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Ban, FileText, PencilLine, RotateCw, Search, Trash2, Upload } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 
 import {
   batchDeleteDocuments,
   batchReprocessDocuments,
+  cancelDocumentJob,
   deleteDocument,
-  getKnowledgeBase,
-  listDocuments,
   listKnowledgeBases,
   reprocessDocument,
+  updateDocument,
   uploadDocument,
+  uploadGlobalDocument,
 } from '../../api/resources';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
-import { LoadingSkeleton } from '../../components/LoadingSkeleton';
-import { WorkspaceShell } from '../../components/WorkspaceShell';
+import { EmptyState } from '../../components/feedback/EmptyState';
+import { ErrorState } from '../../components/feedback/ErrorState';
 import { useToast } from '../../components/feedback/ToastProvider';
-import { KnowledgeBaseSectionNav } from '../KnowledgeBase/KnowledgeBaseSectionNav';
+import { LoadingSkeleton } from '../../components/LoadingSkeleton';
+import { Badge } from '../../components/ui/Badge';
+import { Button } from '../../components/ui/Button';
+import { Dialog } from '../../components/ui/Dialog';
+import { Checkbox, Field, Input, SearchInput, Select } from '../../components/ui/Field';
+import { MetricStrip } from '../../components/ui/MetricStrip';
+import { OverflowMenu } from '../../components/ui/OverflowMenu';
+import { Pagination } from '../../components/ui/Pagination';
+import { useEntityMutation } from '../../hooks/useEntityMutation';
+import { AppShell } from '../../layouts/AppShell';
+import type { DocumentSort, DocumentStatus, KnowledgeBase } from '../../types/api';
+import { formatBytes, formatRelativeTime } from '../../utils/format';
+import { getDocumentProcessingErrorMessage, getErrorMessage } from '../../utils/errors';
+import { KnowledgeBaseLayout, KnowledgeBaseLoadFailure } from '../KnowledgeBase/KnowledgeBaseLayout';
+import { useKnowledgeBase } from '../KnowledgeBase/useKnowledgeBase';
 import { DocumentDetailDrawer } from './DocumentDetailDrawer';
 import { DocumentImportDialog } from './DocumentImportDialog';
 import { DocumentProgress } from './DocumentProgress';
 import { DocumentRecycleBinDrawer } from './DocumentRecycleBinDrawer';
 import {
   documentStatuses,
-  documentStatusClass,
   documentStatusLabel,
-  formatDocumentBytes,
-  formatDocumentDateTime,
+  documentStatusTone,
   isTerminalDocumentStatus,
 } from './documentDisplay';
-import type {
-  DocumentItem,
-  DocumentStatus,
-  KnowledgeBase,
-} from '../../types/api';
-import { getDocumentProcessingErrorMessage, getErrorMessage } from '../../utils/errors';
-import { KnowledgeBaseEntityActions } from '../KnowledgeBase/KnowledgeBaseEntityActions';
+import { useDocumentList } from './useDocumentList';
 
-const statusOptions: Array<DocumentStatus | 'all'> = [
-  'all',
-  ...documentStatuses,
-];
-type DeleteTarget =
-  | { kind: 'single'; document: DocumentItem }
-  | { kind: 'batch'; ids: string[] };
+type DocumentsPageProps = {
+  /** Renders inside the knowledge-base shell and pins the knowledge-base filter. */
+  scoped?: boolean;
+};
 
-export function DocumentsPage() {
+/**
+ * One implementation behind two routes.
+ *
+ * `/documents` and `/knowledge-bases/:id/documents` used to be separate 600- and
+ * 770-line pages with their own table, filter bar, status cards, import entry,
+ * recycle bin and detail drawer. They now differ only in shell and scope.
+ */
+export function DocumentsPage({ scoped = false }: DocumentsPageProps) {
   const { id } = useParams();
-  const navigate = useNavigate();
-  const toast = useToast();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const activeKnowledgeBaseIdRef = useRef(id);
-  const loadRequestRef = useRef(0);
-  const documentDataRequestRef = useRef(0);
-  const reprocessOperationRef = useRef<symbol | null>(null);
-  const submitOperationRef = useRef<symbol | null>(null);
-  const mutationOperationRef = useRef<symbol | null>(null);
-  const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeBase | null>(null);
-  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
-  const [documents, setDocuments] = useState<DocumentItem[]>([]);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
-  const [deleteError, setDeleteError] = useState('');
-  const [statusFilter, setStatusFilter] = useState<DocumentStatus | 'all'>('all');
-  const [typeFilter, setTypeFilter] = useState('all');
-  const [query, setQuery] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [importOpen, setImportOpen] = useState(false);
-  const [workingId, setWorkingId] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
-  const [loadError, setLoadError] = useState('');
-  const [showRecycleBin, setShowRecycleBin] = useState(false);
-  const [uploadFlowActive, setUploadFlowActive] = useState(
-    () => searchParams.get('intent') === 'upload',
-  );
-  const [trackedUploadId, setTrackedUploadId] = useState<string | null>(null);
-  const detailDocumentId = searchParams.get('documentId');
-  const detailChunkId = searchParams.get('chunkId') ?? undefined;
-  activeKnowledgeBaseIdRef.current = id;
+  const scopeId = scoped ? id : undefined;
+  const body = <DocumentsBody scopeKnowledgeBaseId={scopeId} />;
 
-  useEffect(() => {
-    loadRequestRef.current += 1;
-    documentDataRequestRef.current += 1;
-    setKnowledgeBase(null);
-    setDocuments([]);
-    setSelectedIds([]);
-    setDeleteTarget(null);
-    setDeleteError('');
-    setLoadError('');
-    setError('');
-    setTrackedUploadId(null);
-    setImportOpen(false);
-    reprocessOperationRef.current = null;
-    submitOperationRef.current = null;
-    mutationOperationRef.current = null;
-    setWorkingId(null);
-    setSubmitting(false);
-    setUploadFlowActive(searchParams.get('intent') === 'upload');
-  }, [id]);
-
-  useEffect(() => {
-    if (searchParams.get('intent') !== 'upload') {
-      return;
-    }
-
-    setUploadFlowActive(true);
-    setImportOpen(true);
-    const nextSearchParams = new URLSearchParams(searchParams);
-    nextSearchParams.delete('intent');
-    setSearchParams(nextSearchParams, { replace: true });
-  }, [searchParams, setSearchParams]);
-
-  const loadPage = useCallback(async () => {
-    if (!id) {
-      return;
-    }
-
-    const requestedKnowledgeBaseId = id;
-    if (activeKnowledgeBaseIdRef.current !== requestedKnowledgeBaseId) {
-      return;
-    }
-    const request = ++loadRequestRef.current;
-    const documentRequest = ++documentDataRequestRef.current;
-    setLoading(true);
-    setLoadError('');
-    try {
-      const [kb, docs, kbList] = await Promise.all([
-        getKnowledgeBase(requestedKnowledgeBaseId),
-        listDocuments(requestedKnowledgeBaseId),
-        listKnowledgeBases({ pageSize: 100 }),
-      ]);
-      if (
-        activeKnowledgeBaseIdRef.current !== requestedKnowledgeBaseId
-        || loadRequestRef.current !== request
-      ) {
-        return;
-      }
-      setKnowledgeBase(kb);
-      if (documentDataRequestRef.current === documentRequest) {
-        setDocuments(docs.items);
-        setSelectedIds((current) => current.filter((docId) => docs.items.some((doc) => doc.id === docId)));
-      }
-        setKnowledgeBases(mergeCurrentKnowledgeBase(kbList.items, kb));
-    } catch (err) {
-      if (
-        activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
-        && loadRequestRef.current === request
-      ) {
-        setLoadError(errorMessage(err, '文档列表加载失败'));
-      }
-    } finally {
-      if (
-        activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
-        && loadRequestRef.current === request
-      ) {
-        setLoading(false);
-      }
-    }
-  }, [id]);
-
-  useEffect(() => {
-    void loadPage();
-
-    return () => {
-      loadRequestRef.current += 1;
-      documentDataRequestRef.current += 1;
-      reprocessOperationRef.current = null;
-      submitOperationRef.current = null;
-      mutationOperationRef.current = null;
-    };
-  }, [loadPage]);
-
-  const hasProcessingDocuments = useMemo(
-    () => documents.some((document) => !isTerminalDocumentStatus(document.status)),
-    [documents],
-  );
-
-  useEffect(() => {
-    if (!hasProcessingDocuments || !id) {
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      const requestedKnowledgeBaseId = id;
-      const request = ++documentDataRequestRef.current;
-      listDocuments(requestedKnowledgeBaseId)
-        .then((response) => {
-          if (
-            activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
-            && documentDataRequestRef.current === request
-          ) {
-            setDocuments(response.items);
-          }
-        })
-        .catch((err) => {
-          if (
-            activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
-            && documentDataRequestRef.current === request
-          ) {
-            setError(errorMessage(err, '文档状态刷新失败'));
-          }
-        });
-    }, 3000);
-
-    return () => window.clearInterval(timer);
-  }, [hasProcessingDocuments, id]);
-
-  const filteredDocuments = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return documents.filter((document) => {
-      const matchesStatus = statusFilter === 'all' || document.status === statusFilter;
-      const matchesType = typeFilter === 'all' || document.fileType === typeFilter;
-      const matchesQuery =
-        normalizedQuery === '' || document.filename.toLowerCase().includes(normalizedQuery);
-      return matchesStatus && matchesType && matchesQuery;
-    });
-  }, [documents, query, statusFilter, typeFilter]);
-
-  const fileTypes = useMemo(
-    () => Array.from(new Set(documents.map((document) => document.fileType).filter(Boolean))).sort(),
-    [documents],
-  );
-
-  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
-  const completedCount = documents.filter((document) => document.status === 'completed').length;
-  const failedCount = documents.filter((document) => document.status === 'failed').length;
-  const processingCount = documents.filter((document) => !isTerminalDocumentStatus(document.status)).length;
-  const documentMetricsKnown = documents.length > 0 || (!loading && !loadError);
-  const allVisibleSelected =
-    filteredDocuments.length > 0 && filteredDocuments.every((document) => selectedSet.has(document.id));
-  const activeFilterCount = [
-    query.trim(),
-    statusFilter !== 'all' ? statusFilter : '',
-    typeFilter !== 'all' ? typeFilter : '',
-  ].filter(Boolean).length;
-  const trackedDocument = trackedUploadId
-    ? documents.find((document) => document.id === trackedUploadId) ?? null
-    : null;
-  const documentMutationBusy = Boolean(workingId) || submitting;
-
-  function handleUploadedDocument(uploadedDocument: DocumentItem) {
-    if (activeKnowledgeBaseIdRef.current !== uploadedDocument.knowledgeBaseId) {
-      return;
-    }
-    setTrackedUploadId(uploadedDocument.id);
-    setUploadFlowActive(true);
-    setDocuments((current) => [
-      uploadedDocument,
-      ...current.filter((document) => document.id !== uploadedDocument.id),
-    ]);
-  }
-
-  async function handleReprocess(document: DocumentItem) {
-    if (!id || reprocessOperationRef.current || mutationOperationRef.current) {
-      return;
-    }
-
-    const requestedKnowledgeBaseId = id;
-    const operation = Symbol('reprocess-document');
-    reprocessOperationRef.current = operation;
-    mutationOperationRef.current = operation;
-    setWorkingId(document.id);
-    setError('');
-
-    try {
-      await reprocessDocument(document.id);
-      if (
-        activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
-        && reprocessOperationRef.current === operation
-      ) {
-        toast.success('已开始重新处理文档');
-        await loadPage();
-      }
-    } catch (err) {
-      if (
-        activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
-        && reprocessOperationRef.current === operation
-      ) {
-        setError(errorMessage(err, '文档重处理失败'));
-      }
-    } finally {
-      if (
-        reprocessOperationRef.current === operation
-        && mutationOperationRef.current === operation
-      ) {
-        reprocessOperationRef.current = null;
-        mutationOperationRef.current = null;
-        setWorkingId(null);
-      }
-    }
-  }
-
-  async function handleBatchReprocess() {
-    if (!id || selectedIds.length === 0 || submitOperationRef.current || mutationOperationRef.current) {
-      return;
-    }
-
-    const requestedKnowledgeBaseId = id;
-    const operation = Symbol('batch-reprocess-documents');
-    submitOperationRef.current = operation;
-    mutationOperationRef.current = operation;
-    setSubmitting(true);
-    setError('');
-
-    try {
-      await batchReprocessDocuments(selectedIds);
-      if (
-        activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
-        && submitOperationRef.current === operation
-      ) {
-        toast.success('已开始批量重新处理文档');
-        await loadPage();
-      }
-    } catch (err) {
-      if (
-        activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
-        && submitOperationRef.current === operation
-      ) {
-        setError(errorMessage(err, '批量重处理失败'));
-      }
-    } finally {
-      if (
-        submitOperationRef.current === operation
-        && mutationOperationRef.current === operation
-      ) {
-        submitOperationRef.current = null;
-        mutationOperationRef.current = null;
-        setSubmitting(false);
-      }
-    }
-  }
-
-  async function handleDelete() {
-    if (!id || !deleteTarget || submitOperationRef.current || mutationOperationRef.current) {
-      return;
-    }
-
-    const requestedKnowledgeBaseId = id;
-    const operation = Symbol('delete-documents');
-    submitOperationRef.current = operation;
-    mutationOperationRef.current = operation;
-    setSubmitting(true);
-    setError('');
-    setDeleteError('');
-
-    try {
-      if (deleteTarget.kind === 'single') {
-        await deleteDocument(deleteTarget.document.id);
-      } else {
-        await batchDeleteDocuments(deleteTarget.ids);
-      }
-      if (
-        activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
-        && submitOperationRef.current === operation
-      ) {
-        setDeleteError('');
-        setDeleteTarget(null);
-        toast.success(deleteTarget.kind === 'single' ? '文档已移入回收站' : '所选文档已移入回收站');
-        await loadPage();
-      }
-    } catch (err) {
-      if (
-        activeKnowledgeBaseIdRef.current === requestedKnowledgeBaseId
-        && submitOperationRef.current === operation
-      ) {
-        setDeleteError(errorMessage(err, '文档删除失败'));
-      }
-    } finally {
-      if (
-        submitOperationRef.current === operation
-        && mutationOperationRef.current === operation
-      ) {
-        submitOperationRef.current = null;
-        mutationOperationRef.current = null;
-        setSubmitting(false);
-      }
-    }
-  }
-
-  function toggleSelected(documentId: string) {
-    setSelectedIds((current) =>
-      current.includes(documentId)
-        ? current.filter((item) => item !== documentId)
-        : [...current, documentId],
+  if (!scoped) {
+    return (
+      <AppShell active="documents" breadcrumbs={[{ label: '文档' }]}>
+        {body}
+      </AppShell>
     );
   }
 
-  function openDeleteTarget(target: DeleteTarget) {
-    setDeleteError('');
-    setDeleteTarget(target);
+  return <ScopedDocuments>{body}</ScopedDocuments>;
+}
+
+function ScopedDocuments({ children }: { children: React.ReactNode }) {
+  const { knowledgeBase, setKnowledgeBase, loading, error, reload } = useKnowledgeBase();
+
+  if (loading && !knowledgeBase) {
+    return (
+      <AppShell active="knowledge-bases" breadcrumbs={[{ label: '知识库', to: '/knowledge-bases' }]}>
+        <div className="ui-panel"><LoadingSkeleton announce columns={4} rows={5} /></div>
+      </AppShell>
+    );
   }
 
-  function toggleAllVisible() {
-    const visibleIds = filteredDocuments.map((document) => document.id);
-    setSelectedIds(allVisibleSelected ? [] : visibleIds);
-  }
-
-  function openDocumentDetail(documentId: string) {
-    if (mutationOperationRef.current) {
-      return;
-    }
-    const nextSearchParams = new URLSearchParams(searchParams);
-    nextSearchParams.set('documentId', documentId);
-    nextSearchParams.delete('chunkId');
-    setSearchParams(nextSearchParams);
-  }
-
-  function closeDocumentDetail() {
-    const nextSearchParams = new URLSearchParams(searchParams);
-    nextSearchParams.delete('documentId');
-    nextSearchParams.delete('chunkId');
-    setSearchParams(nextSearchParams, { replace: true });
-  }
-
-  function openRecycleBin() {
-    if (mutationOperationRef.current) {
-      return;
-    }
-    setShowRecycleBin(true);
+  if (!knowledgeBase) {
+    return <KnowledgeBaseLoadFailure message={error || '知识库不存在或无权访问。'} onRetry={() => void reload()} />;
   }
 
   return (
-    <WorkspaceShell active="documents">
-      <div className="documents-workspace-page">
-        <section className="document-command-band document-kb-band">
-          <div className="document-command-main">
-            <p className="breadcrumb">
-              知识库 / {knowledgeBase?.name ?? '加载中'} / 文档管理
-            </p>
-            <h1>{knowledgeBase?.name ?? '文档管理'}</h1>
-            <p className="page-description">
-              管理当前知识库中的资料，并查看哪些文档已可用于问答。
-            </p>
-          </div>
-          <div className="document-command-aside" aria-label="当前知识库操作">
-            <span className="document-aside-label">当前知识库</span>
-            <label className="document-target-select">
-              <select
-                aria-label="当前知识库"
-                value={id ?? ''}
-                disabled={documentMutationBusy}
-                onChange={(event) => navigate(`/knowledge-bases/${event.target.value}/documents`)}
-              >
-                {knowledgeBases.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="document-command-actions">
-              {knowledgeBase && (
-                <KnowledgeBaseEntityActions
-                  disabled={documentMutationBusy}
-                  knowledgeBase={knowledgeBase}
-                  onDeleted={() => navigate('/knowledge-bases', { replace: true })}
-                  onUpdated={(updated) => {
-                    setKnowledgeBase(updated);
-                    setKnowledgeBases((current) => mergeCurrentKnowledgeBase(current, updated));
-                  }}
-                />
-              )}
-              <button
-                type="button"
-                onClick={() => setImportOpen(true)}
-                disabled={documentMutationBusy}
-              >
-                导入文档
-              </button>
-            </div>
-          </div>
-        </section>
+    <KnowledgeBaseLayout active="documents" knowledgeBase={knowledgeBase} onUpdated={setKnowledgeBase}>
+      {children}
+    </KnowledgeBaseLayout>
+  );
+}
 
-        {id && <KnowledgeBaseSectionNav active="documents" knowledgeBaseId={id} />}
+function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string }) {
+  const toast = useToast();
+  const mutation = useEntityMutation();
+  const list = useDocumentList(scopeKnowledgeBaseId);
+  const { items, total, counts, loading, error, filters, activeFilterCount, refresh, setFilter } = list;
 
-        {uploadFlowActive && (
-          <section
-            aria-label="文档导入进度"
-            className={`document-upload-flow${trackedDocument?.status === 'completed' ? ' is-complete' : ''}`}
-            role="status"
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [importOpen, setImportOpen] = useState(false);
+  const [recycleOpen, setRecycleOpen] = useState(false);
+  const [deleteIds, setDeleteIds] = useState<string[] | null>(null);
+  const [deleteError, setDeleteError] = useState('');
+  const [renameTarget, setRenameTarget] = useState<{ id: string; filename: string } | null>(null);
+  const [renameError, setRenameError] = useState('');
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [searchDraft, setSearchDraft] = useState(filters.q);
+  const mountedRef = useRef(true);
+  const scopeRef = useRef(scopeKnowledgeBaseId);
+  const previousScopeRef = useRef(scopeKnowledgeBaseId);
+
+  scopeRef.current = scopeKnowledgeBaseId;
+
+  const [searchParams, setSearchParams] = useSearchParams();
+  const deepLinkDocumentId = searchParams.get('documentId');
+  const deepLinkChunkId = searchParams.get('chunkId') ?? undefined;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (previousScopeRef.current === scopeKnowledgeBaseId) return;
+    previousScopeRef.current = scopeKnowledgeBaseId;
+    setSelectedIds([]);
+    setImportOpen(false);
+    setRecycleOpen(false);
+    setDeleteIds(null);
+    setDeleteError('');
+    setRenameTarget(null);
+    setRenameError('');
+  }, [scopeKnowledgeBaseId]);
+
+  useEffect(() => setSearchDraft(filters.q), [filters.q]);
+
+  useEffect(() => {
+    void listKnowledgeBases({ pageSize: 100 })
+      .then((response) => setKnowledgeBases(response.items))
+      .catch(() => setKnowledgeBases([]));
+  }, []);
+
+  // `?documentId=` (and optional `?chunkId=`) opens the detail drawer. Citations
+  // and global search both rely on this contract.
+  useEffect(() => {
+    setDetailId(deepLinkDocumentId);
+  }, [deepLinkDocumentId]);
+
+  // `?intent=upload` opens the import dialog once and consumes the parameter.
+  useEffect(() => {
+    if (searchParams.get('intent') !== 'upload') return;
+    setImportOpen(true);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete('intent');
+      return next;
+    }, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  useEffect(() => {
+    setSelectedIds((current) => current.filter((docId) => items.some((item) => item.id === docId)));
+  }, [items]);
+
+  const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const allSelected = items.length > 0 && items.every((item) => selected.has(item.id));
+  const fileTypes = useMemo(
+    () => Array.from(new Set(items.map((item) => item.fileType).filter(Boolean))).sort(),
+    [items],
+  );
+
+  function mutationKey(key: string) {
+    return `${scopeKnowledgeBaseId ?? 'workspace'}:${key}`;
+  }
+
+  function isCurrentOperation(operationScope: string | undefined) {
+    return mountedRef.current && scopeRef.current === operationScope;
+  }
+
+  function openDetail(documentId: string) {
+    if (mutation.isPendingSync(mutationKey(documentId))) return;
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set('documentId', documentId);
+      next.delete('chunkId');
+      return next;
+    });
+  }
+
+  function closeDetail() {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete('documentId');
+      next.delete('chunkId');
+      return next;
+    }, { replace: true });
+  }
+
+  async function run(
+    key: string,
+    action: () => Promise<void>,
+    success: string,
+    failure: string,
+    onSuccess?: () => void,
+  ) {
+    const operationScope = scopeKnowledgeBaseId;
+    await mutation.run(mutationKey(key), async () => {
+      try {
+        await action();
+        if (!isCurrentOperation(operationScope)) return;
+        onSuccess?.();
+        toast.success(success);
+        await refresh();
+      } catch (caught) {
+        if (isCurrentOperation(operationScope)) {
+          toast.error(getErrorMessage(caught, failure));
+        }
+      }
+    });
+  }
+
+  const uploadTargets = scopeKnowledgeBaseId
+    ? knowledgeBases.filter((item) => item.id === scopeKnowledgeBaseId)
+    : knowledgeBases;
+
+  return (
+    <div className="doc-page">
+      <div className="doc-toolbar">
+        <div className="ui-toolbar">
+          <SearchInput
+            aria-label="按文件名搜索"
+            icon={<Search aria-hidden="true" />}
+            onChange={(event) => {
+              setSearchDraft(event.target.value);
+              setFilter({ q: event.target.value.trim() });
+            }}
+            placeholder="搜索文件名"
+            value={searchDraft}
+          />
+
+          {!scopeKnowledgeBaseId && (
+            <Select
+              aria-label="知识库筛选"
+              onChange={(event) => setFilter({ knowledgeBaseId: event.target.value })}
+              value={filters.knowledgeBaseId}
+            >
+              <option value="">全部知识库</option>
+              {knowledgeBases.map((item) => (
+                <option key={item.id} value={item.id}>{item.name}</option>
+              ))}
+            </Select>
+          )}
+
+          <Select
+            aria-label="类型筛选"
+            onChange={(event) => setFilter({ fileType: event.target.value })}
+            value={filters.fileType}
           >
-            <div>
-              <span className="document-aside-label">下一步</span>
-              <strong>
-                {!trackedDocument
-                  ? '上传第一个文档'
-                  : trackedDocument.status === 'completed'
-                    ? '文档已可用于问答'
-                    : trackedDocument.status === 'failed'
-                      ? '文档处理失败'
-                      : `正在处理 ${trackedDocument.filename}`}
-              </strong>
-              <p>
-                {!trackedDocument
-                  ? '选择文件并确认导入，上传后可在这里查看可用状态。'
-                  : trackedDocument.status === 'completed'
-                    ? `${trackedDocument.filename} 已可用于基于此知识库的问答。`
-                    : trackedDocument.status === 'failed'
-                      ? '请查看处理提示并重试，或重新上传一份文档。'
-                      : `${trackedDocument.filename} 正在准备中，完成后即可用于问答。`}
-              </p>
-            </div>
-            {!trackedDocument && (
-              <button type="button" onClick={() => setImportOpen(true)} disabled={documentMutationBusy}>
-                导入文档
-              </button>
-            )}
-            {trackedDocument?.status === 'completed' && id && (
-              <Link className="button-link" to={`/chat/new?knowledgeBaseId=${id}`}>
-                基于此知识库提问
-              </Link>
-            )}
-          </section>
-        )}
+            <option value="">全部类型</option>
+            {fileTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+          </Select>
 
-        <div className="document-status-strip">
-          <MetricCard label="可用于问答" value={documentMetricsKnown ? completedCount : '--'} tone="success" />
-          <MetricCard label="处理中" value={documentMetricsKnown ? processingCount : '--'} tone="warning" />
-          <MetricCard label="失败" value={documentMetricsKnown ? failedCount : '--'} tone="danger" />
+          <Select
+            aria-label="排序"
+            onChange={(event) => setFilter({ sort: event.target.value as DocumentSort })}
+            value={filters.sort}
+          >
+            <option value="updatedAt_desc">最新更新</option>
+            <option value="createdAt_desc">最新创建</option>
+            <option value="filename_asc">文件名升序</option>
+          </Select>
+
+          <span className="ui-toolbar__spacer" />
+
+          <OverflowMenu
+            label="更多文档操作"
+            items={[
+              { label: '刷新列表', icon: <RotateCw aria-hidden="true" />, onSelect: () => void refresh() },
+              { label: '文档回收站', icon: <Trash2 aria-hidden="true" />, onSelect: () => setRecycleOpen(true) },
+            ]}
+          />
+
+          <Button
+            disabled={uploadTargets.length === 0}
+            leadingIcon={<Upload aria-hidden="true" />}
+            onClick={() => setImportOpen(true)}
+          >
+            导入文档
+          </Button>
         </div>
 
-        {error && <p className="document-alert error-text" role="alert">{error}</p>}
-
-        <div className="panel document-list-panel">
-          <div className="panel-header document-list-header">
-            <div>
-              <h2>文档</h2>
-              <p>
-                当前显示 {filteredDocuments.length} / {documents.length} 个文档
-                {activeFilterCount > 0 ? `，已启用 ${activeFilterCount} 个筛选` : ''}
-              </p>
-            </div>
-            <button className="secondary-button" type="button" onClick={() => void loadPage()}>
-              刷新
-            </button>
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={openRecycleBin}
-              disabled={documentMutationBusy}
+        {/* Status counts double as filters, so a failure count is one click from the list. */}
+        <MetricStrip
+          label="文档处理概况"
+          metrics={[
+            {
+              key: 'all',
+              label: '个文档',
+              value: counts.total,
+              active: filters.status === '',
+              onToggle: () => setFilter({ status: '' }),
+            },
+            {
+              key: 'completed',
+              label: '可用于问答',
+              value: counts.completed,
+              active: filters.status === 'completed',
+              onToggle: () => setFilter({ status: filters.status === 'completed' ? '' : 'completed' }),
+            },
+            {
+              key: 'processing',
+              label: '处理中',
+              tone: 'warn',
+              value: counts.processing,
+              active: filters.status !== '' && filters.status !== 'completed' && filters.status !== 'failed',
+              onToggle: () => setFilter({ status: filters.status === 'parsing' ? '' : 'parsing' }),
+            },
+            {
+              key: 'failed',
+              label: '失败',
+              tone: 'danger',
+              value: counts.failed,
+              active: filters.status === 'failed',
+              onToggle: () => setFilter({ status: filters.status === 'failed' ? '' : 'failed' }),
+            },
+          ]}
+          trailing={activeFilterCount > 0 ? (
+            <Button
+              variant="link"
+              onClick={() => setFilter({ q: '', status: '', fileType: '', knowledgeBaseId: scopeKnowledgeBaseId ? filters.knowledgeBaseId : '' })}
             >
-              文档回收站
-            </button>
-          </div>
+              清除筛选
+            </Button>
+          ) : undefined}
+        />
 
-          <div className="document-filter-bar">
-            <input
-              aria-label="按文件名搜索"
-              placeholder="搜索文件名"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-            <select
-              aria-label="状态筛选"
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value as DocumentStatus | 'all')}
+        {filters.status !== '' && !isTerminalDocumentStatus(filters.status) && (
+          <div className="ui-inline-notice">
+            <span>正在按“{documentStatusLabel(filters.status)}”筛选。</span>
+            <Select
+              aria-label="处理阶段"
+              onChange={(event) => setFilter({ status: event.target.value as DocumentStatus | '' })}
+              value={filters.status}
             >
-              {statusOptions.map((status) => (
-                <option key={status} value={status}>
-                  {status === 'all' ? '全部状态' : documentStatusLabel(status)}
-                </option>
-              ))}
-            </select>
-            <select
-              aria-label="文件类型筛选"
-              value={typeFilter}
-              onChange={(event) => setTypeFilter(event.target.value)}
-            >
-              <option value="all">全部类型</option>
-              {fileTypes.map((fileType) => (
-                <option key={fileType} value={fileType}>
-                  {fileType}
-                </option>
-              ))}
-            </select>
+              {documentStatuses
+                .filter((status) => !isTerminalDocumentStatus(status))
+                .map((status) => (
+                  <option key={status} value={status}>{documentStatusLabel(status)}</option>
+                ))}
+            </Select>
           </div>
+        )}
+      </div>
 
-          {selectedIds.length > 0 && (
-            <div className="document-selection-bar">
-              <span>已选择 {selectedIds.length} 个文档</span>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => void handleBatchReprocess()}
-                disabled={documentMutationBusy}
-              >
-                批量重处理
-              </button>
-              <button
-                className="danger-button"
-                type="button"
-                onClick={() => openDeleteTarget({ kind: 'batch', ids: selectedIds })}
-                disabled={documentMutationBusy}
-              >
-                批量删除
-              </button>
-            </div>
-          )}
-        {loading ? (
-          <LoadingSkeleton rows={4} columns={8} announce />
-        ) : loadError ? (
-          <div className="empty-state" role="alert">
-            <p>{loadError}</p>
-            <button className="secondary-button" type="button" onClick={() => void loadPage()}>
-              重试加载
-            </button>
-          </div>
-        ) : filteredDocuments.length === 0 ? (
-          <div className="empty-state">当前筛选下没有文档。上传 txt、md 或 pdf 后开始处理。</div>
+      {selectedIds.length > 0 && (
+        <div className="ui-bulkbar">
+          <span className="ui-bulkbar__count">已选择 {selectedIds.length} 个文档</span>
+          <Button
+            disabled={mutation.isPending(mutationKey('bulk'))}
+            variant="secondary"
+            onClick={() => void run(
+              'bulk',
+              async () => { await batchReprocessDocuments(selectedIds); },
+              '已开始批量重新处理',
+              '批量重处理失败',
+              () => setSelectedIds([]),
+            )}
+          >
+            重新处理
+          </Button>
+          <span className="ui-toolbar__spacer" />
+          <Button
+            variant="danger"
+            onClick={() => {
+              setDeleteError('');
+              setDeleteIds(selectedIds);
+            }}
+          >
+            删除
+          </Button>
+        </div>
+      )}
+
+      <div className={loading && items.length > 0 ? 'doc-results is-refreshing' : 'doc-results'}>
+        {loading && items.length === 0 ? (
+          <LoadingSkeleton announce columns={6} rows={6} />
+        ) : error ? (
+          <ErrorState description={error} onRetry={() => void refresh()} title="文档列表加载失败" />
+        ) : items.length === 0 ? (
+          <EmptyState
+            action={activeFilterCount > 0
+              ? <Button variant="secondary" onClick={() => setFilter({ q: '', status: '', fileType: '' })}>清除筛选</Button>
+              : uploadTargets.length > 0
+                ? <Button onClick={() => setImportOpen(true)}>导入文档</Button>
+                : <Link className="ui-button ui-button--primary" to="/knowledge-bases?intent=create"><span>先新建知识库</span></Link>}
+            description={activeFilterCount > 0
+              ? '调整筛选条件后再试。'
+              : '导入 txt、md 或 pdf，处理完成后即可用于问答。'}
+            title={activeFilterCount > 0 ? '没有匹配的文档' : '还没有文档'}
+          />
         ) : (
-          <div className="table-wrap">
-            <table className="data-table document-table">
+          <div className="ui-table-wrap">
+            <table className="ui-table doc-table">
               <thead>
                 <tr>
-                  <th>
-                    <input
-                      aria-label="选择当前筛选下全部文档"
-                      checked={allVisibleSelected}
-                      type="checkbox"
-                      onChange={toggleAllVisible}
+                  <th className="ui-table__select">
+                    <Checkbox
+                      aria-label="选择当前页全部文档"
+                      checked={allSelected}
+                      onChange={() => setSelectedIds(allSelected ? [] : items.map((item) => item.id))}
                     />
                   </th>
                   <th>文件名</th>
-                  <th>类型</th>
-                  <th>大小</th>
+                  {!scopeKnowledgeBaseId && <th>知识库</th>}
                   <th>状态</th>
-                  <th>处理提示</th>
-                  <th>更新时间</th>
-                  <th>操作</th>
+                  <th>大小</th>
+                  <th>更新</th>
+                  <th className="ui-table__actions">操作</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredDocuments.map((document) => (
-                  <tr key={document.id}>
-                    <td data-label="选择">
-                      <input
-                        aria-label={`选择 ${document.filename}`}
-                        checked={selectedSet.has(document.id)}
-                        type="checkbox"
-                        onChange={() => toggleSelected(document.id)}
-                      />
-                    </td>
-                    <td className="table-title" data-label="文件名">
-                      <span className="document-name-cell">
-                        <span className="document-file-icon" aria-hidden="true" />
-                        {document.filename}
-                      </span>
-                    </td>
-                    <td data-label="类型">{document.fileType}</td>
-                    <td data-label="大小">{formatDocumentBytes(document.fileSize)}</td>
-                    <td data-label="状态">
-                      <span className={`status-pill status-${documentStatusClass(document.status)}`}>
-                        {documentStatusLabel(document.status)}
-                      </span>
-                      <DocumentProgress compact document={document} />
-                    </td>
-                    <td data-label="处理提示">
-                      {document.status === 'failed'
-                        ? getDocumentProcessingErrorMessage(document.errorMessage)
-                        : '-'}
-                    </td>
-                    <td data-label="更新时间">{formatDocumentDateTime(document.updatedAt || document.createdAt)}</td>
-                    <td data-label="操作">
-                      <div className="table-actions">
-                        <button
-                          className="link-button"
-                          type="button"
-                          onClick={() => openDocumentDetail(document.id)}
-                          disabled={documentMutationBusy}
-                        >
-                          查看
+                {items.map((document) => {
+                  const pending = mutation.isPending(mutationKey(document.id));
+                  return (
+                    <tr data-busy={pending || undefined} data-selected={selected.has(document.id) || undefined} key={document.id}>
+                      <td className="ui-table__select" data-label="选择">
+                        <Checkbox
+                          aria-label={`选择 ${document.filename}`}
+                          checked={selected.has(document.id)}
+                          onChange={() => setSelectedIds((current) => (
+                            current.includes(document.id)
+                              ? current.filter((value) => value !== document.id)
+                              : [...current, document.id]
+                          ))}
+                        />
+                      </td>
+                      <td data-label="文件名">
+                        <button className="doc-name" onClick={() => openDetail(document.id)} type="button">
+                          <FileText aria-hidden="true" />
+                          <span className="ui-truncate">{document.filename}</span>
                         </button>
-                        <button
-                          className="link-button"
-                          type="button"
-                          onClick={() => void handleReprocess(document)}
-                          disabled={documentMutationBusy || !isTerminalDocumentStatus(document.status)}
-                        >
-                          重处理
-                        </button>
-                        <button
-                          className="link-button"
-                          type="button"
-                          onClick={() => openDeleteTarget({ kind: 'single', document })}
-                          disabled={documentMutationBusy}
-                        >
-                          删除
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      {!scopeKnowledgeBaseId && (
+                        <td data-label="知识库">
+                          <Link className="ui-truncate" to={`/knowledge-bases/${document.knowledgeBaseId}`}>
+                            {document.knowledgeBaseName}
+                          </Link>
+                        </td>
+                      )}
+                      <td data-label="状态">
+                        <div className="doc-status-cell">
+                          <Badge tone={documentStatusTone(document.status)}>
+                            {documentStatusLabel(document.status)}
+                          </Badge>
+                          {!isTerminalDocumentStatus(document.status) && (
+                            <DocumentProgress compact document={document} />
+                          )}
+                          {/* The failure reason replaces the old always-present column that
+                              showed "-" on every healthy row. */}
+                          {document.status === 'failed' && (
+                            <small className="doc-status-cell__error">
+                              {getDocumentProcessingErrorMessage(document.errorMessage)}
+                            </small>
+                          )}
+                        </div>
+                      </td>
+                      <td className="ui-table__num" data-label="大小">{formatBytes(document.fileSize)}</td>
+                      <td data-label="更新">{formatRelativeTime(document.updatedAt || document.createdAt)}</td>
+                      <td className="ui-table__actions" data-label="操作">
+                        <div>
+                          <Button disabled={pending} variant="ghost" onClick={() => openDetail(document.id)}>查看</Button>
+                          <OverflowMenu
+                            disabled={pending}
+                            label={`${document.filename} 的更多操作`}
+                            items={[
+                              {
+                                label: '重命名',
+                                icon: <PencilLine aria-hidden="true" />,
+                                onSelect: () => {
+                                  setRenameError('');
+                                  setRenameTarget({ id: document.id, filename: document.filename });
+                                },
+                              },
+                              {
+                                label: '重新处理',
+                                icon: <RotateCw aria-hidden="true" />,
+                                disabled: !isTerminalDocumentStatus(document.status),
+                                onSelect: () => void run(
+                                  document.id,
+                                  async () => { await reprocessDocument(document.id); },
+                                  '已开始重新处理',
+                                  '文档重处理失败',
+                                ),
+                              },
+                              {
+                                // Only a queued or running job can be cancelled;
+                                // the server enforces the same rule.
+                                label: '取消处理',
+                                icon: <Ban aria-hidden="true" />,
+                                disabled: isTerminalDocumentStatus(document.status),
+                                onSelect: () => void run(
+                                  document.id,
+                                  async () => { await cancelDocumentJob(document.id); },
+                                  '已取消文档处理',
+                                  '取消文档处理失败',
+                                ),
+                              },
+                              {
+                                label: '删除',
+                                icon: <Trash2 aria-hidden="true" />,
+                                tone: 'danger',
+                                onSelect: () => {
+                                  setDeleteError('');
+                                  setDeleteIds([document.id]);
+                                },
+                              },
+                            ]}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </div>
 
-      {deleteTarget && (
+      <Pagination
+        onPageChange={(page) => setFilter({ page })}
+        onPageSizeChange={(pageSize) => setFilter({ pageSize })}
+        page={filters.page}
+        pageSize={filters.pageSize}
+        total={total}
+      />
+
+      {deleteIds && (
         <ConfirmDialog
-          title={deleteTarget.kind === 'single' ? '删除文档' : '批量删除文档'}
-          description={
-            deleteTarget.kind === 'single'
-              ? `确认删除“${deleteTarget.document.filename}”？`
-              : `确认删除选中的 ${deleteTarget.ids.length} 个文档？`
-          }
+          busy={mutation.isPending(mutationKey('delete'))}
           confirmLabel="删除"
-          busy={submitting}
+          description={deleteIds.length === 1
+            ? '确认删除这个文档？它会进入回收站，可随时恢复。'
+            : `确认删除选中的 ${deleteIds.length} 个文档？它们会进入回收站，可随时恢复。`}
           error={deleteError}
           onCancel={() => {
             setDeleteError('');
-            setDeleteTarget(null);
+            setDeleteIds(null);
           }}
-          onConfirm={handleDelete}
+          onConfirm={() => {
+            const ids = deleteIds;
+            const operationScope = scopeKnowledgeBaseId;
+            void mutation.run(mutationKey('delete'), async () => {
+              try {
+                if (ids.length === 1) await deleteDocument(ids[0]);
+                else await batchDeleteDocuments(ids);
+                if (!isCurrentOperation(operationScope)) return;
+                setDeleteIds(null);
+                setSelectedIds([]);
+                toast.success('文档已移入回收站');
+                await refresh();
+              } catch (caught) {
+                if (isCurrentOperation(operationScope)) {
+                  setDeleteError(getErrorMessage(caught, '文档删除失败'));
+                }
+              }
+            });
+          }}
+          title={deleteIds.length === 1 ? '删除文档' : '批量删除文档'}
         />
       )}
 
-      {detailDocumentId && (
+      {renameTarget && (
+        <RenameDocumentDialog
+          busy={mutation.isPending(mutationKey('rename'))}
+          error={renameError}
+          filename={renameTarget.filename}
+          onCancel={() => {
+            setRenameError('');
+            setRenameTarget(null);
+          }}
+          onSubmit={(filename) => {
+            const target = renameTarget;
+            const operationScope = scopeKnowledgeBaseId;
+            void mutation.run(mutationKey('rename'), async () => {
+              try {
+                await updateDocument(target.id, { filename });
+                if (!isCurrentOperation(operationScope)) return;
+                setRenameTarget(null);
+                toast.success('文档已重命名');
+                await refresh();
+              } catch (caught) {
+                if (isCurrentOperation(operationScope)) {
+                  setRenameError(getErrorMessage(caught, '文档重命名失败'));
+                }
+              }
+            });
+          }}
+        />
+      )}
+
+      {detailId && (
         <DocumentDetailDrawer
-          chunkId={detailChunkId}
-          documentId={detailDocumentId}
-          knowledgeBaseId={id}
-          knowledgeBaseName={knowledgeBase?.name}
-          onChanged={() => void loadPage()}
-          onClose={closeDocumentDetail}
+          chunkId={deepLinkChunkId}
+          documentId={detailId}
+          knowledgeBaseId={scopeKnowledgeBaseId}
+          knowledgeBaseName={items.find((item) => item.id === detailId)?.knowledgeBaseName}
+          onChanged={() => void refresh()}
+          onClose={closeDetail}
         />
       )}
 
-      {showRecycleBin && (
-        <DocumentRecycleBinDrawer
-          onChanged={() => void loadPage()}
-          onClose={() => setShowRecycleBin(false)}
-        />
+      {recycleOpen && (
+        <DocumentRecycleBinDrawer onChanged={() => void refresh()} onClose={() => setRecycleOpen(false)} />
       )}
 
-      {id && (
-        <DocumentImportDialog
-          fixedKnowledgeBaseId={id}
-          fixedKnowledgeBaseName={knowledgeBase?.name}
-          knowledgeBases={knowledgeBase ? [knowledgeBase] : []}
-          onClose={() => setImportOpen(false)}
-          onUpload={uploadDocument}
-          onUploaded={handleUploadedDocument}
-          open={importOpen}
-        />
-      )}
-      </div>
-    </WorkspaceShell>
-  );
-}
-
-function mergeCurrentKnowledgeBase(items: KnowledgeBase[], current: KnowledgeBase): KnowledgeBase[] {
-  const currentIndex = items.findIndex((item) => item.id === current.id);
-  if (currentIndex === -1) {
-    return [current, ...items];
-  }
-  return items.map((item, index) => index === currentIndex ? current : item);
-}
-
-function MetricCard({ label, value, tone }: { label: string; value: number | string; tone?: 'success' | 'warning' | 'danger' }) {
-  return (
-    <div className={tone ? `document-status-tile document-status-${tone}` : 'document-status-tile'}>
-      <span>{label}</span>
-      <strong>{value}</strong>
+      <DocumentImportDialog
+        fixedKnowledgeBaseId={scopeKnowledgeBaseId}
+        fixedKnowledgeBaseName={uploadTargets[0]?.name}
+        knowledgeBases={uploadTargets}
+        onBatchComplete={() => (
+          isCurrentOperation(scopeKnowledgeBaseId) ? refresh() : undefined
+        )}
+        onClose={() => setImportOpen(false)}
+        onUpload={scopeKnowledgeBaseId ? uploadDocument : uploadGlobalDocument}
+        open={importOpen}
+      />
     </div>
   );
 }
 
-function errorMessage(err: unknown, fallback: string): string {
-  return getErrorMessage(err, fallback);
+type RenameDocumentDialogProps = {
+  busy: boolean;
+  error: string;
+  filename: string;
+  onCancel: () => void;
+  onSubmit: (filename: string) => void;
+};
+
+/**
+ * The extension is fixed: `fileType` is derived from it at upload and selects the
+ * parser used on the next reprocess, so the server rejects a rename that changes
+ * it. Only the stem is editable here. See docs/14-frontend-api-gaps.md G7.
+ */
+function RenameDocumentDialog({ busy, error, filename, onCancel, onSubmit }: RenameDocumentDialogProps) {
+  const separator = filename.lastIndexOf('.');
+  const extension = separator > 0 ? filename.slice(separator) : '';
+  const [stem, setStem] = useState(separator > 0 ? filename.slice(0, separator) : filename);
+  const trimmed = stem.trim();
+
+  return (
+    <Dialog description="扩展名由上传时确定，不可修改。" onClose={onCancel} open title="重命名文档">
+      <form
+        className="ui-dialog__form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!trimmed || busy) return;
+          onSubmit(`${trimmed}${extension}`);
+        }}
+      >
+        <Field error={error} hint={extension ? `保存后为 ${trimmed || '…'}${extension}` : undefined} label="文件名">
+          <Input
+            autoFocus
+            onChange={(event) => setStem(event.target.value)}
+            required
+            value={stem}
+          />
+        </Field>
+        <div className="ui-dialog__actions">
+          <Button disabled={busy} onClick={onCancel} type="button" variant="secondary">取消</Button>
+          <Button disabled={!trimmed} loading={busy} loadingLabel="保存中" type="submit">保存</Button>
+        </div>
+      </form>
+    </Dialog>
+  );
 }

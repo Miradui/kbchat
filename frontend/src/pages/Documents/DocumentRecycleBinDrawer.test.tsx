@@ -58,7 +58,7 @@ describe('DocumentRecycleBinDrawer', () => {
 
     await user.click(opener);
     const dialog = await screen.findByRole('dialog', { name: '文档回收站' });
-    expect(dialog.closest('.drawer-backdrop')?.parentElement).toBe(document.body);
+    expect(dialog.closest('.ui-drawer-backdrop')?.parentElement).toBe(document.body);
     await waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement));
     expect(document.body).toHaveStyle({ overflow: 'hidden' });
 
@@ -77,8 +77,7 @@ describe('DocumentRecycleBinDrawer', () => {
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('文档回收站加载失败');
     expect(screen.queryByText('文档回收站为空。')).not.toBeInTheDocument();
-    expect(within(alert).getByRole('button', { name: '重试加载' })).toBeInTheDocument();
-    expect(screen.getByText('共 -- 条')).toBeInTheDocument();
+    expect(within(alert).getByRole('button', { name: '重试' })).toBeInTheDocument();
   });
 
   it('keeps a manual refresh failure handled inside the drawer', async () => {
@@ -90,7 +89,7 @@ describe('DocumentRecycleBinDrawer', () => {
     await user.click(screen.getByRole('button', { name: '打开回收站' }));
 
     await screen.findByRole('alert');
-    await user.click(screen.getByRole('button', { name: '刷新' }));
+    await user.click(screen.getByRole('button', { name: '重试' }));
 
     await waitFor(() => expect(listDocumentRecycleBin).toHaveBeenCalledTimes(2));
     expect(await screen.findByRole('alert')).toHaveTextContent('文档回收站加载失败');
@@ -136,7 +135,7 @@ describe('DocumentRecycleBinDrawer', () => {
     expect(screen.queryByText('迟到页.pdf')).not.toBeInTheDocument();
   });
 
-  it('locks refresh and pagination while a restore is in progress', async () => {
+  it('locks batch mutations while keeping pagination available during a restore', async () => {
     const restoreResult = deferred<void>();
     vi.mocked(restoreDocument).mockReturnValue(restoreResult.promise);
     vi.mocked(listDocumentRecycleBin).mockResolvedValue({
@@ -148,16 +147,17 @@ describe('DocumentRecycleBinDrawer', () => {
     const user = userEvent.setup();
     renderWithRouter(<Harness />);
     await user.click(screen.getByRole('button', { name: '打开回收站' }));
-    await user.click(await screen.findByRole('button', { name: /^恢复 / }));
+    await user.click(await screen.findByRole('button', { name: '恢复' }));
 
-    expect(screen.getByRole('button', { name: '刷新' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '下一页' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '恢复本页' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '清空' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '下一页' })).toBeEnabled();
 
     restoreResult.resolve();
     await waitFor(() => expect(restoreDocument).toHaveBeenCalledWith('doc1'));
   });
 
-  it('locks every mutation control while restoring one of multiple documents', async () => {
+  it('locks the active row and batch controls without freezing other rows', async () => {
     const restoreResult = deferred<void>();
     vi.mocked(restoreDocument).mockReturnValue(restoreResult.promise);
     vi.mocked(listDocumentRecycleBin).mockResolvedValue({
@@ -174,15 +174,15 @@ describe('DocumentRecycleBinDrawer', () => {
     await user.click(screen.getByRole('button', { name: '打开回收站' }));
     const firstItem = (await screen.findByText('制度.pdf')).closest('article')!;
     const secondItem = screen.getByText('流程.pdf').closest('article')!;
-    await user.click(within(firstItem).getByRole('button', { name: /^恢复 / }));
+    await user.click(within(firstItem).getByRole('button', { name: '恢复' }));
 
-    expect(within(secondItem).getByRole('button', { name: /^恢复 / })).toBeDisabled();
-    expect(within(secondItem).getByRole('button', { name: /^永久删除 / })).toBeDisabled();
+    expect(within(firstItem).getByRole('button', { name: '恢复中' })).toBeDisabled();
+    expect(within(firstItem).getByRole('button', { name: '永久删除' })).toBeDisabled();
+    expect(within(secondItem).getByRole('button', { name: '恢复' })).toBeEnabled();
+    expect(within(secondItem).getByRole('button', { name: '永久删除' })).toBeEnabled();
     expect(screen.getByRole('button', { name: '恢复本页' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '清空回收站' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '关闭' })).toBeDisabled();
-    await user.keyboard('{Escape}');
-    expect(screen.getByRole('dialog', { name: '文档回收站' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '清空' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '关闭' })).toBeEnabled();
 
     restoreResult.resolve();
     await waitFor(() => expect(restoreDocument).toHaveBeenCalledWith('doc1'));
@@ -196,7 +196,7 @@ describe('DocumentRecycleBinDrawer', () => {
     const user = userEvent.setup();
     renderWithRouter(<Harness />);
     await user.click(screen.getByRole('button', { name: '打开回收站' }));
-    await user.click(await screen.findByRole('button', { name: /^恢复 / }));
+    await user.click(await screen.findByRole('button', { name: '恢复' }));
 
     expect(await within(screen.getByRole('region', { name: '通知' })).findByRole('status'))
       .toHaveTextContent('文档恢复成功');
@@ -213,7 +213,7 @@ describe('DocumentRecycleBinDrawer', () => {
     await user.click(await screen.findByRole('button', { name: '恢复本页' }));
 
     expect(await within(screen.getByRole('region', { name: '通知' })).findByRole('status'))
-      .toHaveTextContent('本页文档恢复成功');
+      .toHaveTextContent('本页文档已恢复');
   });
 
   it('announces successful permanent deletion and emptying', async () => {
@@ -224,12 +224,12 @@ describe('DocumentRecycleBinDrawer', () => {
     const user = userEvent.setup();
     renderWithRouter(<Harness />);
     await user.click(screen.getByRole('button', { name: '打开回收站' }));
-    await user.click(await screen.findByRole('button', { name: /^永久删除 / }));
+    await user.click(await screen.findByRole('button', { name: '永久删除' }));
     await user.click(within(screen.getByRole('dialog', { name: '永久删除文档' })).getByRole('button', { name: '永久删除' }));
     expect(await within(screen.getByRole('region', { name: '通知' })).findByRole('status'))
       .toHaveTextContent('文档已永久删除');
 
-    await user.click(screen.getByRole('button', { name: '清空回收站' }));
+    await user.click(screen.getByRole('button', { name: '清空' }));
     await user.click(within(screen.getByRole('dialog', { name: '清空文档回收站' })).getByRole('button', { name: '清空' }));
     expect(await within(screen.getByRole('region', { name: '通知' })).findByText('文档回收站已清空'))
       .toBeInTheDocument();
@@ -262,7 +262,7 @@ describe('DocumentRecycleBinDrawer', () => {
     const user = userEvent.setup();
     renderWithRouter(<Harness />);
     await user.click(screen.getByRole('button', { name: '打开回收站' }));
-    await user.click(await screen.findByRole('button', { name: /^永久删除 / }));
+    await user.click(await screen.findByRole('button', { name: '永久删除' }));
     const confirmation = screen.getByRole('dialog', { name: '永久删除文档' });
     await user.click(within(confirmation).getByRole('button', { name: '永久删除' }));
 

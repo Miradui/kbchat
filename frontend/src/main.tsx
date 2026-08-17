@@ -4,7 +4,11 @@ import { RouterProvider } from 'react-router-dom';
 
 import { ToastProvider } from './components/feedback/ToastProvider';
 import { router } from './router';
+import { themeStore } from './store/themeStore';
 import './styles/index.css';
+
+// Applied before the first paint so a dark preference does not flash light.
+themeStore.init();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

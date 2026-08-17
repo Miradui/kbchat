@@ -3,9 +3,12 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
@@ -47,6 +50,66 @@ type lateMismatchEmbedder struct {
 	calls int
 }
 
+type blockingBatchEmbedder struct {
+	firstStarted chan struct{}
+	releaseFirst chan struct{}
+	once         sync.Once
+	mu           sync.Mutex
+	calls        int
+}
+
+func newBlockingBatchEmbedder() *blockingBatchEmbedder {
+	return &blockingBatchEmbedder{
+		firstStarted: make(chan struct{}),
+		releaseFirst: make(chan struct{}),
+	}
+}
+
+func (e *blockingBatchEmbedder) EmbedTexts(ctx context.Context, texts []string) ([][]float32, error) {
+	e.mu.Lock()
+	e.calls++
+	call := e.calls
+	e.mu.Unlock()
+
+	if call == 1 {
+		e.once.Do(func() { close(e.firstStarted) })
+		select {
+		case <-e.releaseFirst:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return embeddingVectors(texts), nil
+}
+
+func (e *blockingBatchEmbedder) callCount() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.calls
+}
+
+type cancellingEmbedder struct {
+	cancel func() error
+	err    error
+	calls  int
+}
+
+func (e *cancellingEmbedder) EmbedTexts(_ context.Context, texts []string) ([][]float32, error) {
+	e.calls++
+	if e.calls == 1 {
+		e.err = e.cancel()
+	}
+	return embeddingVectors(texts), nil
+}
+
+func embeddingVectors(texts []string) [][]float32 {
+	vectors := make([][]float32, len(texts))
+	for index := range vectors {
+		vectors[index] = []float32{float32(index + 1)}
+	}
+	return vectors
+}
+
 func (e *lateMismatchEmbedder) EmbedTexts(_ context.Context, texts []string) ([][]float32, error) {
 	e.calls++
 	count := len(texts)
@@ -64,9 +127,11 @@ func (e *lateMismatchEmbedder) EmbedTexts(_ context.Context, texts []string) ([]
 }
 
 type processorTestFixture struct {
+	db        *gorm.DB
 	documents *repository.DocumentRepository
 	chunks    *repository.ChunkRepository
 	document  model.Document
+	job       model.DocumentJob
 }
 
 func TestBuildChunkMetadataMergesSplitterMetadata(t *testing.T) {
@@ -157,7 +222,7 @@ func TestProcessPersistsStructuredPDFPages(t *testing.T) {
 		cardinalityEmbedder{},
 	)
 
-	if err := processor.Process(context.Background(), &model.DocumentJob{DocumentID: fixture.document.ID}); err != nil {
+	if err := processor.Process(context.Background(), &fixture.job); err != nil {
 		t.Fatalf("process PDF: %v", err)
 	}
 
@@ -180,7 +245,7 @@ func TestProcessPersistsStructuredPDFPages(t *testing.T) {
 	}
 }
 
-func TestProcessLeavesTerminalStatusForWorker(t *testing.T) {
+func TestProcessPublishesTerminalStatusWithChunks(t *testing.T) {
 	fixture := newProcessorTestFixture(t, "txt")
 	processor := New(
 		fixture.documents,
@@ -193,15 +258,22 @@ func TestProcessLeavesTerminalStatusForWorker(t *testing.T) {
 		cardinalityEmbedder{},
 	)
 
-	if err := processor.Process(context.Background(), &model.DocumentJob{DocumentID: fixture.document.ID}); err != nil {
+	if err := processor.Process(context.Background(), &fixture.job); err != nil {
 		t.Fatalf("process document: %v", err)
 	}
 	document, err := fixture.documents.FindByID(context.Background(), fixture.document.ID)
 	if err != nil || document == nil {
 		t.Fatalf("reload document: document=%#v err=%v", document, err)
 	}
-	if document.Status != "embedding" {
-		t.Fatalf("expected worker to own terminal status, got %q", document.Status)
+	if document.Status != "completed" {
+		t.Fatalf("expected document completion to publish with chunks, got %q", document.Status)
+	}
+	var job model.DocumentJob
+	if err := fixture.db.First(&job, "id = ?", fixture.job.ID).Error; err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if job.Status != "completed" {
+		t.Fatalf("expected job completion to publish with chunks, got %q", job.Status)
 	}
 }
 
@@ -243,7 +315,7 @@ func TestProcessSelectsSplitterStrategyFromParsedFileType(t *testing.T) {
 				cardinalityEmbedder{},
 			)
 
-			if err := processor.Process(context.Background(), &model.DocumentJob{DocumentID: fixture.document.ID}); err != nil {
+			if err := processor.Process(context.Background(), &fixture.job); err != nil {
 				t.Fatalf("process %s: %v", tt.fileType, err)
 			}
 			chunks, err := fixture.chunks.ListByDocument(context.Background(), fixture.document.ID)
@@ -288,7 +360,7 @@ func TestProcessDoesNotWriteEmbeddingCardinalityMismatch(t *testing.T) {
 				cardinalityEmbedder{delta: delta},
 			)
 
-			err := processor.Process(context.Background(), &model.DocumentJob{DocumentID: fixture.document.ID})
+			err := processor.Process(context.Background(), &fixture.job)
 			if err == nil || !strings.Contains(err.Error(), "embedding provider returned") {
 				t.Fatalf("expected cardinality mismatch error, got %v", err)
 			}
@@ -332,7 +404,7 @@ func TestProcessPreservesExistingChunksWhenLaterEmbeddingBatchMismatches(t *test
 				embedder,
 			)
 
-			err := processor.Process(ctx, &model.DocumentJob{DocumentID: fixture.document.ID})
+			err := processor.Process(ctx, &fixture.job)
 			if err == nil || !strings.Contains(err.Error(), "embedding provider returned") {
 				t.Fatalf("expected later cardinality mismatch, got %v", err)
 			}
@@ -347,6 +419,160 @@ func TestProcessPreservesExistingChunksWhenLaterEmbeddingBatchMismatches(t *test
 				t.Fatalf("expected existing complete index to remain untouched, got %#v", chunks)
 			}
 		})
+	}
+}
+
+func TestProcessStopsRemainingEmbeddingBatchesAfterConcurrentCancel(t *testing.T) {
+	fixture := newProcessorTestFixture(t, "txt")
+	ctx := context.Background()
+	existing := seedExistingProcessorChunk(t, fixture, "existing complete index")
+
+	segments := make([]parser.Segment, embeddingBatchSize+1)
+	for index := range segments {
+		segments[index] = parser.Segment{Content: fmt.Sprintf("new segment %02d", index)}
+	}
+	embedder := newBlockingBatchEmbedder()
+	processor := New(
+		fixture.documents,
+		fixture.chunks,
+		structuredParser{document: parser.ParsedDocument{FileType: "txt", Segments: segments}},
+		splitter.New(100, 10),
+		embedder,
+	)
+
+	result := make(chan error, 1)
+	go func() {
+		result <- processor.Process(ctx, &fixture.job)
+	}()
+
+	select {
+	case <-embedder.firstStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the first embedding batch")
+	}
+	if _, err := fixture.documents.CancelActiveJob(ctx, fixture.document.ID, fixture.document.UploaderID); err != nil {
+		t.Fatalf("cancel active job: %v", err)
+	}
+	close(embedder.releaseFirst)
+
+	var processErr error
+	select {
+	case processErr = <-result:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for processor cancellation")
+	}
+	if !errors.Is(processErr, repository.ErrDocumentJobCancelled) {
+		t.Fatalf("expected ErrDocumentJobCancelled, got %v", processErr)
+	}
+	if embedder.callCount() != 1 {
+		t.Fatalf("expected cancellation to stop remaining embedding batches, got %d calls", embedder.callCount())
+	}
+	assertCancelledProcessorState(t, fixture, existing)
+}
+
+func TestProcessDoesNotPublishWhenCancelCommitsImmediatelyBeforePublish(t *testing.T) {
+	fixture := newProcessorTestFixture(t, "txt")
+	ctx := context.Background()
+	existing := seedExistingProcessorChunk(t, fixture, "existing complete index")
+
+	embedder := &cancellingEmbedder{cancel: func() error {
+		_, err := fixture.documents.CancelActiveJob(ctx, fixture.document.ID, fixture.document.UploaderID)
+		return err
+	}}
+	processor := New(
+		fixture.documents,
+		fixture.chunks,
+		structuredParser{document: parser.ParsedDocument{
+			FileType: "txt",
+			Segments: []parser.Segment{{Content: "replacement content"}},
+		}},
+		splitter.New(100, 10),
+		embedder,
+	)
+
+	err := processor.Process(ctx, &fixture.job)
+	if embedder.err != nil {
+		t.Fatalf("cancel immediately before publish: %v", embedder.err)
+	}
+	if !errors.Is(err, repository.ErrDocumentJobCancelled) {
+		t.Fatalf("expected publish to reject the cancelled job, got %v", err)
+	}
+	assertCancelledProcessorState(t, fixture, existing)
+}
+
+func TestProcessPublishesChunksAndCompletesJobBeforeCancelCanWin(t *testing.T) {
+	fixture := newProcessorTestFixture(t, "txt")
+	processor := New(
+		fixture.documents,
+		fixture.chunks,
+		structuredParser{document: parser.ParsedDocument{
+			FileType: "txt",
+			Segments: []parser.Segment{{Content: "published content"}},
+		}},
+		splitter.New(100, 10),
+		cardinalityEmbedder{},
+	)
+
+	if err := processor.Process(context.Background(), &fixture.job); err != nil {
+		t.Fatalf("process document: %v", err)
+	}
+
+	var document model.Document
+	if err := fixture.db.First(&document, "id = ?", fixture.document.ID).Error; err != nil {
+		t.Fatalf("reload published document: %v", err)
+	}
+	var job model.DocumentJob
+	if err := fixture.db.First(&job, "id = ?", fixture.job.ID).Error; err != nil {
+		t.Fatalf("reload published job: %v", err)
+	}
+	if document.Status != "completed" || job.Status != "completed" {
+		t.Fatalf("expected chunks and terminal state to publish atomically, document=%q job=%q", document.Status, job.Status)
+	}
+	if _, err := fixture.documents.CancelActiveJob(
+		context.Background(), fixture.document.ID, fixture.document.UploaderID,
+	); !errors.Is(err, repository.ErrDocumentJobNotCancellable) {
+		t.Fatalf("expected completed publish to beat a later cancel, got %v", err)
+	}
+}
+
+func seedExistingProcessorChunk(t *testing.T, fixture processorTestFixture, content string) model.DocumentChunk {
+	t.Helper()
+	chunks := []model.DocumentChunk{{
+		DocumentID:      fixture.document.ID,
+		KnowledgeBaseID: fixture.document.KnowledgeBaseID,
+		ChunkIndex:      0,
+		Content:         content,
+		Embedding:       pgvector.NewVector([]float32{1}),
+	}}
+	if err := fixture.chunks.CreateBatch(context.Background(), chunks); err != nil {
+		t.Fatalf("seed existing chunk: %v", err)
+	}
+	return chunks[0]
+}
+
+func assertCancelledProcessorState(t *testing.T, fixture processorTestFixture, existing model.DocumentChunk) {
+	t.Helper()
+	stored, err := fixture.chunks.ListByDocument(context.Background(), fixture.document.ID)
+	if err != nil {
+		t.Fatalf("list chunks after cancellation: %v", err)
+	}
+	if len(stored) != 1 || stored[0].ID != existing.ID || stored[0].Content != existing.Content {
+		t.Fatalf("expected the original chunks to remain untouched, got %#v", stored)
+	}
+
+	var job model.DocumentJob
+	if err := fixture.db.First(&job, "id = ?", fixture.job.ID).Error; err != nil {
+		t.Fatalf("reload cancelled job: %v", err)
+	}
+	if job.Status != "cancelled" || job.ErrorMessage != repository.DocumentJobCancelledMessage {
+		t.Fatalf("expected cancelled job state, got %#v", job)
+	}
+	var document model.Document
+	if err := fixture.db.First(&document, "id = ?", fixture.document.ID).Error; err != nil {
+		t.Fatalf("reload cancelled document: %v", err)
+	}
+	if document.Status != "failed" || document.ErrorMessage != repository.DocumentJobCancelledMessage {
+		t.Fatalf("expected cancelled document state, got %#v", document)
 	}
 }
 
@@ -369,6 +595,7 @@ func newProcessorTestFixture(t *testing.T, fileType string) processorTestFixture
 		&model.User{},
 		&model.KnowledgeBase{},
 		&model.Document{},
+		&model.DocumentJob{},
 		&model.DocumentChunk{},
 	); err != nil {
 		t.Fatalf("auto migrate processor fixture: %v", err)
@@ -393,11 +620,23 @@ func newProcessorTestFixture(t *testing.T, fileType string) processorTestFixture
 	if err := db.Create(&document).Error; err != nil {
 		t.Fatalf("create processor document: %v", err)
 	}
+	// The processor writes stage updates through the job that claimed the work,
+	// so the fixture needs a real running job rather than a zero value.
+	job := model.DocumentJob{
+		DocumentID: document.ID,
+		JobType:    "process_document",
+		Status:     "running",
+	}
+	if err := db.Create(&job).Error; err != nil {
+		t.Fatalf("create processor job: %v", err)
+	}
 
 	return processorTestFixture{
+		db:        db,
 		documents: repository.NewDocumentRepository(db),
 		chunks:    repository.NewChunkRepository(db),
 		document:  document,
+		job:       job,
 	}
 }
 

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -31,6 +32,13 @@ type ChatService struct {
 	retrieval      chatRetrievalService
 	chatProvider   chatcore.Provider
 	titleProvider  titlecore.Provider
+	activities     *ActivityRecorder
+}
+
+// SetActivityRecorder wires the workspace timeline. Optional; see the
+// KnowledgeBaseService counterpart.
+func (s *ChatService) SetActivityRecorder(recorder *ActivityRecorder) {
+	s.activities = recorder
 }
 
 const (
@@ -94,17 +102,59 @@ func (s *ChatService) CreateSession(ctx context.Context, userID uuid.UUID, req d
 	return &res, nil
 }
 
-func (s *ChatService) ListSessions(ctx context.Context, userID uuid.UUID) (*dto.ChatSessionListResponse, error) {
-	sessions, err := s.chats.ListSessions(ctx, userID)
+// chatSessionPreviewRunes bounds the preview shipped with each list item so a
+// long answer cannot dominate the rail payload.
+const chatSessionPreviewRunes = 120
+
+func (s *ChatService) ListSessions(ctx context.Context, userID uuid.UUID, query dto.ChatSessionListQuery) (*dto.ChatSessionListResponse, error) {
+	page := query.Page
+	if page <= 0 {
+		page = 1
+	}
+	pageSize := query.PageSize
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	query.Q = strings.TrimSpace(query.Q)
+
+	items, total, err := s.chats.ListSessions(ctx, userID, query, (page-1)*pageSize, pageSize)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
 
-	res := dto.ChatSessionListResponse{Items: make([]dto.ChatSessionResponse, 0, len(sessions))}
-	for i := range sessions {
-		res.Items = append(res.Items, toChatSessionResponse(&sessions[i]))
+	res := dto.ChatSessionListResponse{
+		Items:    make([]dto.ChatSessionResponse, 0, len(items)),
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}
+	for i := range items {
+		messageCount := items[i].MessageCount
+		res.Items = append(res.Items, dto.ChatSessionResponse{
+			ID:                 items[i].ID.String(),
+			KnowledgeBaseID:    items[i].KnowledgeBaseID.String(),
+			Title:              items[i].Title,
+			CreatedAt:          items[i].CreatedAt,
+			UpdatedAt:          items[i].UpdatedAt,
+			ArchivedAt:         items[i].ArchivedAt,
+			KnowledgeBaseName:  items[i].KnowledgeBaseName,
+			MessageCount:       &messageCount,
+			LastMessagePreview: truncateRunes(items[i].LastMessagePreview, chatSessionPreviewRunes),
+		})
 	}
 	return &res, nil
+}
+
+func truncateRunes(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit]) + "…"
 }
 
 func (s *ChatService) GetSession(ctx context.Context, userID, sessionID uuid.UUID) (*dto.ChatSessionResponse, error) {
@@ -137,6 +187,8 @@ func (s *ChatService) UpdateSession(ctx context.Context, userID, sessionID uuid.
 	return &res, nil
 }
 
+// DeleteSession soft deletes and keeps the messages, matching the knowledge base
+// and document recycle bins. See docs/14-frontend-api-gaps.md G15.
 func (s *ChatService) DeleteSession(ctx context.Context, userID, sessionID uuid.UUID) error {
 	session, err := s.findSession(ctx, userID, sessionID)
 	if err != nil {
@@ -145,7 +197,111 @@ func (s *ChatService) DeleteSession(ctx context.Context, userID, sessionID uuid.
 	if err := s.chats.DeleteSession(ctx, session.ID); err != nil {
 		return apperror.Internal(err)
 	}
+	s.recordSessionActivity(ctx, userID, ActivityChatSessionDeleted, session)
 	return nil
+}
+
+func (s *ChatService) ListRecycleBin(ctx context.Context, userID uuid.UUID, page, pageSize int) (*dto.RecycleBinListResponse, error) {
+	page, pageSize = normalizedRecyclePage(page, pageSize)
+	items, total, err := s.chats.ListDeletedSessions(ctx, userID, (page-1)*pageSize, pageSize)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	res := &dto.RecycleBinListResponse{
+		Items:    make([]dto.RecycleBinItemResponse, 0, len(items)),
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}
+	for i := range items {
+		res.Items = append(res.Items, dto.RecycleBinItemResponse{
+			ResourceType:      "chatSession",
+			ID:                items[i].ID.String(),
+			Name:              items[i].Title,
+			KnowledgeBaseID:   items[i].KnowledgeBaseID.String(),
+			KnowledgeBaseName: items[i].KnowledgeBaseName,
+			DeletedAt:         items[i].DeletedAt,
+		})
+	}
+	return res, nil
+}
+
+func (s *ChatService) RestoreSession(ctx context.Context, userID, sessionID uuid.UUID) (*dto.ChatSessionResponse, error) {
+	if _, err := s.findDeletedSession(ctx, userID, sessionID); err != nil {
+		return nil, err
+	}
+	if err := s.chats.RestoreSession(ctx, sessionID); err != nil {
+		if errors.Is(err, repository.ErrChatSessionNotDeleted) {
+			return nil, apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
+		}
+		return nil, apperror.Internal(err)
+	}
+	restored, err := s.findSession(ctx, userID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	s.recordSessionActivity(ctx, userID, ActivityChatSessionRestored, restored)
+	res := toChatSessionResponse(restored)
+	return &res, nil
+}
+
+func (s *ChatService) recordSessionActivity(ctx context.Context, userID uuid.UUID, action string, session *model.ChatSession) {
+	if s.activities == nil {
+		return
+	}
+	knowledgeBaseName := ""
+	if kb, err := s.knowledgeBases.FindByIDAndOwner(ctx, session.KnowledgeBaseID, userID); err == nil && kb != nil {
+		knowledgeBaseName = kb.Name
+	}
+	knowledgeBaseID := session.KnowledgeBaseID
+	s.activities.Record(ctx, userID, ActivityEntry{
+		Action:            action,
+		ResourceType:      "chatSession",
+		ResourceID:        session.ID,
+		ResourceName:      session.Title,
+		KnowledgeBaseID:   &knowledgeBaseID,
+		KnowledgeBaseName: knowledgeBaseName,
+	})
+}
+
+func (s *ChatService) PermanentDeleteSession(ctx context.Context, userID, sessionID uuid.UUID) error {
+	if _, err := s.findDeletedSession(ctx, userID, sessionID); err != nil {
+		return err
+	}
+	if err := s.chats.PermanentDeleteSession(ctx, sessionID); err != nil {
+		if errors.Is(err, repository.ErrChatSessionNotDeleted) {
+			return apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
+		}
+		return apperror.Internal(err)
+	}
+	return nil
+}
+
+func (s *ChatService) EmptyRecycleBin(ctx context.Context, userID uuid.UUID) error {
+	if err := s.chats.EmptyDeletedSessions(ctx, userID); err != nil {
+		return apperror.Internal(err)
+	}
+	return nil
+}
+
+// findDeletedSession applies the same double ownership check as findSession: the
+// session must be the caller's and its knowledge base must still be theirs.
+func (s *ChatService) findDeletedSession(ctx context.Context, userID, sessionID uuid.UUID) (*model.ChatSession, error) {
+	session, err := s.chats.FindDeletedSessionByIDAndUser(ctx, sessionID, userID)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	if session == nil {
+		return nil, apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
+	}
+	kb, err := s.knowledgeBases.FindByIDAndOwner(ctx, session.KnowledgeBaseID, userID)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	if kb == nil {
+		return nil, apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
+	}
+	return session, nil
 }
 
 func (s *ChatService) ArchiveSession(ctx context.Context, userID, sessionID uuid.UUID) (*dto.ChatSessionResponse, error) {
@@ -168,6 +324,26 @@ func (s *ChatService) ArchiveSession(ctx context.Context, userID, sessionID uuid
 	return &res, nil
 }
 
+func (s *ChatService) UnarchiveSession(ctx context.Context, userID, sessionID uuid.UUID) (*dto.ChatSessionResponse, error) {
+	session, err := s.findSession(ctx, userID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if session.ArchivedAt == nil {
+		res := toChatSessionResponse(session)
+		return &res, nil
+	}
+	if err := s.chats.UnarchiveSession(ctx, session.ID, time.Now()); err != nil {
+		return nil, apperror.Internal(err)
+	}
+	restored, err := s.findSession(ctx, userID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	res := toChatSessionResponse(restored)
+	return &res, nil
+}
+
 func (s *ChatService) ListMessages(ctx context.Context, userID, sessionID uuid.UUID) (*dto.ChatMessageListResponse, error) {
 	session, err := s.findSession(ctx, userID, sessionID)
 	if err != nil {
@@ -184,6 +360,106 @@ func (s *ChatService) ListMessages(ctx context.Context, userID, sessionID uuid.U
 		res.Items = append(res.Items, toChatMessageResponse(&messages[i]))
 	}
 	return &res, nil
+}
+
+func (s *ChatService) SetMessageFeedback(
+	ctx context.Context,
+	userID, messageID uuid.UUID,
+	rating string,
+) (*dto.ChatMessageFeedbackResponse, error) {
+	rating = strings.TrimSpace(rating)
+	if rating != "positive" && rating != "negative" {
+		return nil, apperror.Validation(map[string]any{"rating": "rating must be positive or negative"})
+	}
+	message, err := s.chats.FindMessageByIDAndOwner(ctx, messageID, userID)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	if message == nil {
+		return nil, apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
+	}
+	if message.Role != "assistant" {
+		return nil, apperror.Validation(map[string]any{"messageId": "only assistant messages accept feedback"})
+	}
+	updatedAt := time.Now().UTC()
+	if err := s.chats.UpdateMessageFeedback(ctx, message.ID, rating, updatedAt); err != nil {
+		if errors.Is(err, repository.ErrChatMessageNotFound) {
+			return nil, apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
+		}
+		return nil, apperror.Internal(err)
+	}
+	return &dto.ChatMessageFeedbackResponse{
+		MessageID: message.ID.String(),
+		Rating:    rating,
+		UpdatedAt: updatedAt,
+	}, nil
+}
+
+func (s *ChatService) ExportSession(ctx context.Context, userID, sessionID uuid.UUID) (*ExportFile, error) {
+	session, err := s.findSession(ctx, userID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	messages, err := s.chats.ListMessages(ctx, session.ID)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	kb, err := s.knowledgeBases.FindByIDAndOwner(ctx, session.KnowledgeBaseID, userID)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	if kb == nil {
+		return nil, apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
+	}
+
+	var builder strings.Builder
+	title := strings.TrimSpace(session.Title)
+	if title == "" {
+		title = "未命名会话"
+	}
+	builder.WriteString("# " + title + "\n\n")
+	builder.WriteString("知识库：" + kb.Name + "\n\n")
+	for i := range messages {
+		label := "用户"
+		if messages[i].Role == "assistant" {
+			label = "助手"
+		}
+		builder.WriteString("## " + label + "\n\n")
+		builder.WriteString(messages[i].Content)
+		builder.WriteString("\n\n")
+		if messages[i].Role == "assistant" {
+			writeExportCitations(&builder, messages[i].Citations)
+		}
+	}
+	return &ExportFile{
+		Filename:    "chat-" + session.ID.String() + ".md",
+		ContentType: "text/markdown; charset=utf-8",
+		Content:     []byte(builder.String()),
+	}, nil
+}
+
+func writeExportCitations(builder *strings.Builder, raw datatypes.JSON) {
+	if len(raw) == 0 {
+		return
+	}
+	var citations []dto.CitationResponse
+	if err := json.Unmarshal(raw, &citations); err != nil || len(citations) == 0 {
+		return
+	}
+	builder.WriteString("### 来源\n\n")
+	for i := range citations {
+		builder.WriteString(fmt.Sprintf("%d. %s", i+1, citations[i].Filename))
+		if citations[i].PageNumber != nil {
+			builder.WriteString(fmt.Sprintf("（第 %d 页）", *citations[i].PageNumber))
+		}
+		builder.WriteString("\n")
+		if strings.TrimSpace(citations[i].Content) != "" {
+			for _, line := range strings.Split(citations[i].Content, "\n") {
+				builder.WriteString("   " + line + "\n")
+			}
+		}
+	}
+	builder.WriteString("\n")
 }
 
 func (s *ChatService) SendMessage(ctx context.Context, userID, sessionID uuid.UUID, req dto.SendChatMessageRequest) (*dto.SendChatMessageResponse, error) {
@@ -218,25 +494,9 @@ func (s *ChatService) SendMessage(ctx context.Context, userID, sessionID uuid.UU
 		return nil, err
 	}
 
-	userMessage := &model.ChatMessage{
-		SessionID:       session.ID,
-		ClientRequestID: &clientRequestID,
-		Role:            "user",
-		Content:         content,
-	}
-	assistantMessage := &model.ChatMessage{
-		SessionID:       session.ID,
-		ClientRequestID: &clientRequestID,
-		Role:            "assistant",
-		Content:         generated.answer,
-		Citations:       generated.citationJSON,
-	}
-	if generated.rerankFallback != nil {
-		fallbackJSON, marshalErr := json.Marshal(generated.rerankFallback)
-		if marshalErr != nil {
-			return nil, apperror.Internal(marshalErr)
-		}
-		assistantMessage.RerankFallback = datatypes.JSON(fallbackJSON)
+	userMessage, assistantMessage, err := buildChatMessagePair(session.ID, clientRequestID, content, generated)
+	if err != nil {
+		return nil, err
 	}
 	if err := s.chats.CreateMessages(ctx, userMessage, assistantMessage); err != nil {
 		existing, lookupErr := s.chats.FindMessagesByClientRequestID(ctx, session.ID, clientRequestID)
@@ -255,6 +515,144 @@ func (s *ChatService) SendMessage(ctx context.Context, userID, sessionID uuid.UU
 		Citations:        generated.citations,
 		RerankFallback:   generated.rerankFallback,
 	}, nil
+}
+
+// ChatStreamSink receives the events of a streaming send, in order.
+//
+// Any method returning an error aborts generation. That is the disconnect path:
+// the handler's writes fail once the client is gone, so generation stops instead
+// of running to completion for nobody.
+type ChatStreamSink interface {
+	// Citations fires once, after retrieval and before any delta.
+	Citations(citations []dto.CitationResponse) error
+	Delta(text string) error
+	// Done carries exactly the blocking endpoint's response body.
+	Done(res *dto.SendChatMessageResponse) error
+}
+
+// SendMessageStream is the streaming twin of SendMessage. It reuses the same
+// idempotency contract rather than paralleling it:
+//
+//   - the `(session_id, client_request_id, role)` partial unique index is still
+//     the only thing enforcing "one assistant message per key";
+//   - a replayed key with identical content replays the stored pair and calls no
+//     provider at all;
+//   - a replayed key with different content fails with IDEMPOTENCY_KEY_REUSED
+//     before anything is emitted, so the handler can still answer 409.
+//
+// **Nothing is persisted until generation finishes.** An interrupted stream
+// therefore leaves no trace, and the client reconciles by looking the
+// clientRequestId up in the message list: absent means it is safe to resend with
+// the same id. The alternative — storing the partial text — would put a
+// truncated answer into the history that every later turn would then read as
+// context. See docs/14-frontend-api-gaps.md G2.
+func (s *ChatService) SendMessageStream(
+	ctx context.Context,
+	userID, sessionID uuid.UUID,
+	req dto.SendChatMessageRequest,
+	sink ChatStreamSink,
+) error {
+	session, err := s.findSession(ctx, userID, sessionID)
+	if err != nil {
+		return err
+	}
+	content := strings.TrimSpace(req.Content)
+	if content == "" {
+		return apperror.Validation(map[string]any{"content": "content is required"})
+	}
+	clientRequestID, err := uuid.Parse(req.ClientRequestID)
+	if err != nil {
+		return apperror.Validation(map[string]any{"clientRequestId": "client request id is invalid"})
+	}
+
+	// Checked before a single byte is emitted, so a conflict is still an HTTP
+	// status rather than an event on an already-committed 200 stream.
+	existing, err := s.chats.FindMessagesByClientRequestID(ctx, session.ID, clientRequestID)
+	if err != nil {
+		return apperror.Internal(err)
+	}
+	if len(existing) > 0 {
+		res, err := sendMessageResponseFromPair(clientRequestID, content, existing)
+		if err != nil {
+			return err
+		}
+		if err := sink.Citations(res.Citations); err != nil {
+			return err
+		}
+		return sink.Done(res)
+	}
+
+	history, err := s.chats.ListMessages(ctx, session.ID)
+	if err != nil {
+		return apperror.Internal(err)
+	}
+
+	generated, err := s.generateAnswerWithHooks(ctx, userID, session, content, history, answerHooks{
+		onCitations: sink.Citations,
+		onDelta:     sink.Delta,
+	})
+	if err != nil {
+		return err
+	}
+
+	userMessage, assistantMessage, err := buildChatMessagePair(session.ID, clientRequestID, content, generated)
+	if err != nil {
+		return err
+	}
+	if err := s.chats.CreateMessages(ctx, userMessage, assistantMessage); err != nil {
+		// A concurrent stream with the same key may have won the unique index.
+		// Adopting its pair is what keeps "no second assistant message" true
+		// under concurrency, not just under retry.
+		stored, lookupErr := s.chats.FindMessagesByClientRequestID(ctx, session.ID, clientRequestID)
+		if lookupErr == nil && len(stored) > 0 {
+			res, pairErr := sendMessageResponseFromPair(clientRequestID, content, stored)
+			if pairErr != nil {
+				return pairErr
+			}
+			return sink.Done(res)
+		}
+		return apperror.Internal(err)
+	}
+	s.updateSessionTitleIfNeeded(ctx, session, content, generated.answer)
+
+	return sink.Done(&dto.SendChatMessageResponse{
+		ClientRequestID:  clientRequestID.String(),
+		UserMessage:      toChatMessageResponse(userMessage),
+		AssistantMessage: toChatMessageResponse(assistantMessage),
+		Answer:           generated.answer,
+		Citations:        generated.citations,
+		RerankFallback:   generated.rerankFallback,
+	})
+}
+
+// buildChatMessagePair is shared by both send paths so the persisted shape — and
+// with it the idempotency key — cannot drift between them.
+func buildChatMessagePair(
+	sessionID, clientRequestID uuid.UUID,
+	content string,
+	generated generatedChatAnswer,
+) (*model.ChatMessage, *model.ChatMessage, error) {
+	userMessage := &model.ChatMessage{
+		SessionID:       sessionID,
+		ClientRequestID: &clientRequestID,
+		Role:            "user",
+		Content:         content,
+	}
+	assistantMessage := &model.ChatMessage{
+		SessionID:       sessionID,
+		ClientRequestID: &clientRequestID,
+		Role:            "assistant",
+		Content:         generated.answer,
+		Citations:       generated.citationJSON,
+	}
+	if generated.rerankFallback != nil {
+		fallbackJSON, err := json.Marshal(generated.rerankFallback)
+		if err != nil {
+			return nil, nil, apperror.Internal(err)
+		}
+		assistantMessage.RerankFallback = datatypes.JSON(fallbackJSON)
+	}
+	return userMessage, assistantMessage, nil
 }
 
 func sendMessageResponseFromPair(clientRequestID uuid.UUID, content string, messages []model.ChatMessage) (*dto.SendChatMessageResponse, error) {
@@ -360,24 +758,79 @@ type generatedChatAnswer struct {
 	rerankFallback *dto.RerankFallbackResponse
 }
 
+// answerHooks lets the streaming path observe generation without forking it.
+//
+// Both hooks are optional; with neither set generateAnswer behaves exactly as
+// the blocking path always has. Keeping one implementation matters for the
+// citation rule: citations must come only from the chunks that went into this
+// turn's prompt, and a second code path is the obvious way for that to drift.
+type answerHooks struct {
+	// onCitations fires once retrieval has settled, before any answer text
+	// exists, because the citations are an input to the prompt rather than a
+	// product of the completion.
+	onCitations func([]dto.CitationResponse) error
+	onDelta     func(string) error
+}
+
 func (s *ChatService) generateAnswer(ctx context.Context, userID uuid.UUID, session *model.ChatSession, question string, history []model.ChatMessage) (generatedChatAnswer, error) {
+	return s.generateAnswerWithHooks(ctx, userID, session, question, history, answerHooks{})
+}
+
+// complete runs the chat provider, streaming when both the provider supports it
+// and the caller wants deltas. The returned answer is authoritative either way.
+func (s *ChatService) complete(ctx context.Context, messages []chatcore.Message, onDelta func(string) error) (string, error) {
+	if onDelta != nil {
+		if streamer, ok := s.chatProvider.(chatcore.StreamingProvider); ok {
+			return streamer.ChatStream(ctx, messages, onDelta)
+		}
+	}
+	answer, err := s.chatProvider.Chat(ctx, messages)
+	if err != nil {
+		return "", err
+	}
+	// A non-streaming provider still has to look like a stream to the client, so
+	// the whole answer is delivered as a single delta.
+	if onDelta != nil && answer != "" {
+		if err := onDelta(answer); err != nil {
+			return "", err
+		}
+	}
+	return answer, nil
+}
+
+func (s *ChatService) generateAnswerWithHooks(
+	ctx context.Context,
+	userID uuid.UUID,
+	session *model.ChatSession,
+	question string,
+	history []model.ChatMessage,
+	hooks answerHooks,
+) (generatedChatAnswer, error) {
 	intent, err := classifyChatIntent(ctx, s.chatProvider, question, history, s.cfg.ChatHistoryLimit)
 	if err != nil {
 		return generatedChatAnswer{}, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "回答生成失败，请稍后重试", err)
 	}
 
 	if intent.Intent == chatIntentConversation {
-		answer, err := s.chatProvider.Chat(ctx, buildConversationAnswerMessages(question, history, s.cfg.ChatHistoryLimit))
-		if err != nil {
-			return generatedChatAnswer{}, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "回答生成失败，请稍后重试", err)
+		citations := []dto.CitationResponse{}
+		if hooks.onCitations != nil {
+			// Announced even when empty: "this answer has no sources" is
+			// information the client can act on immediately.
+			if err := hooks.onCitations(citations); err != nil {
+				return generatedChatAnswer{}, err
+			}
 		}
-		citationJSON, err := json.Marshal([]dto.CitationResponse{})
+		answer, err := s.complete(ctx, buildConversationAnswerMessages(question, history, s.cfg.ChatHistoryLimit), hooks.onDelta)
+		if err != nil {
+			return generatedChatAnswer{}, chatCompletionError(err)
+		}
+		citationJSON, err := json.Marshal(citations)
 		if err != nil {
 			return generatedChatAnswer{}, apperror.Internal(err)
 		}
 		return generatedChatAnswer{
 			answer:       answer,
-			citations:    []dto.CitationResponse{},
+			citations:    citations,
 			citationJSON: datatypes.JSON(citationJSON),
 		}, nil
 	}
@@ -399,11 +852,23 @@ func (s *ChatService) generateAnswer(ctx context.Context, userID uuid.UUID, sess
 	}
 
 	citations := citationsFromSearch(searchRes.Items)
+	if hooks.onCitations != nil {
+		if err := hooks.onCitations(citations); err != nil {
+			return generatedChatAnswer{}, err
+		}
+	}
+
 	answer := "当前知识库中未找到足够依据回答该问题。"
 	if len(searchRes.Items) > 0 {
-		answer, err = s.chatProvider.Chat(ctx, buildAnswerMessages(question, searchRes.Items, history, s.cfg.ChatHistoryLimit))
+		answer, err = s.complete(ctx, buildAnswerMessages(question, searchRes.Items, history, s.cfg.ChatHistoryLimit), hooks.onDelta)
 		if err != nil {
-			return generatedChatAnswer{}, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "回答生成失败，请稍后重试", err)
+			return generatedChatAnswer{}, chatCompletionError(err)
+		}
+	} else if hooks.onDelta != nil {
+		// The refusal never reaches the provider, so stream it explicitly rather
+		// than letting the client sit on an empty answer until `done`.
+		if err := hooks.onDelta(answer); err != nil {
+			return generatedChatAnswer{}, err
 		}
 	}
 
@@ -418,6 +883,21 @@ func (s *ChatService) generateAnswer(ctx context.Context, userID uuid.UUID, sess
 		citationJSON:   datatypes.JSON(citationJSON),
 		rerankFallback: searchRes.RerankFallback,
 	}, nil
+}
+
+// chatCompletionError keeps a sink or context failure distinguishable from a
+// genuine provider failure: the former means the client went away, and dressing
+// it up as CHAT_COMPLETION_FAILED would tell the user their question failed when
+// it was their connection that did.
+func chatCompletionError(err error) error {
+	var appErr *apperror.Error
+	if errors.As(err, &appErr) {
+		return err
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "回答生成失败，请稍后重试", err)
 }
 
 func (s *ChatService) findSession(ctx context.Context, userID, sessionID uuid.UUID) (*model.ChatSession, error) {
@@ -529,6 +1009,14 @@ func toChatMessageResponse(message *model.ChatMessage) dto.ChatMessageResponse {
 		value := message.ClientRequestID.String()
 		clientRequestID = &value
 	}
+	var feedback *dto.ChatMessageFeedbackResponse
+	if message.FeedbackRating != nil && message.FeedbackUpdatedAt != nil {
+		feedback = &dto.ChatMessageFeedbackResponse{
+			MessageID: message.ID.String(),
+			Rating:    *message.FeedbackRating,
+			UpdatedAt: *message.FeedbackUpdatedAt,
+		}
+	}
 	return dto.ChatMessageResponse{
 		ID:              message.ID.String(),
 		SessionID:       message.SessionID.String(),
@@ -536,6 +1024,7 @@ func toChatMessageResponse(message *model.ChatMessage) dto.ChatMessageResponse {
 		Role:            message.Role,
 		Content:         message.Content,
 		Citations:       citations,
+		Feedback:        feedback,
 		CreatedAt:       message.CreatedAt,
 	}
 }

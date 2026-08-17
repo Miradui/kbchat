@@ -33,6 +33,9 @@ func (s *KnowledgeBaseTagService) Create(ctx context.Context, ownerID uuid.UUID,
 		return nil, apperror.Internal(err)
 	}
 	res := toTagResponse(tag)
+	// A freshly created tag is bound to nothing yet.
+	zero := int64(0)
+	res.KnowledgeBaseCount = &zero
 	return &res, nil
 }
 
@@ -41,9 +44,16 @@ func (s *KnowledgeBaseTagService) List(ctx context.Context, ownerID uuid.UUID) (
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
+	counts, err := s.tags.CountBindingsByOwner(ctx, ownerID)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
 	res := dto.KnowledgeBaseTagListResponse{Items: make([]dto.KnowledgeBaseTagResponse, 0, len(items))}
 	for i := range items {
-		res.Items = append(res.Items, toTagResponse(&items[i]))
+		item := toTagResponse(&items[i])
+		count := counts[items[i].ID]
+		item.KnowledgeBaseCount = &count
+		res.Items = append(res.Items, item)
 	}
 	return &res, nil
 }
@@ -61,7 +71,12 @@ func (s *KnowledgeBaseTagService) Update(ctx context.Context, ownerID, id uuid.U
 	if err := s.tags.Update(ctx, tag); err != nil {
 		return nil, apperror.Internal(err)
 	}
+	count, err := s.tags.CountBindings(ctx, ownerID, tag.ID)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
 	res := toTagResponse(tag)
+	res.KnowledgeBaseCount = &count
 	return &res, nil
 }
 
@@ -70,7 +85,7 @@ func (s *KnowledgeBaseTagService) Delete(ctx context.Context, ownerID, id uuid.U
 	if err != nil {
 		return err
 	}
-	count, err := s.tags.CountBindings(ctx, tag.ID)
+	count, err := s.tags.CountBindings(ctx, ownerID, tag.ID)
 	if err != nil {
 		return apperror.Internal(err)
 	}

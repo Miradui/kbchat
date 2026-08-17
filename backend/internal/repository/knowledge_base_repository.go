@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"rag/backend/internal/dto"
 	"rag/backend/internal/model"
@@ -16,6 +17,10 @@ import (
 type KnowledgeBaseRepository struct {
 	db *gorm.DB
 }
+
+// ErrKnowledgeBaseNotDeleted means restore/permanent-delete lost a race and the
+// knowledge base is no longer present in the recycle bin.
+var ErrKnowledgeBaseNotDeleted = errors.New("knowledge base is not in the recycle bin")
 
 func NewKnowledgeBaseRepository(db *gorm.DB) *KnowledgeBaseRepository {
 	return &KnowledgeBaseRepository{db: db}
@@ -160,18 +165,33 @@ type KnowledgeBaseStats struct {
 }
 
 func (r *KnowledgeBaseRepository) Stats(ctx context.Context, ownerID uuid.UUID, start, previousStart time.Time) (KnowledgeBaseStats, KnowledgeBaseStats, error) {
-	current, err := r.statsForRange(ctx, ownerID, start, time.Time{})
+	current, err := r.statsForRange(ctx, ownerID, nil, start, time.Time{})
 	if err != nil {
 		return KnowledgeBaseStats{}, KnowledgeBaseStats{}, err
 	}
-	previous, err := r.statsForRange(ctx, ownerID, previousStart, start)
+	previous, err := r.statsForRange(ctx, ownerID, nil, previousStart, start)
 	if err != nil {
 		return KnowledgeBaseStats{}, KnowledgeBaseStats{}, err
 	}
 	return current, previous, nil
 }
 
-func (r *KnowledgeBaseRepository) statsForRange(ctx context.Context, ownerID uuid.UUID, start, end time.Time) (KnowledgeBaseStats, error) {
+// StatsForKnowledgeBase narrows the same owner-scoped counting rules to a single
+// knowledge base. KnowledgeBaseCount is left at zero because it carries no
+// meaning for one row; callers expose documents, views and questions only.
+func (r *KnowledgeBaseRepository) StatsForKnowledgeBase(ctx context.Context, ownerID, kbID uuid.UUID, start, previousStart time.Time) (KnowledgeBaseStats, KnowledgeBaseStats, error) {
+	current, err := r.statsForRange(ctx, ownerID, &kbID, start, time.Time{})
+	if err != nil {
+		return KnowledgeBaseStats{}, KnowledgeBaseStats{}, err
+	}
+	previous, err := r.statsForRange(ctx, ownerID, &kbID, previousStart, start)
+	if err != nil {
+		return KnowledgeBaseStats{}, KnowledgeBaseStats{}, err
+	}
+	return current, previous, nil
+}
+
+func (r *KnowledgeBaseRepository) statsForRange(ctx context.Context, ownerID uuid.UUID, kbID *uuid.UUID, start, end time.Time) (KnowledgeBaseStats, error) {
 	var stats KnowledgeBaseStats
 	kbQuery := r.db.WithContext(ctx).Model(&model.KnowledgeBase{}).Where("owner_id = ?", ownerID).Where("deleted_at IS NULL")
 	docQuery := r.db.WithContext(ctx).Model(&model.Document{}).
@@ -203,7 +223,11 @@ func (r *KnowledgeBaseRepository) statsForRange(ctx context.Context, ownerID uui
 		questionQuery = questionQuery.Where("chat_messages.created_at < ?", end)
 	}
 
-	if err := kbQuery.Count(&stats.KnowledgeBaseCount).Error; err != nil {
+	if kbID != nil {
+		docQuery = docQuery.Where("knowledge_bases.id = ?", *kbID)
+		viewQuery = viewQuery.Where("knowledge_bases.id = ?", *kbID)
+		questionQuery = questionQuery.Where("knowledge_bases.id = ?", *kbID)
+	} else if err := kbQuery.Count(&stats.KnowledgeBaseCount).Error; err != nil {
 		return stats, err
 	}
 	if err := docQuery.Count(&stats.DocumentCount).Error; err != nil {
@@ -226,6 +250,35 @@ func (r *KnowledgeBaseRepository) CountByCategory(ctx context.Context, ownerID, 
 		Where("deleted_at IS NULL").
 		Count(&count).Error
 	return count, err
+}
+
+// CountByCategoryGrouped returns the direct knowledge base count per category for
+// one owner. Uncategorized knowledge bases have a NULL category_id and are left
+// out; the category tree has no node to hang them on.
+func (r *KnowledgeBaseRepository) CountByCategoryGrouped(ctx context.Context, ownerID uuid.UUID) (map[uuid.UUID]int64, error) {
+	type row struct {
+		CategoryID uuid.UUID
+		Total      int64
+	}
+
+	var rows []row
+	err := r.db.WithContext(ctx).
+		Model(&model.KnowledgeBase{}).
+		Select("knowledge_bases.category_id AS category_id, COUNT(*) AS total").
+		Where("knowledge_bases.owner_id = ?", ownerID).
+		Where("knowledge_bases.deleted_at IS NULL").
+		Where("knowledge_bases.category_id IS NOT NULL").
+		Group("knowledge_bases.category_id").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	counts := make(map[uuid.UUID]int64, len(rows))
+	for _, item := range rows {
+		counts[item.CategoryID] = item.Total
+	}
+	return counts, nil
 }
 
 func (r *KnowledgeBaseRepository) FindByIDAndOwner(ctx context.Context, id, ownerID uuid.UUID) (*model.KnowledgeBase, error) {
@@ -286,15 +339,42 @@ func (r *KnowledgeBaseRepository) Delete(ctx context.Context, kb *model.Knowledg
 }
 
 func (r *KnowledgeBaseRepository) Restore(ctx context.Context, id uuid.UUID) error {
-	return r.db.WithContext(ctx).
+	result := r.db.WithContext(ctx).
 		Unscoped().
 		Model(&model.KnowledgeBase{}).
-		Where("id = ?", id).
-		Update("deleted_at", nil).Error
+		Where("id = ? AND deleted_at IS NOT NULL", id).
+		Update("deleted_at", nil)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrKnowledgeBaseNotDeleted
+	}
+	return nil
+}
+
+func (r *KnowledgeBaseRepository) BatchRestore(ctx context.Context, ids []uuid.UUID) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.
+			Unscoped().
+			Model(&model.KnowledgeBase{}).
+			Where("id IN ? AND deleted_at IS NOT NULL", ids).
+			Update("deleted_at", nil)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != int64(len(ids)) {
+			return ErrKnowledgeBaseNotDeleted
+		}
+		return nil
+	})
 }
 
 func (r *KnowledgeBaseRepository) PermanentDelete(ctx context.Context, kbID uuid.UUID) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockDeletedKnowledgeBase(tx, kbID); err != nil {
+			return err
+		}
 		return permanentDeleteKnowledgeBase(tx, kbID)
 	})
 }
@@ -306,6 +386,8 @@ func (r *KnowledgeBaseRepository) EmptyDeletedByOwner(ctx context.Context, owner
 			Model(&model.KnowledgeBase{}).
 			Where("owner_id = ?", ownerID).
 			Where("deleted_at IS NOT NULL").
+			Order("id asc").
+			Clauses(clause.Locking{Strength: "UPDATE"}).
 			Pluck("id", &ids).Error; err != nil {
 			return err
 		}
@@ -318,12 +400,28 @@ func (r *KnowledgeBaseRepository) EmptyDeletedByOwner(ctx context.Context, owner
 	})
 }
 
+func lockDeletedKnowledgeBase(tx *gorm.DB, kbID uuid.UUID) error {
+	var kb model.KnowledgeBase
+	err := tx.
+		Unscoped().
+		Select("id").
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND deleted_at IS NOT NULL", kbID).
+		First(&kb).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrKnowledgeBaseNotDeleted
+	}
+	return err
+}
+
 func permanentDeleteKnowledgeBase(tx *gorm.DB, kbID uuid.UUID) error {
 	var documentIDs []uuid.UUID
 	if err := tx.Unscoped().
 		Model(&model.Document{}).
 		Where("knowledge_base_id = ?", kbID).
-		Pluck("id", &documentIDs).Error; err != nil {
+		Order("documents.id asc").
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Pluck("documents.id", &documentIDs).Error; err != nil {
 		return err
 	}
 	for _, documentID := range documentIDs {

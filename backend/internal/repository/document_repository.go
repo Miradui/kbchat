@@ -34,7 +34,24 @@ type DocumentRepository struct {
 var (
 	errDocumentJobBlocked    = errors.New("document job blocked by running predecessor")
 	errDocumentJobNotRunning = errors.New("document job is not running")
+
+	// ErrDocumentJobActive rejects a cross-knowledge-base move while the document
+	// still has a queued or running job.
+	ErrDocumentJobActive = errors.New("document has an active processing job")
+	// ErrDocumentJobNotCancellable is returned when there is nothing to cancel:
+	// the document has no pending or running job.
+	ErrDocumentJobNotCancellable = errors.New("document has no cancellable job")
+	// ErrDocumentJobCancelled tells an in-flight processor that its job was
+	// cancelled and it should stop instead of publishing its result.
+	ErrDocumentJobCancelled = errors.New("document job was cancelled")
+	// ErrDocumentNotDeleted means restore/permanent-delete lost a race and the
+	// document is no longer present in the recycle bin.
+	ErrDocumentNotDeleted = errors.New("document is not in the recycle bin")
 )
+
+// DocumentJobCancelledMessage is stored on both the job and the document so the
+// service layer can tell a cancel apart from a genuine processing failure.
+const DocumentJobCancelledMessage = "document job cancelled by user"
 
 func NewDocumentRepository(db *gorm.DB) *DocumentRepository {
 	return &DocumentRepository{db: db}
@@ -51,16 +68,6 @@ func (r *DocumentRepository) CreateWithJob(ctx context.Context, document *model.
 		}
 		return touchKnowledgeBase(tx, document.KnowledgeBaseID, updatedByID, time.Now())
 	})
-}
-
-func (r *DocumentRepository) ListByKnowledgeBase(ctx context.Context, kbID uuid.UUID) ([]model.Document, error) {
-	var items []model.Document
-	err := r.db.WithContext(ctx).
-		Where("knowledge_base_id = ?", kbID).
-		Where("deleted_at IS NULL").
-		Order("created_at desc").
-		Find(&items).Error
-	return items, err
 }
 
 func (r *DocumentRepository) ListByOwner(ctx context.Context, ownerID uuid.UUID, query GlobalDocumentQuery) ([]GlobalDocumentListItem, int64, error) {
@@ -332,9 +339,11 @@ func (r *DocumentRepository) LatestJobsByDocumentIDs(ctx context.Context, docume
 func (r *DocumentRepository) ClaimPendingJob(ctx context.Context) (*model.DocumentJob, error) {
 	var job model.DocumentJob
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.
-			Where("status = ? AND job_type = ?", "pending", "process_document").
-			Where("locked_at IS NULL OR locked_at <= ?", time.Now()).
+		if err := tx.Model(&model.DocumentJob{}).
+			Select("document_jobs.*").
+			Joins("JOIN documents ON documents.id = document_jobs.document_id").
+			Where("document_jobs.status = ? AND document_jobs.job_type = ?", "pending", "process_document").
+			Where("document_jobs.locked_at IS NULL OR document_jobs.locked_at <= ?", time.Now()).
 			Where(`NOT EXISTS (
 				SELECT 1
 				FROM document_jobs AS running_jobs
@@ -342,21 +351,31 @@ func (r *DocumentRepository) ClaimPendingJob(ctx context.Context) (*model.Docume
 					AND running_jobs.status = ?
 					AND running_jobs.job_type = ?
 			)`, "running", "process_document").
-			Order("created_at asc").
-			Clauses(clauseLockingUpdateSkipLocked()).
+			Order("document_jobs.created_at asc").
+			Clauses(clause.Locking{
+				Strength: "UPDATE",
+				Table:    clause.Table{Name: "documents"},
+				Options:  "SKIP LOCKED",
+			}).
 			First(&job).Error; err != nil {
 			return err
 		}
 
-		var document model.Document
+		var lockedJob model.DocumentJob
 		if err := tx.
-			Unscoped().
-			Select("id").
 			Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("id = ?", job.DocumentID).
-			First(&document).Error; err != nil {
+			Where(
+				"id = ? AND document_id = ? AND status = ? AND job_type = ?",
+				job.ID, job.DocumentID, "pending", "process_document",
+			).
+			Where("locked_at IS NULL OR locked_at <= ?", time.Now()).
+			First(&lockedJob).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errDocumentJobBlocked
+			}
 			return err
 		}
+		job = lockedJob
 		var runningCount int64
 		if err := tx.Model(&model.DocumentJob{}).
 			Where("document_id = ? AND job_type = ? AND status = ?", job.DocumentID, "process_document", "running").
@@ -405,11 +424,18 @@ func (r *DocumentRepository) FindByID(ctx context.Context, id uuid.UUID) (*model
 }
 
 func (r *DocumentRepository) Restore(ctx context.Context, id uuid.UUID) error {
-	return r.db.WithContext(ctx).
+	result := r.db.WithContext(ctx).
 		Unscoped().
 		Model(&model.Document{}).
-		Where("id = ?", id).
-		Update("deleted_at", nil).Error
+		Where("id = ? AND deleted_at IS NOT NULL", id).
+		Update("deleted_at", nil)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrDocumentNotDeleted
+	}
+	return nil
 }
 
 func (r *DocumentRepository) BatchRestore(ctx context.Context, documentIDs []uuid.UUID) error {
@@ -423,7 +449,7 @@ func (r *DocumentRepository) BatchRestore(ctx context.Context, documentIDs []uui
 			return result.Error
 		}
 		if result.RowsAffected != int64(len(documentIDs)) {
-			return gorm.ErrRecordNotFound
+			return ErrDocumentNotDeleted
 		}
 		return nil
 	})
@@ -431,6 +457,9 @@ func (r *DocumentRepository) BatchRestore(ctx context.Context, documentIDs []uui
 
 func (r *DocumentRepository) PermanentDelete(ctx context.Context, documentID uuid.UUID) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockDocumentForPermanentDelete(tx, documentID); err != nil {
+			return err
+		}
 		if err := tx.Where("document_id = ?", documentID).Delete(&model.DocumentChunk{}).Error; err != nil {
 			return err
 		}
@@ -449,6 +478,8 @@ func (r *DocumentRepository) EmptyDeletedByOwner(ctx context.Context, ownerID uu
 			Joins("JOIN knowledge_bases ON knowledge_bases.id = documents.knowledge_base_id").
 			Where("knowledge_bases.owner_id = ?", ownerID).
 			Where("documents.deleted_at IS NOT NULL").
+			Order("documents.id asc").
+			Clauses(clause.Locking{Strength: "UPDATE", Table: clause.Table{Name: "documents"}}).
 			Pluck("documents.id", &ids).Error; err != nil {
 			return err
 		}
@@ -465,6 +496,20 @@ func (r *DocumentRepository) EmptyDeletedByOwner(ctx context.Context, ownerID uu
 		}
 		return nil
 	})
+}
+
+func lockDocumentForPermanentDelete(tx *gorm.DB, documentID uuid.UUID) error {
+	var document model.Document
+	err := tx.
+		Unscoped().
+		Select("id").
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND deleted_at IS NOT NULL", documentID).
+		First(&document).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrDocumentNotDeleted
+	}
+	return err
 }
 
 type RecycleDocumentItem struct {
@@ -504,18 +549,246 @@ func (r *DocumentRepository) ListDeletedByOwner(ctx context.Context, ownerID uui
 	return items, total, err
 }
 
-func (r *DocumentRepository) UpdateStatus(ctx context.Context, documentID uuid.UUID, status string, errorMessage string) error {
-	return r.db.WithContext(ctx).Model(&model.Document{}).
+// UpdateStatus records an in-flight processing stage. It is scoped to the job
+// that is doing the work: once that job stops being 'running' — cancelled, or
+// already finalized — the write is refused with ErrDocumentJobCancelled so the
+// processor aborts instead of overwriting the terminal state and burning more
+// embedding calls.
+func (r *DocumentRepository) UpdateStatus(ctx context.Context, documentID, jobID uuid.UUID, status string, errorMessage string) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := guardRunningDocumentJob(tx, documentID, jobID); err != nil {
+			return err
+		}
+		result := tx.Model(&model.Document{}).
+			Where("id = ?", documentID).
+			Updates(map[string]any{
+				"status":        status,
+				"error_message": errorMessage,
+				"updated_at":    time.Now(),
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
+}
+
+// EnsureJobRunning is the inexpensive cancellation checkpoint used between
+// embedding batches. The final publication has its own transactional guard;
+// this method exists to stop spending provider calls as soon as a cancel has
+// already committed.
+func (r *DocumentRepository) EnsureJobRunning(ctx context.Context, documentID, jobID uuid.UUID) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return guardRunningDocumentJob(tx, documentID, jobID)
+	})
+}
+
+// guardRunningDocumentJob uses the document row as the aggregate lock shared
+// with CancelActiveJob and chunk publication. A cancel that committed first is
+// observed here; a caller that acquired the lock first completes its atomic
+// operation before cancellation can take effect.
+func guardRunningDocumentJob(tx *gorm.DB, documentID, jobID uuid.UUID) error {
+	var document model.Document
+	if err := tx.
+		Select("id").
+		Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("id = ?", documentID).
-		Updates(map[string]any{
-			"status":        status,
-			"error_message": errorMessage,
-			"updated_at":    time.Now(),
-		}).Error
+		First(&document).Error; err != nil {
+		return err
+	}
+
+	var running int64
+	if err := tx.Model(&model.DocumentJob{}).
+		Where(
+			"id = ? AND document_id = ? AND status = ? AND job_type = ?",
+			jobID, documentID, "running", "process_document",
+		).
+		Count(&running).Error; err != nil {
+		return err
+	}
+	if running != 1 {
+		return ErrDocumentJobCancelled
+	}
+	return nil
+}
+
+// UpdateMetadata renames a document and optionally moves it to another knowledge
+// base. A move has to carry the chunks with it: the composite foreign key
+// (document_id, knowledge_base_id) makes the two rows inseparable, so migration
+// 011 marks that constraint DEFERRABLE and this transaction defers it until both
+// statements have run. Updating either side alone would violate it.
+func (r *DocumentRepository) UpdateMetadata(
+	ctx context.Context,
+	documentID uuid.UUID,
+	filename string,
+	targetKnowledgeBaseID *uuid.UUID,
+	actorID uuid.UUID,
+) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var document model.Document
+		if err := tx.
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", documentID).
+			First(&document).Error; err != nil {
+			return err
+		}
+
+		moving := targetKnowledgeBaseID != nil && *targetKnowledgeBaseID != document.KnowledgeBaseID
+		if moving {
+			// A claimed processor writes its chunks under the knowledge base it
+			// read when it started. Moving underneath it would either break the
+			// composite key or publish chunks into the old knowledge base, so
+			// wait for the job to finish instead.
+			var activeJobs int64
+			if err := tx.Model(&model.DocumentJob{}).
+				Where("document_id = ? AND job_type = ? AND status IN ?",
+					documentID, "process_document", []string{"pending", "running"}).
+				Count(&activeJobs).Error; err != nil {
+				return err
+			}
+			if activeJobs > 0 {
+				return ErrDocumentJobActive
+			}
+			if err := deferChunkKnowledgeBaseConstraint(tx); err != nil {
+				return err
+			}
+		}
+
+		now := time.Now()
+		updates := map[string]any{"updated_at": now}
+		if filename != "" {
+			updates["filename"] = filename
+		}
+		if moving {
+			updates["knowledge_base_id"] = *targetKnowledgeBaseID
+		}
+		result := tx.Model(&model.Document{}).Where("id = ?", documentID).Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+
+		if !moving {
+			return touchKnowledgeBase(tx, document.KnowledgeBaseID, actorID, now)
+		}
+
+		if err := tx.Model(&model.DocumentChunk{}).
+			Where("document_id = ?", documentID).
+			Update("knowledge_base_id", *targetKnowledgeBaseID).Error; err != nil {
+			return err
+		}
+		// Both knowledge bases changed in the workspace, so both get touched.
+		if err := touchKnowledgeBase(tx, document.KnowledgeBaseID, actorID, now); err != nil {
+			return err
+		}
+		return touchKnowledgeBase(tx, *targetKnowledgeBaseID, actorID, now)
+	})
+}
+
+// CancelActiveJob stops the document's queued or running job. It shares the
+// worker's terminal-state guard rather than adding a second path: finalizeJob
+// and RetryJob both require status='running', so once this flips the row to
+// 'cancelled' a late-finishing worker can no longer write over the result.
+func (r *DocumentRepository) CancelActiveJob(ctx context.Context, documentID, actorID uuid.UUID) (*model.DocumentJob, error) {
+	var cancelled model.DocumentJob
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var document model.Document
+		if err := tx.
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", documentID).
+			First(&document).Error; err != nil {
+			return err
+		}
+
+		var jobs []model.DocumentJob
+		if err := tx.
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("document_id = ? AND job_type = ? AND status IN ?",
+				documentID, "process_document", []string{"pending", "running"}).
+			Order("created_at desc").
+			Find(&jobs).Error; err != nil {
+			return err
+		}
+		if len(jobs) == 0 {
+			return ErrDocumentJobNotCancellable
+		}
+
+		now := time.Now()
+		ids := make([]uuid.UUID, 0, len(jobs))
+		for i := range jobs {
+			ids = append(ids, jobs[i].ID)
+		}
+		if err := tx.Model(&model.DocumentJob{}).
+			Where("id IN ?", ids).
+			Updates(map[string]any{
+				"status":        "cancelled",
+				"error_message": DocumentJobCancelledMessage,
+				"locked_at":     nil,
+				"updated_at":    now,
+			}).Error; err != nil {
+			return err
+		}
+
+		// Already-embedded batches are not rolled back, and the processor only
+		// swaps chunks in after every batch succeeded, so a cancel never leaves
+		// half an index behind. The document lands on failed; jobStatus carries
+		// the reason.
+		if err := tx.Model(&model.Document{}).
+			Where("id = ?", documentID).
+			Updates(map[string]any{
+				"status":        "failed",
+				"error_message": DocumentJobCancelledMessage,
+				"updated_at":    now,
+			}).Error; err != nil {
+			return err
+		}
+		if err := touchKnowledgeBase(tx, document.KnowledgeBaseID, actorID, now); err != nil {
+			return err
+		}
+		cancelled = jobs[0]
+		cancelled.Status = "cancelled"
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &cancelled, nil
+}
+
+// deferChunkKnowledgeBaseConstraint is a no-op outside PostgreSQL. SQLite, used
+// by the service tests, never creates the composite constraint at all.
+func deferChunkKnowledgeBaseConstraint(tx *gorm.DB) error {
+	if tx.Dialector == nil || tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	return tx.Exec("SET CONSTRAINTS fk_document_chunks_document_kb DEFERRED").Error
 }
 
 func (r *DocumentRepository) CompleteJob(ctx context.Context, jobID uuid.UUID) error {
-	return r.finalizeJob(ctx, jobID, "completed", "")
+	err := r.finalizeJob(ctx, jobID, "completed", "")
+	if !errors.Is(err, errDocumentJobNotRunning) {
+		return err
+	}
+
+	// Chunk publication now completes the document and job in the same
+	// transaction. The worker still calls CompleteJob after Process returns, so
+	// treat that already-completed state as an idempotent success while keeping
+	// cancelled and failed jobs protected from late writes.
+	var completed int64
+	if queryErr := r.db.WithContext(ctx).Model(&model.DocumentJob{}).
+		Where("id = ? AND job_type = ? AND status = ?", jobID, "process_document", "completed").
+		Count(&completed).Error; queryErr != nil {
+		return queryErr
+	}
+	if completed == 1 {
+		return nil
+	}
+	return err
 }
 
 func (r *DocumentRepository) FailJob(ctx context.Context, jobID uuid.UUID, message string) error {
@@ -532,7 +805,6 @@ func (r *DocumentRepository) finalizeJob(
 		var job model.DocumentJob
 		if err := tx.
 			Select("id", "document_id").
-			Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("id = ? AND status = ? AND job_type = ?", jobID, "running", "process_document").
 			First(&job).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -548,6 +820,21 @@ func (r *DocumentRepository) finalizeJob(
 			Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("id = ?", job.DocumentID).
 			First(&document).Error; err != nil {
+			return err
+		}
+
+		var lockedJob model.DocumentJob
+		if err := tx.
+			Select("id", "document_id").
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where(
+				"id = ? AND document_id = ? AND status = ? AND job_type = ?",
+				jobID, job.DocumentID, "running", "process_document",
+			).
+			First(&lockedJob).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errDocumentJobNotRunning
+			}
 			return err
 		}
 		documentResult := tx.Unscoped().Model(&model.Document{}).
@@ -582,9 +869,12 @@ func (r *DocumentRepository) finalizeJob(
 	})
 }
 
+// RetryJob reschedules a failed attempt. The status='running' guard is what
+// keeps a cancel final: a worker whose processor died after the cancel landed
+// updates nothing here, so the job stays cancelled instead of being requeued.
 func (r *DocumentRepository) RetryJob(ctx context.Context, jobID uuid.UUID, retryCount int, retryAt time.Time, message string) error {
 	return r.db.WithContext(ctx).Model(&model.DocumentJob{}).
-		Where("id = ?", jobID).
+		Where("id = ? AND status = ? AND job_type = ?", jobID, "running", "process_document").
 		Updates(map[string]any{
 			"status":        "pending",
 			"retry_count":   retryCount,
@@ -592,10 +882,6 @@ func (r *DocumentRepository) RetryJob(ctx context.Context, jobID uuid.UUID, retr
 			"locked_at":     retryAt,
 			"updated_at":    time.Now(),
 		}).Error
-}
-
-func clauseLockingUpdateSkipLocked() clause.Expression {
-	return clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}
 }
 
 func isTerminalDocumentStatus(status string) bool {

@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '../../api/client';
 import {
@@ -15,7 +15,8 @@ import {
   listKnowledgeBaseCategories,
   listKnowledgeBases,
   regenerateChatMessage,
-  sendChatMessage,
+  setChatMessageFeedback,
+  sendChatMessageStream as sendChatMessage,
   updateChatSessionTitle,
 } from '../../api/resources';
 import { renderWithRouter } from '../../test/render';
@@ -26,6 +27,7 @@ vi.mock('../../api/resources', () => ({
   archiveChatSession: vi.fn(),
   createChatSession: vi.fn(),
   deleteChatSession: vi.fn(),
+  exportChatSession: vi.fn(),
   getChatSession: vi.fn(),
   getWorkspacePreference: vi.fn(),
   listChatMessages: vi.fn(),
@@ -34,9 +36,11 @@ vi.mock('../../api/resources', () => ({
   listKnowledgeBases: vi.fn(),
   logout: vi.fn(),
   regenerateChatMessage: vi.fn(),
-  sendChatMessage: vi.fn(),
+  setChatMessageFeedback: vi.fn(),
+  sendChatMessageStream: vi.fn(),
   updateChatSessionTitle: vi.fn(),
 }));
+vi.mock('../../utils/download', () => ({ downloadBlob: vi.fn() }));
 
 const knowledgeBase = {
   id: 'kb1',
@@ -152,7 +156,12 @@ beforeEach(() => {
   vi.mocked(createChatSession).mockReset();
   vi.mocked(deleteChatSession).mockReset();
   vi.mocked(regenerateChatMessage).mockReset();
+  vi.mocked(setChatMessageFeedback).mockReset();
   vi.mocked(updateChatSessionTitle).mockReset();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 function LocationProbe() {
@@ -175,6 +184,41 @@ function ChatRouteControls() {
   );
 }
 
+async function findSessionTitle(title: string) {
+  return screen.findByText(title, { selector: '.ui-inline-edit__text' });
+}
+
+async function startSessionTitleEdit(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole('button', { name: '重命名会话' }));
+  return screen.getByRole('textbox', { name: '重命名会话' });
+}
+
+async function openSessionActions(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole('button', { name: '会话操作' }));
+  return screen.getByRole('menu', { name: '会话操作' });
+}
+
+async function clickSessionAction(user: ReturnType<typeof userEvent.setup>, action: string) {
+  const menu = await openSessionActions(user);
+  await user.click(within(menu).getByRole('menuitem', { name: action }));
+}
+
+async function finishAutomaticSendChecks() {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5_000);
+  });
+  vi.useRealTimers();
+}
+
+async function submitWithAutomaticChecksPaused() {
+  vi.useFakeTimers();
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 describe('ChatPage', () => {
   it('does not load knowledge-base category workspace data', async () => {
     renderWithRouter(
@@ -183,7 +227,7 @@ describe('ChatPage', () => {
       </Routes>,
       ['/chat/s1'],
     );
-    await screen.findByRole('heading', { name: '制度问答' });
+    await findSessionTitle('制度问答');
 
     expect(listKnowledgeBaseCategories).not.toHaveBeenCalled();
     expect(getWorkspacePreference).not.toHaveBeenCalled();
@@ -201,14 +245,12 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('消息加载失败');
-    expect(screen.queryByText('开始提问')).not.toBeInTheDocument();
-    expect(within(screen.getByLabelText('会话统计')).getByText('-- 问')).toBeInTheDocument();
-    expect(within(screen.getByLabelText('会话统计')).getByText('-- 引用')).toBeInTheDocument();
-    expect(within(screen.getByLabelText('引用来源')).getByText('消息加载失败，引用暂不可用。')).toBeInTheDocument();
+    const errorText = await screen.findByText('消息加载失败');
+    const status = errorText.closest('[role="status"]');
+    expect(status).not.toBeNull();
+    expect(screen.queryByText('选择一个知识库开始提问')).not.toBeInTheDocument();
     expect(screen.queryByText('当前知识库中未找到足够依据。')).not.toBeInTheDocument();
-    await user.click(within(alert).getByRole('button', { name: '重试消息' }));
+    await user.click(within(status!).getByRole('button', { name: '重试' }));
 
     await waitFor(() => expect(listChatMessages).toHaveBeenCalledTimes(2));
     expect(await screen.findByText('新回答')).toBeInTheDocument();
@@ -231,9 +273,11 @@ describe('ChatPage', () => {
     expect(alert).toHaveTextContent('会话列表加载失败');
     expect(screen.queryByText('当前知识库暂无会话。')).not.toBeInTheDocument();
 
-    await user.click(within(alert).getByRole('button', { name: '重试会话列表' }));
-    await waitFor(() => expect(listChatSessions).toHaveBeenCalledTimes(2));
-    expect(listKnowledgeBases).toHaveBeenCalledTimes(1);
+    const sessionCallsBeforeRetry = vi.mocked(listChatSessions).mock.calls.length;
+    const knowledgeBaseCallsBeforeRetry = vi.mocked(listKnowledgeBases).mock.calls.length;
+    await user.click(within(alert).getByRole('button', { name: '重试' }));
+    await waitFor(() => expect(vi.mocked(listChatSessions).mock.calls.length).toBeGreaterThan(sessionCallsBeforeRetry));
+    expect(listKnowledgeBases).toHaveBeenCalledTimes(knowledgeBaseCallsBeforeRetry);
     expect(await screen.findByRole('link', { name: /制度问答/ })).toBeInTheDocument();
   });
 
@@ -253,9 +297,13 @@ describe('ChatPage', () => {
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('知识库列表加载失败');
 
-    await user.click(within(alert).getByRole('button', { name: '重试知识库列表' }));
+    await waitFor(() => expect(listChatSessions).toHaveBeenLastCalledWith(expect.objectContaining({
+      knowledgeBaseId: knowledgeBase.id,
+    })));
+    const sessionCallsBeforeRetry = vi.mocked(listChatSessions).mock.calls.length;
+    await user.click(within(alert).getByRole('button', { name: '重试' }));
     await waitFor(() => expect(listKnowledgeBases).toHaveBeenCalledTimes(2));
-    expect(listChatSessions).toHaveBeenCalledTimes(1);
+    expect(listChatSessions).toHaveBeenCalledTimes(sessionCallsBeforeRetry);
     expect(await screen.findByLabelText('当前知识库')).toHaveValue(knowledgeBase.id);
   });
 
@@ -274,7 +322,7 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    const input = await screen.findByRole('textbox', { name: '输入问题' });
     await user.type(input, '离开前的问题');
     await user.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() => expect(sendChatMessage).toHaveBeenCalledOnce());
@@ -288,7 +336,7 @@ describe('ChatPage', () => {
     expect(listChatMessages).toHaveBeenCalledTimes(1);
   });
 
-  it('does not merge a late title response after switching sessions', async () => {
+  it('does not let a late title response replace the session selected afterward', async () => {
     const titleResult = deferred<ChatSession>();
     const sameKnowledgeBaseSecondSession = {
       ...secondSession,
@@ -311,22 +359,22 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    const titleInput = await screen.findByRole('textbox', { name: '会话标题' });
-    await waitFor(() => expect(titleInput).toBeEnabled());
+    const titleInput = await startSessionTitleEdit(user);
     await user.clear(titleInput);
     await user.type(titleInput, '迟到标题');
-    await user.click(screen.getByRole('button', { name: '改名' }));
+    await user.click(screen.getByRole('button', { name: '保存' }));
     await user.click(screen.getByRole('button', { name: '强制切换产品会话' }));
-    await screen.findByRole('heading', { name: '产品问答' });
+    await findSessionTitle('产品问答');
 
     titleResult.resolve({ ...session, title: '迟到标题' });
     await act(async () => {
       await Promise.resolve();
     });
-    expect(screen.queryByRole('link', { name: /迟到标题/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /迟到标题/ })).toBeInTheDocument();
+    expect(screen.getByText('产品问答', { selector: '.ui-inline-edit__text' })).toBeInTheDocument();
   });
 
-  it('announces each chat loading operation once with a distinct name', async () => {
+  it('announces the primary message loading state once without duplicating the rail skeleton', async () => {
     vi.mocked(listChatSessions).mockReturnValue(deferred<Awaited<ReturnType<typeof listChatSessions>>>().promise);
     vi.mocked(listChatMessages).mockReturnValue(deferred<Awaited<ReturnType<typeof listChatMessages>>>().promise);
     renderWithRouter(
@@ -336,10 +384,9 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    await waitFor(() => expect(screen.getByRole('status', { name: '正在加载会话' })).toBeInTheDocument());
-    expect(screen.getAllByRole('status', { name: '正在加载会话' })).toHaveLength(1);
-    expect(screen.getAllByRole('status', { name: '正在加载消息' })).toHaveLength(1);
-    expect(screen.queryByRole('status', { name: '正在加载' })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('status', { name: '正在加载' })).toBeInTheDocument());
+    expect(screen.getAllByRole('status', { name: '正在加载' })).toHaveLength(1);
+    expect(screen.queryByRole('status', { name: '正在加载会话' })).not.toBeInTheDocument();
   });
 
   it('exposes exactly one current session to assistive technology', async () => {
@@ -371,8 +418,8 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    await screen.findByRole('heading', { name: '制度问答' });
-    await user.click(screen.getByRole('button', { name: '归档' }));
+    await findSessionTitle('制度问答');
+    await clickSessionAction(user, '归档会话');
     const dialog = screen.getByRole('dialog', { name: '归档会话' });
     await user.click(within(dialog).getByRole('button', { name: '归档' }));
 
@@ -397,13 +444,17 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    await screen.findByRole('heading', { name: '制度问答' });
-    await user.click(screen.getByRole('button', { name: '归档' }));
+    await findSessionTitle('制度问答');
+    await waitFor(() => expect(listChatSessions).toHaveBeenLastCalledWith(expect.objectContaining({
+      knowledgeBaseId: knowledgeBase.id,
+    })));
+    const sessionCallsBeforeArchive = vi.mocked(listChatSessions).mock.calls.length;
+    await clickSessionAction(user, '归档会话');
     await user.click(within(screen.getByRole('dialog', { name: '归档会话' })).getByRole('button', { name: '归档' }));
 
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '归档会话' })).not.toBeInTheDocument());
-    expect(screen.getByText(/已归档于/)).toBeInTheDocument();
-    expect(listChatSessions).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/已归档/, { selector: '.ui-badge' })).toBeInTheDocument();
+    expect(listChatSessions).toHaveBeenCalledTimes(sessionCallsBeforeArchive);
   });
 
   it('does not let a pre-archive session-list response reinsert the archived session', async () => {
@@ -421,8 +472,8 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    await screen.findByRole('heading', { name: '制度问答' });
-    await user.click(screen.getByRole('button', { name: '归档' }));
+    await findSessionTitle('制度问答');
+    await clickSessionAction(user, '归档会话');
     await user.click(within(screen.getByRole('dialog', { name: '归档会话' })).getByRole('button', { name: '归档' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '归档会话' })).not.toBeInTheDocument());
 
@@ -453,17 +504,17 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    await screen.findByRole('heading', { name: '制度问答' });
-    await user.click(screen.getByRole('button', { name: '归档' }));
+    await findSessionTitle('制度问答');
+    await clickSessionAction(user, '归档会话');
     await user.click(within(screen.getByRole('dialog', { name: '归档会话' })).getByRole('button', { name: '归档' }));
     fireEvent.click(screen.getByText('强制切换产品会话'));
-    await screen.findByRole('heading', { name: '产品问答' });
+    await findSessionTitle('产品问答');
 
     archiveResult.resolve({ ...session, archivedAt: '2026-07-01T01:00:00Z' });
 
     await waitFor(() => expect(archiveChatSession).toHaveBeenCalledWith(session.id));
-    await waitFor(() => expect(screen.getByRole('button', { name: '删除' })).toBeEnabled());
-    expect(screen.getByRole('heading', { name: '产品问答' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: '会话操作' })).toBeEnabled());
+    expect(screen.getByText('产品问答', { selector: '.ui-inline-edit__text' })).toBeInTheDocument();
   });
 
   it('does not navigate away when a deleted session is no longer active', async () => {
@@ -487,16 +538,17 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    await screen.findByRole('heading', { name: '制度问答' });
-    await user.click(screen.getByRole('button', { name: '删除' }));
+    await findSessionTitle('制度问答');
+    await clickSessionAction(user, '删除会话');
     await user.click(within(screen.getByRole('dialog', { name: '删除会话' })).getByRole('button', { name: '删除' }));
     fireEvent.click(screen.getByText('强制切换产品会话'));
-    await screen.findByRole('heading', { name: '产品问答' });
+    await findSessionTitle('产品问答');
+    const sessionCallsBeforeDeleteResolution = vi.mocked(listChatSessions).mock.calls.length;
 
     deleteResult.resolve();
 
     await waitFor(() => expect(deleteChatSession).toHaveBeenCalledWith(session.id));
-    expect(listChatSessions).toHaveBeenCalledTimes(1);
+    expect(listChatSessions).toHaveBeenCalledTimes(sessionCallsBeforeDeleteResolution);
     expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat/s2');
   });
 
@@ -512,8 +564,8 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    await screen.findByRole('heading', { name: '制度问答' });
-    await user.click(screen.getByRole('button', { name: '删除' }));
+    await findSessionTitle('制度问答');
+    await clickSessionAction(user, '删除会话');
     const dialog = screen.getByRole('dialog', { name: '删除会话' });
     await user.click(within(dialog).getByRole('button', { name: '删除' }));
 
@@ -539,12 +591,16 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    await screen.findByRole('heading', { name: '制度问答' });
-    await user.click(screen.getByRole('button', { name: '删除' }));
+    await findSessionTitle('制度问答');
+    await waitFor(() => expect(listChatSessions).toHaveBeenLastCalledWith(expect.objectContaining({
+      knowledgeBaseId: knowledgeBase.id,
+    })));
+    const sessionCallsBeforeDelete = vi.mocked(listChatSessions).mock.calls.length;
+    await clickSessionAction(user, '删除会话');
     await user.click(within(screen.getByRole('dialog', { name: '删除会话' })).getByRole('button', { name: '删除' }));
 
     await waitFor(() => expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat'));
-    expect(listChatSessions).toHaveBeenCalledTimes(1);
+    expect(listChatSessions).toHaveBeenCalledTimes(sessionCallsBeforeDelete);
   });
 
   it('lets the user inspect citations from any historical assistant answer', async () => {
@@ -558,15 +614,22 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    expect(await screen.findByText(/新制度\.pdf/)).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '查看回答“旧回答”的引用' }));
+    const newAnswer = (await screen.findByText('新回答')).closest('article');
+    const oldAnswer = screen.getByText('旧回答').closest('article');
+    expect(newAnswer).not.toBeNull();
+    expect(oldAnswer).not.toBeNull();
 
-    expect(screen.getByText(/旧制度\.pdf/)).toBeInTheDocument();
-    expect(screen.queryByText(/新制度\.pdf/)).not.toBeInTheDocument();
+    await user.click(within(oldAnswer!).getByRole('button', { name: '1 条来源' }));
+    expect(within(oldAnswer!).getByText('旧制度.pdf')).toBeInTheDocument();
+    expect(within(newAnswer!).queryByText('新制度.pdf')).not.toBeInTheDocument();
+
+    await user.click(within(newAnswer!).getByRole('button', { name: '1 条来源' }));
+    expect(within(newAnswer!).getByText('新制度.pdf')).toBeInTheDocument();
   });
 
   it('links each citation to its exact document and chunk', async () => {
     vi.mocked(listChatMessages).mockResolvedValue({ items: historicalAnswers });
+    const user = userEvent.setup();
 
     renderWithRouter(
       <Routes>
@@ -575,7 +638,10 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    expect(await screen.findByRole('link', { name: '打开来源：新制度.pdf，第 5 页' })).toHaveAttribute(
+    const answer = (await screen.findByText('新回答')).closest('article');
+    await user.click(within(answer!).getByRole('button', { name: '1 条来源' }));
+
+    expect(await screen.findByRole('link', { name: '打开来源：新制度.pdf，p.5' })).toHaveAttribute(
       'href',
       '/knowledge-bases/kb1/documents?documentId=doc-new&chunkId=chunk-new',
     );
@@ -605,7 +671,7 @@ describe('ChatPage', () => {
     await user.click(sourceControl);
 
     expect(screen.getByRole('article', { name: '来源 1：新制度.pdf' })).toHaveAttribute('aria-current', 'true');
-    expect(screen.getByRole('status')).toHaveTextContent('已定位到来源 1：新制度.pdf');
+    expect(screen.getByRole('button', { name: '1 条来源' })).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('renders a grouped source marker as separate validated source controls', async () => {
@@ -667,6 +733,7 @@ describe('ChatPage', () => {
         }],
       }],
     });
+    const user = userEvent.setup();
 
     renderWithRouter(
       <Routes>
@@ -675,9 +742,11 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
+    const answer = (await screen.findByText('新回答')).closest('article');
+    await user.click(within(answer!).getByRole('button', { name: '1 条来源' }));
     const sourceCard = await screen.findByRole('article', { name: '来源 1：新制度.pdf' });
-    expect(within(sourceCard).getByText(/\.\.\.$/)).toBeInTheDocument();
-    expect(within(sourceCard).getByText('查看完整摘录').closest('details')).not.toHaveAttribute('open');
+    expect(within(sourceCard).getByText(/…$/)).toBeInTheDocument();
+    expect(within(sourceCard).getByText('完整摘录').closest('details')).not.toHaveAttribute('open');
     expect(within(sourceCard).getByText('检索详情').closest('details')).not.toHaveAttribute('open');
     expect(within(sourceCard).getByText(/精排相关度 无精排分/)).toBeInTheDocument();
   });
@@ -685,7 +754,7 @@ describe('ChatPage', () => {
   it('keeps regeneration failures beside the affected answer and allows retrying', async () => {
     vi.mocked(listChatMessages).mockResolvedValue({ items: historicalAnswers });
     vi.mocked(regenerateChatMessage)
-      .mockRejectedValueOnce(new ApiError(500, {
+      .mockRejectedValueOnce(new ApiError(400, {
         code: 'CHAT_COMPLETION_FAILED',
         message: 'chat completion failed',
       }))
@@ -701,16 +770,16 @@ describe('ChatPage', () => {
 
     const answer = (await screen.findByText('新回答')).closest('article');
     expect(answer).not.toBeNull();
-    await user.click(within(answer!).getByRole('button', { name: '重新生成回答' }));
+    await user.click(within(answer!).getByRole('button', { name: '重新生成' }));
 
     const recovery = await within(answer!).findByRole('alert');
     expect(within(recovery).getByText('重新生成失败')).toBeInTheDocument();
     expect(within(recovery).getByText('回答生成失败，请稍后重试。')).toBeInTheDocument();
-    expect(within(answer!).getByRole('button', { name: '重试重新生成' })).toBeInTheDocument();
-    expect(within(answer!).queryByRole('button', { name: '重新生成回答' })).not.toBeInTheDocument();
+    expect(within(answer!).getByRole('button', { name: '重试' })).toBeInTheDocument();
+    expect(within(answer!).queryByRole('button', { name: '重新生成' })).not.toBeInTheDocument();
     expect(screen.getAllByRole('alert')).toHaveLength(1);
 
-    await user.click(within(answer!).getByRole('button', { name: '重试重新生成' }));
+    await user.click(within(answer!).getByRole('button', { name: '重试' }));
     await waitFor(() => expect(regenerateChatMessage).toHaveBeenCalledTimes(2));
   });
 
@@ -734,16 +803,16 @@ describe('ChatPage', () => {
     );
 
     const answer = (await screen.findByText('新回答')).closest('article');
-    await user.click(within(answer!).getByRole('button', { name: '重新生成回答' }));
+    await user.click(within(answer!).getByRole('button', { name: '重新生成' }));
 
-    const recovery = await within(answer!).findByRole('alert');
-    expect(within(recovery).getByText('重新生成结果待确认')).toBeInTheDocument();
-    expect(within(answer!).getByRole('button', { name: '再次检查' })).toBeInTheDocument();
-    expect(within(answer!).queryByRole('button', { name: '重试重新生成' })).not.toBeInTheDocument();
-    expect(within(answer!).queryByRole('button', { name: '重新生成回答' })).not.toBeInTheDocument();
+    const recovery = await within(answer!).findByRole('status');
+    expect(within(recovery).getByText('正在确认重新生成结果…')).toBeInTheDocument();
+    expect(within(answer!).getByRole('button', { name: '再检查一次' })).toBeInTheDocument();
+    expect(within(answer!).queryByRole('button', { name: '重试' })).not.toBeInTheDocument();
+    expect(within(answer!).queryByRole('button', { name: '重新生成' })).not.toBeInTheDocument();
     expect(window.localStorage.getItem('rag.chat.pending-regeneration:s1')).not.toBeNull();
 
-    await user.click(within(answer!).getByRole('button', { name: '再次检查' }));
+    await user.click(within(answer!).getByRole('button', { name: '再检查一次' }));
 
     expect(await screen.findByText('网络中断前已经生成的回答')).toBeInTheDocument();
     expect(regenerateChatMessage).toHaveBeenCalledTimes(1);
@@ -773,8 +842,8 @@ describe('ChatPage', () => {
     );
 
     const answer = (await screen.findByText('新回答')).closest('article');
-    await user.click(within(answer!).getByRole('button', { name: '重新生成回答' }));
-    await user.click(await within(answer!).findByRole('button', { name: '再次检查' }));
+    await user.click(within(answer!).getByRole('button', { name: '重新生成' }));
+    await user.click(await within(answer!).findByRole('button', { name: '再检查一次' }));
 
     expect(await within(answer!).findByRole('button', { name: '确认重新生成' })).toBeInTheDocument();
     expect(regenerateChatMessage).toHaveBeenCalledTimes(1);
@@ -802,7 +871,7 @@ describe('ChatPage', () => {
     );
 
     const answer = (await screen.findByText('新回答')).closest('article');
-    await user.click(within(answer!).getByRole('button', { name: '重新生成回答' }));
+    await user.click(within(answer!).getByRole('button', { name: '重新生成' }));
 
     expect(window.localStorage.getItem('rag.chat.pending-regeneration:s1')).not.toBeNull();
     view.unmount();
@@ -832,10 +901,10 @@ describe('ChatPage', () => {
       );
 
       const answer = (await screen.findByText('新回答')).closest('article');
-      await user.click(within(answer!).getByRole('button', { name: '重新生成回答' }));
+      await user.click(within(answer!).getByRole('button', { name: '重新生成' }));
 
       expect(regenerateChatMessage).not.toHaveBeenCalled();
-      expect(await within(answer!).findByText('无法安全发起重新生成，请检查浏览器存储设置后重试。')).toBeInTheDocument();
+      expect(await within(answer!).findByText('浏览器存储不可用，无法安全地重新生成。请检查隐私设置后重试。')).toBeInTheDocument();
     } finally {
       setItem.mockRestore();
     }
@@ -863,7 +932,7 @@ describe('ChatPage', () => {
 
     const answer = (await screen.findByText('新回答')).closest('article');
     const confirmRegeneration = await within(answer!).findByRole('button', { name: '确认重新生成' });
-    await user.click(screen.getByRole('button', { name: '归档' }));
+    await clickSessionAction(user, '归档会话');
     const archiveDialog = screen.getByRole('dialog', { name: '归档会话' });
     act(() => {
       fireEvent.click(within(archiveDialog).getByRole('button', { name: '归档' }));
@@ -900,7 +969,7 @@ describe('ChatPage', () => {
     );
 
     const answer = (await screen.findByText('新回答')).closest('article');
-    expect(await within(answer!).findByText('重新生成结果待确认')).toBeInTheDocument();
+    expect(await within(answer!).findByText('没有找到新的回答')).toBeInTheDocument();
     expect(within(answer!).queryByRole('button', { name: '确认重新生成' })).not.toBeInTheDocument();
     expect(window.localStorage.getItem('rag.chat.pending-regeneration:s1')).not.toBeNull();
   });
@@ -922,9 +991,9 @@ describe('ChatPage', () => {
     );
 
     const answer = (await screen.findByText('新回答')).closest('article');
-    expect(await within(answer!).findByText('重新生成结果待确认')).toBeInTheDocument();
-    expect(within(answer!).getByRole('button', { name: '再次检查' })).toBeInTheDocument();
-    expect(within(answer!).queryByRole('button', { name: '重新生成回答' })).not.toBeInTheDocument();
+    expect(await within(answer!).findByText('正在确认重新生成结果…')).toBeInTheDocument();
+    expect(within(answer!).getByRole('button', { name: '再检查一次' })).toBeInTheDocument();
+    expect(within(answer!).queryByRole('button', { name: '重新生成' })).not.toBeInTheDocument();
   });
 
   it('clears a persisted regeneration check when the new answer is already present', async () => {
@@ -954,7 +1023,7 @@ describe('ChatPage', () => {
     await waitFor(() => {
       expect(window.localStorage.getItem('rag.chat.pending-regeneration:s1')).toBeNull();
     });
-    expect(screen.queryByText('重新生成结果待确认')).not.toBeInTheDocument();
+    expect(screen.queryByText('正在确认重新生成结果…')).not.toBeInTheDocument();
   });
 
   it('uses a successful regeneration response without requiring a message-list refresh', async () => {
@@ -978,12 +1047,12 @@ describe('ChatPage', () => {
     );
 
     const answer = (await screen.findByText('新回答')).closest('article');
-    await user.click(within(answer!).getByRole('button', { name: '重新生成回答' }));
+    await user.click(within(answer!).getByRole('button', { name: '重新生成' }));
 
     expect(await screen.findByText('重新生成后的回答')).toBeInTheDocument();
     expect(listChatMessages).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '重试重新生成' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '重试' })).not.toBeInTheDocument();
   });
 
   it('disables session mutations while the routed session detail is loading', async () => {
@@ -996,19 +1065,21 @@ describe('ChatPage', () => {
     const user = userEvent.setup();
 
     renderWithRouter(
-      <Routes>
-        <Route path="/chat/:sessionId" element={<ChatPage />} />
-      </Routes>,
+      <>
+        <Routes>
+          <Route path="/chat/:sessionId" element={<ChatPage />} />
+        </Routes>
+        <ChatRouteControls />
+      </>,
       ['/chat/s1'],
     );
 
-    await screen.findByRole('heading', { name: '制度问答' });
-    await user.selectOptions(screen.getByLabelText('当前知识库'), secondKnowledgeBase.id);
+    await findSessionTitle('制度问答');
+    await user.click(screen.getByRole('button', { name: '强制切换产品会话' }));
 
-    expect(screen.getByRole('textbox', { name: '会话标题' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '改名' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '归档' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '删除' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: '输入问题' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '重命名会话' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '会话操作' })).toBeDisabled();
   });
 
   it('closes a destructive confirmation when switching sessions', async () => {
@@ -1027,8 +1098,8 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    await screen.findByRole('heading', { name: '制度问答' });
-    await user.click(screen.getByRole('button', { name: '删除' }));
+    await findSessionTitle('制度问答');
+    await clickSessionAction(user, '删除会话');
     expect(screen.getByRole('dialog', { name: '删除会话' })).toHaveTextContent('制度问答');
 
     await user.selectOptions(screen.getByLabelText('当前知识库'), secondKnowledgeBase.id);
@@ -1050,17 +1121,22 @@ describe('ChatPage', () => {
     const user = userEvent.setup();
 
     renderWithRouter(
-      <Routes>
-        <Route path="/chat/:sessionId" element={<ChatPage />} />
-      </Routes>,
+      <>
+        <Routes>
+          <Route path="/chat/:sessionId" element={<ChatPage />} />
+        </Routes>
+        <ChatRouteControls />
+      </>,
       ['/chat/s1'],
     );
 
-    expect(await screen.findByText(/新制度\.pdf/)).toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText('当前知识库'), secondKnowledgeBase.id);
+    const answer = (await screen.findByText('新回答')).closest('article');
+    await user.click(within(answer!).getByRole('button', { name: '1 条来源' }));
+    expect(within(answer!).getByText('新制度.pdf')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '强制切换产品会话' }));
 
-    expect(screen.queryByText(/新制度\.pdf/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/旧制度\.pdf/)).not.toBeInTheDocument();
+    expect(screen.queryByText('新制度.pdf')).not.toBeInTheDocument();
+    expect(screen.queryByText('旧制度.pdf')).not.toBeInTheDocument();
   });
 
   it('locks chat navigation while a message is being sent', async () => {
@@ -1087,10 +1163,10 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    const input = await screen.findByRole('textbox', { name: '输入问题' });
     await user.type(input, '制度会话问题');
     await user.click(screen.getByRole('button', { name: '发送' }));
-    expect(await screen.findAllByText('制度会话问题')).toHaveLength(2);
+    expect(await screen.findAllByText('制度会话问题')).toHaveLength(1);
 
     expect(screen.getByLabelText('当前知识库')).toBeDisabled();
     screen.getAllByRole('button', { name: '新建对话' }).forEach((button) => {
@@ -1118,10 +1194,11 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    const composer = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    const composer = await screen.findByRole('textbox', { name: '输入问题' });
     await user.type(composer, '不要和删除并发');
     const composerForm = composer.closest('form');
-    const deleteButton = screen.getByRole('button', { name: '删除' });
+    const sessionMenu = await openSessionActions(user);
+    const deleteButton = within(sessionMenu).getByRole('menuitem', { name: '删除会话' });
     expect(composerForm).not.toBeNull();
     await act(async () => {
       composerForm!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
@@ -1130,9 +1207,8 @@ describe('ChatPage', () => {
 
     expect(sendChatMessage).toHaveBeenCalledOnce();
     expect(screen.queryByRole('dialog', { name: '删除会话' })).not.toBeInTheDocument();
-    expect(screen.getByRole('textbox', { name: '会话标题' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '归档' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '删除' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '重命名会话' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '会话操作' })).toBeDisabled();
 
     await act(async () => {
       sendResult.resolve({ answer: '回答', citations: [], rerankFallback: null });
@@ -1151,9 +1227,8 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    const titleInput = await screen.findByRole('textbox', { name: '会话标题' });
-    const composer = screen.getByRole('textbox', { name: '继续追问当前知识库' });
-    await waitFor(() => expect(titleInput).toBeEnabled());
+    const titleInput = await startSessionTitleEdit(user);
+    const composer = screen.getByRole('textbox', { name: '输入问题' });
     await user.clear(titleInput);
     await user.type(titleInput, '新标题');
     await user.type(composer, '不要和改名并发');
@@ -1194,11 +1269,10 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    const titleInput = await screen.findByRole('textbox', { name: '会话标题' });
-    await waitFor(() => expect(titleInput).toBeEnabled());
+    const titleInput = await startSessionTitleEdit(user);
     await user.clear(titleInput);
     await user.type(titleInput, '保存中的标题');
-    await user.click(screen.getByRole('button', { name: '改名' }));
+    await user.click(screen.getByRole('button', { name: '保存' }));
 
     const otherSession = screen.getByRole('link', { name: /产品问答/ });
     expect(otherSession).toHaveAttribute('aria-disabled', 'true');
@@ -1221,6 +1295,8 @@ describe('ChatPage', () => {
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
     vi.mocked(listChatMessages)
       .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({ items: [] })
       .mockReturnValueOnce(checkResult.promise);
     vi.mocked(sendChatMessage).mockRejectedValueOnce(new Error('network disconnected'));
     const user = userEvent.setup();
@@ -1232,18 +1308,21 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    const composer = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    const composer = await screen.findByRole('textbox', { name: '输入问题' });
     await user.type(composer, '检查期间保持互斥');
-    await user.click(screen.getByRole('button', { name: '发送' }));
-    const checkButton = await screen.findByRole('button', { name: '再次检查' });
-    const deleteButton = screen.getByRole('button', { name: '删除' });
+    await submitWithAutomaticChecksPaused();
+    expect(screen.getByText('正在确认这条消息…')).toBeInTheDocument();
+    await finishAutomaticSendChecks();
+    const checkButton = screen.getByRole('button', { name: '再检查一次' });
+    const sessionActions = await openSessionActions(user);
+    const deleteAction = within(sessionActions).getByRole('menuitem', { name: '删除会话' });
     act(() => {
       fireEvent.click(checkButton);
-      fireEvent.click(deleteButton);
+      fireEvent.click(deleteAction);
     });
 
     expect(screen.queryByRole('dialog', { name: '删除会话' })).not.toBeInTheDocument();
-    expect(screen.getByRole('textbox', { name: '会话标题' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '重命名会话' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('当前知识库')).toBeDisabled();
     const otherSession = screen.getByRole('link', { name: /产品问答/ });
     expect(otherSession).toHaveAttribute('aria-disabled', 'true');
@@ -1270,17 +1349,18 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    const input = await screen.findByRole('textbox', { name: '输入问题' });
     await user.type(input, '制度库未知结果');
-    await user.click(screen.getByRole('button', { name: '发送' }));
-    await screen.findByRole('button', { name: '再次检查' });
+    await submitWithAutomaticChecksPaused();
+    expect(screen.getByText('正在确认这条消息…')).toBeInTheDocument();
+    vi.useRealTimers();
 
-    await user.selectOptions(screen.getByLabelText('当前知识库'), secondKnowledgeBase.id);
-    await screen.findByRole('heading', { name: '产品问答' });
-    const nextInput = screen.getByRole('textbox', { name: '继续追问当前知识库' });
+    await user.click(screen.getByRole('link', { name: /产品问答/ }));
+    await findSessionTitle('产品问答');
+    const nextInput = screen.getByRole('textbox', { name: '输入问题' });
     await user.type(nextInput, '产品库新问题');
 
-    expect(screen.queryByRole('button', { name: '再次检查' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '再检查一次' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '确认重新发送' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '发送' })).toBeEnabled();
   });
@@ -1288,12 +1368,12 @@ describe('ChatPage', () => {
   it('labels a draft as a new conversation', async () => {
     renderWithRouter(
       <Routes>
-        <Route path="/chat/new" element={<ChatPage draftSession />} />
+        <Route path="/chat" element={<ChatPage />} />
       </Routes>,
-      ['/chat/new?knowledgeBaseId=kb1'],
+      ['/chat?knowledgeBaseId=kb1'],
     );
 
-    expect(await screen.findByRole('heading', { name: '新建对话' })).toBeInTheDocument();
+    expect(await screen.findByText('新对话', { selector: '.chat-main__title-text' })).toBeInTheDocument();
   });
 
   it('opens a draft when creating another conversation from the chat page', async () => {
@@ -1301,6 +1381,7 @@ describe('ChatPage', () => {
     renderWithRouter(
       <>
         <Routes>
+          <Route path="/chat" element={<ChatPage />} />
           <Route path="/chat/:sessionId" element={<ChatPage />} />
         </Routes>
         <LocationProbe />
@@ -1311,7 +1392,7 @@ describe('ChatPage', () => {
     await user.click(await screen.findByRole('button', { name: '新建对话' }));
 
     expect(createChatSession).not.toHaveBeenCalled();
-    expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat/new?knowledgeBaseId=kb1');
+    expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat?knowledgeBaseId=kb1');
   });
 
   it('opens a draft when switching to a knowledge base without sessions', async () => {
@@ -1320,6 +1401,7 @@ describe('ChatPage', () => {
     renderWithRouter(
       <>
         <Routes>
+          <Route path="/chat" element={<ChatPage />} />
           <Route path="/chat/:sessionId" element={<ChatPage />} />
         </Routes>
         <LocationProbe />
@@ -1330,7 +1412,7 @@ describe('ChatPage', () => {
     await user.selectOptions(await screen.findByLabelText('当前知识库'), 'kb2');
 
     expect(createChatSession).not.toHaveBeenCalled();
-    expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat/new?knowledgeBaseId=kb2');
+    expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat?knowledgeBaseId=kb2');
   });
 
   it('keeps the typed draft when switching to a knowledge base with existing sessions', async () => {
@@ -1341,20 +1423,20 @@ describe('ChatPage', () => {
     renderWithRouter(
       <>
         <Routes>
-          <Route path="/chat/new" element={<ChatPage draftSession />} />
+          <Route path="/chat" element={<ChatPage />} />
           <Route path="/chat/:sessionId" element={<ChatPage />} />
         </Routes>
         <LocationProbe />
       </>,
-      ['/chat/new?knowledgeBaseId=kb1'],
+      ['/chat?knowledgeBaseId=kb1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    const input = await screen.findByRole('textbox', { name: '输入问题' });
     await user.type(input, '请对比两份制度');
     await user.selectOptions(await screen.findByLabelText('当前知识库'), secondKnowledgeBase.id);
 
-    expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat/new?knowledgeBaseId=kb2');
-    expect(screen.getByRole('textbox', { name: '继续追问当前知识库' })).toHaveValue('请对比两份制度');
+    expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat?knowledgeBaseId=kb2');
+    expect(screen.getByRole('textbox', { name: '输入问题' })).toHaveValue('请对比两份制度');
     expect(createChatSession).not.toHaveBeenCalled();
     expect(listChatMessages).not.toHaveBeenCalled();
   });
@@ -1366,12 +1448,13 @@ describe('ChatPage', () => {
 
     renderWithRouter(
       <Routes>
+        <Route path="/chat" element={<ChatPage />} />
         <Route path="/chat/:sessionId" element={<ChatPage />} />
       </Routes>,
-      ['/chat/new?knowledgeBaseId=kb1'],
+      ['/chat?knowledgeBaseId=kb1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    const input = await screen.findByRole('textbox', { name: '输入问题' });
     expect(createChatSession).not.toHaveBeenCalled();
 
     await user.type(input, '第一次提问');
@@ -1381,23 +1464,23 @@ describe('ChatPage', () => {
     expect(sendChatMessage).toHaveBeenCalledWith('s1', expect.objectContaining({
       content: '第一次提问',
       clientRequestId: expect.any(String),
-    }));
+    }), expect.any(Object));
   });
 
-  it('supports the explicit static draft route used by the application router', async () => {
+  it('supports the static draft route used by the application router', async () => {
     vi.mocked(createChatSession).mockResolvedValue(session);
     vi.mocked(sendChatMessage).mockResolvedValue({ answer: '回答', citations: [], rerankFallback: null });
     const user = userEvent.setup();
 
     renderWithRouter(
       <Routes>
-        <Route path="/chat/new" element={<ChatPage draftSession />} />
-        <Route path="/chat/:sessionId" element={<div>已有会话</div>} />
+        <Route path="/chat" element={<ChatPage />} />
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
       </Routes>,
-      ['/chat/new?knowledgeBaseId=kb1'],
+      ['/chat?knowledgeBaseId=kb1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    const input = await screen.findByRole('textbox', { name: '输入问题' });
     expect(input).toBeEnabled();
     await user.type(input, '静态路由首问');
     await user.click(screen.getByRole('button', { name: '发送' }));
@@ -1406,21 +1489,20 @@ describe('ChatPage', () => {
     expect(sendChatMessage).toHaveBeenCalledWith('s1', expect.objectContaining({
       content: '静态路由首问',
       clientRequestId: expect.any(String),
-    }));
+    }), expect.any(Object));
   });
 
   it('keeps draft sessions focused on asking instead of disabled session management', async () => {
     renderWithRouter(
       <Routes>
-        <Route path="/chat/new" element={<ChatPage draftSession />} />
+        <Route path="/chat" element={<ChatPage />} />
       </Routes>,
-      ['/chat/new?knowledgeBaseId=kb1'],
+      ['/chat?knowledgeBaseId=kb1'],
     );
 
-    await screen.findByRole('textbox', { name: '继续追问当前知识库' });
-    expect(screen.queryByRole('textbox', { name: '会话标题' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '归档' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '删除' })).not.toBeInTheDocument();
+    await screen.findByRole('textbox', { name: '输入问题' });
+    expect(screen.queryByRole('button', { name: '重命名会话' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '会话操作' })).not.toBeInTheDocument();
   });
 
   it('synchronously locks a draft against duplicate submit events', async () => {
@@ -1431,13 +1513,13 @@ describe('ChatPage', () => {
 
     renderWithRouter(
       <Routes>
-        <Route path="/chat/new" element={<ChatPage draftSession />} />
+        <Route path="/chat" element={<ChatPage />} />
         <Route path="/chat/:sessionId" element={<ChatPage />} />
       </Routes>,
-      ['/chat/new?knowledgeBaseId=kb1'],
+      ['/chat?knowledgeBaseId=kb1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    const input = await screen.findByRole('textbox', { name: '输入问题' });
     await user.type(input, '只发送一次');
     const form = input.closest('form');
     expect(form).not.toBeNull();
@@ -1460,17 +1542,17 @@ describe('ChatPage', () => {
     renderWithRouter(
       <>
         <Routes>
-          <Route path="/chat/new" element={<ChatPage draftSession />} />
+          <Route path="/chat" element={<ChatPage />} />
           <Route path="/chat/:sessionId" element={<ChatPage />} />
           <Route path="/away" element={<div>已离开聊天</div>} />
         </Routes>
         <LocationProbe />
         <LeaveChatButton />
       </>,
-      ['/chat/new?knowledgeBaseId=kb1'],
+      ['/chat?knowledgeBaseId=kb1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    const input = await screen.findByRole('textbox', { name: '输入问题' });
     await user.type(input, '离开前的问题');
     await user.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() => expect(createChatSession).toHaveBeenCalledOnce());
@@ -1497,12 +1579,14 @@ describe('ChatPage', () => {
 
     renderWithRouter(
       <Routes>
+        <Route path="/chat" element={<ChatPage />} />
         <Route path="/chat/:sessionId" element={<ChatPage />} />
       </Routes>,
-      ['/chat/new?knowledgeBaseId=kb1'],
+      ['/chat?knowledgeBaseId=kb1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    const input = await screen.findByRole('textbox', { name: '输入问题' });
+    await waitFor(() => expect(input).toBeEnabled());
     await user.type(input, '第一次提问');
     await user.click(screen.getByRole('button', { name: '发送' }));
 
@@ -1510,17 +1594,17 @@ describe('ChatPage', () => {
       () => expect(sendChatMessage).toHaveBeenCalledWith('s1', expect.objectContaining({
         content: '第一次提问',
         clientRequestId: expect.any(String),
-      })),
+      }), expect.any(Object)),
       { timeout: 3000 },
     );
     sessionDetail.resolve(session);
-    await screen.findByRole('heading', { name: '制度问答' });
+    await findSessionTitle('制度问答');
     await waitFor(() => expect(listChatMessages).toHaveBeenCalledWith('s1'));
-    expect(screen.getByRole('textbox', { name: '继续追问当前知识库' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '发送中...' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: '输入问题' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '生成中' })).toBeDisabled();
 
     sendResult.resolve({ answer: '回答', citations: [], rerankFallback: null });
-    await waitFor(() => expect(screen.getByRole('textbox', { name: '继续追问当前知识库' })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('textbox', { name: '输入问题' })).toBeEnabled());
   });
 
   it('does not let the draft route load overwrite messages refreshed after sending', async () => {
@@ -1543,13 +1627,13 @@ describe('ChatPage', () => {
 
     renderWithRouter(
       <Routes>
-        <Route path="/chat/new" element={<ChatPage draftSession />} />
+        <Route path="/chat" element={<ChatPage />} />
         <Route path="/chat/:sessionId" element={<ChatPage />} />
       </Routes>,
-      ['/chat/new?knowledgeBaseId=kb1'],
+      ['/chat?knowledgeBaseId=kb1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    const input = await screen.findByRole('textbox', { name: '输入问题' });
     await user.type(input, '触发首问');
     await user.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() => expect(listChatMessages).toHaveBeenCalledTimes(1));
@@ -1567,7 +1651,7 @@ describe('ChatPage', () => {
 
   it('keeps a failed question and provides a retry action', async () => {
     vi.mocked(sendChatMessage)
-      .mockRejectedValueOnce(new ApiError(500, {
+      .mockRejectedValueOnce(new ApiError(400, {
         code: 'CHAT_COMPLETION_FAILED',
         message: 'chat completion failed',
       }))
@@ -1581,26 +1665,25 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    const input = await screen.findByRole('textbox', { name: '输入问题' });
+    await waitFor(() => expect(input).toBeEnabled());
     await user.type(input, '如何报销？');
     await user.click(screen.getByRole('button', { name: '发送' }));
 
     const conversation = screen.getByRole('region', { name: '问答会话' });
     expect(await within(conversation).findByRole('alert', undefined, { timeout: 3000 }))
       .toHaveTextContent('回答生成失败，请稍后重试。');
-    expect(within(conversation).getAllByText('如何报销？')).toHaveLength(2);
-    expect(within(conversation).getByRole('button', { name: '重新生成' })).toBeInTheDocument();
+    expect(within(conversation).getAllByText('如何报销？')).toHaveLength(1);
+    expect(within(conversation).getByRole('button', { name: '重试' })).toBeInTheDocument();
     expect(within(conversation).getByRole('button', { name: '修改问题' })).toBeInTheDocument();
-    expect(input).toHaveValue('如何报销？');
+    expect(input).toHaveValue('');
 
-    await user.clear(input);
-    await user.type(input, '修改后的问题');
-    await user.click(within(conversation).getByRole('button', { name: '重新生成' }));
+    await user.click(within(conversation).getByRole('button', { name: '重试' }));
     await waitFor(() => expect(sendChatMessage).toHaveBeenCalledTimes(2));
     expect(sendChatMessage).toHaveBeenNthCalledWith(2, 's1', expect.objectContaining({
-      content: '修改后的问题',
+      content: '如何报销？',
       clientRequestId: expect.any(String),
-    }));
+    }), expect.any(Object));
   });
 
   it('requires reconciliation before retrying an unknown network outcome', async () => {
@@ -1614,21 +1697,27 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    const input = await screen.findByRole('textbox', { name: '输入问题' });
     await user.type(input, '网络中断的问题');
-    await user.click(screen.getByRole('button', { name: '发送' }));
+    await submitWithAutomaticChecksPaused();
 
     const conversation = screen.getByRole('region', { name: '问答会话' });
-    expect(await within(conversation).findByRole('alert')).toHaveTextContent('发送结果暂时无法确认');
-    expect(within(conversation).getAllByText('网络中断的问题')).toHaveLength(2);
+    expect(within(conversation).getByText('正在确认这条消息…')).toBeInTheDocument();
+    expect(within(conversation).getAllByText('网络中断的问题')).toHaveLength(1);
+    expect(within(conversation).queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '重试发送' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '再次检查' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '确认重新发送' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '再检查一次' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '确认重新发送' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
-    expect(input).toHaveValue('网络中断的问题');
+    expect(input).toHaveValue('');
+
+    await finishAutomaticSendChecks();
+    expect(within(conversation).getByRole('alert')).toHaveTextContent('没有找到这条消息');
+    expect(screen.getByRole('button', { name: '再检查一次' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '确认重新发送' })).toBeInTheDocument();
   });
 
-  it('opens the session and citation drawers with accessible controls', async () => {
+  it('exposes the persistent session rail and inline source disclosure', async () => {
     vi.mocked(listChatMessages).mockResolvedValue({ items: historicalAnswers });
     const user = userEvent.setup();
 
@@ -1639,22 +1728,15 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    const sessionTrigger = await screen.findByRole('button', { name: '打开会话列表' });
-    await user.click(sessionTrigger);
-    const sessionDrawer = screen.getByRole('dialog', { name: '会话列表' });
-    expect(sessionDrawer).toBeInTheDocument();
-    expect(sessionDrawer.closest('.chat-aux')?.parentElement).toBe(document.body);
-    await user.click(within(sessionDrawer).getByRole('button', { name: '关闭会话列表' }));
-    expect(screen.queryByRole('dialog', { name: '会话列表' })).not.toBeInTheDocument();
-    expect(sessionTrigger).toHaveFocus();
+    const sessionRail = await screen.findByRole('complementary', { name: '会话列表' });
+    expect(await within(sessionRail).findByRole('link', { name: /制度问答/ })).toHaveAttribute('aria-current', 'page');
 
-    const citationTrigger = screen.getByRole('button', { name: '打开引用来源' });
-    await user.click(citationTrigger);
-    const citationDrawer = screen.getByRole('dialog', { name: '引用来源' });
-    expect(citationDrawer.closest('.chat-aux')?.parentElement).toBe(document.body);
-    expect(within(citationDrawer).getByText(/新制度\.pdf/)).toBeInTheDocument();
-    await user.click(within(citationDrawer).getByRole('button', { name: '关闭引用来源' }));
-    expect(citationTrigger).toHaveFocus();
+    const answer = (await screen.findByText('新回答')).closest('article');
+    expect(within(answer!).queryByRole('article', { name: '来源 1：新制度.pdf' })).not.toBeInTheDocument();
+    const sourceToggle = within(answer!).getByRole('button', { name: '1 条来源' });
+    await user.click(sourceToggle);
+    expect(within(answer!).getByRole('article', { name: '来源 1：新制度.pdf' })).toBeInTheDocument();
+    expect(sourceToggle).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('reconciles an uncertain draft only by its client request id', async () => {
@@ -1668,15 +1750,16 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    const input = await screen.findByRole('textbox', { name: '输入问题' });
     await user.type(input, '已被服务端接收的问题');
-    await user.click(screen.getByRole('button', { name: '发送' }));
-    await screen.findByRole('button', { name: '再次检查' });
+    await submitWithAutomaticChecksPaused();
+    expect(screen.getByText('正在确认这条消息…')).toBeInTheDocument();
 	const firstPayload = vi.mocked(sendChatMessage).mock.calls[0]?.[1];
 	expect(firstPayload).toEqual(expect.objectContaining({
 		content: '已被服务端接收的问题',
 		clientRequestId: expect.any(String),
 	}));
+	await finishAutomaticSendChecks();
 
     vi.mocked(listChatMessages).mockResolvedValueOnce({
       items: [{
@@ -1689,9 +1772,9 @@ describe('ChatPage', () => {
 		createdAt: '2026-07-01T00:01:00Z',
       }],
     });
-    await user.click(screen.getByRole('button', { name: '再次检查' }));
-	expect(await screen.findByRole('alert')).toHaveTextContent('暂未发现这条问题');
-	expect(input).toHaveValue('已被服务端接收的问题');
+    await user.click(screen.getByRole('button', { name: '再检查一次' }));
+	expect(await screen.findByRole('alert')).toHaveTextContent('没有找到这条消息');
+	expect(input).toHaveValue('');
 
 	vi.mocked(listChatMessages).mockResolvedValueOnce({
 		items: [{
@@ -1704,7 +1787,7 @@ describe('ChatPage', () => {
 			createdAt: '2026-07-01T00:01:00Z',
 		}],
 	});
-	await user.click(screen.getByRole('button', { name: '再次检查' }));
+	await user.click(screen.getByRole('button', { name: '再检查一次' }));
 
     await waitFor(() => expect(input).toHaveValue(''));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -1735,7 +1818,8 @@ describe('ChatPage', () => {
       }
       firstSessionLoads += 1;
       if (firstSessionLoads === 1) return Promise.resolve({ items: [] });
-      if (firstSessionLoads === 2) return staleCheck.promise;
+      if (firstSessionLoads === 2 || firstSessionLoads === 3) return Promise.resolve({ items: [] });
+      if (firstSessionLoads === 4) return staleCheck.promise;
       return Promise.resolve({ items: [freshMessage] });
     });
     vi.mocked(sendChatMessage).mockRejectedValueOnce(new Error('network disconnected'));
@@ -1750,11 +1834,13 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    const input = await screen.findByRole('textbox', { name: '输入问题' });
     await user.type(input, '需要核对的问题');
-    await user.click(screen.getByRole('button', { name: '发送' }));
-    await user.click(await screen.findByRole('button', { name: '再次检查' }));
-    await waitFor(() => expect(firstSessionLoads).toBe(2));
+    await submitWithAutomaticChecksPaused();
+    expect(screen.getByText('正在确认这条消息…')).toBeInTheDocument();
+    await finishAutomaticSendChecks();
+    await user.click(screen.getByRole('button', { name: '再检查一次' }));
+    await waitFor(() => expect(firstSessionLoads).toBe(4));
 
     await user.click(screen.getByRole('button', { name: '强制切换产品会话' }));
     await screen.findByText(secondSessionMessage.content);
@@ -1782,10 +1868,12 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '继续追问当前知识库' });
+    const input = await screen.findByRole('textbox', { name: '输入问题' });
     await user.type(input, '需要确认重发的问题');
-    await user.click(screen.getByRole('button', { name: '发送' }));
-    await screen.findByRole('button', { name: '确认重新发送' }, { timeout: 3_000 });
+    await submitWithAutomaticChecksPaused();
+    expect(screen.getByText('正在确认这条消息…')).toBeInTheDocument();
+    await finishAutomaticSendChecks();
+    expect(screen.getByRole('button', { name: '确认重新发送' })).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '确认重新发送' }));
 
