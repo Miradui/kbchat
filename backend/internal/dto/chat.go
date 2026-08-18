@@ -52,6 +52,13 @@ type SendChatMessageRequest struct {
 	ClientRequestID string `json:"clientRequestId" binding:"required,uuid"`
 }
 
+// EditChatMessageRequest replaces a user turn and regenerates the assistant
+// answer. The client request id makes retries safe when the response is lost.
+type EditChatMessageRequest struct {
+	Content         string `json:"content" binding:"required"`
+	ClientRequestID string `json:"clientRequestId" binding:"required,uuid"`
+}
+
 type CitationResponse struct {
 	DocumentID  string   `json:"documentId"`
 	ChunkID     string   `json:"chunkId"`

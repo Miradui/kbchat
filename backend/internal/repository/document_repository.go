@@ -164,16 +164,80 @@ func (r *DocumentRepository) FindDeletedByIDAndOwner(ctx context.Context, id, ow
 }
 
 func (r *DocumentRepository) Delete(ctx context.Context, document *model.Document) error {
-	return r.db.WithContext(ctx).Delete(document).Error
+	if document == nil {
+		return gorm.ErrRecordNotFound
+	}
+	return r.softDeleteAndCancelJobs(ctx, []uuid.UUID{document.ID})
 }
 
 func (r *DocumentRepository) BatchDelete(ctx context.Context, documentIDs []uuid.UUID) error {
+	return r.softDeleteAndCancelJobs(ctx, documentIDs)
+}
+
+func (r *DocumentRepository) softDeleteAndCancelJobs(ctx context.Context, documentIDs []uuid.UUID) error {
+	orderedIDs := append([]uuid.UUID(nil), documentIDs...)
+	sort.Slice(orderedIDs, func(i, j int) bool {
+		return orderedIDs[i].String() < orderedIDs[j].String()
+	})
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Where("id IN ?", documentIDs).Delete(&model.Document{})
+		var documents []model.Document
+		if err := tx.
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id IN ?", orderedIDs).
+			Order("id asc").
+			Find(&documents).Error; err != nil {
+			return err
+		}
+		if len(documents) != len(orderedIDs) {
+			return gorm.ErrRecordNotFound
+		}
+
+		var activeJobs []model.DocumentJob
+		if err := tx.
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("document_id IN ? AND job_type = ? AND status IN ?", orderedIDs, "process_document", []string{"pending", "running"}).
+			Order("document_id asc, created_at asc").
+			Find(&activeJobs).Error; err != nil {
+			return err
+		}
+		if len(activeJobs) > 0 {
+			now := time.Now()
+			jobIDs := make([]uuid.UUID, 0, len(activeJobs))
+			activeDocumentIDs := make([]uuid.UUID, 0, len(activeJobs))
+			seenDocuments := make(map[uuid.UUID]struct{}, len(activeJobs))
+			for i := range activeJobs {
+				jobIDs = append(jobIDs, activeJobs[i].ID)
+				if _, seen := seenDocuments[activeJobs[i].DocumentID]; !seen {
+					seenDocuments[activeJobs[i].DocumentID] = struct{}{}
+					activeDocumentIDs = append(activeDocumentIDs, activeJobs[i].DocumentID)
+				}
+			}
+			if err := tx.Model(&model.DocumentJob{}).
+				Where("id IN ?", jobIDs).
+				Updates(map[string]any{
+					"status":        "cancelled",
+					"error_message": DocumentJobCancelledMessage,
+					"locked_at":     nil,
+					"updated_at":    now,
+				}).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&model.Document{}).
+				Where("id IN ?", activeDocumentIDs).
+				Updates(map[string]any{
+					"status":        "failed",
+					"error_message": DocumentJobCancelledMessage,
+					"updated_at":    now,
+				}).Error; err != nil {
+				return err
+			}
+		}
+
+		result := tx.Where("id IN ?", orderedIDs).Delete(&model.Document{})
 		if result.Error != nil {
 			return result.Error
 		}
-		if result.RowsAffected != int64(len(documentIDs)) {
+		if result.RowsAffected != int64(len(orderedIDs)) {
 			return gorm.ErrRecordNotFound
 		}
 		return nil

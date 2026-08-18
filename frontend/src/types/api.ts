@@ -556,10 +556,12 @@ export type SendChatMessageRequest = {
   clientRequestId: string;
 };
 
+export type EditChatMessageRequest = SendChatMessageRequest;
+
 export type SendChatMessageResponse = {
-  clientRequestId?: string;
-  userMessage?: ChatMessage;
-  assistantMessage?: ChatMessage;
+  clientRequestId: string;
+  userMessage: ChatMessage;
+  assistantMessage: ChatMessage;
   answer: string;
   citations: Citation[];
   rerankFallback: KnowledgeBaseRerankFallback | null;

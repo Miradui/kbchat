@@ -1,4 +1,4 @@
-import { Upload, X } from 'lucide-react';
+import { Square, Upload, X } from 'lucide-react';
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiError } from '../../api/client';
@@ -35,7 +35,7 @@ function extensionSummary(extensions: string[]): string {
   return extensions.map((extension) => extension.toUpperCase()).join('、');
 }
 
-type ImportStatus = 'pending' | 'uploading' | 'succeeded' | 'failed';
+type ImportStatus = 'pending' | 'uploading' | 'succeeded' | 'failed' | 'unconfirmed';
 
 type ImportItem = {
   error: string;
@@ -62,6 +62,7 @@ type DocumentImportDialogProps = {
     knowledgeBaseId: string,
     file: File,
     onProgress?: (progress: number) => void,
+    signal?: AbortSignal,
   ) => Promise<DocumentItem>;
   onUploaded?: (document: DocumentItem) => void;
   open: boolean;
@@ -83,6 +84,7 @@ export function DocumentImportDialog({
   const { upload } = useSystemCapabilities();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const operationRef = useRef<symbol | null>(null);
+  const uploadAbortRef = useRef<AbortController | null>(null);
   const wasOpenRef = useRef(false);
   const [items, setItems] = useState<ImportItem[]>([]);
   const [knowledgeBaseId, setKnowledgeBaseId] = useState('');
@@ -94,6 +96,8 @@ export function DocumentImportDialog({
     const opening = open && !wasOpenRef.current;
     wasOpenRef.current = open;
     if (!open) {
+      uploadAbortRef.current?.abort();
+      uploadAbortRef.current = null;
       operationRef.current = null;
       setConfirmDiscard(false);
       return;
@@ -116,6 +120,8 @@ export function DocumentImportDialog({
   }, [fixedKnowledgeBaseId, initialKnowledgeBaseId, knowledgeBases, open]);
 
   useEffect(() => () => {
+    uploadAbortRef.current?.abort();
+    uploadAbortRef.current = null;
     operationRef.current = null;
   }, []);
 
@@ -200,16 +206,23 @@ export function DocumentImportDialog({
     }
 
     const operation = Symbol('document-import');
+    const controller = new AbortController();
     operationRef.current = operation;
+    uploadAbortRef.current = controller;
     setUploading(true);
     setValidationError('');
     const uploadedDocuments: DocumentItem[] = [];
     let batchCompleteError: unknown;
     let hasFailure = false;
+    let cancelled = false;
 
     for (const item of uploadCandidates) {
       if (operationRef.current !== operation) {
         return;
+      }
+      if (controller.signal.aborted) {
+        cancelled = true;
+        break;
       }
       setItems((current) => updateImportItem(current, item.key, {
         error: '',
@@ -223,7 +236,7 @@ export function DocumentImportDialog({
             progress: clampProgress(progress),
             status: 'uploading',
           }));
-        });
+        }, controller.signal);
         if (operationRef.current !== operation) {
           return;
         }
@@ -239,6 +252,14 @@ export function DocumentImportDialog({
           return;
         }
         hasFailure = true;
+        if (controller.signal.aborted) {
+          cancelled = true;
+          setItems((current) => updateImportItem(current, item.key, {
+            error: '上传结果未知，请先在文档列表确认。',
+            status: 'unconfirmed',
+          }));
+          break;
+        }
         setItems((current) => updateImportItem(current, item.key, {
           error: documentUploadErrorMessage(error),
           status: 'failed',
@@ -250,7 +271,7 @@ export function DocumentImportDialog({
       return;
     }
     try {
-      if (uploadedDocuments.length > 0) {
+      if (uploadedDocuments.length > 0 || cancelled) {
         await onBatchComplete?.(uploadedDocuments);
       }
     } catch (error) {
@@ -261,7 +282,14 @@ export function DocumentImportDialog({
     }
 
     operationRef.current = null;
+    if (uploadAbortRef.current === controller) uploadAbortRef.current = null;
     setUploading(false);
+    if (cancelled) {
+      setValidationError(batchCompleteError
+        ? '上传已停止，但文档列表刷新失败。请手动刷新并确认文件是否已创建。'
+        : '上传已停止，结果可能已提交。文档列表已刷新，请确认未创建后再重新选择该文件。');
+      return;
+    }
     if (hasFailure) {
       if (batchCompleteError) {
         toast.error(getErrorMessage(batchCompleteError, '部分文档已上传，但列表刷新失败'));
@@ -386,15 +414,25 @@ export function DocumentImportDialog({
         )}
 
         <div className="ui-dialog__actions">
-          <Button disabled={uploading} onClick={closeSafely} variant="secondary">取消</Button>
-          <Button
-            disabled={!knowledgeBaseId || (pendingCount === 0 && failedCount === 0)}
-            loading={uploading}
-            loadingLabel="正在导入"
-            onClick={() => void handleSubmit()}
-          >
-            {failedCount > 0 && pendingCount === 0 ? '重试失败项' : '开始导入'}
-          </Button>
+          {uploading ? (
+            <Button
+              leadingIcon={<Square aria-hidden="true" />}
+              onClick={() => uploadAbortRef.current?.abort()}
+              variant="secondary"
+            >
+              停止上传
+            </Button>
+          ) : (
+            <>
+              <Button onClick={closeSafely} variant="secondary">取消</Button>
+              <Button
+                disabled={!knowledgeBaseId || (pendingCount === 0 && failedCount === 0)}
+                onClick={() => void handleSubmit()}
+              >
+                {failedCount > 0 && pendingCount === 0 ? '重试失败项' : '开始导入'}
+              </Button>
+            </>
+          )}
         </div>
       </div>
       </Dialog>
@@ -450,6 +488,7 @@ function importStatusLabel(status: ImportStatus): string {
     case 'uploading': return '上传中';
     case 'succeeded': return '已上传';
     case 'failed': return '上传失败';
+    case 'unconfirmed': return '结果待确认';
     default: return '待上传';
   }
 }

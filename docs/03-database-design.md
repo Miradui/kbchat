@@ -45,7 +45,8 @@ CREATE TABLE knowledge_bases (
       "enableRerank": true
     }',
     created_at TIMESTAMP DEFAULT now(),
-    updated_at TIMESTAMP DEFAULT now()
+    updated_at TIMESTAMP DEFAULT now(),
+    deleted_at TIMESTAMP NULL
 );
 ```
 
@@ -140,7 +141,8 @@ CREATE TABLE documents (
     status VARCHAR(32) DEFAULT 'uploaded',
     error_message TEXT,
     created_at TIMESTAMP DEFAULT now(),
-    updated_at TIMESTAMP DEFAULT now()
+    updated_at TIMESTAMP DEFAULT now(),
+    deleted_at TIMESTAMP NULL
 );
 ```
 
@@ -221,7 +223,7 @@ PostgreSQL CHECK 约束，因此不能代替该 migration。
 CREATE TABLE chat_sessions (
     id UUID PRIMARY KEY,
     user_id UUID NOT NULL REFERENCES users(id),
-    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id),
+    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
     title VARCHAR(255),
     created_at TIMESTAMP DEFAULT now(),
     updated_at TIMESTAMP DEFAULT now(),

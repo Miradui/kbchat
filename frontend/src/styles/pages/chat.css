@@ -12,9 +12,9 @@
 /* ---------------- Session rail ---------------- */
 .chat-rail {
   border-right: 1px solid var(--line);
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: var(--s-3);
-  grid-template-rows: auto auto 1fr;
   min-height: 0;
   padding: var(--s-3);
 }
@@ -24,7 +24,14 @@
 .chat-rail__collapse { display: none; }
 .chat-rail__new { justify-content: flex-start; }
 
-.chat-rail__list { display: grid; align-content: start; gap: var(--s-3); min-height: 0; overflow-y: auto; }
+.chat-rail__list {
+  align-content: start;
+  display: grid;
+  flex: 1 1 auto;
+  gap: var(--s-3);
+  min-height: 0;
+  overflow-y: auto;
+}
 .chat-rail__group { display: grid; gap: 1px; }
 .chat-rail__group-label {
   color: var(--text-faint);
@@ -157,6 +164,23 @@
   border-color: var(--accent-line);
   color: var(--accent);
 }
+.chat-msg__edit-input {
+  background: var(--surface);
+  border: 1px solid var(--line-focus);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.6;
+  min-height: 84px;
+  outline: none;
+  padding: var(--s-2);
+  resize: vertical;
+  width: min(560px, 100%);
+}
+.chat-msg__edit-input:focus { box-shadow: var(--ring); }
+.chat-msg__edit-actions { display: flex; flex-wrap: wrap; gap: var(--s-2); justify-content: flex-end; }
+.chat-msg__actions { min-height: 36px; }
+.chat-msg__copy-error { color: var(--danger); font-size: var(--t-small); }
 
 .chat-msg__sources-toggle {
   align-items: center;
@@ -239,6 +263,12 @@ a.chat-source__link:hover { color: var(--accent); }
 }
 .chat-recovery strong { color: var(--text); font-size: var(--t-body); }
 .chat-recovery p { color: var(--text-muted); font-size: var(--t-small); }
+.chat-recovery__question {
+  color: var(--text-secondary) !important;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .chat-recovery__actions { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-2); }
 .chat-recovery--failed { background: var(--danger-wash); border-color: var(--danger-line); }
 .chat-recovery--failed strong { color: var(--danger); }

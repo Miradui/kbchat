@@ -121,6 +121,12 @@ export function HomePage({ sources }: { sources?: HomeSources }) {
           </div>
           {activityLoading && activity.length === 0 ? (
             <LoadingSkeleton announce columns={1} compact rows={5} />
+          ) : activities.error ? (
+            <EmptyState
+              action={<Button onClick={activities.reload}>重试</Button>}
+              description={activities.error}
+              title="动态暂不可用"
+            />
           ) : activity.length === 0 ? (
             <EmptyState
               action={<Link className="ui-button ui-button--primary" to="/knowledge-bases?intent=create"><span>新建知识库</span></Link>}

@@ -8,6 +8,7 @@ import {
   archiveChatSession,
   createChatSession,
   deleteChatSession,
+  editChatMessage,
   getChatSession,
   getWorkspacePreference,
   listChatMessages,
@@ -27,6 +28,7 @@ vi.mock('../../api/resources', () => ({
   archiveChatSession: vi.fn(),
   createChatSession: vi.fn(),
   deleteChatSession: vi.fn(),
+  editChatMessage: vi.fn(),
   exportChatSession: vi.fn(),
   getChatSession: vi.fn(),
   getWorkspacePreference: vi.fn(),
@@ -155,6 +157,7 @@ beforeEach(() => {
   vi.mocked(archiveChatSession).mockReset();
   vi.mocked(createChatSession).mockReset();
   vi.mocked(deleteChatSession).mockReset();
+  vi.mocked(editChatMessage).mockReset();
   vi.mocked(regenerateChatMessage).mockReset();
   vi.mocked(setChatMessageFeedback).mockReset();
   vi.mocked(updateChatSessionTitle).mockReset();
@@ -212,14 +215,83 @@ async function finishAutomaticSendChecks() {
 
 async function submitWithAutomaticChecksPaused() {
   vi.useFakeTimers();
-  await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name: '发送' }));
-    await Promise.resolve();
-    await Promise.resolve();
+  fireEvent.click(screen.getByRole('button', { name: '发送' }));
+  await vi.waitFor(() => {
+    expect(screen.getByText('正在确认这条消息…')).toBeInTheDocument();
+  }, {
+    interval: 10,
+    timeout: 1_000,
   });
 }
 
 describe('ChatPage', () => {
+  it('locks other chat writes while an edited message is being saved', async () => {
+    const editResult = deferred<{
+      clientRequestId: string;
+      userMessage: ChatMessage;
+      assistantMessage: ChatMessage;
+      answer: string;
+      citations: [];
+      rerankFallback: null;
+    }>();
+    const userMessage = {
+      id: 'user-1',
+      sessionId: session.id,
+      role: 'user',
+      content: '原问题',
+      citations: [],
+      createdAt: '2026-07-01T00:00:00Z',
+    } satisfies ChatMessage;
+    const assistantMessage = {
+      id: 'assistant-1',
+      sessionId: session.id,
+      role: 'assistant',
+      content: '原回答',
+      citations: [],
+      createdAt: '2026-07-01T00:01:00Z',
+    } satisfies ChatMessage;
+    vi.mocked(listChatMessages).mockResolvedValue({ items: [userMessage, assistantMessage] });
+    vi.mocked(editChatMessage).mockReturnValue(editResult.promise);
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>,
+      ['/chat/s1'],
+    );
+
+    const composer = await screen.findByRole('textbox', { name: '输入问题' });
+    await user.type(composer, '不能并发发送');
+    await user.click(screen.getByRole('button', { name: '编辑消息' }));
+    const editInput = screen.getByRole('textbox', { name: '编辑消息' });
+    await user.clear(editInput);
+    await user.type(editInput, '修改后的问题');
+    await user.click(screen.getByRole('button', { name: '保存并重新生成' }));
+
+    expect(editChatMessage).toHaveBeenCalledOnce();
+    expect(composer).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '重新生成' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '编辑消息' })).not.toBeInTheDocument();
+    fireEvent.submit(composer.closest('form')!);
+    expect(sendChatMessage).not.toHaveBeenCalled();
+
+    editResult.resolve({
+      clientRequestId: 'edit-request',
+      userMessage: { ...userMessage, content: '修改后的问题', clientRequestId: 'edit-request' },
+      assistantMessage: {
+        ...assistantMessage,
+        id: 'assistant-edited',
+        content: '修改后的回答',
+        clientRequestId: 'edit-request',
+      },
+      answer: '修改后的回答',
+      citations: [],
+      rerankFallback: null,
+    });
+
+    expect(await screen.findByText('修改后的回答')).toBeInTheDocument();
+    await waitFor(() => expect(composer).toBeEnabled());
+  });
+
   it('does not load knowledge-base category workspace data', async () => {
     renderWithRouter(
       <Routes>
@@ -625,6 +697,69 @@ describe('ChatPage', () => {
 
     await user.click(within(newAnswer!).getByRole('button', { name: '1 条来源' }));
     expect(within(newAnswer!).getByText('新制度.pdf')).toBeInTheDocument();
+  });
+
+  it('saves feedback for different answers independently', async () => {
+    vi.mocked(listChatMessages).mockResolvedValue({ items: historicalAnswers });
+    const first = deferred<Awaited<ReturnType<typeof setChatMessageFeedback>>>();
+    const second = deferred<Awaited<ReturnType<typeof setChatMessageFeedback>>>();
+    vi.mocked(setChatMessageFeedback)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
+      </Routes>,
+      ['/chat/s1'],
+    );
+
+    const answers = await screen.findAllByRole('article');
+    const oldAnswer = answers.find((item) => within(item).queryByText('旧回答'));
+    const newAnswer = answers.find((item) => within(item).queryByText('新回答'));
+    expect(oldAnswer).toBeTruthy();
+    expect(newAnswer).toBeTruthy();
+
+    await user.click(within(oldAnswer!).getByRole('button', { name: '标记回答有帮助' }));
+    await user.click(within(newAnswer!).getByRole('button', { name: '标记回答没有帮助' }));
+
+    expect(setChatMessageFeedback).toHaveBeenCalledTimes(2);
+    first.resolve({ messageId: historicalAnswers[0].id, rating: 'positive', updatedAt: '2026-08-17T00:00:00Z' });
+    second.resolve({ messageId: historicalAnswers[1].id, rating: 'negative', updatedAt: '2026-08-17T00:00:01Z' });
+  });
+
+  it('does not force the message list to the bottom while the user reads history', async () => {
+    vi.mocked(listChatMessages).mockResolvedValue({ items: historicalAnswers });
+    const stream = deferred<Awaited<ReturnType<typeof sendChatMessage>>>();
+    let handlers: { onDelta?: (text: string) => void } | undefined;
+    vi.mocked(sendChatMessage).mockImplementation((_sessionId, _input, nextHandlers) => {
+      handlers = nextHandlers;
+      return stream.promise;
+    });
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
+      </Routes>,
+      ['/chat/s1'],
+    );
+    const thread = (await screen.findByText('新回答')).closest('.chat-thread') as HTMLDivElement;
+    Object.defineProperties(thread, {
+      clientHeight: { configurable: true, value: 200 },
+      scrollHeight: { configurable: true, value: 1000 },
+      scrollTop: { configurable: true, value: 0, writable: true },
+    });
+    fireEvent.scroll(thread);
+    vi.mocked(Element.prototype.scrollTo).mockClear();
+
+    await user.type(screen.getByRole('textbox', { name: '输入问题' }), '继续追问');
+    await user.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(handlers).toBeTruthy());
+    act(() => handlers?.onDelta?.('第一段'));
+
+    expect(Element.prototype.scrollTo).not.toHaveBeenCalled();
   });
 
   it('links each citation to its exact document and chunk', async () => {
@@ -1464,7 +1599,7 @@ describe('ChatPage', () => {
     expect(sendChatMessage).toHaveBeenCalledWith('s1', expect.objectContaining({
       content: '第一次提问',
       clientRequestId: expect.any(String),
-    }), expect.any(Object));
+    }), expect.any(Object), expect.any(AbortSignal));
   });
 
   it('supports the static draft route used by the application router', async () => {
@@ -1489,7 +1624,7 @@ describe('ChatPage', () => {
     expect(sendChatMessage).toHaveBeenCalledWith('s1', expect.objectContaining({
       content: '静态路由首问',
       clientRequestId: expect.any(String),
-    }), expect.any(Object));
+    }), expect.any(Object), expect.any(AbortSignal));
   });
 
   it('keeps draft sessions focused on asking instead of disabled session management', async () => {
@@ -1594,14 +1729,14 @@ describe('ChatPage', () => {
       () => expect(sendChatMessage).toHaveBeenCalledWith('s1', expect.objectContaining({
         content: '第一次提问',
         clientRequestId: expect.any(String),
-      }), expect.any(Object)),
+      }), expect.any(Object), expect.any(AbortSignal)),
       { timeout: 3000 },
     );
     sessionDetail.resolve(session);
     await findSessionTitle('制度问答');
     await waitFor(() => expect(listChatMessages).toHaveBeenCalledWith('s1'));
     expect(screen.getByRole('textbox', { name: '输入问题' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '生成中' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '停止生成' })).toBeEnabled();
 
     sendResult.resolve({ answer: '回答', citations: [], rerankFallback: null });
     await waitFor(() => expect(screen.getByRole('textbox', { name: '输入问题' })).toBeEnabled());
@@ -1683,7 +1818,7 @@ describe('ChatPage', () => {
     expect(sendChatMessage).toHaveBeenNthCalledWith(2, 's1', expect.objectContaining({
       content: '如何报销？',
       clientRequestId: expect.any(String),
-    }), expect.any(Object));
+    }), expect.any(Object), expect.any(AbortSignal));
   });
 
   it('requires reconciliation before retrying an unknown network outcome', async () => {
@@ -1703,7 +1838,9 @@ describe('ChatPage', () => {
 
     const conversation = screen.getByRole('region', { name: '问答会话' });
     expect(within(conversation).getByText('正在确认这条消息…')).toBeInTheDocument();
-    expect(within(conversation).getAllByText('网络中断的问题')).toHaveLength(1);
+    expect(within(conversation).getByLabelText('正在核对的问题')).toHaveTextContent('网络中断的问题');
+    expect(within(conversation).getByLabelText('正在核对的问题').closest('.chat-msg--assistant')).not.toBeNull();
+    expect(within(conversation).queryByText('网络中断的问题', { selector: '.chat-msg--user *' })).not.toBeInTheDocument();
     expect(within(conversation).queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '重试发送' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '再检查一次' })).not.toBeInTheDocument();
@@ -1713,6 +1850,7 @@ describe('ChatPage', () => {
 
     await finishAutomaticSendChecks();
     expect(within(conversation).getByRole('alert')).toHaveTextContent('没有找到这条消息');
+    expect(within(conversation).getByLabelText('待确认的问题')).toHaveTextContent('网络中断的问题');
     expect(screen.getByRole('button', { name: '再检查一次' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '确认重新发送' })).toBeInTheDocument();
   });
@@ -1871,6 +2009,8 @@ describe('ChatPage', () => {
     const input = await screen.findByRole('textbox', { name: '输入问题' });
     await user.type(input, '需要确认重发的问题');
     await submitWithAutomaticChecksPaused();
+    expect(sendChatMessage).toHaveBeenCalledTimes(1);
+    expect(window.localStorage.getItem('rag.chat.pending-request:s1')).not.toBeNull();
     expect(screen.getByText('正在确认这条消息…')).toBeInTheDocument();
     await finishAutomaticSendChecks();
     expect(screen.getByRole('button', { name: '确认重新发送' })).toBeInTheDocument();

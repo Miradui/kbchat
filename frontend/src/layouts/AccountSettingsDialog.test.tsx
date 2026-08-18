@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ApiError } from '../api/client';
 import { ToastProvider } from '../components/feedback/ToastProvider';
 import { currentUserStore } from '../store/currentUserStore';
 import { AccountSettingsDialog } from './AccountSettingsDialog';
@@ -27,10 +28,10 @@ vi.mock('../hooks/useSystemCapabilities', () => ({
   }),
 }));
 
-function renderDialog() {
+function renderDialog(onProfileSaved = vi.fn()) {
   return render(
     <ToastProvider>
-      <AccountSettingsDialog onClose={vi.fn()} open />
+      <AccountSettingsDialog onClose={vi.fn()} onProfileSaved={onProfileSaved} open />
     </ToastProvider>,
   );
 }
@@ -89,12 +90,35 @@ describe('AccountSettingsDialog password limits', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('新密码不能超过 72 个 UTF-8 字节');
   });
 
+  it('binds an invalid current password error to the current password field', async () => {
+    const user = userEvent.setup();
+    resourceMocks.changePassword.mockRejectedValue(new ApiError(400, {
+      code: 'INVALID_CURRENT_PASSWORD',
+      message: '当前密码不正确',
+    }));
+    renderDialog();
+    await screen.findByDisplayValue('Owner');
+    const inputs = passwordInputs();
+
+    await user.type(inputs.current, 'incorrect-current-password');
+    await user.type(inputs.next, 'new-password');
+    await user.type(inputs.confirm, 'new-password');
+    await user.click(screen.getByRole('button', { name: '修改密码' }));
+
+    expect(await screen.findByText('当前密码不正确')).toBeInTheDocument();
+    expect(inputs.current).toHaveFocus();
+    expect(inputs.current).toHaveAttribute('aria-invalid', 'true');
+    expect(inputs.next).not.toHaveAttribute('aria-invalid', 'true');
+  });
+
   it('counts display names and avatar URLs by Unicode code points instead of UTF-16 units', async () => {
     const user = userEvent.setup();
-    resourceMocks.updateProfile.mockResolvedValue({
+    const updatedUser = {
       id: 'user-1', username: 'owner', displayName: '😀'.repeat(128), avatarUrl: '', role: 'user',
-    });
-    renderDialog();
+    };
+    const onProfileSaved = vi.fn();
+    resourceMocks.updateProfile.mockResolvedValue(updatedUser);
+    renderDialog(onProfileSaved);
     const displayName = await screen.findByLabelText('显示名称');
     const avatarUrl = screen.getByLabelText('头像地址');
     const unicodeName = '😀'.repeat(128);
@@ -111,6 +135,7 @@ describe('AccountSettingsDialog password limits', () => {
       displayName: unicodeName,
       avatarUrl: unicodeAvatar,
     });
+    expect(onProfileSaved).toHaveBeenCalledWith(updatedUser);
   });
 
   it('rejects profile fields beyond the Unicode code-point limits', async () => {

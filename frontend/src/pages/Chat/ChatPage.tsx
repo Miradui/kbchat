@@ -54,13 +54,16 @@ export function ChatPage() {
   const [sessionActionError, setSessionActionError] = useState('');
   const [sessionBusy, setSessionBusy] = useState(false);
   const [sessionExporting, setSessionExporting] = useState(false);
-  const [feedbackSavingId, setFeedbackSavingId] = useState<string | null>(null);
+  const [feedbackSavingIds, setFeedbackSavingIds] = useState<Set<string>>(() => new Set());
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingDraft, setEditingDraft] = useState('');
   const messagesRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
   const activeSessionIdRef = useRef(sessionId);
   const sessionActionOperationRef = useRef<symbol | null>(null);
   const sessionBusyRef = useRef(false);
   const sessionExportOperationRef = useRef<symbol | null>(null);
-  const feedbackOperationRef = useRef<symbol | null>(null);
+  const feedbackOperationsRef = useRef<Map<string, symbol>>(new Map());
 
   const urlKnowledgeBaseId = searchParams.get('knowledgeBaseId') ?? '';
   const [railScope, setRailScope] = useState<ChatSessionScope>('active');
@@ -125,6 +128,8 @@ export function ChatPage() {
   useEffect(() => {
     setDraft('');
     setFocusedCitation(null);
+    setEditingMessageId(null);
+    setEditingDraft('');
     setConfirmArchive(false);
     setConfirmDelete(false);
     setSessionActionError('');
@@ -133,8 +138,9 @@ export function ChatPage() {
     setSessionBusy(false);
     sessionExportOperationRef.current = null;
     setSessionExporting(false);
-    feedbackOperationRef.current = null;
-    setFeedbackSavingId(null);
+    feedbackOperationsRef.current.clear();
+    setFeedbackSavingIds(new Set());
+    stickToBottomRef.current = true;
   }, [sessionId]);
 
   // The home page hands a question over via `?q=`; consume it into the composer.
@@ -150,6 +156,7 @@ export function ChatPage() {
   }, [searchParams, setSearchParams]);
 
   useEffect(() => {
+    if (!stickToBottomRef.current) return;
     // `auto` while streaming: a smooth scroll per token never settles.
     messagesRef.current?.scrollTo({
       top: messagesRef.current.scrollHeight,
@@ -165,6 +172,7 @@ export function ChatPage() {
   const archived = Boolean(currentSession?.archivedAt);
   const threadInteractionPending = thread.sending
     || Boolean(thread.regeneratingId)
+    || Boolean(thread.editingId)
     || Boolean(thread.unconfirmedSend?.checking)
     || Boolean(thread.regeneration?.checking);
   const interactionLocked = thread.loading || sessionBusy || threadInteractionPending;
@@ -172,6 +180,7 @@ export function ChatPage() {
     && !archived
     && !thread.loading
     && !sessionBusy
+    && !thread.editingId
     && !thread.unconfirmedSend;
 
   const composerHint = !activeKnowledgeBase
@@ -216,23 +225,27 @@ export function ChatPage() {
   }
 
   async function handleMessageFeedback(messageId: string, rating: ChatFeedbackRating) {
-    if (feedbackOperationRef.current) return;
+    if (feedbackOperationsRef.current.has(messageId)) return;
     const operation = Symbol('chat-feedback');
-    feedbackOperationRef.current = operation;
-    setFeedbackSavingId(messageId);
+    feedbackOperationsRef.current.set(messageId, operation);
+    setFeedbackSavingIds((current) => new Set(current).add(messageId));
     try {
       const feedback = await setChatMessageFeedback(messageId, rating);
-      if (feedbackOperationRef.current !== operation) return;
+      if (feedbackOperationsRef.current.get(messageId) !== operation) return;
       thread.updateMessageFeedback(messageId, feedback);
       toast.success(rating === 'positive' ? '已记录“有帮助”' : '已记录“没有帮助”');
     } catch (caught) {
-      if (feedbackOperationRef.current === operation) {
+      if (feedbackOperationsRef.current.get(messageId) === operation) {
         toast.error(getErrorMessage(caught, '回答反馈保存失败'));
       }
     } finally {
-      if (feedbackOperationRef.current === operation) {
-        feedbackOperationRef.current = null;
-        setFeedbackSavingId(null);
+      if (feedbackOperationsRef.current.get(messageId) === operation) {
+        feedbackOperationsRef.current.delete(messageId);
+        setFeedbackSavingIds((current) => {
+          const next = new Set(current);
+          next.delete(messageId);
+          return next;
+        });
       }
     }
   }
@@ -404,7 +417,14 @@ export function ChatPage() {
             </div>
           )}
 
-          <div className="chat-thread" ref={messagesRef}>
+          <div
+            className="chat-thread"
+            onScroll={(event) => {
+              const element = event.currentTarget;
+              stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 80;
+            }}
+            ref={messagesRef}
+          >
             {thread.loading ? (
               <LoadingSkeleton announce columns={1} compact rows={5} />
             ) : thread.messages.length === 0 && !thread.pendingQuestion && !thread.failedSend && !thread.unconfirmedSend ? (
@@ -424,15 +444,43 @@ export function ChatPage() {
                       message.id === latestAssistantId
                       && thread.regeneration?.messageId !== message.id
                       && !archived
+                      && !interactionLocked
                     }
+                    canEdit={!archived && !interactionLocked}
                     focusedCitationIndex={
                       focusedCitation?.messageId === message.id ? focusedCitation.index : null
                     }
                     key={message.id}
                     knowledgeBaseId={activeKnowledgeBaseId || undefined}
                     message={message}
-                    feedbackSaving={feedbackSavingId === message.id}
+                    editDraft={editingDraft}
+                    editing={editingMessageId === message.id}
+                    editSaving={thread.editingId === message.id}
+                    feedbackSaving={feedbackSavingIds.has(message.id)}
                     onFeedback={(messageId, rating) => void handleMessageFeedback(messageId, rating)}
+                    onEditDraftChange={setEditingDraft}
+                    onStartEdit={(messageId, content) => {
+                      if (archived || interactionLocked || thread.editingId || message.role !== 'user') return;
+                      setEditingMessageId(messageId);
+                      setEditingDraft(content);
+                    }}
+                    onCancelEdit={() => {
+                      if (thread.editingId) return;
+                      setEditingMessageId(null);
+                      setEditingDraft('');
+                    }}
+                    onSubmitEdit={(messageId, content) => {
+                      if (archived || interactionLocked || thread.editingId || !content.trim()) return;
+                      void thread.editMessage(messageId, content).then(() => {
+                        if (activeSessionIdRef.current === sessionId && editingMessageId === messageId) {
+                          setEditingMessageId(null);
+                          setEditingDraft('');
+                          toast.success('消息已更新并重新生成');
+                        }
+                      }).catch((caught) => {
+                        toast.error(getErrorMessage(caught, '消息更新失败，请稍后重试'));
+                      });
+                    }}
                     onFocusCitation={(messageId, index) => setFocusedCitation({ messageId, index })}
                     onRegenerate={(id) => {
                       if (!sessionBusyRef.current) void thread.regenerate(id);
@@ -530,14 +578,10 @@ export function ChatPage() {
 
                 {thread.unconfirmedSend && (
                   <>
-                    <article className="chat-msg chat-msg--user">
-                      <div className="chat-msg__body">
-                        <p className="chat-msg__content">{thread.unconfirmedSend.request.question}</p>
-                      </div>
-                    </article>
                     <article className="chat-msg chat-msg--assistant">
                       <div className="chat-msg__body">
                         <UnconfirmedSendNotice
+                          question={thread.unconfirmedSend.request.question}
                           blocked={sessionBusy}
                           checking={thread.unconfirmedSend.checking}
                           needsDecision={thread.needsResendDecision}
@@ -561,6 +605,7 @@ export function ChatPage() {
           <ChatComposer
             disabled={!canSend || thread.sending || sessionBusy}
             hint={composerHint}
+            onCancel={thread.cancelSend}
             onChange={setDraft}
             onSubmit={() => {
               if (sessionBusyRef.current) return;
@@ -685,12 +730,14 @@ function ChatEmptyState({
  * only asked to decide after the automatic checks are exhausted.
  */
 function UnconfirmedSendNotice({
+  question,
   blocked,
   checking,
   needsDecision,
   onCheck,
   onResend,
 }: {
+  question: string;
   blocked: boolean;
   checking: boolean;
   needsDecision: boolean;
@@ -702,6 +749,7 @@ function UnconfirmedSendNotice({
       <div className="chat-recovery" role="status">
         <strong>正在确认这条消息…</strong>
         <p>网络结果暂时未知，正在自动核对。这条问题不会被重复发送。</p>
+        <p className="chat-recovery__question" aria-label="正在核对的问题">“{question}”</p>
       </div>
     );
   }
@@ -709,7 +757,8 @@ function UnconfirmedSendNotice({
   return (
     <div className="chat-recovery chat-recovery--decision" role="alert">
       <strong>没有找到这条消息</strong>
-      <p>自动核对后仍未看到这条问题。你可以再检查一次，或确认重新发送。</p>
+      <p>自动核对后仍未看到这条问题。确认后才会再次发送，原请求编号会保持不变。</p>
+      <p className="chat-recovery__question" aria-label="待确认的问题">“{question}”</p>
       <div className="chat-recovery__actions">
         <Button disabled={checking || blocked} loading={checking} loadingLabel="检查中" variant="secondary" onClick={onCheck}>
           再检查一次

@@ -26,6 +26,10 @@ var ErrChatSessionNotDeleted = errors.New("chat session is not in the recycle bi
 // read and the field-level feedback update.
 var ErrChatMessageNotFound = errors.New("chat message not found")
 
+// ErrChatMessageChanged means another write changed the target or its tail
+// after the service loaded the conversation.
+var ErrChatMessageChanged = errors.New("chat message changed concurrently")
+
 func NewChatRepository(db *gorm.DB) *ChatRepository {
 	return &ChatRepository{db: db}
 }
@@ -295,7 +299,7 @@ func (r *ChatRepository) ListMessages(ctx context.Context, sessionID uuid.UUID) 
 	var messages []model.ChatMessage
 	err := r.db.WithContext(ctx).
 		Where("session_id = ?", sessionID).
-		Order("created_at asc").
+		Order("created_at asc, id asc").
 		Find(&messages).Error
 	return messages, err
 }
@@ -359,7 +363,41 @@ func (r *ChatRepository) CreateMessage(ctx context.Context, message *model.ChatM
 }
 
 func (r *ChatRepository) CreateMessages(ctx context.Context, messages ...*model.ChatMessage) error {
+	return r.createMessages(ctx, nil, false, messages...)
+}
+
+func (r *ChatRepository) CreateMessagesIfUnchanged(
+	ctx context.Context,
+	expectedMessageIDs []uuid.UUID,
+	messages ...*model.ChatMessage,
+) error {
+	return r.createMessages(ctx, expectedMessageIDs, true, messages...)
+}
+
+func (r *ChatRepository) createMessages(
+	ctx context.Context,
+	expectedMessageIDs []uuid.UUID,
+	checkSnapshot bool,
+	messages ...*model.ChatMessage,
+) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if len(messages) > 0 {
+			var session model.ChatSession
+			if err := tx.Select("id").Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("id = ?", messages[0].SessionID).First(&session).Error; err != nil {
+				return err
+			}
+			if checkSnapshot {
+				var current []model.ChatMessage
+				if err := tx.Select("id").Where("session_id = ?", messages[0].SessionID).
+					Order("created_at asc, id asc").Find(&current).Error; err != nil {
+					return err
+				}
+				if !sameUUIDs(messageIDs(current), expectedMessageIDs) {
+					return ErrChatMessageChanged
+				}
+			}
+		}
 		for _, message := range messages {
 			if err := tx.Create(message).Error; err != nil {
 				return err
@@ -372,4 +410,97 @@ func (r *ChatRepository) CreateMessages(ctx context.Context, messages ...*model.
 		}
 		return nil
 	})
+}
+
+// ReplaceMessageTail updates an existing user turn and atomically removes the
+// messages that followed it before creating the regenerated assistant turn.
+// IDs are supplied by the service from its ordered snapshot so this operation
+// never guesses ordering from timestamps or UUID values.
+func (r *ChatRepository) ReplaceMessageTail(
+	ctx context.Context,
+	sessionID, targetMessageID uuid.UUID,
+	expectedClientRequestID *uuid.UUID,
+	expectedTailIDs []uuid.UUID,
+	userMessage *model.ChatMessage,
+	assistantMessage *model.ChatMessage,
+) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var session model.ChatSession
+		if err := tx.Select("id").Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", sessionID).First(&session).Error; err != nil {
+			return err
+		}
+		var current []model.ChatMessage
+		if err := tx.Where("session_id = ?", sessionID).
+			Order("created_at asc, id asc").Find(&current).Error; err != nil {
+			return err
+		}
+		targetIndex := -1
+		for i := range current {
+			if current[i].ID == targetMessageID {
+				targetIndex = i
+				break
+			}
+		}
+		if targetIndex < 0 || current[targetIndex].Role != "user" {
+			return ErrChatMessageNotFound
+		}
+		if !sameOptionalUUID(current[targetIndex].ClientRequestID, expectedClientRequestID) ||
+			!sameUUIDs(messageIDs(current[targetIndex+1:]), expectedTailIDs) {
+			return ErrChatMessageChanged
+		}
+		target := current[targetIndex]
+
+		if len(expectedTailIDs) > 0 {
+			if err := tx.Where("session_id = ? AND id IN ?", sessionID, expectedTailIDs).
+				Delete(&model.ChatMessage{}).Error; err != nil {
+				return err
+			}
+		}
+
+		if err := tx.Model(&target).Updates(map[string]any{
+			"client_request_id":   userMessage.ClientRequestID,
+			"content":             userMessage.Content,
+			"citations":           userMessage.Citations,
+			"rerank_fallback":     userMessage.RerankFallback,
+			"feedback_rating":     nil,
+			"feedback_updated_at": nil,
+		}).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Create(assistantMessage).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.ChatSession{}).
+			Where("id = ?", sessionID).
+			Update("updated_at", time.Now()).Error
+	})
+}
+
+func messageIDs(messages []model.ChatMessage) []uuid.UUID {
+	ids := make([]uuid.UUID, 0, len(messages))
+	for i := range messages {
+		ids = append(ids, messages[i].ID)
+	}
+	return ids
+}
+
+func sameUUIDs(left, right []uuid.UUID) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func sameOptionalUUID(left, right *uuid.UUID) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }

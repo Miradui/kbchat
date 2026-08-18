@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../../api/client';
 import {
   createChatSession,
+  editChatMessage,
   getChatSession,
   listChatMessages,
   regenerateChatMessage,
@@ -18,6 +19,7 @@ import type {
 import { getErrorMessage } from '../../utils/errors';
 import { pendingChatRequestStore } from './pendingChatRequestStore';
 import type { PendingChatRequest } from './pendingChatRequestStore';
+import { pendingChatEditStore } from './pendingChatEditStore';
 import { pendingRegenerationStore } from './pendingRegenerationStore';
 
 /** Delays for the automatic reconciliation attempts after an unconfirmed write. */
@@ -72,6 +74,7 @@ export function useChatThread({
   const [unconfirmedSend, setUnconfirmedSend] = useState<UnconfirmedSend | null>(null);
   const [regeneration, setRegeneration] = useState<RegenerationState | null>(null);
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [rerankFallback, setRerankFallback] = useState<KnowledgeBaseRerankFallback | null>(null);
   /** Answer text accumulated from the current stream; empty when not streaming. */
   const [streamingAnswer, setStreamingAnswer] = useState('');
@@ -82,9 +85,11 @@ export function useChatThread({
   const loadRequestRef = useRef(0);
   const sendTokenRef = useRef<symbol | null>(null);
   const regenerateTokenRef = useRef<symbol | null>(null);
+  const editTokenRef = useRef<symbol | null>(null);
   const sendCheckTokenRef = useRef<symbol | null>(null);
   const regenerationCheckTokenRef = useRef<symbol | null>(null);
   const draftSendSessionRef = useRef<string | null>(null);
+  const sendAbortRef = useRef<AbortController | null>(null);
   const autoCheckTimersRef = useRef<number[]>([]);
   const reconcileSequenceRef = useRef(0);
   const onSessionsChangedRef = useRef(onSessionsChanged);
@@ -97,10 +102,13 @@ export function useChatThread({
       loadRequestRef.current += 1;
       sendTokenRef.current = null;
       regenerateTokenRef.current = null;
+      editTokenRef.current = null;
       sendCheckTokenRef.current = null;
       regenerationCheckTokenRef.current = null;
       autoCheckTimersRef.current.forEach((timer) => window.clearTimeout(timer));
       autoCheckTimersRef.current = [];
+      sendAbortRef.current?.abort();
+      sendAbortRef.current = null;
     };
   }, []);
 
@@ -131,6 +139,13 @@ export function useChatThread({
 
       setSession(sessionResponse);
       setMessages(messageResponse.items);
+
+      const pendingEdit = pendingChatEditStore.get(targetSessionId);
+      if (pendingEdit && messageResponse.items.some(
+        (message) => message.clientRequestId === pendingEdit.clientRequestId,
+      )) {
+        pendingChatEditStore.clear(targetSessionId, pendingEdit.clientRequestId);
+      }
 
       // Reconcile a write whose result was unknown when the tab last closed.
       const storedRequest = pendingChatRequestStore.get(targetSessionId);
@@ -183,6 +198,7 @@ export function useChatThread({
     clearAutoChecks();
     setRegeneration(null);
     setRegeneratingId(null);
+    setEditingId(null);
     setRerankFallback(null);
     setStreamingAnswer('');
     setStreamingCitations([]);
@@ -190,6 +206,8 @@ export function useChatThread({
     regenerationCheckTokenRef.current = null;
 
     if (!continuingDraftSend) {
+      sendAbortRef.current?.abort();
+      sendAbortRef.current = null;
       sendTokenRef.current = null;
       setSending(false);
       setPendingQuestion('');
@@ -279,7 +297,13 @@ export function useChatThread({
 
   const send = useCallback(async (question: string, options: { resend?: boolean } = {}) => {
     const retryOf = options.resend ? unconfirmedSend?.request ?? null : null;
-    if (!question || sending || sendTokenRef.current) return;
+    if (
+      !question
+      || sending
+      || sendTokenRef.current
+      || regenerateTokenRef.current
+      || editTokenRef.current
+    ) return;
     if (unconfirmedSend && !options.resend) return;
     if (isDraft && !draftKnowledgeBaseId) return;
 
@@ -298,6 +322,7 @@ export function useChatThread({
     const clientRequestId = retryOf?.clientRequestId ?? crypto.randomUUID();
     let targetSessionId = sessionId ?? '';
     let messageRequestStarted = false;
+    let streamController: AbortController | null = null;
 
     try {
       if (isDraft) {
@@ -327,6 +352,8 @@ export function useChatThread({
         && sendTokenRef.current === token
         && activeSessionRef.current === targetSessionId;
 
+      streamController = new AbortController();
+      sendAbortRef.current = streamController;
       const response = await sendChatMessageStream(
         targetSessionId,
         { content: question, clientRequestId },
@@ -338,12 +365,15 @@ export function useChatThread({
             if (isCurrent()) setStreamingCitations(citations);
           },
         },
+        streamController.signal,
       );
+      if (sendAbortRef.current === streamController) sendAbortRef.current = null;
       pendingChatRequestStore.clear(targetSessionId, clientRequestId);
       if (isCurrent()) {
         setRerankFallback(response.rerankFallback?.used ? response.rerankFallback : null);
       }
     } catch (caught) {
+      if (streamController && sendAbortRef.current === streamController) sendAbortRef.current = null;
       if (!mountedRef.current || sendTokenRef.current !== token || activeSessionRef.current !== targetSessionId) {
         return;
       }
@@ -441,7 +471,7 @@ export function useChatThread({
   }, [reconcileSend, unconfirmedSend]);
 
   const regenerate = useCallback(async (messageId: string) => {
-    if (!sessionId || regenerateTokenRef.current || sendTokenRef.current) return;
+    if (!sessionId || regenerateTokenRef.current || sendTokenRef.current || editTokenRef.current) return;
 
     const targetSessionId = sessionId;
     const baselineMessageIds = messages.map((message) => message.id);
@@ -567,9 +597,85 @@ export function useChatThread({
     )));
   }, []);
 
+  const editMessage = useCallback(async (messageId: string, content: string) => {
+    if (!sessionId || !content.trim() || sendTokenRef.current || regenerateTokenRef.current || editTokenRef.current) return;
+    const targetSessionId = sessionId;
+    const normalizedContent = content.trim();
+    const previousPending = pendingChatEditStore.get(targetSessionId);
+    if (previousPending && (
+      previousPending.messageId !== messageId || previousPending.content !== normalizedContent
+    )) {
+      throw new ApiError(409, {
+        code: 'CHAT_EDIT_UNCONFIRMED',
+        message: '上一次编辑结果尚未确认，请刷新会话后再试。',
+      });
+    }
+    const token = Symbol('edit-message');
+    editTokenRef.current = token;
+    setEditingId(messageId);
+    const clientRequestId = previousPending?.clientRequestId ?? crypto.randomUUID();
+    pendingChatEditStore.set({
+      sessionId: targetSessionId,
+      messageId,
+      content: normalizedContent,
+      clientRequestId,
+      createdAt: previousPending?.createdAt ?? new Date().toISOString(),
+    });
+    try {
+      const response = await editChatMessage(targetSessionId, messageId, {
+        content: normalizedContent,
+        clientRequestId,
+      });
+      pendingChatEditStore.clear(targetSessionId, clientRequestId);
+      if (!mountedRef.current || activeSessionRef.current !== targetSessionId || editTokenRef.current !== token) return;
+      setMessages((current) => {
+        const index = current.findIndex((message) => message.id === messageId);
+        if (index < 0) return [response.userMessage, response.assistantMessage];
+        return [...current.slice(0, index), response.userMessage, response.assistantMessage];
+      });
+      setLoadError('');
+      setRerankFallback(response.rerankFallback?.used ? response.rerankFallback : null);
+      onSessionsChangedRef.current();
+    } catch (caught) {
+      if (caught instanceof ApiError && isDefinitiveSendFailure(caught)) {
+        pendingChatEditStore.clear(targetSessionId, clientRequestId);
+        throw caught;
+      }
+      try {
+        const response = await listChatMessages(targetSessionId);
+        const accepted = response.items.some((message) => message.clientRequestId === clientRequestId);
+        if (accepted) {
+          pendingChatEditStore.clear(targetSessionId, clientRequestId);
+          if (mountedRef.current && activeSessionRef.current === targetSessionId && editTokenRef.current === token) {
+            setMessages(response.items);
+            setLoadError('');
+            onSessionsChangedRef.current();
+          }
+          return;
+        }
+      } catch {
+        // Keep the original error and pending id for a later retry/reload.
+      }
+      throw new ApiError(0, {
+        code: 'CHAT_EDIT_UNCONFIRMED',
+        message: '编辑结果暂未确认，已保留原请求编号。请刷新会话后再试。',
+      });
+    } finally {
+      if (editTokenRef.current === token) {
+        editTokenRef.current = null;
+        if (mountedRef.current) setEditingId(null);
+      }
+    }
+  }, [sessionId]);
+
+  const cancelSend = useCallback(() => {
+    sendAbortRef.current?.abort();
+  }, []);
+
   const hasPendingWrite = useCallback(() => Boolean(
     sendTokenRef.current
     || regenerateTokenRef.current
+    || editTokenRef.current
     || sendCheckTokenRef.current
     || regenerationCheckTokenRef.current
   ), []);
@@ -590,13 +696,16 @@ export function useChatThread({
     ),
     regeneration,
     regeneratingId,
+    editingId,
     rerankFallback,
     streamingAnswer,
     streamingCitations,
     reload: () => (sessionId ? loadThread(sessionId) : Promise.resolve()),
     send,
+    cancelSend,
     checkSendNow,
     regenerate,
+    editMessage,
     checkRegeneration,
     hasPendingWrite,
     updateMessageFeedback,
@@ -614,5 +723,7 @@ function findNewAssistantMessage(messages: ChatMessage[], baselineIds: string[])
  * and unclassified 5xx must go through reconciliation instead.
  */
 function isDefinitiveSendFailure(error: ApiError): boolean {
-  return error.status >= 400 && error.status < 500;
+  return (error.status >= 400 && error.status < 500)
+    || error.code === 'CHAT_COMPLETION_FAILED'
+    || error.code === 'RERANK_FAILED';
 }

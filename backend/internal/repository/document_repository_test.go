@@ -38,6 +38,39 @@ func TestClaimPendingJobLocksDocumentBeforeJob(t *testing.T) {
 	}
 }
 
+func TestSoftDeleteCancelsActiveJobAndLeavesRestorableFailedState(t *testing.T) {
+	db := newDocumentRepositoryTestDB(t)
+	repository := NewDocumentRepository(db)
+	document := createDocumentRepositoryTestDocument(t, db)
+	document.Status = "embedding"
+	if err := db.Save(&document).Error; err != nil {
+		t.Fatalf("mark document processing: %v", err)
+	}
+	job := model.DocumentJob{DocumentID: document.ID, JobType: "process_document", Status: "running"}
+	if err := db.Create(&job).Error; err != nil {
+		t.Fatalf("create running job: %v", err)
+	}
+
+	if err := repository.Delete(context.Background(), &document); err != nil {
+		t.Fatalf("soft delete document: %v", err)
+	}
+
+	var storedDocument model.Document
+	if err := db.Unscoped().First(&storedDocument, "id = ?", document.ID).Error; err != nil {
+		t.Fatalf("reload deleted document: %v", err)
+	}
+	if !storedDocument.DeletedAt.Valid || storedDocument.Status != "failed" {
+		t.Fatalf("expected a restorable failed document, got deleted=%v status=%q", storedDocument.DeletedAt.Valid, storedDocument.Status)
+	}
+	var storedJob model.DocumentJob
+	if err := db.First(&storedJob, "id = ?", job.ID).Error; err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if storedJob.Status != "cancelled" {
+		t.Fatalf("expected delete to cancel the active job, got %q", storedJob.Status)
+	}
+}
+
 func TestFinalizeJobLocksDocumentBeforeJob(t *testing.T) {
 	db := newDocumentRepositoryTestDB(t)
 	repository := NewDocumentRepository(db)

@@ -57,7 +57,9 @@
 | 500 | `EMBEDDING_FAILED` | 向量生成失败 |
 | 500 | `RERANK_FAILED` | 检索精排失败 |
 | 500 | `CHAT_COMPLETION_FAILED` | 生成回答失败 |
+| 500 | `CHAT_RESULT_UNCONFIRMED` | 回答结果需要重新确认 |
 | 409 | `IDEMPOTENCY_KEY_REUSED` | 同一幂等键已用于不同的聊天内容 |
+| 409 | `CHAT_MESSAGE_CHANGED` | 编辑消息生成期间会话已被其他请求修改，请刷新后重试 |
 | 400 | `EXPORT_TOO_LARGE` | 搜索结果过多，请缩小范围后再导出 |
 
 ## 字段校验错误示例

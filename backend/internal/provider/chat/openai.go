@@ -1,52 +1,59 @@
 package chat
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
+
+	openai "github.com/sashabaranov/go-openai"
 
 	chatcore "rag/backend/internal/chat"
 	"rag/backend/internal/config"
 )
 
 type OpenAICompatibleProvider struct {
-	baseURL    string
-	apiKey     string
-	model      string
-	httpClient *http.Client
-	// streamClient has no overall timeout: a long answer legitimately takes
-	// longer than one request budget, and cancellation comes from the request
-	// context instead. The header timeout still bounds an unresponsive endpoint.
+	baseURL      string
+	apiKey       string
+	model        string
+	client       *openai.Client
 	streamClient *http.Client
 }
 
 func NewOpenAICompatibleProvider(cfg config.Config) *OpenAICompatibleProvider {
+	baseURL := strings.TrimRight(cfg.ChatBaseURL, "/")
+	httpClient := &http.Client{Timeout: 90 * time.Second}
 	return &OpenAICompatibleProvider{
-		baseURL: strings.TrimRight(cfg.ChatBaseURL, "/"),
+		baseURL: baseURL,
 		apiKey:  cfg.ChatAPIKey,
 		model:   cfg.ChatModel,
-		httpClient: &http.Client{
-			Timeout: 90 * time.Second,
-		},
-		streamClient: &http.Client{
-			Transport: &http.Transport{
-				Proxy:                 http.ProxyFromEnvironment,
-				ResponseHeaderTimeout: 60 * time.Second,
-			},
-		},
+		client:  newClient(cfg.ChatAPIKey, baseURL, httpClient),
+		streamClient: &http.Client{Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			ResponseHeaderTimeout: 60 * time.Second,
+		}},
 	}
 }
 
+func newClient(apiKey, baseURL string, doer openai.HTTPDoer) *openai.Client {
+	cfg := openai.DefaultConfig(apiKey)
+	cfg.BaseURL = baseURL
+	cfg.HTTPClient = doer
+	return openai.NewClientWithConfig(cfg)
+}
+
+// Kept as a small wire-contract fixture for provider tests that verify stream=true.
 type chatRequest struct {
 	Model       string        `json:"model"`
 	Messages    []chatMessage `json:"messages"`
 	Temperature float64       `json:"temperature"`
-	Stream      bool          `json:"stream,omitempty"`
+	Stream      bool          `json:"stream"`
 }
 
 type chatMessage struct {
@@ -54,85 +61,25 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 
-type chatResponse struct {
-	Choices []struct {
-		Message chatMessage `json:"message"`
-	} `json:"choices"`
-	Error *struct {
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
-}
-
 func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []chatcore.Message) (string, error) {
 	if p.apiKey == "" {
 		return "", fmt.Errorf("CHAT_API_KEY is required")
 	}
 
-	payloadMessages := make([]chatMessage, 0, len(messages))
-	for _, message := range messages {
-		payloadMessages = append(payloadMessages, chatMessage{
-			Role:    message.Role,
-			Content: message.Content,
-		})
-	}
-
-	payload, err := json.Marshal(chatRequest{
+	response, err := p.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model:       p.model,
-		Messages:    payloadMessages,
+		Messages:    toOpenAIMessages(messages),
 		Temperature: 0.2,
 	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("chat request failed: %w", err)
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/chat/completions", bytes.NewReader(payload))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
-
-	resp, err := p.httpClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	var result chatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if result.Error != nil && result.Error.Message != "" {
-			return "", fmt.Errorf("chat request failed: %s", result.Error.Message)
-		}
-		return "", fmt.Errorf("chat request failed with status %d", resp.StatusCode)
-	}
-	if len(result.Choices) == 0 {
+	if len(response.Choices) == 0 {
 		return "", fmt.Errorf("chat response has no choices")
 	}
-
-	return result.Choices[0].Message.Content, nil
+	return response.Choices[0].Message.Content, nil
 }
 
-type chatStreamChunk struct {
-	Choices []struct {
-		Delta struct {
-			Content string `json:"content"`
-		} `json:"delta"`
-	} `json:"choices"`
-	Error *struct {
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
-}
-
-// maxStreamLineBytes bounds one SSE line. Providers occasionally emit a large
-// first chunk, and bufio's 64 KiB default would fail the whole stream on it.
-const maxStreamLineBytes = 1024 * 1024
-
-// ChatStream implements chatcore.StreamingProvider over the OpenAI-compatible
-// `stream: true` protocol: a sequence of `data: {json}` lines terminated by
-// `data: [DONE]`.
 func (p *OpenAICompatibleProvider) ChatStream(
 	ctx context.Context,
 	messages []chatcore.Message,
@@ -142,125 +89,53 @@ func (p *OpenAICompatibleProvider) ChatStream(
 		return "", fmt.Errorf("CHAT_API_KEY is required")
 	}
 
-	payloadMessages := make([]chatMessage, 0, len(messages))
-	for _, message := range messages {
-		payloadMessages = append(payloadMessages, chatMessage{
-			Role:    message.Role,
-			Content: message.Content,
-		})
-	}
-
-	payload, err := json.Marshal(chatRequest{
+	tracker := &streamResponseTracker{}
+	client := newClient(p.apiKey, p.baseURL, &trackingDoer{client: p.streamClient, tracker: tracker})
+	stream, err := client.CreateChatCompletionStream(ctx, openai.ChatCompletionRequest{
 		Model:       p.model,
-		Messages:    payloadMessages,
+		Messages:    toOpenAIMessages(messages),
 		Temperature: 0.2,
-		Stream:      true,
 	})
 	if err != nil {
-		return "", err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/chat/completions", bytes.NewReader(payload))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
-	req.Header.Set("Accept", "text/event-stream")
-
-	resp, err := p.streamClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Errors arrive as a normal JSON body even when streaming was requested.
-		var result chatResponse
-		message := ""
-		if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr == nil {
-			if result.Error != nil && result.Error.Message != "" {
-				message = result.Error.Message
-			}
-		}
-		if streamUnsupported(resp.StatusCode, message) {
-			_ = resp.Body.Close()
+		if streamUnsupportedError(err) {
 			return p.blockingFallback(ctx, messages, onDelta)
 		}
-		if message != "" {
-			return "", fmt.Errorf("chat request failed: %s", message)
-		}
-		return "", fmt.Errorf("chat request failed with status %d", resp.StatusCode)
+		return "", fmt.Errorf("chat request failed: %w", err)
 	}
+	defer stream.Close()
 
-	// A few OpenAI-compatible services ignore stream=true and return a regular
-	// completion JSON with 200. That is a valid non-streaming capability signal,
-	// not an incomplete SSE stream, so consume it without issuing a second call.
-	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "application/json") {
-		var result chatResponse
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			return "", err
+	if tracker.isJSON() {
+		_, recvErr := stream.Recv()
+		if recvErr != nil && !errors.Is(recvErr, io.EOF) {
+			return "", fmt.Errorf("decode chat response: %w", recvErr)
 		}
-		if result.Error != nil && result.Error.Message != "" {
-			return "", fmt.Errorf("chat request failed: %s", result.Error.Message)
-		}
-		if len(result.Choices) == 0 || result.Choices[0].Message.Content == "" {
-			return "", fmt.Errorf("chat response has no choices")
-		}
-		answer := result.Choices[0].Message.Content
-		if onDelta != nil {
-			if err := onDelta(answer); err != nil {
-				return "", err
-			}
-		}
-		return answer, nil
+		return emitBlockingJSON(tracker.bodyBytes(), onDelta)
 	}
 
 	var answer strings.Builder
-	sawDone := false
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxStreamLineBytes)
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		// Blank separators and non-data fields (`event:`, `id:`, `:` comments)
-		// carry nothing this protocol uses.
-		if line == "" || !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" {
-			continue
-		}
-		if data == "[DONE]" {
-			sawDone = true
+	for {
+		response, recvErr := stream.Recv()
+		if errors.Is(recvErr, io.EOF) {
+			if !tracker.doneSeen() {
+				return "", fmt.Errorf("chat stream ended before [DONE]")
+			}
 			break
 		}
-
-		var chunk chatStreamChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			return "", fmt.Errorf("decode chat stream data: %w", err)
+		if recvErr != nil {
+			return "", fmt.Errorf("decode chat stream data: %w", recvErr)
 		}
-		if chunk.Error != nil && chunk.Error.Message != "" {
-			return "", fmt.Errorf("chat request failed: %s", chunk.Error.Message)
-		}
-		for _, choice := range chunk.Choices {
-			if choice.Delta.Content == "" {
+		for _, choice := range response.Choices {
+			delta := choice.Delta.Content
+			if delta == "" {
 				continue
 			}
-			answer.WriteString(choice.Delta.Content)
+			answer.WriteString(delta)
 			if onDelta != nil {
-				if err := onDelta(choice.Delta.Content); err != nil {
+				if err := onDelta(delta); err != nil {
 					return "", err
 				}
 			}
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return "", err
-	}
-	if !sawDone {
-		return "", fmt.Errorf("chat stream ended before [DONE]")
 	}
 
 	if answer.Len() == 0 {
@@ -269,20 +144,33 @@ func (p *OpenAICompatibleProvider) ChatStream(
 	return answer.String(), nil
 }
 
+func toOpenAIMessages(messages []chatcore.Message) []openai.ChatCompletionMessage {
+	result := make([]openai.ChatCompletionMessage, 0, len(messages))
+	for _, message := range messages {
+		result = append(result, openai.ChatCompletionMessage{Role: message.Role, Content: message.Content})
+	}
+	return result
+}
+
+func streamUnsupportedError(err error) bool {
+	var apiErr *openai.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return streamUnsupported(apiErr.HTTPStatusCode, apiErr.Message)
+}
+
 func streamUnsupported(status int, message string) bool {
 	if status == http.StatusNotImplemented {
 		return true
 	}
-	if status != http.StatusBadRequest &&
-		status != http.StatusMethodNotAllowed &&
-		status != http.StatusUnsupportedMediaType &&
-		status != http.StatusUnprocessableEntity {
+	if status != http.StatusBadRequest && status != http.StatusMethodNotAllowed &&
+		status != http.StatusUnsupportedMediaType && status != http.StatusUnprocessableEntity {
 		return false
 	}
 	message = strings.ToLower(message)
 	return strings.Contains(message, "stream") && (strings.Contains(message, "not support") ||
-		strings.Contains(message, "unsupported") ||
-		strings.Contains(message, "does not support"))
+		strings.Contains(message, "unsupported") || strings.Contains(message, "does not support"))
 }
 
 func (p *OpenAICompatibleProvider) blockingFallback(
@@ -300,4 +188,123 @@ func (p *OpenAICompatibleProvider) blockingFallback(
 		}
 	}
 	return answer, nil
+}
+
+func emitBlockingJSON(body []byte, onDelta func(string) error) (string, error) {
+	var response openai.ChatCompletionResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return "", fmt.Errorf("decode chat response: %w", err)
+	}
+	if len(response.Choices) == 0 || response.Choices[0].Message.Content == "" {
+		return "", fmt.Errorf("chat response has no choices")
+	}
+	answer := response.Choices[0].Message.Content
+	if onDelta != nil {
+		if err := onDelta(answer); err != nil {
+			return "", err
+		}
+	}
+	return answer, nil
+}
+
+type trackingDoer struct {
+	client  openai.HTTPDoer
+	tracker *streamResponseTracker
+}
+
+func (d *trackingDoer) Do(req *http.Request) (*http.Response, error) {
+	response, err := d.client.Do(req)
+	if response == nil {
+		return response, err
+	}
+	d.tracker.setContentType(response.Header.Get("Content-Type"))
+	response.Body = &trackingBody{ReadCloser: response.Body, tracker: d.tracker}
+	return response, err
+}
+
+type trackingBody struct {
+	io.ReadCloser
+	tracker *streamResponseTracker
+}
+
+func (b *trackingBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 {
+		b.tracker.observe(p[:n])
+	}
+	if err != nil {
+		b.tracker.finish()
+	}
+	return n, err
+}
+
+const maxCapturedJSONBytes = 4 * 1024 * 1024
+
+type streamResponseTracker struct {
+	mu          sync.Mutex
+	contentType string
+	lineBuffer  []byte
+	sawDone     bool
+	body        bytes.Buffer
+}
+
+func (t *streamResponseTracker) setContentType(contentType string) {
+	t.mu.Lock()
+	t.contentType = strings.ToLower(contentType)
+	t.mu.Unlock()
+}
+
+func (t *streamResponseTracker) observe(chunk []byte) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if strings.Contains(t.contentType, "application/json") && t.body.Len() < maxCapturedJSONBytes {
+		remaining := maxCapturedJSONBytes - t.body.Len()
+		if len(chunk) > remaining {
+			chunk = chunk[:remaining]
+		}
+		_, _ = t.body.Write(chunk)
+	}
+	t.lineBuffer = append(t.lineBuffer, chunk...)
+	for {
+		lineEnd := bytes.IndexByte(t.lineBuffer, '\n')
+		if lineEnd < 0 {
+			break
+		}
+		t.observeLine(t.lineBuffer[:lineEnd])
+		t.lineBuffer = t.lineBuffer[lineEnd+1:]
+	}
+}
+
+func (t *streamResponseTracker) finish() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.lineBuffer) > 0 {
+		t.observeLine(t.lineBuffer)
+		t.lineBuffer = nil
+	}
+}
+
+func (t *streamResponseTracker) observeLine(line []byte) {
+	if string(bytes.TrimSpace(line)) == "data: [DONE]" {
+		t.sawDone = true
+	}
+}
+
+func (t *streamResponseTracker) isJSON() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return strings.Contains(t.contentType, "application/json")
+}
+
+func (t *streamResponseTracker) doneSeen() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sawDone
+}
+
+func (t *streamResponseTracker) bodyBytes() []byte {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]byte(nil), t.body.Bytes()...)
 }

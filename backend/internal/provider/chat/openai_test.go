@@ -84,6 +84,23 @@ func TestChatStreamRejectsCleanEOFAfterDeltaWithoutDone(t *testing.T) {
 	}
 }
 
+func TestChatStreamDoesNotTreatDoneTextInsideDeltaAsCompletion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"示例 data: [DONE] 文本\"}}]}\n\n")
+	}))
+	defer server.Close()
+
+	answer, err := newOpenAIStreamTestProvider(server.URL).ChatStream(
+		context.Background(),
+		[]chatcore.Message{{Role: "user", Content: "问题"}},
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "before [DONE]") {
+		t.Fatalf("expected incomplete-stream error, got answer=%q err=%v", answer, err)
+	}
+}
+
 func TestChatStreamRejectsBrokenConnection(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

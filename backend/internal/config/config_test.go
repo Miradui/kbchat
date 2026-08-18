@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -84,6 +85,19 @@ func TestLoadPreservesInvalidMaxUploadSizeForValidation(t *testing.T) {
 	}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "MAX_UPLOAD_SIZE_MB") {
 		t.Fatalf("expected MAX_UPLOAD_SIZE_MB validation error, got %v", err)
+	}
+}
+
+func TestLoadKeepsProcessEnvironmentOverDotEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/.env", []byte("SERVER_PORT=8080\n"), 0o600); err != nil {
+		t.Fatalf("write .env: %v", err)
+	}
+	t.Chdir(dir)
+	t.Setenv("SERVER_PORT", "9090")
+
+	if got := Load().ServerPort; got != "9090" {
+		t.Fatalf("expected process environment to win, got %q", got)
 	}
 }
 

@@ -184,7 +184,7 @@ func loadDotEnv() {
 	}
 
 	for _, path := range paths {
-		_ = godotenv.Overload(path)
+		_ = godotenv.Load(path)
 	}
 }
 

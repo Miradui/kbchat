@@ -17,6 +17,7 @@ export const SORTS: KnowledgeBaseSort[] = ['updatedAt_desc', 'createdAt_desc', '
 export const VISIBILITIES: WorkspaceVisibility[] = ['all', 'private', 'public'];
 
 const DEFAULT_PAGE_SIZE = 20;
+const PAGE_SIZES = [10, 20, 50] as const;
 
 function readEnum<T extends string>(raw: string | null, allowed: readonly T[], fallback: T): T {
   return raw !== null && (allowed as readonly string[]).includes(raw) ? (raw as T) : fallback;
@@ -25,6 +26,11 @@ function readEnum<T extends string>(raw: string | null, allowed: readonly T[], f
 function readPage(raw: string | null): number {
   const parsed = Number(raw);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function readPageSize(raw: string | null): number {
+  const parsed = Number(raw);
+  return PAGE_SIZES.includes(parsed as (typeof PAGE_SIZES)[number]) ? parsed : DEFAULT_PAGE_SIZE;
 }
 
 export type KnowledgeBaseFilters = {
@@ -62,7 +68,7 @@ export function useKnowledgeBaseList() {
     scope: readEnum(searchParams.get('scope'), SCOPES, 'all'),
     sort: readEnum(searchParams.get('sort'), SORTS, 'updatedAt_desc'),
     page: readPage(searchParams.get('page')),
-    pageSize: readPage(searchParams.get('pageSize')) || DEFAULT_PAGE_SIZE,
+    pageSize: readPageSize(searchParams.get('pageSize')),
   }), [searchParams]);
 
   useEffect(() => {

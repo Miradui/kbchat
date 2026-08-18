@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 
+import { ApiError } from '../api/client';
 import { changePassword, getCurrentUser, updateProfile } from '../api/resources';
 import { useToast } from '../components/feedback/ToastProvider';
 import { Button } from '../components/ui/Button';
@@ -11,19 +12,22 @@ import { currentUserStore } from '../store/currentUserStore';
 import { getErrorMessage } from '../utils/errors';
 import { validatePasswordLength } from '../utils/password';
 import { countUnicodeCodePoints } from '../utils/text';
+import type { User } from '../types/api';
 
 type AccountSettingsDialogProps = {
   open: boolean;
   onClose: () => void;
-  /** Lets the shell refresh the name it shows in the rail. */
-  onProfileSaved?: (displayName: string) => void;
+  /** Lets the shell refresh the identity it shows in the rail. */
+  onProfileSaved?: (user: User) => void;
 };
 
 type ProfileForm = { displayName: string; avatarUrl: string };
 type ProfileFieldErrors = { displayName: string; avatarUrl: string };
 type PasswordForm = { currentPassword: string; newPassword: string; confirmPassword: string };
+type PasswordFieldErrors = PasswordForm;
 
 const emptyPassword: PasswordForm = { currentPassword: '', newPassword: '', confirmPassword: '' };
+const emptyPasswordErrors: PasswordFieldErrors = { currentPassword: '', newPassword: '', confirmPassword: '' };
 const emptyProfileErrors: ProfileFieldErrors = { displayName: '', avatarUrl: '' };
 
 /**
@@ -40,9 +44,13 @@ export function AccountSettingsDialog({ open, onClose, onProfileSaved }: Account
   const [profileFieldErrors, setProfileFieldErrors] = useState<ProfileFieldErrors>(emptyProfileErrors);
   const [profileSaving, setProfileSaving] = useState(false);
   const [password, setPassword] = useState<PasswordForm>(emptyPassword);
-  const [passwordError, setPasswordError] = useState('');
+  const [passwordFieldErrors, setPasswordFieldErrors] = useState<PasswordFieldErrors>(emptyPasswordErrors);
+  const [passwordFormError, setPasswordFormError] = useState('');
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const currentPasswordRef = useRef<HTMLInputElement>(null);
+  const newPasswordRef = useRef<HTMLInputElement>(null);
+  const confirmPasswordRef = useRef<HTMLInputElement>(null);
 
   // Read the profile fresh on open: the rail only keeps the display name.
   useEffect(() => {
@@ -51,7 +59,8 @@ export function AccountSettingsDialog({ open, onClose, onProfileSaved }: Account
     setLoadError('');
     setProfileError('');
     setProfileFieldErrors(emptyProfileErrors);
-    setPasswordError('');
+    setPasswordFieldErrors(emptyPasswordErrors);
+    setPasswordFormError('');
     setPassword(emptyPassword);
     void currentUserStore
       .load(getCurrentUser)
@@ -92,7 +101,7 @@ export function AccountSettingsDialog({ open, onClose, onProfileSaved }: Account
       const updated = await updateProfile(nextProfile);
       // The cached user is now stale; the next read refetches it.
       currentUserStore.clear();
-      onProfileSaved?.(updated.displayName.trim() || updated.username);
+      onProfileSaved?.(updated);
       toast.success('账户资料已更新');
     } catch (error) {
       setProfileError(getErrorMessage(error, '账户资料更新失败'));
@@ -104,8 +113,11 @@ export function AccountSettingsDialog({ open, onClose, onProfileSaved }: Account
   const submitPassword = async (event: FormEvent) => {
     event.preventDefault();
     if (passwordSaving) return;
+    setPasswordFieldErrors(emptyPasswordErrors);
+    setPasswordFormError('');
     if (password.newPassword !== password.confirmPassword) {
-      setPasswordError('两次输入的新密码不一致');
+      setPasswordFieldErrors({ ...emptyPasswordErrors, confirmPassword: '两次输入的新密码不一致' });
+      confirmPasswordRef.current?.focus();
       return;
     }
     const lengthError = validatePasswordLength(
@@ -114,14 +126,21 @@ export function AccountSettingsDialog({ open, onClose, onProfileSaved }: Account
       capabilities.account.maxPasswordBytes,
     );
     if (lengthError === 'tooShort') {
-      setPasswordError(`新密码至少需要 ${capabilities.account.minPasswordLength} 个字符`);
+      setPasswordFieldErrors({
+        ...emptyPasswordErrors,
+        newPassword: `新密码至少需要 ${capabilities.account.minPasswordLength} 个字符`,
+      });
+      newPasswordRef.current?.focus();
       return;
     }
     if (lengthError === 'tooLong') {
-      setPasswordError(`新密码不能超过 ${capabilities.account.maxPasswordBytes} 个 UTF-8 字节`);
+      setPasswordFieldErrors({
+        ...emptyPasswordErrors,
+        newPassword: `新密码不能超过 ${capabilities.account.maxPasswordBytes} 个 UTF-8 字节`,
+      });
+      newPasswordRef.current?.focus();
       return;
     }
-    setPasswordError('');
     setPasswordSaving(true);
     try {
       await changePassword({
@@ -129,9 +148,18 @@ export function AccountSettingsDialog({ open, onClose, onProfileSaved }: Account
         newPassword: password.newPassword,
       });
       setPassword(emptyPassword);
+      setPasswordFieldErrors(emptyPasswordErrors);
       toast.success('密码已修改');
     } catch (error) {
-      setPasswordError(getErrorMessage(error, '密码修改失败'));
+      if (error instanceof ApiError && error.code === 'INVALID_CURRENT_PASSWORD') {
+        setPasswordFieldErrors({
+          ...emptyPasswordErrors,
+          currentPassword: getErrorMessage(error, '当前密码不正确'),
+        });
+        currentPasswordRef.current?.focus();
+      } else {
+        setPasswordFormError(getErrorMessage(error, '密码修改失败'));
+      }
     } finally {
       setPasswordSaving(false);
     }
@@ -190,18 +218,23 @@ export function AccountSettingsDialog({ open, onClose, onProfileSaved }: Account
       <div className="ui-menu-sep" />
 
       <form className="ui-dialog__form" onSubmit={(event) => void submitPassword(event)}>
-        <Field htmlFor="account-current-password" label="当前密码">
+        {passwordFormError && <p className="ui-field__error" role="alert">{passwordFormError}</p>}
+        <Field error={passwordFieldErrors.currentPassword} htmlFor="account-current-password" label="当前密码">
           <Input
             autoComplete="current-password"
             id="account-current-password"
-            onChange={(event) => setPassword((current) => ({ ...current, currentPassword: event.target.value }))}
+            onChange={(event) => {
+              setPassword((current) => ({ ...current, currentPassword: event.target.value }));
+              setPasswordFieldErrors((current) => ({ ...current, currentPassword: '' }));
+            }}
+            ref={currentPasswordRef}
             required
             type="password"
             value={password.currentPassword}
           />
         </Field>
         <Field
-          error={passwordError}
+          error={passwordFieldErrors.newPassword}
           htmlFor="account-new-password"
           hint={`至少 ${capabilities.account.minPasswordLength} 个字符，最多 ${capabilities.account.maxPasswordBytes} 个 UTF-8 字节`}
           label="新密码"
@@ -209,17 +242,25 @@ export function AccountSettingsDialog({ open, onClose, onProfileSaved }: Account
           <Input
             autoComplete="new-password"
             id="account-new-password"
-            onChange={(event) => setPassword((current) => ({ ...current, newPassword: event.target.value }))}
+            onChange={(event) => {
+              setPassword((current) => ({ ...current, newPassword: event.target.value }));
+              setPasswordFieldErrors((current) => ({ ...current, newPassword: '' }));
+            }}
+            ref={newPasswordRef}
             required
             type="password"
             value={password.newPassword}
           />
         </Field>
-        <Field htmlFor="account-confirm-password" label="确认新密码">
+        <Field error={passwordFieldErrors.confirmPassword} htmlFor="account-confirm-password" label="确认新密码">
           <Input
             autoComplete="new-password"
             id="account-confirm-password"
-            onChange={(event) => setPassword((current) => ({ ...current, confirmPassword: event.target.value }))}
+            onChange={(event) => {
+              setPassword((current) => ({ ...current, confirmPassword: event.target.value }));
+              setPasswordFieldErrors((current) => ({ ...current, confirmPassword: '' }));
+            }}
+            ref={confirmPasswordRef}
             required
             type="password"
             value={password.confirmPassword}

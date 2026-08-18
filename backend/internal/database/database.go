@@ -29,7 +29,19 @@ func AutoMigrate(ctx context.Context, db *gorm.DB) error {
 		return err
 	}
 
-	models := []any{
+	for _, item := range autoMigrateModels() {
+		if !db.WithContext(ctx).Migrator().HasTable(item) {
+			if err := db.WithContext(ctx).Migrator().CreateTable(item); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func autoMigrateModels() []any {
+	return []any{
 		&model.User{},
 		&model.KnowledgeBase{},
 		&model.KnowledgeBaseCategory{},
@@ -41,14 +53,6 @@ func AutoMigrate(ctx context.Context, db *gorm.DB) error {
 		&model.DocumentChunk{},
 		&model.ChatSession{},
 		&model.ChatMessage{},
+		&model.Activity{},
 	}
-	for _, item := range models {
-		if !db.WithContext(ctx).Migrator().HasTable(item) {
-			if err := db.WithContext(ctx).Migrator().CreateTable(item); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
 }

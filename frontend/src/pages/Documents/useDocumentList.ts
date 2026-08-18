@@ -54,7 +54,10 @@ export function useDocumentList(scopeKnowledgeBaseId?: string) {
     total: null, completed: null, processing: null, failed: null,
   });
   const requestRef = useRef(0);
+  const countRequestRef = useRef(0);
   const mountedRef = useRef(true);
+  const listAbortRef = useRef<AbortController | null>(null);
+  const countAbortRef = useRef<AbortController | null>(null);
 
   const filters = useMemo<DocumentFilters>(() => ({
     q: searchParams.get('q') ?? '',
@@ -73,11 +76,17 @@ export function useDocumentList(scopeKnowledgeBaseId?: string) {
     return () => {
       mountedRef.current = false;
       requestRef.current += 1;
+      countRequestRef.current += 1;
+      listAbortRef.current?.abort();
+      countAbortRef.current?.abort();
     };
   }, []);
 
   const load = useCallback(async (options: { quiet?: boolean } = {}) => {
     const request = ++requestRef.current;
+    listAbortRef.current?.abort();
+    const controller = new AbortController();
+    listAbortRef.current = controller;
     if (!options.quiet) setLoading(true);
     try {
       const response = await listGlobalDocuments({
@@ -88,7 +97,7 @@ export function useDocumentList(scopeKnowledgeBaseId?: string) {
         sort: filters.sort,
         page: filters.page,
         pageSize: filters.pageSize,
-      });
+      }, controller.signal);
       if (mountedRef.current && requestRef.current === request) {
         setItems(response.items);
         setTotal(response.total);
@@ -110,6 +119,10 @@ export function useDocumentList(scopeKnowledgeBaseId?: string) {
    * rather than counting the current page, which would under-report on page 2.
    */
   const loadCounts = useCallback(async () => {
+    const request = ++countRequestRef.current;
+    countAbortRef.current?.abort();
+    const controller = new AbortController();
+    countAbortRef.current = controller;
     const base = {
       q: filters.q || undefined,
       knowledgeBaseId: filters.knowledgeBaseId || undefined,
@@ -119,11 +132,11 @@ export function useDocumentList(scopeKnowledgeBaseId?: string) {
     };
     try {
       const [all, completed, failed] = await Promise.all([
-        listGlobalDocuments(base),
-        listGlobalDocuments({ ...base, status: 'completed' }),
-        listGlobalDocuments({ ...base, status: 'failed' }),
+        listGlobalDocuments(base, controller.signal),
+        listGlobalDocuments({ ...base, status: 'completed' }, controller.signal),
+        listGlobalDocuments({ ...base, status: 'failed' }, controller.signal),
       ]);
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || countRequestRef.current !== request) return;
       setCounts({
         total: all.total,
         completed: completed.total,
@@ -131,7 +144,7 @@ export function useDocumentList(scopeKnowledgeBaseId?: string) {
         processing: Math.max(0, all.total - completed.total - failed.total),
       });
     } catch {
-      if (mountedRef.current) {
+      if (mountedRef.current && countRequestRef.current === request) {
         setCounts({ total: null, completed: null, processing: null, failed: null });
       }
     }

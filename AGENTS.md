@@ -19,6 +19,9 @@
 | Frontend build | `cd frontend; npm run build` |
 | Frontend dev server | `cd frontend; npm run dev -- --host 127.0.0.1 --port 5173` |
 
+## Real Environment Verification
+- Real browser checks against the local integrated environment only need the `1920x1080` viewport.
+
 ## External References
 | Need | File |
 |------|------|

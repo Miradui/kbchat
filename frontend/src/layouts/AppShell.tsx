@@ -102,6 +102,7 @@ export function AppShell({
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const [userName, setUserName] = useState('当前用户');
+  const [userAvatarUrl, setUserAvatarUrl] = useState('');
   const [theme, setTheme] = useState<ThemeChoice>(() => themeStore.get());
   const [loggingOut, setLoggingOut] = useState(false);
   const railRef = useRef<HTMLElement>(null);
@@ -129,7 +130,10 @@ export function AppShell({
     let active = true;
     void currentUserStore.load(currentUserRequest)
       .then((user) => {
-        if (active) setUserName(user.displayName.trim() || user.username);
+        if (active) {
+          setUserName(user.displayName.trim() || user.username);
+          setUserAvatarUrl(user.avatarUrl?.trim() ?? '');
+        }
       })
       .catch(() => {
         // Handled by the API client.
@@ -243,7 +247,11 @@ export function AppShell({
             width={200}
             trigger={(props) => (
               <button {...props} className="rail__user" type="button">
-                <span className="ui-avatar" aria-hidden="true"><UserRound size={13} /></span>
+                <span className="ui-avatar" aria-hidden="true">
+                  {userAvatarUrl
+                    ? <img alt="" src={userAvatarUrl} onError={() => setUserAvatarUrl('')} />
+                    : <UserRound size={13} />}
+                </span>
                 <span className="rail__user-name" title={userName}>{userName}</span>
               </button>
             )}
@@ -355,7 +363,10 @@ export function AppShell({
       {accountOpen && (
         <AccountSettingsDialog
           onClose={() => setAccountOpen(false)}
-          onProfileSaved={setUserName}
+          onProfileSaved={(user) => {
+            setUserName(user.displayName.trim() || user.username);
+            setUserAvatarUrl(user.avatarUrl?.trim() ?? '');
+          }}
           open
         />
       )}

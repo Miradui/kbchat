@@ -427,9 +427,10 @@ func TestSendMessageStreamPersistsNothingWhenOpenAIStreamEndsWithoutDone(t *test
 	}
 }
 
-// G2: a concurrent stream that lost the unique index adopts the winner's pair
-// rather than failing or writing a second assistant message.
-func TestSendMessageStreamAdoptsConcurrentWinner(t *testing.T) {
+// A stream that already emitted a different answer cannot finish with the
+// winner's pair: that would make the visible deltas contradict done. The
+// client must reconcile the now-unknown result by clientRequestId instead.
+func TestSendMessageStreamRejectsDivergentConcurrentWinner(t *testing.T) {
 	ctx := context.Background()
 	db := newChatServiceTestDB(t)
 	user := createChatServiceUser(t, db)
@@ -451,18 +452,16 @@ func TestSendMessageStreamAdoptsConcurrentWinner(t *testing.T) {
 		clientRequestID: clientRequestID,
 		content:         "退货政策是什么",
 	}
-	if err := service.SendMessageStream(ctx, user.ID, session.ID, dto.SendChatMessageRequest{
+	err := service.SendMessageStream(ctx, user.ID, session.ID, dto.SendChatMessageRequest{
 		Content:         "退货政策是什么",
 		ClientRequestID: clientRequestID.String(),
-	}, racing); err != nil {
-		t.Fatalf("stream losing the race must still succeed: %v", err)
+	}, racing)
+	if err == nil {
+		t.Fatal("a stream whose emitted answer differs from the stored winner must remain unconfirmed")
 	}
 
-	if len(racing.done) != 1 {
-		t.Fatalf("expected the loser to finish with the winner's pair, got %d done events", len(racing.done))
-	}
-	if racing.done[0].Answer != "抢先写入的回答" {
-		t.Fatalf("expected the winner's stored answer, got %q", racing.done[0].Answer)
+	if len(racing.done) != 0 {
+		t.Fatalf("a divergent stream must not emit done, got %d done events", len(racing.done))
 	}
 	if got := countAssistantMessages(t, db, session.ID); got != 1 {
 		t.Fatalf("expected exactly one assistant message, got %d", got)

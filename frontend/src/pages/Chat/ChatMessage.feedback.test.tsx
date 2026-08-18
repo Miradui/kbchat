@@ -36,6 +36,48 @@ function renderMessage(message: ChatMessage, props: Partial<ComponentProps<typeo
 }
 
 describe('MessageBubble feedback', () => {
+  it('copies assistant and user messages and exposes edit controls', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+    const userMessage = {
+      ...assistantMessage,
+      id: 'user-1',
+      role: 'user',
+      content: '用户问题',
+    } satisfies ChatMessage;
+    const onStartEdit = vi.fn();
+    renderMessage(userMessage, { onStartEdit });
+
+    await user.click(screen.getByRole('button', { name: '复制消息' }));
+    expect(writeText).toHaveBeenCalledWith('用户问题');
+    await user.click(screen.getByRole('button', { name: '编辑消息' }));
+    expect(onStartEdit).toHaveBeenCalledWith('user-1', '用户问题');
+  });
+
+  it('supports keyboard submit and cancel while editing', async () => {
+    const user = userEvent.setup();
+    const onSubmitEdit = vi.fn();
+    const onCancelEdit = vi.fn();
+    const userMessage = {
+      ...assistantMessage,
+      id: 'user-1',
+      role: 'user',
+      content: '用户问题',
+    } satisfies ChatMessage;
+    const view = renderMessage(userMessage, {
+      editing: true,
+      editDraft: '修改后的问题',
+      onSubmitEdit,
+      onCancelEdit,
+    });
+    const input = screen.getByRole('textbox', { name: '编辑消息' });
+    await user.type(input, '{Control>}{Enter}{/Control}');
+    expect(onSubmitEdit).toHaveBeenCalledWith('user-1', '修改后的问题');
+    await user.keyboard('{Escape}');
+    expect(onCancelEdit).toHaveBeenCalled();
+    view.unmount();
+  });
+
   it('submits positive and negative feedback for assistant answers', async () => {
     const user = userEvent.setup();
     const onFeedback = vi.fn();

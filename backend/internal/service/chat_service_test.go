@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/driver/sqlite"
@@ -490,6 +491,131 @@ func TestRegenerateMessageRejectsNonAssistantMessage(t *testing.T) {
 
 	if _, err := service.RegenerateMessage(ctx, user.ID, session.ID, userMessage.ID); err == nil {
 		t.Fatal("expected regenerate to reject user messages")
+	}
+}
+
+func TestEditMessageAndRegenerateReplacesTail(t *testing.T) {
+	ctx := context.Background()
+	db := newChatServiceTestDB(t)
+	user := createChatServiceUser(t, db)
+	kb := createChatServiceKnowledgeBase(t, db, user.ID)
+	session := createChatServiceSession(t, db, user.ID, kb.ID)
+	baseTime := time.Now().UTC().Add(-time.Minute)
+	firstUser := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "old question", CreatedAt: baseTime}
+	oldAssistant := model.ChatMessage{SessionID: session.ID, Role: "assistant", Content: "old answer", CreatedAt: baseTime.Add(time.Second)}
+	laterUser := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "later question", CreatedAt: baseTime.Add(2 * time.Second)}
+	laterAssistant := model.ChatMessage{SessionID: session.ID, Role: "assistant", Content: "later answer", CreatedAt: baseTime.Add(3 * time.Second)}
+	for _, message := range []*model.ChatMessage{&firstUser, &oldAssistant, &laterUser, &laterAssistant} {
+		if err := db.Create(message).Error; err != nil {
+			t.Fatalf("create message: %v", err)
+		}
+	}
+	chunkID := uuid.New()
+	retrieval := &fakeChatRetrieval{response: &dto.SearchResponse{Items: []dto.SearchResultResponse{{
+		ChunkID: chunkID.String(), DocumentID: uuid.New().String(), Filename: "manual.md", Content: "fresh citation", VectorScore: 0.9,
+	}}}}
+	provider := &fakeChatProvider{responses: []string{
+		`{"intent":"knowledge_base","standaloneQuery":"rewritten edited question","reason":"needs docs"}`,
+		"new answer",
+	}}
+	service := NewChatService(config.Config{VectorTopN: 30, RerankTopK: 5, RerankEnabled: true, ChatHistoryLimit: 10}, repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), retrieval, provider, nil)
+	requestID := uuid.NewString()
+	res, err := service.EditMessageAndRegenerate(ctx, user.ID, session.ID, firstUser.ID, dto.EditChatMessageRequest{Content: " edited question ", ClientRequestID: requestID})
+	if err != nil {
+		t.Fatalf("edit message: %v", err)
+	}
+	if res.UserMessage.ID != firstUser.ID.String() || res.UserMessage.Content != "edited question" || res.AssistantMessage.Content != "new answer" {
+		t.Fatalf("unexpected edit response: %#v", res)
+	}
+	if len(retrieval.calls) != 1 || retrieval.calls[0].Query != "rewritten edited question" {
+		t.Fatalf("expected retrieval for edited content, got %#v", retrieval.calls)
+	}
+	var messages []model.ChatMessage
+	if err := db.Where("session_id = ?", session.ID).Order("created_at asc").Find(&messages).Error; err != nil {
+		t.Fatalf("list edited messages: %v", err)
+	}
+	if len(messages) != 2 || messages[0].ID != firstUser.ID || messages[0].Content != "edited question" || messages[1].Role != "assistant" {
+		t.Fatalf("expected target and one fresh assistant after tail replacement, got %#v", messages)
+	}
+}
+
+func TestEditMessageAndRegenerateKeepsOldMessagesWhenGenerationFails(t *testing.T) {
+	ctx := context.Background()
+	db := newChatServiceTestDB(t)
+	user := createChatServiceUser(t, db)
+	kb := createChatServiceKnowledgeBase(t, db, user.ID)
+	session := createChatServiceSession(t, db, user.ID, kb.ID)
+	userMessage := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "old question"}
+	assistantMessage := model.ChatMessage{SessionID: session.ID, Role: "assistant", Content: "old answer"}
+	if err := db.Create(&userMessage).Error; err != nil {
+		t.Fatalf("create user message: %v", err)
+	}
+	if err := db.Create(&assistantMessage).Error; err != nil {
+		t.Fatalf("create assistant message: %v", err)
+	}
+	service := NewChatService(config.Config{VectorTopN: 30, RerankTopK: 5, RerankEnabled: true, ChatHistoryLimit: 10}, repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), &fakeChatRetrieval{}, &fakeChatProvider{err: errors.New("provider unavailable")}, nil)
+	if _, err := service.EditMessageAndRegenerate(ctx, user.ID, session.ID, userMessage.ID, dto.EditChatMessageRequest{Content: "new question", ClientRequestID: uuid.NewString()}); err == nil {
+		t.Fatal("expected generation failure")
+	}
+	var messages []model.ChatMessage
+	if err := db.Where("session_id = ?", session.ID).Order("created_at asc").Find(&messages).Error; err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	if len(messages) != 2 || messages[0].Content != "old question" || messages[1].Content != "old answer" {
+		t.Fatalf("generation failure must preserve old conversation, got %#v", messages)
+	}
+}
+
+func TestEditMessageAndRegenerateIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	db := newChatServiceTestDB(t)
+	user := createChatServiceUser(t, db)
+	kb := createChatServiceKnowledgeBase(t, db, user.ID)
+	session := createChatServiceSession(t, db, user.ID, kb.ID)
+	userMessage := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "old question"}
+	assistantMessage := model.ChatMessage{SessionID: session.ID, Role: "assistant", Content: "old answer"}
+	if err := db.Create(&userMessage).Error; err != nil {
+		t.Fatalf("create user message: %v", err)
+	}
+	if err := db.Create(&assistantMessage).Error; err != nil {
+		t.Fatalf("create assistant message: %v", err)
+	}
+	provider := &fakeChatProvider{responses: []string{
+		`{"intent":"knowledge_base","standaloneQuery":"edited question","reason":"needs docs"}`,
+		"new answer",
+	}}
+	service := NewChatService(config.Config{VectorTopN: 30, RerankTopK: 5, RerankEnabled: true, ChatHistoryLimit: 10}, repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), &fakeChatRetrieval{response: &dto.SearchResponse{Items: []dto.SearchResultResponse{{ChunkID: uuid.NewString(), DocumentID: uuid.NewString(), Filename: "manual.md", Content: "supporting fact", VectorScore: 0.9}}}}, provider, nil)
+	request := dto.EditChatMessageRequest{Content: "edited question", ClientRequestID: uuid.NewString()}
+	first, err := service.EditMessageAndRegenerate(ctx, user.ID, session.ID, userMessage.ID, request)
+	if err != nil {
+		t.Fatalf("first edit: %v", err)
+	}
+	second, err := service.EditMessageAndRegenerate(ctx, user.ID, session.ID, userMessage.ID, request)
+	if err != nil {
+		t.Fatalf("idempotent edit retry: %v", err)
+	}
+	if first.AssistantMessage.ID != second.AssistantMessage.ID || len(provider.calls) != 2 {
+		t.Fatalf("retry should replay pair without regenerating, first=%#v second=%#v calls=%d", first, second, len(provider.calls))
+	}
+}
+
+func TestEditMessageAndRegenerateRejectsArchivedSession(t *testing.T) {
+	ctx := context.Background()
+	db := newChatServiceTestDB(t)
+	user := createChatServiceUser(t, db)
+	kb := createChatServiceKnowledgeBase(t, db, user.ID)
+	session := createChatServiceSession(t, db, user.ID, kb.ID)
+	archivedAt := time.Now().UTC()
+	if err := db.Model(&model.ChatSession{}).Where("id = ?", session.ID).Update("archived_at", archivedAt).Error; err != nil {
+		t.Fatalf("archive session: %v", err)
+	}
+	message := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "question"}
+	if err := db.Create(&message).Error; err != nil {
+		t.Fatalf("create message: %v", err)
+	}
+	service := NewChatService(config.Config{}, repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), &fakeChatRetrieval{}, &fakeChatProvider{}, nil)
+	if _, err := service.EditMessageAndRegenerate(ctx, user.ID, session.ID, message.ID, dto.EditChatMessageRequest{Content: "edited", ClientRequestID: uuid.NewString()}); err == nil {
+		t.Fatal("expected archived session edit to be rejected")
 	}
 }
 

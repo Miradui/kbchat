@@ -1,4 +1,4 @@
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -402,6 +402,7 @@ describe('DocumentsPage', () => {
       knowledgeBase.id,
       expect.any(File),
       expect.any(Function),
+      expect.any(AbortSignal),
     ));
     act(() => screen.getByText('切换到产品库路由').click());
     expect(await screen.findByRole('heading', { name: '产品库' })).toBeInTheDocument();
@@ -442,7 +443,7 @@ describe('DocumentsPage', () => {
       firstUpload.resolve(uploadedDocument);
       await Promise.resolve();
     });
-    expect(screen.getByRole('button', { name: '正在导入' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '停止上传' })).toBeEnabled();
 
     await act(async () => {
       secondUpload.resolve(secondDocument);
@@ -582,6 +583,36 @@ describe('DocumentsPage', () => {
     expect(screen.queryByText('handbook.pdf')).not.toBeInTheDocument();
   });
 
+  it('does not let stale count requests overwrite the current search totals', async () => {
+    const stale = deferred<{ items: DocumentItem[]; total: number; page: number; pageSize: number }>();
+    documentListMocks.counts.mockImplementation((params: { q?: string; status?: string }) => {
+      if (params.q === '旧筛选') return stale.promise;
+      if (params.q === '新筛选') {
+        const total = params.status === 'completed' ? 5 : params.status === 'failed' ? 1 : 8;
+        return Promise.resolve({ items: [], total, page: 1, pageSize: 1 });
+      }
+      return Promise.resolve({ items: [], total: 0, page: 1, pageSize: 1 });
+    });
+    renderPage();
+    const search = await screen.findByRole('searchbox', { name: '按文件名搜索' });
+
+    fireEvent.change(search, { target: { value: '旧筛选' } });
+    await waitFor(() => expect(documentListMocks.counts).toHaveBeenCalledWith(expect.objectContaining({ q: '旧筛选' })));
+    fireEvent.change(search, { target: { value: '新筛选' } });
+
+    const metrics = screen.getByRole('group', { name: '文档处理概况' });
+    await waitFor(() => expect(metrics).toHaveTextContent('8个文档'));
+    expect(metrics).toHaveTextContent('5可用于问答');
+    expect(metrics).toHaveTextContent('2处理中');
+
+    await act(async () => {
+      stale.resolve({ items: [], total: 99, page: 1, pageSize: 1 });
+      await Promise.resolve();
+    });
+    expect(metrics).toHaveTextContent('8个文档');
+    expect(metrics).not.toHaveTextContent('99个文档');
+  });
+
   it('keeps a failed document delete error inside the confirmation dialog', async () => {
     vi.mocked(listDocuments).mockResolvedValue({ items: [uploadedDocument] });
     vi.mocked(deleteDocument).mockRejectedValue(
@@ -670,5 +701,34 @@ describe('DocumentsPage', () => {
     expect(within(row!).getByText('失败')).toBeInTheDocument();
     expect(within(row!).getByText('文档处理失败，请检查文件内容或稍后重处理。')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '基于此知识库提问' })).toBeInTheDocument();
+  });
+
+  it('treats a stopped upload as unknown and refreshes before allowing another upload', async () => {
+    let uploadSignal: AbortSignal | undefined;
+    vi.mocked(uploadDocument).mockImplementation((
+      _knowledgeBaseId,
+      _file,
+      _onProgress,
+      signal,
+    ) => {
+      uploadSignal = signal;
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(
+          new ApiError(0, { code: 'REQUEST_ABORTED', message: '请求已取消。' }),
+        ), { once: true });
+      });
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    await uploadThroughDialog(user, new File(['large-content'], 'large.pdf', { type: 'application/pdf' }));
+    const dialog = screen.getByRole('dialog', { name: '导入文档' });
+    await waitFor(() => expect(uploadSignal).toBeInstanceOf(AbortSignal));
+    await user.click(within(dialog).getByRole('button', { name: '停止上传' }));
+
+    expect(uploadSignal?.aborted).toBe(true);
+    expect(await within(dialog).findByText(/上传结果未知/)).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: '重试失败项' })).not.toBeInTheDocument();
+    await waitFor(() => expect(listDocuments).toHaveBeenCalledTimes(2));
   });
 });

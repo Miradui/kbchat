@@ -105,7 +105,7 @@ type ChatProvider interface {
 }
 ```
 
-MVP 默认使用 OpenAI-compatible HTTP API 实现以上接口。
+MVP 默认使用 `github.com/sashabaranov/go-openai` 调用 OpenAI-compatible Chat、Embedding 和 Title API；Rerank 的 `/rerank` 为供应商扩展端点，继续由独立 Provider 实现。业务层仍只依赖上述 Provider 接口。
 
 ## 异步任务设计
 

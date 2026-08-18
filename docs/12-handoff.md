@@ -26,14 +26,14 @@
    - 数据库任务 worker。
    - txt、md、pdf 文档解析入口；PDF 按物理页保留真实页码。
    - 按来源格式切片：TXT 按纯文本处理，Markdown 保留结构，PDF 页内切片且不跨页合并或 overlap。
-   - OpenAI-compatible Embedding Provider。
+   - 基于 `go-openai` 的 OpenAI-compatible Embedding Provider。
    - 文档处理状态流转和 chunks 入库。
    - 向量检索 API。
    - OpenAI-compatible Rerank Provider、disabled provider 和可配置失败策略；当前 `RERANK_ENABLED=false` 时跳过 rerank。
    - 语义搜索 debug payload：`POST /api/v1/knowledge-bases/:id/search` 可传 `debug=true` 返回 vector/rerank/final 三段调试信息。
    - 聊天会话和消息 API。
-   - OpenAI-compatible Chat Provider。
-   - OpenAI-compatible Title Provider；会话默认标题会在首次问答后用独立 `TITLE_*` API 摘要更新，不复用 Chat Provider。
+   - 基于 `go-openai` 的 OpenAI-compatible Chat Provider；流式路径保留 `[DONE]` 完成信号校验及非流式兼容回退。
+   - 基于 `go-openai` 的 OpenAI-compatible Title Provider；会话默认标题会在首次问答后用独立 `TITLE_*` API 摘要更新，不复用 Chat Provider。
    - 多轮 RAG Prompt 组装：最近历史用于 Chat Provider 意图分类、检索问题改写和最终回答上下文。
    - AI 意图分类分支：Chat Provider 输出 `conversation` 或 `knowledge_base`；程序按 intent 路由。`conversation` 跳过知识库检索，直接基于历史回答，`citations=[]`。
    - answer + citations 返回和消息保存。
@@ -551,3 +551,18 @@ OpenAI-compatible Provider 同样把上游 `data: [DONE]` 作为唯一协议完�
 可选的真实 PostgreSQL 行锁集成测试只读取显式的 `RAG_TEST_POSTGRES_DSN`；
 未设置时按设计跳过，设置后使用独立临时 schema。SQLite 单元测试不能替代该
 真实锁等待验证。
+
+## Chat UX Update (2026-08-18)
+
+- 聊天模型调用统一通过 `github.com/sashabaranov/go-openai`：Chat、流式 Chat、
+  Embedding 和 Title 均使用 OpenAI-compatible SDK；Rerank 的供应商 `/rerank`
+  扩展端点仍由独立 Provider 负责。
+- user 消息支持复制和编辑；assistant 回答支持复制和重新生成。编辑成功后保留
+  原 user 消息 ID，删除其后的旧尾部并写入新的 user/assistant 消息，不保留版本树。
+  `Escape` 取消，`Ctrl/Cmd+Enter` 保存并重新生成；编辑结果未知时复用原
+  `clientRequestId` 对账，不重复生成。
+- 编辑、发送和重新生成互斥；编辑生成在途时禁用其它写操作，避免并发请求覆盖草稿。
+  会话列表仍由独立滚动区域承载，顶部知识库选择、新建和活跃/归档切换保持固定。
+- 左侧账户栏会显示已保存的头像 URL；图片加载失败时回退默认图标，不影响账户菜单。
+- 真实浏览器联调按项目约定只检查 `1920x1080`：登录、深层 URL、会话侧栏、消息
+  复制/编辑入口均已验证，控制台错误为 0。`.env` 未修改，工作区改动未提交。

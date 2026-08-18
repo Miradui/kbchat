@@ -101,6 +101,82 @@ func TestArchiveSessionDoesNotOverwriteExistingTimestamp(t *testing.T) {
 	}
 }
 
+func TestReplaceMessageTailRejectsStaleConversationSnapshot(t *testing.T) {
+	db := newChatRepositoryTestDB(t)
+	repository := NewChatRepository(db)
+	user := model.User{Username: "edit-" + uuid.NewString(), PasswordHash: "hash"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	kb := model.KnowledgeBase{Name: "Edit KB", OwnerID: user.ID}
+	if err := db.Create(&kb).Error; err != nil {
+		t.Fatalf("create knowledge base: %v", err)
+	}
+	session := model.ChatSession{UserID: user.ID, KnowledgeBaseID: kb.ID, Title: "edit"}
+	if err := db.Create(&session).Error; err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	target := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "old"}
+	oldAnswer := model.ChatMessage{SessionID: session.ID, Role: "assistant", Content: "old answer"}
+	concurrent := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "concurrent question"}
+	for _, message := range []*model.ChatMessage{&target, &oldAnswer, &concurrent} {
+		if err := db.Create(message).Error; err != nil {
+			t.Fatalf("create message: %v", err)
+		}
+	}
+	requestID := uuid.New()
+	edited := &model.ChatMessage{ID: target.ID, SessionID: session.ID, ClientRequestID: &requestID, Role: "user", Content: "edited"}
+	answer := &model.ChatMessage{SessionID: session.ID, ClientRequestID: &requestID, Role: "assistant", Content: "new answer"}
+	err := repository.ReplaceMessageTail(context.Background(), session.ID, target.ID, nil, []uuid.UUID{oldAnswer.ID}, edited, answer)
+	if !errors.Is(err, ErrChatMessageChanged) {
+		t.Fatalf("expected stale tail conflict, got %v", err)
+	}
+	var stored []model.ChatMessage
+	if err := db.Where("session_id = ?", session.ID).Find(&stored).Error; err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	if len(stored) != 3 {
+		t.Fatalf("stale edit must preserve all messages, got %#v", stored)
+	}
+}
+
+func TestCreateMessagesIfUnchangedRejectsStaleConversationSnapshot(t *testing.T) {
+	db := newChatRepositoryTestDB(t)
+	repository := NewChatRepository(db)
+	user := model.User{Username: "send-" + uuid.NewString(), PasswordHash: "hash"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	kb := model.KnowledgeBase{Name: "Send KB", OwnerID: user.ID}
+	if err := db.Create(&kb).Error; err != nil {
+		t.Fatalf("create knowledge base: %v", err)
+	}
+	session := model.ChatSession{UserID: user.ID, KnowledgeBaseID: kb.ID, Title: "send"}
+	if err := db.Create(&session).Error; err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	first := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "first"}
+	concurrent := model.ChatMessage{SessionID: session.ID, Role: "assistant", Content: "concurrent"}
+	if err := db.Create(&first).Error; err != nil {
+		t.Fatalf("create first message: %v", err)
+	}
+	if err := db.Create(&concurrent).Error; err != nil {
+		t.Fatalf("create concurrent message: %v", err)
+	}
+	stale := &model.ChatMessage{SessionID: session.ID, Role: "assistant", Content: "stale answer"}
+	err := repository.CreateMessagesIfUnchanged(context.Background(), []uuid.UUID{first.ID}, stale)
+	if !errors.Is(err, ErrChatMessageChanged) {
+		t.Fatalf("expected stale write conflict, got %v", err)
+	}
+	var count int64
+	if err := db.Model(&model.ChatMessage{}).Where("session_id = ?", session.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count messages: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("stale write must not append a message, got %d", count)
+	}
+}
+
 func newChatRepositoryTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", uuid.NewString())

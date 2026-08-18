@@ -234,6 +234,28 @@ describe('AppShell', () => {
     expect(screen.getByRole('button', { name: '打开导航' })).toHaveFocus();
   });
 
+  it('shows the saved avatar and falls back when the image cannot load', async () => {
+    stubMatchMedia(false);
+    const currentUserRequest = vi.fn().mockResolvedValue({
+      id: 'user-1',
+      username: 'admin',
+      displayName: '管理员',
+      avatarUrl: 'https://example.com/avatar.png',
+    });
+
+    const view = renderWithRouter(
+      <AppShell active="home" currentUserRequest={currentUserRequest}><p>内容</p></AppShell>,
+    );
+
+    await screen.findByText('管理员');
+    const avatar = view.container.querySelector<HTMLImageElement>('.rail__user .ui-avatar img');
+    expect(avatar).not.toBeNull();
+    expect(avatar).toHaveAttribute('src', 'https://example.com/avatar.png');
+
+    fireEvent.error(avatar!);
+    expect(view.container.querySelector('.rail__user .ui-avatar img')).not.toBeInTheDocument();
+  });
+
   it('keeps the mobile drawer open while focus moves within navigation', async () => {
     stubMatchMedia(true);
     const user = userEvent.setup();

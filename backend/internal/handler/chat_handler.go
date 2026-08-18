@@ -410,6 +410,28 @@ func (h *ChatHandler) RegenerateMessage(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
+func (h *ChatHandler) EditMessage(c *gin.Context) {
+	userID, sessionID, ok := userAndSessionID(c)
+	if !ok {
+		return
+	}
+	messageID, ok := parseUUIDParam(c, "messageId", "message id is invalid")
+	if !ok {
+		return
+	}
+	var req dto.EditChatMessageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		RespondError(c, apperror.Validation(map[string]any{"body": "request body is invalid"}))
+		return
+	}
+	res, err := h.chats.EditMessageAndRegenerate(c.Request.Context(), userID, sessionID, messageID, req)
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
 func userAndSessionID(c *gin.Context) (uuid.UUID, uuid.UUID, bool) {
 	userID, ok := currentUserIDOrError(c)
 	if !ok {

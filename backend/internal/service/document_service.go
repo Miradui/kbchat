@@ -1,10 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -574,10 +576,31 @@ func (s *DocumentService) validateFile(file *multipart.FileHeader) error {
 	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(file.Filename)), ".")
 	for _, allowed := range AllowedDocumentExtensions {
 		if ext == allowed {
+			if ext == "pdf" {
+				return validatePDFSignature(file)
+			}
 			return nil
 		}
 	}
 	return apperror.New(http.StatusBadRequest, "DOCUMENT_TYPE_UNSUPPORTED", "unsupported document type")
+}
+
+func validatePDFSignature(file *multipart.FileHeader) error {
+	opened, err := file.Open()
+	if err != nil {
+		return apperror.New(http.StatusBadRequest, "DOCUMENT_TYPE_UNSUPPORTED", "unsupported document type")
+	}
+	defer opened.Close()
+
+	header := make([]byte, 1024)
+	n, readErr := io.ReadFull(opened, header)
+	if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		return apperror.New(http.StatusBadRequest, "DOCUMENT_TYPE_UNSUPPORTED", "unsupported document type")
+	}
+	if !bytes.Contains(header[:n], []byte("%PDF-")) {
+		return apperror.New(http.StatusBadRequest, "DOCUMENT_TYPE_UNSUPPORTED", "unsupported document type")
+	}
+	return nil
 }
 
 func (s *DocumentService) latestJobForDocument(ctx context.Context, documentID uuid.UUID) (*model.DocumentJob, error) {

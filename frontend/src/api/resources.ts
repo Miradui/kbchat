@@ -45,6 +45,7 @@ import type {
   RegenerateChatMessageResponse,
   SendChatMessageResponse,
   SendChatMessageRequest,
+  EditChatMessageRequest,
   SearchSuggestResponse,
   SystemCapabilities,
   UpdateProfileInput,
@@ -379,8 +380,9 @@ export function listDocuments(
 
 export function listGlobalDocuments(
   params: GlobalDocumentListParams = {},
+  signal?: AbortSignal,
 ): Promise<GlobalDocumentListResponse> {
-  return apiRequest<GlobalDocumentListResponse>(withQuery('/documents', params));
+  return apiRequest<GlobalDocumentListResponse>(withQuery('/documents', params), { signal });
 }
 
 export function getDocument(id: string): Promise<DocumentItem> {
@@ -408,12 +410,14 @@ export function uploadDocument(
   knowledgeBaseId: string,
   file: File,
   onProgress?: (progress: number) => void,
+  signal?: AbortSignal,
 ): Promise<DocumentItem> {
   const body = new FormData();
   body.append('file', file);
 
   return apiUploadRequest<DocumentItem>(`/knowledge-bases/${knowledgeBaseId}/documents`, body, {
     onProgress,
+    signal,
   });
 }
 
@@ -421,12 +425,13 @@ export function uploadGlobalDocument(
   knowledgeBaseId: string,
   file: File,
   onProgress?: (progress: number) => void,
+  signal?: AbortSignal,
 ): Promise<DocumentItem> {
   const body = new FormData();
   body.append('knowledgeBaseId', knowledgeBaseId);
   body.append('file', file);
 
-  return apiUploadRequest<DocumentItem>('/documents', body, { onProgress });
+  return apiUploadRequest<DocumentItem>('/documents', body, { onProgress, signal });
 }
 
 export function deleteDocument(id: string): Promise<void> {
@@ -682,7 +687,8 @@ export async function sendChatMessageStream(
       const payload = parseStreamPayload<{ citations?: Citation[] }>(event.data);
       handlers.onCitations?.(payload?.citations ?? []);
     } else if (event.event === 'done') {
-      done = parseStreamPayload<SendChatMessageResponse>(event.data);
+      const payload = parseStreamPayload<unknown>(event.data);
+      done = isCompletedChatResponse(payload, sessionId, input.clientRequestId) ? payload : null;
       break;
     } else if (event.event === 'error') {
       const payload = parseStreamPayload<{ status?: number; code?: string; message?: string; details?: Record<string, unknown> }>(event.data);
@@ -700,6 +706,39 @@ export async function sendChatMessageStream(
     throw new ApiError(0, { code: 'STREAM_INCOMPLETE', message: '回答尚未完成，连接已中断。' });
   }
   return done;
+}
+
+export function editChatMessage(
+  sessionId: string,
+  messageId: string,
+  input: EditChatMessageRequest,
+): Promise<SendChatMessageResponse> {
+  return apiRequest<SendChatMessageResponse>(`/chat/sessions/${sessionId}/messages/${messageId}/edit`, {
+    method: 'PUT',
+    body: input,
+  });
+}
+
+function isCompletedChatResponse(
+  value: unknown,
+  sessionId: string,
+  clientRequestId: string,
+): value is SendChatMessageResponse {
+  if (!value || typeof value !== 'object') return false;
+  const response = value as Partial<SendChatMessageResponse>;
+  if (
+    response.clientRequestId !== clientRequestId
+    || typeof response.answer !== 'string'
+    || !Array.isArray(response.citations)
+    || !response.userMessage
+    || !response.assistantMessage
+  ) return false;
+  return response.userMessage.sessionId === sessionId
+    && response.userMessage.role === 'user'
+    && response.userMessage.clientRequestId === clientRequestId
+    && response.assistantMessage.sessionId === sessionId
+    && response.assistantMessage.role === 'assistant'
+    && response.assistantMessage.clientRequestId === clientRequestId;
 }
 
 function parseStreamPayload<T>(data: string): T | null {

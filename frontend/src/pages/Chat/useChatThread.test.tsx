@@ -8,6 +8,7 @@ import { useChatThread } from './useChatThread';
 
 const resourceMocks = vi.hoisted(() => ({
   createChatSession: vi.fn(),
+  editChatMessage: vi.fn(),
   getChatSession: vi.fn(),
   listChatMessages: vi.fn(),
   regenerateChatMessage: vi.fn(),
@@ -26,10 +27,26 @@ const session: ChatSession = {
 };
 
 const completedResponse: SendChatMessageResponse = {
+  clientRequestId: 'req-completed',
+  userMessage: messagesForResponse('req-completed')[0],
+  assistantMessage: messagesForResponse('req-completed')[1],
   answer: '完整回答',
   citations: [],
   rerankFallback: null,
 };
+
+function messagesForResponse(clientRequestId: string): [ChatMessage, ChatMessage] {
+  return [
+    {
+      id: 'completed-user', sessionId: session.id, clientRequestId, role: 'user',
+      content: '问题', citations: [], createdAt: '2026-08-10T00:00:01Z',
+    },
+    {
+      id: 'completed-assistant', sessionId: session.id, clientRequestId, role: 'assistant',
+      content: '完整回答', citations: [], createdAt: '2026-08-10T00:00:02Z',
+    },
+  ];
+}
 
 function messagesFor(clientRequestId: string): ChatMessage[] {
   return [
@@ -102,6 +119,67 @@ describe('useChatThread send reconciliation', () => {
       message: messagesFor('regenerate')[1],
       rerankFallback: null,
     });
+    resourceMocks.editChatMessage.mockReset();
+  });
+
+  it('replaces the edited user turn and all later messages with the returned pair', async () => {
+    const initial = [
+      ...messagesFor('old-request'),
+      { ...messagesFor('later-request')[0], id: 'later-user', content: '后续问题' },
+      { ...messagesFor('later-request')[1], id: 'later-assistant', content: '后续回答' },
+    ];
+    resourceMocks.listChatMessages.mockResolvedValue({ items: initial });
+    const editedUser = { ...initial[0], content: '修改后的问题', clientRequestId: 'edit-request' };
+    const editedAssistant = { ...initial[1], id: 'edited-assistant', content: '修改后的回答', clientRequestId: 'edit-request' };
+    resourceMocks.editChatMessage.mockResolvedValue({
+      clientRequestId: 'edit-request',
+      userMessage: editedUser,
+      assistantMessage: editedAssistant,
+      answer: editedAssistant.content,
+      citations: [],
+      rerankFallback: null,
+    });
+    const { result } = renderThread();
+    await settleEffects();
+
+    await act(async () => {
+      await result.current.editMessage(initial[0].id, '修改后的问题');
+    });
+
+    expect(resourceMocks.editChatMessage).toHaveBeenCalledWith(
+      session.id,
+      initial[0].id,
+      expect.objectContaining({ content: '修改后的问题' }),
+    );
+    expect(result.current.messages).toEqual([editedUser, editedAssistant]);
+    expect(result.current.editingId).toBeNull();
+  });
+
+  it('adopts a committed edit when the edit response is lost', async () => {
+    const initial = messagesFor('old-request');
+    const committed = [
+      { ...initial[0], content: '修改后的问题', clientRequestId: 'lost-edit-request' },
+      { ...initial[1], id: 'edited-assistant', content: '服务端已提交的新回答', clientRequestId: 'lost-edit-request' },
+    ];
+    resourceMocks.listChatMessages
+      .mockResolvedValueOnce({ items: initial })
+      .mockImplementationOnce(async () => {
+        const request = resourceMocks.editChatMessage.mock.calls[0]?.[2] as { clientRequestId: string };
+        return {
+          items: committed.map((message) => ({ ...message, clientRequestId: request.clientRequestId })),
+        };
+      });
+    resourceMocks.editChatMessage.mockRejectedValue(new TypeError('Failed to fetch'));
+    const { result } = renderThread();
+    await settleEffects();
+
+    await act(async () => {
+      await result.current.editMessage(initial[0].id, '修改后的问题');
+    });
+
+    expect(result.current.messages[0].content).toBe('修改后的问题');
+    expect(result.current.messages[1].content).toBe('服务端已提交的新回答');
+    expect(window.localStorage.getItem(`rag.chat.pending-edit:${session.id}`)).toBeNull();
   });
 
   it('treats a partial stream without done as an unknown result', async () => {
@@ -127,6 +205,37 @@ describe('useChatThread send reconciliation', () => {
     expect(pendingChatRequestStore.get(session.id)?.clientRequestId).toBe(
       result.current.unconfirmedSend?.request.clientRequestId,
     );
+  });
+
+  it('aborts the active stream when the thread unmounts', async () => {
+    let receivedSignal: AbortSignal | undefined;
+    resourceMocks.sendChatMessageStream.mockImplementation((
+      _sessionId: string,
+      _input: unknown,
+      _handlers: unknown,
+      signal?: AbortSignal,
+    ) => {
+      receivedSignal = signal;
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+      });
+    });
+
+    const { result, unmount } = renderThread();
+    await settleEffects();
+
+    let sending!: Promise<void>;
+    act(() => {
+      sending = result.current.send('问题');
+    });
+    await settleEffects();
+    expect(receivedSignal).toBeInstanceOf(AbortSignal);
+
+    unmount();
+    expect(receivedSignal?.aborted).toBe(true);
+    await act(async () => {
+      await sending;
+    });
   });
 
   it('treats status zero as an unknown result', async () => {
@@ -176,7 +285,7 @@ describe('useChatThread send reconciliation', () => {
     expect(pendingChatRequestStore.get(session.id)).toBeNull();
   });
 
-  it('does not classify a 5xx stream error as a definitive failure', async () => {
+  it('treats an explicit chat generation failure as definitive', async () => {
     resourceMocks.sendChatMessageStream.mockRejectedValue(
       new ApiError(500, { code: 'CHAT_COMPLETION_FAILED', message: '生成失败' }),
     );
@@ -188,8 +297,12 @@ describe('useChatThread send reconciliation', () => {
       await result.current.send('问题');
     });
 
-    expect(result.current.failedSend).toBeNull();
-    expect(result.current.unconfirmedSend?.request.question).toBe('问题');
+    expect(result.current.failedSend).toEqual({
+      question: '问题',
+      message: '回答生成失败，请稍后重试。',
+    });
+    expect(result.current.unconfirmedSend).toBeNull();
+    expect(pendingChatRequestStore.get(session.id)).toBeNull();
   });
 
   it('reuses the original clientRequestId when resending an unknown result', async () => {

@@ -122,6 +122,28 @@ describe('sendChatMessageStream', () => {
     expect(afterDone).not.toHaveBeenCalled();
   });
 
+  it('rejects a done payload that omits the persisted message pair', async () => {
+    apiEventStreamMock.mockImplementation(streamOf([{
+      event: 'done',
+      data: { answer: '看似完成', citations: [], rerankFallback: null },
+    }]));
+
+    await expect(
+      sendChatMessageStream('s1', { content: 'q', clientRequestId: 'req-1' }),
+    ).rejects.toMatchObject({ code: 'STREAM_INCOMPLETE', status: 0 });
+  });
+
+  it('rejects a done payload for a different clientRequestId', async () => {
+    apiEventStreamMock.mockImplementation(streamOf([{
+      event: 'done',
+      data: { ...donePayload, clientRequestId: 'another-request' },
+    }]));
+
+    await expect(
+      sendChatMessageStream('s1', { content: 'q', clientRequestId: 'req-1' }),
+    ).rejects.toMatchObject({ code: 'STREAM_INCOMPLETE', status: 0 });
+  });
+
   it('ignores a malformed frame instead of failing the whole answer', async () => {
     apiEventStreamMock.mockImplementation(async function* () {
       yield { event: 'delta', data: '{not json' };

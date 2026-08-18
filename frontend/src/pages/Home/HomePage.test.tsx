@@ -172,4 +172,21 @@ describe('HomePage', () => {
     expect(screen.getByText('个知识库').parentElement).toHaveTextContent('7个知识库');
     expect(vi.mocked(sources.loadSummary).mock.calls.length).toBeGreaterThan(1);
   });
+
+  it('shows and retries an activity loading failure instead of an empty state', async () => {
+    const sources = createSources();
+    vi.mocked(sources.loadActivities)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue([]);
+    const user = userEvent.setup();
+    renderWithRouter(<HomePage sources={sources} />);
+
+    const unavailable = await screen.findByText('动态暂不可用');
+    expect(screen.queryByText('还没有动态')).not.toBeInTheDocument();
+
+    await user.click(within(unavailable.parentElement!).getByRole('button', { name: '重试' }));
+
+    expect(await screen.findByText('还没有动态')).toBeInTheDocument();
+    expect(sources.loadActivities).toHaveBeenCalledTimes(2);
+  });
 });

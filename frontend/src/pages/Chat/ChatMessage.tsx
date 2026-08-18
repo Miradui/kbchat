@@ -1,4 +1,4 @@
-import { ChevronDown, FileText, RotateCw, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { Check, ChevronDown, Copy, FileText, Pencil, RotateCw, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
@@ -23,12 +23,20 @@ type MessageBubbleProps = {
   focusedCitationIndex: number | null;
   onFocusCitation: (messageId: string, index: number | null) => void;
   canRegenerate: boolean;
+  canEdit?: boolean;
   regenerating: boolean;
   onRegenerate: (messageId: string) => void;
   feedbackSaving: boolean;
   onFeedback: (messageId: string, rating: ChatFeedbackRating) => void;
   /** Recovery affordance rendered under this message, if it owns one. */
   recovery?: ReactNode;
+  editing?: boolean;
+  editDraft?: string;
+  editSaving?: boolean;
+  onEditDraftChange?: (content: string) => void;
+  onStartEdit?: (messageId: string, content: string) => void;
+  onCancelEdit?: () => void;
+  onSubmitEdit?: (messageId: string, content: string) => void;
 };
 
 export function MessageBubble({
@@ -37,14 +45,41 @@ export function MessageBubble({
   focusedCitationIndex,
   onFocusCitation,
   canRegenerate,
+  canEdit = true,
   regenerating,
   onRegenerate,
   feedbackSaving,
   onFeedback,
   recovery,
+  editing = false,
+  editDraft = '',
+  editSaving = false,
+  onEditDraftChange,
+  onStartEdit,
+  onCancelEdit,
+  onSubmitEdit,
 }: MessageBubbleProps) {
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
+  const copiedTimerRef = useRef<number | null>(null);
   const isAssistant = message.role === 'assistant';
+
+  useEffect(() => () => {
+    if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current);
+  }, []);
+
+  async function copyMessage() {
+    try {
+      await copyText(message.content);
+      setCopied(true);
+      setCopyError(false);
+      if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setCopyError(true);
+    }
+  }
 
   // Clicking an inline marker opens the source list and reveals that entry.
   useEffect(() => {
@@ -54,16 +89,67 @@ export function MessageBubble({
   return (
     <article className={`chat-msg chat-msg--${message.role}`}>
       <div className="chat-msg__body">
-        <p className="chat-msg__content">
-          {isAssistant
-            ? renderWithCitations(
-              message.content,
-              message.citations,
-              focusedCitationIndex,
-              (index) => onFocusCitation(message.id, index),
-            )
-            : message.content}
-        </p>
+        {editing && !isAssistant ? (
+          <textarea
+            aria-label="编辑消息"
+            autoFocus
+            className="chat-msg__edit-input"
+            disabled={editSaving}
+            onChange={(event) => onEditDraftChange?.(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                onCancelEdit?.();
+              } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault();
+                onSubmitEdit?.(message.id, editDraft);
+              }
+            }}
+            value={editDraft}
+          />
+        ) : (
+          <p className="chat-msg__content">
+            {isAssistant
+              ? renderWithCitations(
+                message.content,
+                message.citations,
+                focusedCitationIndex,
+                (index) => onFocusCitation(message.id, index),
+              )
+              : message.content}
+          </p>
+        )}
+
+        {editing && !isAssistant ? (
+          <div className="chat-msg__edit-actions">
+            <Button disabled={editSaving} leadingIcon={<X aria-hidden="true" />} variant="ghost" onClick={onCancelEdit}>取消</Button>
+            <Button
+              disabled={!editDraft.trim()}
+              loading={editSaving}
+              loadingLabel="生成中"
+              variant="primary"
+              onClick={() => onSubmitEdit?.(message.id, editDraft)}
+            >
+              保存并重新生成
+            </Button>
+          </div>
+        ) : !isAssistant ? (
+          <div className="chat-msg__foot chat-msg__actions">
+            <IconButton
+              className="chat-msg__copy-button"
+              label={copied ? '已复制' : isAssistant ? '复制回答' : '复制消息'}
+              onClick={() => void copyMessage()}
+            >
+              {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+            </IconButton>
+            {canEdit && (
+              <IconButton label="编辑消息" onClick={() => onStartEdit?.(message.id, message.content)}>
+                <Pencil aria-hidden="true" />
+              </IconButton>
+            )}
+            {copyError && <span className="chat-msg__copy-error" role="alert">复制失败，请手动选择文本。</span>}
+          </div>
+        ) : null}
 
         {isAssistant && (
           <div className="chat-msg__foot">
@@ -83,6 +169,14 @@ export function MessageBubble({
             ) : (
               <span className="chat-msg__no-sources">当前知识库中未找到足够依据。</span>
             )}
+
+            <IconButton
+              className="chat-msg__copy-button"
+              label={copied ? '已复制' : '复制回答'}
+              onClick={() => void copyMessage()}
+            >
+              {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+            </IconButton>
 
             <div aria-label="回答反馈" className="chat-msg__feedback" role="group">
               <IconButton
@@ -117,6 +211,7 @@ export function MessageBubble({
                 重新生成
               </Button>
             )}
+            {copyError && <span className="chat-msg__copy-error" role="alert">复制失败，请手动选择文本。</span>}
           </div>
         )}
 
@@ -255,4 +350,21 @@ export function CitationCard({ citation, focused, index, knowledgeBaseId }: Cita
       </footer>
     </article>
   );
+}
+
+async function copyText(content: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(content);
+    return;
+  }
+  const input = document.createElement('textarea');
+  input.value = content;
+  input.setAttribute('readonly', '');
+  input.style.position = 'fixed';
+  input.style.opacity = '0';
+  document.body.appendChild(input);
+  input.select();
+  const copied = document.execCommand('copy');
+  input.remove();
+  if (!copied) throw new Error('copy failed');
 }

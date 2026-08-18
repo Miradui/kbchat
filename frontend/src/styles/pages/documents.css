@@ -117,6 +117,7 @@
 .doc-import__status.is-uploading { color: var(--warn); }
 .doc-import__status.is-succeeded { color: var(--ok); }
 .doc-import__status.is-failed { color: var(--danger); }
+.doc-import__status.is-unconfirmed { color: var(--warn); }
 .doc-import__upload-progress {
   align-items: center;
   display: grid;

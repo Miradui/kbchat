@@ -1,4 +1,4 @@
-import { CornerDownLeft } from 'lucide-react';
+import { CornerDownLeft, Square } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import type { FormEvent, KeyboardEvent } from 'react';
 
@@ -15,6 +15,7 @@ type ChatComposerProps = {
   hint?: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  onCancel: () => void;
 };
 
 /**
@@ -29,6 +30,7 @@ export function ChatComposer({
   hint,
   onChange,
   onSubmit,
+  onCancel,
 }: ChatComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -71,15 +73,23 @@ export function ChatComposer({
           <span className="chat-composer__hint">
             <kbd className="ui-kbd">Enter</kbd> 发送 · <kbd className="ui-kbd">Shift + Enter</kbd> 换行
           </span>
-          <Button
-            disabled={disabled || !value.trim()}
-            leadingIcon={<CornerDownLeft aria-hidden="true" />}
-            loading={sending}
-            loadingLabel="生成中"
-            type="submit"
-          >
-            发送
-          </Button>
+          {sending ? (
+            <Button
+              leadingIcon={<Square aria-hidden="true" />}
+              onClick={onCancel}
+              variant="secondary"
+            >
+              停止生成
+            </Button>
+          ) : (
+            <Button
+              disabled={disabled || !value.trim()}
+              leadingIcon={<CornerDownLeft aria-hidden="true" />}
+              type="submit"
+            >
+              发送
+            </Button>
+          )}
         </div>
       </div>
       {hint && <p className="chat-composer__note">{hint}</p>}

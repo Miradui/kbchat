@@ -138,6 +138,7 @@ describe('DocumentImportDialog', () => {
       'kb1',
       expect.objectContaining({ name: 'notes.txt' }),
       expect.any(Function),
+      expect.any(AbortSignal),
     ));
   });
 
@@ -277,7 +278,7 @@ describe('DocumentImportDialog', () => {
     fireEvent.mouseDown(screen.getByTestId('dialog-backdrop'));
 
     expect(onClose).not.toHaveBeenCalled();
-    expect(within(screen.getByRole('dialog')).getByRole('button', { name: '取消' })).toBeDisabled();
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: '停止上传' })).toBeEnabled();
 
     await act(async () => {
       result.resolve(documentFor(file));

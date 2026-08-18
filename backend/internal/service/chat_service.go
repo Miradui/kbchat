@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 
@@ -498,10 +499,13 @@ func (s *ChatService) SendMessage(ctx context.Context, userID, sessionID uuid.UU
 	if err != nil {
 		return nil, err
 	}
-	if err := s.chats.CreateMessages(ctx, userMessage, assistantMessage); err != nil {
+	if err := s.chats.CreateMessagesIfUnchanged(ctx, chatMessageIDs(history), userMessage, assistantMessage); err != nil {
 		existing, lookupErr := s.chats.FindMessagesByClientRequestID(ctx, session.ID, clientRequestID)
 		if lookupErr == nil && len(existing) > 0 {
 			return sendMessageResponseFromPair(clientRequestID, content, existing)
+		}
+		if errors.Is(err, repository.ErrChatMessageChanged) {
+			return nil, apperror.New(http.StatusConflict, "CHAT_MESSAGE_CHANGED", "conversation changed while the answer was being generated")
 		}
 		return nil, apperror.Internal(err)
 	}
@@ -599,7 +603,7 @@ func (s *ChatService) SendMessageStream(
 	if err != nil {
 		return err
 	}
-	if err := s.chats.CreateMessages(ctx, userMessage, assistantMessage); err != nil {
+	if err := s.chats.CreateMessagesIfUnchanged(ctx, chatMessageIDs(history), userMessage, assistantMessage); err != nil {
 		// A concurrent stream with the same key may have won the unique index.
 		// Adopting its pair is what keeps "no second assistant message" true
 		// under concurrency, not just under retry.
@@ -609,7 +613,23 @@ func (s *ChatService) SendMessageStream(
 			if pairErr != nil {
 				return pairErr
 			}
+			if generated.answer != res.Answer ||
+				!reflect.DeepEqual(generated.citations, res.Citations) ||
+				!reflect.DeepEqual(generated.rerankFallback, res.RerankFallback) {
+				// Deltas are already visible, so finishing with another request's
+				// stored answer would make one successful stream contradict itself.
+				// Keep the outcome unknown; the client will adopt the stored pair
+				// during clientRequestId reconciliation.
+				return apperror.New(
+					http.StatusInternalServerError,
+					"CHAT_RESULT_UNCONFIRMED",
+					"回答结果需要重新确认",
+				)
+			}
 			return sink.Done(res)
+		}
+		if errors.Is(err, repository.ErrChatMessageChanged) {
+			return apperror.New(http.StatusConflict, "CHAT_MESSAGE_CHANGED", "conversation changed while the answer was being generated")
 		}
 		return apperror.Internal(err)
 	}
@@ -741,7 +761,10 @@ func (s *ChatService) RegenerateMessage(ctx context.Context, userID, sessionID, 
 		Content:   generated.answer,
 		Citations: generated.citationJSON,
 	}
-	if err := s.chats.CreateMessages(ctx, assistantMessage); err != nil {
+	if err := s.chats.CreateMessagesIfUnchanged(ctx, chatMessageIDs(messages), assistantMessage); err != nil {
+		if errors.Is(err, repository.ErrChatMessageChanged) {
+			return nil, apperror.New(http.StatusConflict, "CHAT_MESSAGE_CHANGED", "conversation changed while the answer was being regenerated")
+		}
 		return nil, apperror.Internal(err)
 	}
 
@@ -749,6 +772,105 @@ func (s *ChatService) RegenerateMessage(ctx context.Context, userID, sessionID, 
 		Message:        toChatMessageResponse(assistantMessage),
 		RerankFallback: generated.rerankFallback,
 	}, nil
+}
+
+// EditMessageAndRegenerate replaces a user turn and its descendants in one
+// repository transaction. AI generation intentionally happens first so a
+// provider failure cannot destroy the existing conversation.
+func (s *ChatService) EditMessageAndRegenerate(
+	ctx context.Context,
+	userID, sessionID, messageID uuid.UUID,
+	req dto.EditChatMessageRequest,
+) (*dto.SendChatMessageResponse, error) {
+	session, err := s.findSession(ctx, userID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if session.ArchivedAt != nil {
+		return nil, apperror.Validation(map[string]any{"sessionId": "archived sessions are read-only"})
+	}
+	content := strings.TrimSpace(req.Content)
+	if content == "" {
+		return nil, apperror.Validation(map[string]any{"content": "content is required"})
+	}
+	clientRequestID, err := uuid.Parse(req.ClientRequestID)
+	if err != nil {
+		return nil, apperror.Validation(map[string]any{"clientRequestId": "client request id is invalid"})
+	}
+
+	// A retry after a lost response must replay the already committed pair and
+	// must not run retrieval or mutate the conversation a second time.
+	existing, err := s.chats.FindMessagesByClientRequestID(ctx, session.ID, clientRequestID)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	if len(existing) > 0 {
+		return sendMessageResponseFromPair(clientRequestID, content, existing)
+	}
+
+	messages, err := s.chats.ListMessages(ctx, session.ID)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	targetIndex := -1
+	for i := range messages {
+		if messages[i].ID == messageID {
+			targetIndex = i
+			break
+		}
+	}
+	if targetIndex < 0 {
+		return nil, apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
+	}
+	if messages[targetIndex].Role != "user" {
+		return nil, apperror.Validation(map[string]any{"messageId": "only user messages can be edited"})
+	}
+
+	history := append([]model.ChatMessage(nil), messages[:targetIndex]...)
+	generated, err := s.generateAnswer(ctx, userID, session, content, history)
+	if err != nil {
+		return nil, err
+	}
+	userMessage, assistantMessage, err := buildChatMessagePair(session.ID, clientRequestID, content, generated)
+	if err != nil {
+		return nil, err
+	}
+	userMessage.ID = messages[targetIndex].ID
+	userMessage.CreatedAt = messages[targetIndex].CreatedAt
+	removeIDs := make([]uuid.UUID, 0, len(messages)-targetIndex-1)
+	for i := targetIndex + 1; i < len(messages); i++ {
+		removeIDs = append(removeIDs, messages[i].ID)
+	}
+	if err := s.chats.ReplaceMessageTail(ctx, session.ID, messageID, messages[targetIndex].ClientRequestID, removeIDs, userMessage, assistantMessage); err != nil {
+		stored, lookupErr := s.chats.FindMessagesByClientRequestID(ctx, session.ID, clientRequestID)
+		if lookupErr == nil && len(stored) > 0 {
+			return sendMessageResponseFromPair(clientRequestID, content, stored)
+		}
+		if errors.Is(err, repository.ErrChatMessageNotFound) {
+			return nil, apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
+		}
+		if errors.Is(err, repository.ErrChatMessageChanged) {
+			return nil, apperror.New(http.StatusConflict, "CHAT_MESSAGE_CHANGED", "conversation changed while the message was being edited")
+		}
+		return nil, apperror.Internal(err)
+	}
+	s.updateSessionTitleIfNeeded(ctx, session, content, generated.answer)
+	return &dto.SendChatMessageResponse{
+		ClientRequestID:  clientRequestID.String(),
+		UserMessage:      toChatMessageResponse(userMessage),
+		AssistantMessage: toChatMessageResponse(assistantMessage),
+		Answer:           generated.answer,
+		Citations:        generated.citations,
+		RerankFallback:   generated.rerankFallback,
+	}, nil
+}
+
+func chatMessageIDs(messages []model.ChatMessage) []uuid.UUID {
+	ids := make([]uuid.UUID, 0, len(messages))
+	for i := range messages {
+		ids = append(ids, messages[i].ID)
+	}
+	return ids
 }
 
 type generatedChatAnswer struct {

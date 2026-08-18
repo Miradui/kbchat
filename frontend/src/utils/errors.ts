@@ -9,6 +9,8 @@ export function getErrorMessage(error: unknown, fallback: string): string {
     CHAT_COMPLETION_FAILED: '回答生成失败，请稍后重试。',
     EMBEDDING_FAILED: '知识检索暂时不可用，请稍后重试。',
     RERANK_FAILED: '知识检索排序暂时不可用，请稍后重试。',
+    CHAT_MESSAGE_CHANGED: '会话已在其他窗口更新，请刷新后再编辑。',
+    CHAT_EDIT_UNCONFIRMED: '编辑结果暂未确认，已保留原请求编号。请刷新会话后再试。',
     DOCUMENT_PROCESS_FAILED: '文档处理失败，请检查文件内容或稍后重处理。',
     INTERNAL_ERROR: fallback,
   };

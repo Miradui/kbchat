@@ -179,6 +179,7 @@ func New(cfg config.Config, db *gorm.DB, logger *zap.Logger) *gin.Engine {
 	protected.GET("/chat/sessions/:id/messages", chatHandler.ListMessages)
 	protected.POST("/chat/sessions/:id/messages", chatHandler.SendMessage)
 	protected.POST("/chat/sessions/:id/messages/stream", chatHandler.SendMessageStream)
+	protected.PUT("/chat/sessions/:id/messages/:messageId/edit", chatHandler.EditMessage)
 	protected.POST("/chat/sessions/:id/messages/:messageId/regenerate", chatHandler.RegenerateMessage)
 	protected.GET("/chat/sessions/:id/export", chatHandler.ExportSession)
 	protected.POST("/chat/messages/:messageId/feedback", chatHandler.SetMessageFeedback)

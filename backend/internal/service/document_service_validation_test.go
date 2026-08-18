@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"rag/backend/internal/apperror"
+	"rag/backend/internal/config"
 	"rag/backend/internal/dto"
 )
 
@@ -41,5 +42,28 @@ func TestDocumentBatchOperationsReturnReadableEmptySelectionError(t *testing.T) 
 				t.Fatalf("expected readable validation detail, got %q", got)
 			}
 		})
+	}
+}
+
+func TestValidateFileRejectsSpoofedPDFBeforeQueueing(t *testing.T) {
+	service := &DocumentService{cfg: config.Config{MaxUploadSizeMB: 1}}
+	file := createUploadFile(t, "spoofed.pdf", "this is not a PDF")
+
+	err := service.validateFile(file)
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) {
+		t.Fatalf("expected application error, got %v", err)
+	}
+	if appErr.Code != "DOCUMENT_TYPE_UNSUPPORTED" {
+		t.Fatalf("expected DOCUMENT_TYPE_UNSUPPORTED, got %q", appErr.Code)
+	}
+}
+
+func TestValidateFileAcceptsPDFSignature(t *testing.T) {
+	service := &DocumentService{cfg: config.Config{MaxUploadSizeMB: 1}}
+	file := createUploadFile(t, "document.pdf", "%PDF-1.7\n")
+
+	if err := service.validateFile(file); err != nil {
+		t.Fatalf("expected a PDF signature to pass upload validation: %v", err)
 	}
 }

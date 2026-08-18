@@ -1474,6 +1474,7 @@ data: {"status":500,"code":"CHAT_COMPLETION_FAILED","message":"回答生成失�
 - 仍然由 `chat_messages` 上的部分唯一索引 `(session_id, client_request_id, role)` 兜底
 - 同键同内容的重放直接回放已存的消息对，**完全不调用 Provider**，且只发 `citations` + `done`
 - 并发的同键请求中落败的一方会采用胜出者已写入的消息对，因此「至多一条 assistant 消息」在并发下同样成立
+- 如果并发落败方已经流出了与胜出者不同的 delta/citations，则不能再用胜出者内容发送一个自相矛盾的 `done`。服务端改发 `CHAT_RESULT_UNCONFIRMED` error 事件，客户端按原 `clientRequestId` 对账并采用已提交的胜出者消息对
 
 ### POST /chat/sessions/:sessionId/messages/:messageId/regenerate
 
@@ -1503,6 +1504,23 @@ MVP 语义：
   "rerankFallback": null
 }
 ```
+
+### PUT /chat/sessions/:sessionId/messages/:messageId/edit
+
+编辑一条当前用户发送的消息并重新生成回答。编辑不会保留版本历史：目标用户消息保留原 ID，目标之后的旧消息会被删除，然后写入新的 assistant 消息。模型生成在替换事务之前执行，失败时原会话保持不变。
+
+请求：
+
+```json
+{
+  "content": "编辑后的问题",
+  "clientRequestId": "uuid"
+}
+```
+
+响应与 `POST /chat/sessions/:sessionId/messages` 相同（`SendChatMessageResponse`）。同一 `clientRequestId` 的重试会返回已提交的 user/assistant 消息，不会再次调用模型。
+
+编辑事务会锁定会话并校验目标消息及其尾部仍与生成前快照一致；若其他请求在此期间写入或编辑会话，返回 `409 CHAT_MESSAGE_CHANGED`，不删除并发请求已经成功写入的数据。
 
 多轮上下文规则：
 
