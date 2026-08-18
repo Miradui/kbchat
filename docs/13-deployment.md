@@ -264,7 +264,7 @@ cd /opt/rag/app/backend
 
 ### 7.3 已有数据库
 
-当前 migration runner 不记录已经执行的 migration，并且部分 migration 不能重复执行。已有数据库不要直接再次运行 `rag-migrate`。
+当前 migration runner 不记录已经执行的 migration，并且部分 migration 不能重复执行。已有数据库不要直接运行不带参数的 `rag-migrate`。
 
 升级时应：
 
@@ -273,13 +273,13 @@ cd /opt/rag/app/backend
 3. 审查新版本中新增的 migration。
 4. 只按文件名顺序执行尚未应用的文件。
 
-示例：
+使用 `-migration` 精确指定已审核的单个文件。该参数只接受 `migrations/` 目录中的文件名，不接受路径；单文件会在一个数据库事务中执行：
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/009_kb_members_and_chat_archive.sql
+./bin/rag-migrate -migration 014_chat_message_feedback.sql
 ```
 
-在补齐正式的 schema migration 版本表之前，部署记录必须明确保存已执行到哪个 migration。
+指定单文件不会检查它的前置 migration 是否已经执行。在补齐正式的 schema migration 版本表之前，仍需按顺序逐个执行，且部署记录必须明确保存已执行到哪个 migration。
 
 ### 7.4 初始化管理员
 

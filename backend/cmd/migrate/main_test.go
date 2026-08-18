@@ -2,9 +2,52 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 )
+
+func TestSelectMigrationFiles(t *testing.T) {
+	dir := t.TempDir()
+	files := []string{
+		filepath.Join(dir, "014_chat_message_feedback.sql"),
+		filepath.Join(dir, "013_chat_message_editing.sql"),
+	}
+
+	selected, err := selectMigrationFiles(files, "014_chat_message_feedback.sql")
+	if err != nil {
+		t.Fatalf("select migration: %v", err)
+	}
+	if len(selected) != 1 || selected[0] != files[0] {
+		t.Fatalf("expected only migration 014, got %v", selected)
+	}
+
+	all, err := selectMigrationFiles(files, "")
+	if err != nil {
+		t.Fatalf("select all migrations: %v", err)
+	}
+	if len(all) != 2 || filepath.Base(all[0]) != "013_chat_message_editing.sql" {
+		t.Fatalf("expected sorted migrations, got %v", all)
+	}
+}
+
+func TestSelectMigrationFilesRejectsUnsafeOrUnknownNames(t *testing.T) {
+	files := []string{filepath.Join(t.TempDir(), "014_chat_message_feedback.sql")}
+	for _, name := range []string{
+		"../014_chat_message_feedback.sql",
+		`..\014_chat_message_feedback.sql`,
+		"missing.sql",
+		"014_chat_message_feedback.txt",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := selectMigrationFiles(files, name)
+			if err == nil {
+				t.Fatalf("expected %q to be rejected", name)
+			}
+		})
+	}
+}
 
 func TestWorkspacePreferenceMigrationCanBeReapplied(t *testing.T) {
 	sql, err := os.ReadFile("../../migrations/008_kb_workspace_preference.sql")
@@ -33,6 +76,25 @@ func TestChatIdempotencyMigrationCanBeReapplied(t *testing.T) {
 	for _, pattern := range patterns {
 		if !regexp.MustCompile(pattern).MatchString(sql) {
 			t.Fatalf("expected migration to match %q", pattern)
+		}
+	}
+}
+
+func TestChatFeedbackMigrationCanBeReapplied(t *testing.T) {
+	sqlBytes, err := os.ReadFile("../../migrations/014_chat_message_feedback.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+
+	sql := string(sqlBytes)
+	for _, fragment := range []string{
+		"ADD COLUMN IF NOT EXISTS feedback_rating",
+		"ADD COLUMN IF NOT EXISTS feedback_updated_at",
+		"DROP CONSTRAINT IF EXISTS chat_messages_feedback_rating_check",
+		"feedback_rating IN ('positive', 'negative')",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Fatalf("expected migration to contain %q", fragment)
 		}
 	}
 }

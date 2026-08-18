@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -37,6 +38,24 @@ func AutoMigrate(ctx context.Context, db *gorm.DB) error {
 		}
 	}
 
+	return validateSchema(ctx, db)
+}
+
+func validateSchema(ctx context.Context, db *gorm.DB) error {
+	requiredColumns := []string{"feedback_rating", "feedback_updated_at"}
+	missing := make([]string, 0, len(requiredColumns))
+	migrator := db.WithContext(ctx).Migrator()
+	for _, column := range requiredColumns {
+		if !migrator.HasColumn(&model.ChatMessage{}, column) {
+			missing = append(missing, column)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf(
+			"database schema incompatible: chat_messages missing %s; apply migration 014 (migrations/014_chat_message_feedback.sql)",
+			strings.Join(missing, ", "),
+		)
+	}
 	return nil
 }
 

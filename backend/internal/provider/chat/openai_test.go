@@ -57,6 +57,34 @@ func TestChatStreamCompletesOnlyAfterDone(t *testing.T) {
 	}
 }
 
+func TestChatStreamAcceptsValidDoneWhitespaceVariants(t *testing.T) {
+	for _, doneFrame := range []string{
+		"data:[DONE]\n\n",
+		"data:\t[DONE]\r\n\r\n",
+	} {
+		doneFrame := doneFrame
+		t.Run(fmt.Sprintf("%q", doneFrame), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"完整回答\"}}]}\n\n"+doneFrame)
+			}))
+			defer server.Close()
+
+			answer, err := newOpenAIStreamTestProvider(server.URL).ChatStream(
+				context.Background(),
+				[]chatcore.Message{{Role: "user", Content: "问题"}},
+				nil,
+			)
+			if err != nil {
+				t.Fatalf("chat stream with valid DONE frame: %v", err)
+			}
+			if answer != "完整回答" {
+				t.Fatalf("expected complete answer, got %q", answer)
+			}
+		})
+	}
+}
+
 func TestChatStreamRejectsCleanEOFAfterDeltaWithoutDone(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

@@ -286,7 +286,12 @@ func (t *streamResponseTracker) finish() {
 }
 
 func (t *streamResponseTracker) observeLine(line []byte) {
-	if string(bytes.TrimSpace(line)) == "data: [DONE]" {
+	line = bytes.TrimSuffix(line, []byte{'\r'})
+	if !bytes.HasPrefix(line, []byte("data:")) {
+		return
+	}
+	payload := bytes.TrimSpace(line[len("data:"):])
+	if bytes.Equal(payload, []byte("[DONE]")) {
 		t.sawDone = true
 	}
 }
