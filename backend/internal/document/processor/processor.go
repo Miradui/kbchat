@@ -12,6 +12,7 @@ import (
 	"rag/backend/internal/embedding"
 	"rag/backend/internal/model"
 	"rag/backend/internal/repository"
+	"rag/backend/internal/storage"
 )
 
 const embeddingBatchSize = 16
@@ -22,6 +23,7 @@ type Processor struct {
 	parser    parser.Parser
 	splitter  *splitter.Splitter
 	embedder  embedding.Provider
+	storage   storage.Storage
 }
 
 func New(
@@ -31,12 +33,35 @@ func New(
 	splitter *splitter.Splitter,
 	embedder embedding.Provider,
 ) *Processor {
+	return newProcessor(documents, chunks, parser, splitter, embedder, nil)
+}
+
+func NewWithStorage(
+	documents *repository.DocumentRepository,
+	chunks *repository.ChunkRepository,
+	parser parser.Parser,
+	splitter *splitter.Splitter,
+	embedder embedding.Provider,
+	fileStorage storage.Storage,
+) *Processor {
+	return newProcessor(documents, chunks, parser, splitter, embedder, fileStorage)
+}
+
+func newProcessor(
+	documents *repository.DocumentRepository,
+	chunks *repository.ChunkRepository,
+	parser parser.Parser,
+	splitter *splitter.Splitter,
+	embedder embedding.Provider,
+	fileStorage storage.Storage,
+) *Processor {
 	return &Processor{
 		documents: documents,
 		chunks:    chunks,
 		parser:    parser,
 		splitter:  splitter,
 		embedder:  embedder,
+		storage:   fileStorage,
 	}
 }
 
@@ -55,7 +80,16 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 	if err := p.documents.UpdateStatus(ctx, document.ID, job.ID, "parsing", ""); err != nil {
 		return err
 	}
-	parsedDocument, err := p.parser.ParseDocument(document.StoragePath, document.FileType)
+	localPath := document.StoragePath
+	cleanup := func() {}
+	if p.storage != nil {
+		localPath, cleanup, err = p.storage.Materialize(ctx, document.StoragePath)
+		if err != nil {
+			return err
+		}
+	}
+	defer cleanup()
+	parsedDocument, err := p.parser.ParseDocument(localPath, document.FileType)
 	if err != nil {
 		return err
 	}

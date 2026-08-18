@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http/httptest"
 	"os"
@@ -59,6 +60,7 @@ func newWorkspaceTestServices(t *testing.T) workspaceTestServices {
 		&model.KnowledgeBaseViewEvent{},
 		&model.Document{},
 		&model.DocumentJob{},
+		&model.StorageCleanupJob{},
 		&model.ChatSession{},
 		&model.ChatMessage{},
 		&model.DocumentChunk{},
@@ -521,12 +523,28 @@ type failingCleanupStorage struct {
 	deleteErr error
 }
 
-func (s *failingCleanupStorage) SaveKnowledgeBaseFile(uuid.UUID, *multipart.FileHeader) (string, error) {
+func (s *failingCleanupStorage) SaveKnowledgeBaseFile(context.Context, uuid.UUID, *multipart.FileHeader) (string, error) {
 	return s.path, nil
 }
 
-func (s *failingCleanupStorage) Delete(string) error {
+func (s *failingCleanupStorage) Delete(context.Context, string) error {
 	return s.deleteErr
+}
+
+func (s *failingCleanupStorage) Open(context.Context, string) (io.ReadCloser, storage.ObjectInfo, error) {
+	return nil, storage.ObjectInfo{}, errors.New("not implemented")
+}
+
+func (s *failingCleanupStorage) Read(context.Context, string) ([]byte, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s *failingCleanupStorage) Stat(context.Context, string) (storage.ObjectInfo, error) {
+	return storage.ObjectInfo{}, errors.New("not implemented")
+}
+
+func (s *failingCleanupStorage) Materialize(context.Context, string) (string, func(), error) {
+	return "", nil, errors.New("not implemented")
 }
 
 func TestKnowledgeBaseMembersManageRolesAndPermissionsView(t *testing.T) {
@@ -1840,7 +1858,12 @@ func TestDocumentDownloadAndMissingFileError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("download existing file: %v", err)
 	}
-	if file.Path != storedPath || file.Filename != "manual.txt" || file.ContentType != "text/plain; charset=utf-8" {
+	defer file.Reader.Close()
+	content, readErr := io.ReadAll(file.Reader)
+	if readErr != nil {
+		t.Fatalf("read download: %v", readErr)
+	}
+	if string(content) != "hello" || file.Size != int64(len(content)) || file.Filename != "manual.txt" || file.ContentType != "text/plain; charset=utf-8" {
 		t.Fatalf("unexpected download response: %#v", file)
 	}
 }

@@ -43,7 +43,7 @@
 ## Key Conventions
 - Implement tasks in the order defined by `docs/11-ai-task-prompts.md`.
 - Keep MVP scope: login, knowledge bases, document upload, parsing, chunking, embedding, pgvector search, Rerank, chat, and citations.
-- Keep out of MVP: multi-tenancy, SSO, complex RBAC, audit logs, object storage, and docx parsing.
+- Keep out of MVP: multi-tenancy, SSO, complex RBAC, audit logs, non-MinIO object storage, lifecycle management, and docx parsing.
 - Backend must follow `handler -> service -> repository`.
 - Backend database access must use GORM.
 - Model calls must go through provider interfaces for embedding, rerank, and chat.

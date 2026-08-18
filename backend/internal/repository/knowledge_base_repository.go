@@ -415,13 +415,26 @@ func lockDeletedKnowledgeBase(tx *gorm.DB, kbID uuid.UUID) error {
 }
 
 func permanentDeleteKnowledgeBase(tx *gorm.DB, kbID uuid.UUID) error {
-	var documentIDs []uuid.UUID
+	var documents []struct {
+		ID          uuid.UUID
+		StoragePath string
+	}
 	if err := tx.Unscoped().
 		Model(&model.Document{}).
 		Where("knowledge_base_id = ?", kbID).
 		Order("documents.id asc").
 		Clauses(clause.Locking{Strength: "UPDATE"}).
-		Pluck("documents.id", &documentIDs).Error; err != nil {
+		Select("documents.id, documents.storage_path").
+		Find(&documents).Error; err != nil {
+		return err
+	}
+	paths := make([]string, 0, len(documents))
+	documentIDs := make([]uuid.UUID, 0, len(documents))
+	for _, document := range documents {
+		paths = append(paths, document.StoragePath)
+		documentIDs = append(documentIDs, document.ID)
+	}
+	if err := enqueueStorageCleanup(tx, paths); err != nil {
 		return err
 	}
 	for _, documentID := range documentIDs {

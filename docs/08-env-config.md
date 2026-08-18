@@ -40,7 +40,14 @@ RERANK_API_KEY=replace-with-rerank-api-key
 RERANK_MODEL=rerank-model-name
 RERANK_FAILURE_MODE=strict
 
+STORAGE_PROVIDER=local
 UPLOAD_DIR=./uploads
+MINIO_ENDPOINT=http://127.0.0.1:9000
+MINIO_ACCESS_KEY=replace-with-minio-access-key
+MINIO_SECRET_KEY=replace-with-minio-secret-key
+MINIO_BUCKET=rag-documents
+MINIO_REGION=
+MINIO_USE_SSL=false
 MAX_UPLOAD_SIZE_MB=50
 
 VECTOR_TOP_N=30
@@ -82,7 +89,14 @@ VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1
 | `RERANK_API_KEY` | 无 | Rerank API Key |
 | `RERANK_MODEL` | `rerank-model-name` | Rerank 模型 |
 | `RERANK_FAILURE_MODE` | `strict` | Rerank 失败策略：`strict` 返回 `RERANK_FAILED`；`fallback` 降级为 vector topK 并标记 `rerankFallback` |
-| `UPLOAD_DIR` | `./uploads` | 本地上传目录 |
+| `STORAGE_PROVIDER` | `local` | 文档存储实现：`local` 或 `minio` |
+| `UPLOAD_DIR` | `./uploads` | 本地上传目录；MinIO 模式仍用于读取切换前的存量文件 |
+| `MINIO_ENDPOINT` | 无 | MinIO API endpoint，可写 `host:port` 或 `http(s)://host:port`；不得包含路径或凭据 |
+| `MINIO_ACCESS_KEY` | 无 | MinIO access key；仅 `STORAGE_PROVIDER=minio` 时必填；需具备读取 bucket policy 的权限 |
+| `MINIO_SECRET_KEY` | 无 | MinIO secret key；仅 `STORAGE_PROVIDER=minio` 时必填，不得提交真实值 |
+| `MINIO_BUCKET` | `rag-documents` | 私有文档 bucket；服务启动时不存在会自动创建 |
+| `MINIO_REGION` | 空 | 可选 MinIO region |
+| `MINIO_USE_SSL` | `false` | endpoint 未写 scheme 时是否使用 HTTPS；显式 `http://` / `https://` 优先 |
 | `MAX_UPLOAD_SIZE_MB` | `50` | 单文件上传上限（MiB）；必须为正数，请求体另预留 1 MiB multipart 开销 |
 | `VECTOR_TOP_N` | `30` | 向量召回数量 |
 | `RERANK_TOP_K` | `5` | Rerank 后数量 |
@@ -90,7 +104,7 @@ VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1
 | `ENABLE_RERANK` | `true` | 旧兼容开关；优先使用 `RERANK_ENABLED` |
 | `WORKER_CONCURRENCY` | `2` | 文档处理 worker 并发任务数 |
 | `WORKER_MAX_RETRIES` | `3` | 文档处理任务失败后的最大重试次数 |
-| `WORKER_RETRY_DELAY` | `10s` | 文档处理任务重试退避时间，使用 Go duration 格式 |
+| `WORKER_RETRY_DELAY` | `10s` | 文档处理和对象清理任务的基础重试退避时间，使用 Go duration 格式 |
 | `VITE_API_BASE_URL` | `/api/v1` | 前端 API 地址；跨域/分离部署时设置为完整后端地址 |
 
 `VECTOR_TOP_N`、`RERANK_TOP_K` 和 `SCORE_THRESHOLD` 是知识库未保存对应 `retrievalConfig` 时的默认值。运行时限制 `vectorTopN<=100`、`rerankTopK<=20`，并保证 `rerankTopK<=vectorTopN`。

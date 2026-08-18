@@ -318,9 +318,10 @@ func (h *DocumentHandler) Download(c *gin.Context) {
 		RespondError(c, err)
 		return
 	}
-	c.Header("Content-Type", file.ContentType)
-	c.Header("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(file.Filename))
-	c.File(file.Path)
+	defer file.Reader.Close()
+	c.DataFromReader(http.StatusOK, file.Size, file.ContentType, file.Reader, map[string]string{
+		"Content-Disposition": "attachment; filename*=UTF-8''" + url.PathEscape(file.Filename),
+	})
 }
 
 func (h *DocumentHandler) Preview(c *gin.Context) {

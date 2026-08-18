@@ -4,7 +4,7 @@
 
 ```text
 上传文件
--> 保存到本地 uploads
+-> 保存到配置的文档存储（本地 uploads 或 MinIO）
 -> 创建 documents 记录
 -> 创建 document_jobs 任务
 -> worker 开始处理
@@ -18,7 +18,11 @@
 -> status=completed
 ```
 
-上传文件先写入本地存储，再在单个数据库事务中创建 `documents`、`document_jobs` 并刷新知识库 `updatedAt/updatedBy`。任一数据库写入失败时事务必须全部回滚，并删除本次已保存的文件；API 不得在返回失败时留下可被 worker 领取的部分任务。若文件补偿删除本身失败，内部错误链必须同时保留数据库错误和清理错误，不能静默吞掉残留文件信号。
+上传文件先写入配置的存储，再在单个数据库事务中创建 `documents`、`document_jobs` 并刷新知识库 `updatedAt/updatedBy`。任一数据库写入失败时事务必须全部回滚，并删除本次已保存的文件；API 不得在返回失败时留下可被 worker 领取的部分任务。若文件补偿删除本身失败，内部错误链必须同时保留数据库错误和清理错误，不能静默吞掉残留文件信号。
+
+MinIO 模式使用私有 bucket，`storage_path` 保存 `minio://bucket/key`，原始文件名不进入对象 key。下载和预览由后端鉴权后代理；worker 解析前把对象物化为临时文件，并在本轮处理结束时清理。切换到 MinIO 后，既有本地 `storage_path` 继续从 `UPLOAD_DIR` 读取，避免存量文档立即失效。
+
+永久删除文档、清空文档回收站以及永久删除知识库时，repository 必须在删除业务行的同一事务中把每个 `storage_path` 写入 `storage_cleanup_jobs`。独立 cleanup worker 通过统一 storage 接口删除对象，成功后删除任务；失败则指数退避并持续重试。领取使用带 token 的租约，过期 worker 不能提交迟到结果。不得先批量删除对象再提交数据库事务，也不得在丢失 `storage_path` 后吞掉存储错误。
 
 失败时：
 

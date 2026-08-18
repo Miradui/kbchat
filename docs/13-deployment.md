@@ -27,7 +27,7 @@ Browser
 6. 当前 migration runner 没有迁移版本表，只适合全新数据库首次执行全部迁移。
 7. `/healthz` 只检查 HTTP 进程存活，不检查数据库、Redis 或模型 Provider。
 
-由于本地文件存储和内置 worker 的约束，在没有额外验证前，生产环境只运行一个 backend 实例。
+由于内置 worker 的任务领取约束，在没有额外验证前，生产环境只运行一个 backend 实例。MinIO 解决共享文件存储问题，但不改变 worker 的单实例约束。
 
 ## 2. 环境要求
 
@@ -110,7 +110,14 @@ RERANK_API_KEY=replace-with-rerank-api-key
 RERANK_MODEL=replace-with-rerank-model
 RERANK_FAILURE_MODE=strict
 
+STORAGE_PROVIDER=minio
 UPLOAD_DIR=/var/lib/rag/uploads
+MINIO_ENDPOINT=https://minio.example.com
+MINIO_ACCESS_KEY=replace-with-minio-access-key
+MINIO_SECRET_KEY=replace-with-minio-secret-key
+MINIO_BUCKET=rag-documents
+MINIO_REGION=
+MINIO_USE_SSL=true
 MAX_UPLOAD_SIZE_MB=50
 
 VECTOR_TOP_N=30
@@ -133,6 +140,10 @@ sudo chmod 0640 /etc/rag/rag.env
 注意事项：
 
 - 数据库密码包含特殊字符时，必须在 `DATABASE_URL` 中进行 URL 编码。
+- MinIO bucket 必须保持私有，不需要为浏览器设置公开读权限；下载和预览由 backend 代理。backend 会读取 bucket policy，发现任何 bucket policy 时拒绝启动，避免匿名访问绕过 JWT 与 owner 校验。
+- endpoint 显式写 `http://` 或 `https://` 时，其 scheme 优先于 `MINIO_USE_SSL`。生产环境应使用 HTTPS。
+- backend 启动时会检查 bucket，并在不存在时自动创建；endpoint、凭据或权限错误会阻止启动。若由运维预建 bucket，凭据除对象读、写、删除和统计权限外还必须能够读取 bucket policy。
+- 切换前的本地文件不会自动搬迁到 MinIO，backend 会继续通过 `UPLOAD_DIR` 读取这些历史路径；确认完成迁移前不要删除旧上传目录。
 - 使用云数据库时应按服务商要求设置 `sslmode=require` 或更严格模式。
 - `EMBEDDING_DIMENSION` 必须保持为 `1536`，除非已经执行对应 schema migration 并重建全部 embedding。
 - `RERANK_FAILURE_MODE=strict` 会在 Rerank Provider 失败时终止本次检索；`fallback` 会降级为 vector topK。
@@ -454,13 +465,15 @@ curl -fsS https://rag.example.com/api/v1/healthz
 至少备份：
 
 - PostgreSQL 数据库。
-- `/var/lib/rag/uploads`。
+- MinIO 的 `rag-documents` bucket；仍有历史本地路径时同时备份 `/var/lib/rag/uploads`。
 - `/etc/rag/rag.env` 的加密副本。
 
 使用 Compose PostgreSQL 时可以执行：
 
 ```bash
 docker exec rag-postgres pg_dump -U rag -d rag -Fc > rag-$(date +%F-%H%M).dump
+mc mirror --overwrite production/rag-documents ./rag-documents-backup
+# 仅在仍有历史本地文件时执行：
 tar -C /var/lib/rag -czf rag-uploads-$(date +%F-%H%M).tar.gz uploads
 ```
 
@@ -480,7 +493,7 @@ tar -C /var/lib/rag -czf rag-uploads-$(date +%F-%H%M).tar.gz uploads
 
 检查：
 
-- `UPLOAD_DIR` 是否存在且对 `rag` 用户可写。
+- `STORAGE_PROVIDER=local` 时检查 `UPLOAD_DIR` 是否存在且对 `rag` 用户可写；`minio` 时检查 endpoint、bucket 权限和网络连通性。若数据库中仍有历史本地路径，MinIO 模式也必须保留可读的 `UPLOAD_DIR`。
 - Embedding Provider 地址、Key、模型和维度是否正确。
 - `journalctl -u rag-backend` 中的 worker 日志。
 

@@ -15,6 +15,40 @@ import (
 	"rag/backend/internal/model"
 )
 
+func TestCreateMessagesMakesCreatedAtStrictlyIncreasing(t *testing.T) {
+	db := newChatRepositoryTestDB(t)
+	repository := NewChatRepository(db)
+	user := model.User{Username: "message-order-" + uuid.NewString(), PasswordHash: "hash"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	knowledgeBase := model.KnowledgeBase{Name: "Message order", OwnerID: user.ID}
+	if err := db.Create(&knowledgeBase).Error; err != nil {
+		t.Fatalf("create knowledge base: %v", err)
+	}
+	session := model.ChatSession{UserID: user.ID, KnowledgeBaseID: knowledgeBase.ID, Title: "Message order"}
+	if err := db.Create(&session).Error; err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	sameTime := time.Date(2026, time.August, 19, 0, 0, 0, 0, time.UTC)
+	userMessage := &model.ChatMessage{SessionID: session.ID, Role: "user", Content: "question", CreatedAt: sameTime}
+	assistantMessage := &model.ChatMessage{SessionID: session.ID, Role: "assistant", Content: "answer", CreatedAt: sameTime}
+
+	if err := repository.CreateMessages(context.Background(), userMessage, assistantMessage); err != nil {
+		t.Fatalf("create messages: %v", err)
+	}
+	if !assistantMessage.CreatedAt.After(userMessage.CreatedAt) {
+		t.Fatalf("expected strict message order, user=%s assistant=%s", userMessage.CreatedAt, assistantMessage.CreatedAt)
+	}
+	listed, err := repository.ListMessages(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	if len(listed) != 2 || listed[0].ID != userMessage.ID || listed[1].ID != assistantMessage.ID {
+		t.Fatalf("unexpected message order: %#v", listed)
+	}
+}
+
 func TestEmptyDeletedSessionsLocksVisibleSessionsBeforeDeleting(t *testing.T) {
 	db := newChatRepositoryTestDB(t)
 	repository := NewChatRepository(db)
@@ -116,9 +150,10 @@ func TestReplaceMessageTailRejectsStaleConversationSnapshot(t *testing.T) {
 	if err := db.Create(&session).Error; err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	target := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "old"}
-	oldAnswer := model.ChatMessage{SessionID: session.ID, Role: "assistant", Content: "old answer"}
-	concurrent := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "concurrent question"}
+	createdAt := time.Now()
+	target := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "old", CreatedAt: createdAt}
+	oldAnswer := model.ChatMessage{SessionID: session.ID, Role: "assistant", Content: "old answer", CreatedAt: createdAt.Add(time.Microsecond)}
+	concurrent := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "concurrent question", CreatedAt: createdAt.Add(2 * time.Microsecond)}
 	for _, message := range []*model.ChatMessage{&target, &oldAnswer, &concurrent} {
 		if err := db.Create(message).Error; err != nil {
 			t.Fatalf("create message: %v", err)

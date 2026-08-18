@@ -11,7 +11,7 @@ Gin Backend
     |
     |-- PostgreSQL + pgvector
     |-- Redis
-    |-- Local File Storage
+    |-- Document Storage (Local / MinIO S3)
     |-- Embedding Provider
     |-- Rerank Provider
     |-- Chat Provider
@@ -50,8 +50,10 @@ React -> Gin Router -> Middleware -> Handler -> Service -> Repository -> Postgre
 文档上传请求：
 
 ```text
-React -> Upload API -> Local Storage -> documents -> document_jobs -> Worker
+React -> Upload API -> Storage (Local / MinIO) -> documents -> document_jobs -> Worker
 ```
+
+MinIO bucket 保持私有。下载和预览仍经由带 JWT 与 owner 校验的后端 API 代理，不向前端暴露对象地址。MinIO 对象在 `documents.storage_path` 中使用 `minio://bucket/key` 标识；启用 MinIO 后，历史本地路径仍由 `UPLOAD_DIR` 读取。worker 处理远端对象时下载到权限受限的临时文件，解析完成后立即清理。
 
 问答请求：
 

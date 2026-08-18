@@ -149,6 +149,21 @@ type DocumentJob struct {
 	UpdatedAt    time.Time  `json:"updatedAt"`
 }
 
+// StorageCleanupJob is a durable outbox entry created in the same transaction
+// that permanently deletes a document. It keeps the object location available
+// until storage deletion succeeds.
+type StorageCleanupJob struct {
+	ID            uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	StoragePath   string     `gorm:"not null;uniqueIndex" json:"storagePath"`
+	RetryCount    int        `json:"retryCount"`
+	NextAttemptAt *time.Time `gorm:"index" json:"nextAttemptAt"`
+	LockedAt      *time.Time `gorm:"index" json:"lockedAt"`
+	LeaseToken    *uuid.UUID `gorm:"type:uuid;index" json:"leaseToken"`
+	LastError     string     `json:"lastError"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	UpdatedAt     time.Time  `json:"updatedAt"`
+}
+
 type DocumentChunk struct {
 	ID              uuid.UUID       `gorm:"type:uuid;primaryKey" json:"id"`
 	DocumentID      uuid.UUID       `gorm:"type:uuid;not null;index" json:"documentId"`
@@ -213,6 +228,13 @@ func (c *DocumentChunk) BeforeCreate(_ *gorm.DB) error {
 }
 
 func (j *DocumentJob) BeforeCreate(_ *gorm.DB) error {
+	if j.ID == uuid.Nil {
+		j.ID = uuid.New()
+	}
+	return nil
+}
+
+func (j *StorageCleanupJob) BeforeCreate(_ *gorm.DB) error {
 	if j.ID == uuid.Nil {
 		j.ID = uuid.New()
 	}

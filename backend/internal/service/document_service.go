@@ -9,7 +9,6 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -22,6 +21,7 @@ import (
 	"rag/backend/internal/dto"
 	"rag/backend/internal/model"
 	"rag/backend/internal/repository"
+	"rag/backend/internal/storage"
 )
 
 const (
@@ -34,7 +34,7 @@ type DocumentService struct {
 	documents      *repository.DocumentRepository
 	chunks         *repository.ChunkRepository
 	knowledgeBases *repository.KnowledgeBaseRepository
-	storage        documentStorage
+	storage        storage.Storage
 	activities     *ActivityRecorder
 }
 
@@ -44,17 +44,12 @@ func (s *DocumentService) SetActivityRecorder(recorder *ActivityRecorder) {
 	s.activities = recorder
 }
 
-type documentStorage interface {
-	SaveKnowledgeBaseFile(kbID uuid.UUID, file *multipart.FileHeader) (string, error)
-	Delete(path string) error
-}
-
 func NewDocumentService(
 	cfg config.Config,
 	documents *repository.DocumentRepository,
 	chunks *repository.ChunkRepository,
 	knowledgeBases *repository.KnowledgeBaseRepository,
-	storage documentStorage,
+	storage storage.Storage,
 ) *DocumentService {
 	return &DocumentService{
 		cfg:            cfg,
@@ -73,7 +68,7 @@ func (s *DocumentService) Upload(ctx context.Context, ownerID, kbID uuid.UUID, f
 		return nil, err
 	}
 
-	storagePath, err := s.storage.SaveKnowledgeBaseFile(kbID, file)
+	storagePath, err := s.storage.SaveKnowledgeBaseFile(ctx, kbID, file)
 	if err != nil {
 		return nil, apperror.Wrap(http.StatusInternalServerError, "DOCUMENT_UPLOAD_FAILED", "document upload failed", err)
 	}
@@ -92,7 +87,7 @@ func (s *DocumentService) Upload(ctx context.Context, ownerID, kbID uuid.UUID, f
 		Status:  "pending",
 	}
 	if err := s.documents.CreateWithJob(ctx, document, job, ownerID); err != nil {
-		if cleanupErr := s.storage.Delete(storagePath); cleanupErr != nil {
+		if cleanupErr := s.storage.Delete(context.WithoutCancel(ctx), storagePath); cleanupErr != nil {
 			err = errors.Join(err, fmt.Errorf("delete uploaded file: %w", cleanupErr))
 		}
 		return nil, apperror.Internal(err)
@@ -285,18 +280,17 @@ func (s *DocumentService) Download(ctx context.Context, ownerID, documentID uuid
 	if err != nil {
 		return nil, err
 	}
-	if _, err := os.Stat(document.StoragePath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, apperror.NotFound("DOCUMENT_FILE_NOT_FOUND", "document file not found")
-		}
-		return nil, apperror.Internal(err)
+	reader, info, err := s.storage.Open(ctx, document.StoragePath)
+	if err != nil {
+		return nil, documentStorageError(err)
 	}
 	contentType := contentTypeForFile(document.Filename)
 	return &dto.DocumentDownloadResponse{
 		Filename:    document.Filename,
 		FileType:    document.FileType,
 		ContentType: contentType,
-		Path:        document.StoragePath,
+		Size:        info.Size,
+		Reader:      reader,
 	}, nil
 }
 
@@ -305,12 +299,9 @@ func (s *DocumentService) Preview(ctx context.Context, ownerID, documentID uuid.
 	if err != nil {
 		return nil, err
 	}
-	info, err := os.Stat(document.StoragePath)
+	info, err := s.storage.Stat(ctx, document.StoragePath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, apperror.NotFound("DOCUMENT_FILE_NOT_FOUND", "document file not found")
-		}
-		return nil, apperror.Internal(err)
+		return nil, documentStorageError(err)
 	}
 	contentType := contentTypeForFile(document.Filename)
 	res := &dto.DocumentPreviewResponse{
@@ -324,12 +315,12 @@ func (s *DocumentService) Preview(ctx context.Context, ownerID, documentID uuid.
 	if res.Kind != "text" {
 		return res, nil
 	}
-	if info.Size() > maxPreviewTextBytes {
+	if info.Size > maxPreviewTextBytes {
 		return nil, apperror.New(http.StatusBadRequest, "FILE_TOO_LARGE_FOR_PREVIEW", "document is too large to preview")
 	}
-	content, err := os.ReadFile(document.StoragePath)
+	content, err := s.storage.Read(ctx, document.StoragePath)
 	if err != nil {
-		return nil, apperror.Internal(err)
+		return nil, documentStorageError(err)
 	}
 	res.Content = string(content)
 	return res, nil
@@ -372,8 +363,14 @@ func (s *DocumentService) PermanentDelete(ctx context.Context, ownerID, document
 		}
 		return apperror.Internal(err)
 	}
-	_ = s.storage.Delete(document.StoragePath)
 	return nil
+}
+
+func documentStorageError(err error) error {
+	if errors.Is(err, storage.ErrNotFound) {
+		return apperror.NotFound("DOCUMENT_FILE_NOT_FOUND", "document file not found")
+	}
+	return apperror.Internal(err)
 }
 
 func (s *DocumentService) EmptyRecycleBin(ctx context.Context, ownerID uuid.UUID) error {

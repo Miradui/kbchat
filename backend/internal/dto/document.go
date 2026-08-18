@@ -1,6 +1,7 @@
 package dto
 
 import (
+	"io"
 	"time"
 
 	"github.com/google/uuid"
@@ -87,7 +88,8 @@ type DocumentDownloadResponse struct {
 	Filename    string
 	FileType    string
 	ContentType string
-	Path        string
+	Size        int64
+	Reader      io.ReadCloser
 }
 
 type DocumentPreviewResponse struct {

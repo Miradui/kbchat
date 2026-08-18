@@ -397,6 +397,9 @@ func (r *ChatRepository) createMessages(
 					return ErrChatMessageChanged
 				}
 			}
+			if err := assignStrictMessageTimes(tx, messages[0].SessionID, messages); err != nil {
+				return err
+			}
 		}
 		for _, message := range messages {
 			if err := tx.Create(message).Error; err != nil {
@@ -410,6 +413,29 @@ func (r *ChatRepository) createMessages(
 		}
 		return nil
 	})
+}
+
+func assignStrictMessageTimes(tx *gorm.DB, sessionID uuid.UUID, messages []*model.ChatMessage) error {
+	var latest model.ChatMessage
+	err := tx.Select("created_at").Where("session_id = ?", sessionID).
+		Order("created_at desc, id desc").First(&latest).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	cursor := latest.CreatedAt
+	now := time.Now().UTC()
+	for _, message := range messages {
+		createdAt := message.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = now
+		}
+		if !cursor.IsZero() && !createdAt.After(cursor) {
+			createdAt = cursor.Add(time.Microsecond)
+		}
+		message.CreatedAt = createdAt
+		cursor = createdAt
+	}
+	return nil
 }
 
 // ReplaceMessageTail updates an existing user turn and atomically removes the

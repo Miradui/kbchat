@@ -18,6 +18,7 @@ import (
 	embeddingprovider "rag/backend/internal/provider/embedding"
 	"rag/backend/internal/repository"
 	"rag/backend/internal/router"
+	"rag/backend/internal/storage"
 )
 
 func main() {
@@ -48,12 +49,21 @@ func main() {
 
 	documentRepo := repository.NewDocumentRepository(db)
 	chunkRepo := repository.NewChunkRepository(db)
-	documentProcessor := processor.New(
+	storageCleanupRepo := repository.NewStorageCleanupRepository(db)
+	fileStorage, err := storage.NewFromConfig(cfg)
+	if err != nil {
+		log.Fatal("initialize document storage failed", zap.Error(err))
+	}
+	if err := storage.EnsureReady(ctx, fileStorage); err != nil {
+		log.Fatal("document storage readiness check failed", zap.Error(err))
+	}
+	documentProcessor := processor.NewWithStorage(
 		documentRepo,
 		chunkRepo,
 		parser.NewDefaultParser(),
 		splitter.New(splitter.DefaultChunkSize, splitter.DefaultChunkOverlap),
 		embeddingprovider.NewOpenAICompatibleProvider(cfg),
+		fileStorage,
 	)
 	workerCtx, stopWorker := context.WithCancel(context.Background())
 	defer stopWorker()
@@ -62,8 +72,11 @@ func main() {
 		MaxRetries:  cfg.WorkerMaxRetries,
 		RetryDelay:  cfg.WorkerRetryDelay,
 	}).Start(workerCtx)
+	go job.NewStorageCleanupWorker(storageCleanupRepo, fileStorage, log, job.Options{
+		RetryDelay: cfg.WorkerRetryDelay,
+	}).Start(workerCtx)
 
-	r := router.New(cfg, db, log)
+	r := router.NewWithStorage(cfg, db, log, fileStorage)
 
 	server := &http.Server{
 		Addr:    ":" + cfg.ServerPort,

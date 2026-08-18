@@ -95,7 +95,7 @@ redis
 | `embedding` | Embedding 业务接口 |
 | `provider` | 外部模型 HTTP 实现 |
 | `retrieval` | pgvector 召回、Rerank、排序 |
-| `storage` | 本地文件保存和删除 |
+| `storage` | 本地 / MinIO S3 文件保存、读取、物化和删除 |
 | `job` | 后台任务和 worker |
 
 ## AI 开发约束
@@ -105,4 +105,3 @@ redis
 3. 不要把 provider 实现写进 service。
 4. 不要把前端页面全部写进 `App.tsx`。
 5. 后续如需新增目录，必须能说明职责，并保持分层清晰。
-

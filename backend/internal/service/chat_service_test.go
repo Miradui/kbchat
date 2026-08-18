@@ -411,8 +411,8 @@ func TestRegenerateMessageRerunsRetrievalAndCreatesNewAssistantMessage(t *testin
 	user := createChatServiceUser(t, db)
 	kb := createChatServiceKnowledgeBase(t, db, user.ID)
 	session := createChatServiceSession(t, db, user.ID, kb.ID)
-	userMessage := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "original question"}
-	oldAssistant := model.ChatMessage{SessionID: session.ID, Role: "assistant", Content: "old answer"}
+	userMessage := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "original question", CreatedAt: time.Now().Add(-time.Second)}
+	oldAssistant := model.ChatMessage{SessionID: session.ID, Role: "assistant", Content: "old answer", CreatedAt: time.Now()}
 	if err := db.Create(&userMessage).Error; err != nil {
 		t.Fatalf("create user message: %v", err)
 	}

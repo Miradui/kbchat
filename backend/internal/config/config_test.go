@@ -88,6 +88,53 @@ func TestLoadPreservesInvalidMaxUploadSizeForValidation(t *testing.T) {
 	}
 }
 
+func TestConfigValidateMinIOStorage(t *testing.T) {
+	base := Config{
+		JWTSecret:       "unit-test-secret-with-at-least-32-bytes",
+		MaxUploadSizeMB: 50,
+		StorageProvider: "minio",
+		MinIOEndpoint:   "http://minio.example.test:9000",
+		MinIOAccessKey:  "test-access-key",
+		MinIOSecretKey:  "test-secret-key",
+		MinIOBucket:     "rag-documents",
+	}
+	if err := base.Validate(); err != nil {
+		t.Fatalf("expected complete MinIO config to validate: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{name: "endpoint", mutate: func(c *Config) { c.MinIOEndpoint = "" }, want: "MINIO_ENDPOINT"},
+		{name: "access key", mutate: func(c *Config) { c.MinIOAccessKey = "" }, want: "MINIO_ACCESS_KEY"},
+		{name: "secret key", mutate: func(c *Config) { c.MinIOSecretKey = "" }, want: "MINIO_SECRET_KEY"},
+		{name: "bucket", mutate: func(c *Config) { c.MinIOBucket = "" }, want: "MINIO_BUCKET"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := base
+			tt.mutate(&cfg)
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected %s validation error, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
+func TestConfigValidateRejectsUnknownStorageProvider(t *testing.T) {
+	err := (Config{
+		JWTSecret:       "unit-test-secret-with-at-least-32-bytes",
+		MaxUploadSizeMB: 50,
+		StorageProvider: "ftp",
+	}).Validate()
+	if err == nil || !strings.Contains(err.Error(), "STORAGE_PROVIDER") {
+		t.Fatalf("expected STORAGE_PROVIDER validation error, got %v", err)
+	}
+}
+
 func TestLoadKeepsProcessEnvironmentOverDotEnvFile(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(dir+"/.env", []byte("SERVER_PORT=8080\n"), 0o600); err != nil {

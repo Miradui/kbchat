@@ -798,7 +798,7 @@ Content-Type: 按文件类型推断
 Content-Disposition: attachment
 ```
 
-本地文件不存在时返回 `DOCUMENT_FILE_NOT_FOUND`。
+存储对象不存在时返回 `DOCUMENT_FILE_NOT_FOUND`。
 
 ### GET /documents/:id/preview
 
@@ -1617,7 +1617,7 @@ MVP 语义：
 
 ### DELETE /knowledge-bases/recycle-bin/:id
 
-永久删除当前用户 owner 的、已在回收站中的知识库，并清理关联文档、chunks、chat sessions、成员、收藏、浏览和标签绑定。
+永久删除当前用户 owner 的、已在回收站中的知识库，并清理关联文档、chunks、chat sessions、成员、收藏、浏览和标签绑定。关联文件对象通过同事务写入的持久化清理任务异步删除；存储临时失败会重试，不影响数据库删除的原子性。
 
 ### POST /knowledge-bases/recycle-bin/empty
 
@@ -1633,11 +1633,11 @@ MVP 语义：
 
 ### DELETE /documents/recycle-bin/:id
 
-永久删除当前用户 owner 的、已在回收站中的文档，并清理 chunks 和处理任务。
+永久删除当前用户 owner 的、已在回收站中的文档，并清理 chunks 和处理任务。文件对象通过同事务写入的持久化清理任务异步删除。
 
 ### POST /documents/recycle-bin/empty
 
-清空当前用户 owner 的文档回收站，采用 all-or-nothing 语义。
+清空当前用户 owner 的文档回收站，数据库删除与全部对象清理任务采用 all-or-nothing 事务语义；对象由后台 worker 删除并在失败时持续重试。
 
 ## P1 权限设置扩展
 

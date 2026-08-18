@@ -14,7 +14,7 @@ Included in the MVP:
 
 Out of MVP for now:
 
-- SSO, complex RBAC, multi-tenancy, audit logs, object storage, and docx parsing.
+- SSO, complex RBAC, multi-tenancy, audit logs, non-MinIO object storage, object lifecycle management, and docx parsing.
 
 ## Repository Layout
 
@@ -63,6 +63,8 @@ At minimum, configure:
 - `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`
 - `RERANK_ENABLED`, `RERANK_BASE_URL`, `RERANK_API_KEY`, `RERANK_MODEL`, `RERANK_FAILURE_MODE`
 
+Document storage defaults to local files. To use MinIO, set `STORAGE_PROVIDER=minio` and configure `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, and `MINIO_BUCKET`. The bucket must have no bucket policy; browser preview and download always pass through the authenticated backend.
+
 ## Backend
 
 Run commands from `backend/`.
@@ -89,6 +91,8 @@ The document worker runs inside the backend server process. It is configured wit
 - `WORKER_CONCURRENCY` for parallel document jobs.
 - `WORKER_MAX_RETRIES` for failed job retry budget.
 - `WORKER_RETRY_DELAY` for retry backoff, using Go duration syntax such as `10s` or `1m`.
+
+The server also runs a durable storage-cleanup worker. Permanent deletion records object locations in `storage_cleanup_jobs` in the same database transaction, then removes local or MinIO objects asynchronously with retry.
 
 Different documents may run concurrently, but jobs for the same document are serialized. Reprocessing keeps the previous chunks until all new embeddings succeed and the replacement transaction commits.
 

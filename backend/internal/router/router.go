@@ -1,7 +1,9 @@
 package router
 
 import (
+	"context"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -22,6 +24,19 @@ import (
 )
 
 func New(cfg config.Config, db *gorm.DB, logger *zap.Logger) *gin.Engine {
+	fileStorage, err := storage.NewFromConfig(cfg)
+	if err != nil {
+		panic(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := storage.EnsureReady(ctx, fileStorage); err != nil {
+		panic(err)
+	}
+	return NewWithStorage(cfg, db, logger, fileStorage)
+}
+
+func NewWithStorage(cfg config.Config, db *gorm.DB, logger *zap.Logger, fileStorage storage.Storage) *gin.Engine {
 	if cfg.AppEnv == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -40,7 +55,6 @@ func New(cfg config.Config, db *gorm.DB, logger *zap.Logger) *gin.Engine {
 	chatRepo := repository.NewChatRepository(db)
 	globalSearchRepo := repository.NewGlobalSearchRepository(db)
 	activityRepo := repository.NewActivityRepository(db)
-	localStorage := storage.NewLocalStorage(cfg.UploadDir)
 	embedder := embeddingprovider.NewOpenAICompatibleProvider(cfg)
 	reranker := newRerankProvider(cfg)
 	chatProvider := chatprovider.NewOpenAICompatibleProvider(cfg)
@@ -50,7 +64,7 @@ func New(cfg config.Config, db *gorm.DB, logger *zap.Logger) *gin.Engine {
 	knowledgeBaseService := service.NewKnowledgeBaseService(knowledgeBaseRepo, knowledgeBaseCategoryRepo, knowledgeBaseFavoriteRepo, knowledgeBaseViewRepo, knowledgeBaseWorkspacePreferenceRepo, knowledgeBaseTagRepo, knowledgeBaseTagBindingRepo, knowledgeBaseMemberRepo, userRepo)
 	knowledgeBaseCategoryService := service.NewKnowledgeBaseCategoryService(knowledgeBaseCategoryRepo, knowledgeBaseRepo)
 	knowledgeBaseTagService := service.NewKnowledgeBaseTagService(knowledgeBaseTagRepo, knowledgeBaseTagBindingRepo)
-	documentService := service.NewDocumentService(cfg, documentRepo, chunkRepo, knowledgeBaseRepo, localStorage)
+	documentService := service.NewDocumentService(cfg, documentRepo, chunkRepo, knowledgeBaseRepo, fileStorage)
 	retrievalService := retrieval.NewService(cfg, chunkRepo, knowledgeBaseRepo, embedder, reranker)
 	chatService := service.NewChatService(cfg, chatRepo, knowledgeBaseRepo, retrievalService, chatProvider, titleProvider)
 	globalSearchService := service.NewGlobalSearchService(globalSearchRepo)

@@ -566,3 +566,14 @@ OpenAI-compatible Provider 同样把上游 `data: [DONE]` 作为唯一协议完�
 - 左侧账户栏会显示已保存的头像 URL；图片加载失败时回退默认图标，不影响账户菜单。
 - 真实浏览器联调按项目约定只检查 `1920x1080`：登录、深层 URL、会话侧栏、消息
   复制/编辑入口均已验证，控制台错误为 0。`.env` 未修改，工作区改动未提交。
+
+## MinIO Storage Update (2026-08-18)
+
+- 文档存储新增 `STORAGE_PROVIDER=minio`，使用 `github.com/minio/minio-go/v7` 接入 S3-compatible MinIO；配置项为 `MINIO_ENDPOINT`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`、`MINIO_BUCKET`、`MINIO_REGION`、`MINIO_USE_SSL`。
+- MinIO bucket 保持私有，下载和预览继续由现有 owner-scoped API 代理。对象位置以 `minio://bucket/key` 写入 `documents.storage_path`，key 不含用户原始文件名。
+- 上传、下载、文本预览、永久删除和 worker 解析统一通过 storage 接口。worker 将远端对象物化到权限受限的临时文件并在本轮处理结束时清理。
+- 切换 MinIO 后，非 `minio://` 的历史本地路径仍由 `UPLOAD_DIR` 读取；本次不自动迁移或删除存量本地文件。
+- MinIO 必填配置在启动时校验。endpoint 支持 `host:port` 或 `http(s)://host:port`，拒绝路径、嵌入凭据和非 HTTP(S) scheme；启动时检查 bucket，不存在则自动创建，连接、凭据或权限错误会阻止服务启动。
+- 使用官方 `github.com/minio/minio-go/v7` SDK。启动时拒绝带 bucket policy 的 bucket，并容忍多进程同时创建同一 bucket 的竞态；凭据必须能够读取 bucket policy。
+- migration 015 新增 `storage_cleanup_jobs`。单文档永久删除、文档回收站清空及知识库永久删除会在同一事务持久化对象清理任务，cleanup worker 删除成功后移除任务，存储故障时指数退避并持续重试；每次领取使用新的 `lease_token`，旧 worker 的迟到完成或重试不会覆盖当前租约。
+- `STORAGE_PROVIDER=local` 时若仍提供完整 MinIO 配置，会继续读取和清理历史 `minio://` 对象；回切本地存储前不得移除旧 MinIO 配置。

@@ -29,7 +29,10 @@ const (
 	defaultRerankBaseURL      = "https://api.openai.com/v1"
 	defaultRerankModel        = "rerank-model-name"
 	defaultRerankFailureMode  = "strict"
+	defaultStorageProvider    = "local"
 	defaultUploadDir          = "./uploads"
+	defaultMinIOBucket        = "rag-documents"
+	defaultMinIOUseSSL        = false
 	defaultMaxUploadSizeMB    = 50
 	defaultVectorTopN         = 30
 	defaultRerankTopK         = 5
@@ -71,7 +74,14 @@ type Config struct {
 	RerankAPIKey       string
 	RerankModel        string
 	RerankFailureMode  string
+	StorageProvider    string
 	UploadDir          string
+	MinIOEndpoint      string
+	MinIOAccessKey     string
+	MinIOSecretKey     string
+	MinIOBucket        string
+	MinIORegion        string
+	MinIOUseSSL        bool
 	MaxUploadSizeMB    int
 	VectorTopN         int
 	RerankTopK         int
@@ -111,7 +121,14 @@ func Load() Config {
 		RerankAPIKey:       getEnv("RERANK_API_KEY", getEnv("OPENAI_API_KEY", "")),
 		RerankModel:        getEnv("RERANK_MODEL", defaultRerankModel),
 		RerankFailureMode:  normalizeRerankFailureMode(getEnv("RERANK_FAILURE_MODE", defaultRerankFailureMode)),
+		StorageProvider:    normalizeStorageProvider(getEnv("STORAGE_PROVIDER", defaultStorageProvider)),
 		UploadDir:          getEnv("UPLOAD_DIR", defaultUploadDir),
+		MinIOEndpoint:      strings.TrimSpace(getEnv("MINIO_ENDPOINT", "")),
+		MinIOAccessKey:     getEnv("MINIO_ACCESS_KEY", ""),
+		MinIOSecretKey:     getEnv("MINIO_SECRET_KEY", ""),
+		MinIOBucket:        strings.TrimSpace(getEnv("MINIO_BUCKET", defaultMinIOBucket)),
+		MinIORegion:        strings.TrimSpace(getEnv("MINIO_REGION", "")),
+		MinIOUseSSL:        getEnvBool("MINIO_USE_SSL", defaultMinIOUseSSL),
 		MaxUploadSizeMB:    getEnvUploadSizeMB(defaultMaxUploadSizeMB),
 		VectorTopN:         getEnvInt("VECTOR_TOP_N", defaultVectorTopN),
 		RerankTopK:         getEnvInt("RERANK_TOP_K", defaultRerankTopK),
@@ -127,7 +144,39 @@ func (c Config) Validate() error {
 	if err := ValidateJWTSecret(c.JWTSecret); err != nil {
 		return err
 	}
-	return validateMaxUploadSizeMB(c.MaxUploadSizeMB)
+	if err := validateMaxUploadSizeMB(c.MaxUploadSizeMB); err != nil {
+		return err
+	}
+	return validateStorageConfig(c)
+}
+
+func validateStorageConfig(c Config) error {
+	provider := normalizeStorageProvider(c.StorageProvider)
+	if provider == "" {
+		provider = defaultStorageProvider
+	}
+	switch provider {
+	case "local":
+		return nil
+	case "minio":
+		required := []struct {
+			name  string
+			value string
+		}{
+			{name: "MINIO_ENDPOINT", value: c.MinIOEndpoint},
+			{name: "MINIO_ACCESS_KEY", value: c.MinIOAccessKey},
+			{name: "MINIO_SECRET_KEY", value: c.MinIOSecretKey},
+			{name: "MINIO_BUCKET", value: c.MinIOBucket},
+		}
+		for _, item := range required {
+			if strings.TrimSpace(item.value) == "" {
+				return fmt.Errorf("%s is required when STORAGE_PROVIDER=minio", item.name)
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("STORAGE_PROVIDER must be local or minio")
+	}
 }
 
 func ValidateJWTSecret(value string) error {
@@ -186,6 +235,10 @@ func loadDotEnv() {
 	for _, path := range paths {
 		_ = godotenv.Load(path)
 	}
+}
+
+func normalizeStorageProvider(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func getEnv(key, fallback string) string {

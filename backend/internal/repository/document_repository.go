@@ -403,7 +403,7 @@ func (r *DocumentRepository) LatestJobsByDocumentIDs(ctx context.Context, docume
 func (r *DocumentRepository) ClaimPendingJob(ctx context.Context) (*model.DocumentJob, error) {
 	var job model.DocumentJob
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&model.DocumentJob{}).
+		result := tx.Model(&model.DocumentJob{}).
 			Select("document_jobs.*").
 			Joins("JOIN documents ON documents.id = document_jobs.document_id").
 			Where("document_jobs.status = ? AND document_jobs.job_type = ?", "pending", "process_document").
@@ -421,8 +421,13 @@ func (r *DocumentRepository) ClaimPendingJob(ctx context.Context) (*model.Docume
 				Table:    clause.Table{Name: "documents"},
 				Options:  "SKIP LOCKED",
 			}).
-			First(&job).Error; err != nil {
-			return err
+			Limit(1).
+			Find(&job)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
 		}
 
 		var lockedJob model.DocumentJob
@@ -521,7 +526,11 @@ func (r *DocumentRepository) BatchRestore(ctx context.Context, documentIDs []uui
 
 func (r *DocumentRepository) PermanentDelete(ctx context.Context, documentID uuid.UUID) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := lockDocumentForPermanentDelete(tx, documentID); err != nil {
+		document, err := lockDocumentForPermanentDelete(tx, documentID)
+		if err != nil {
+			return err
+		}
+		if err := enqueueStorageCleanup(tx, []string{document.StoragePath}); err != nil {
 			return err
 		}
 		if err := tx.Where("document_id = ?", documentID).Delete(&model.DocumentChunk{}).Error; err != nil {
@@ -536,7 +545,10 @@ func (r *DocumentRepository) PermanentDelete(ctx context.Context, documentID uui
 
 func (r *DocumentRepository) EmptyDeletedByOwner(ctx context.Context, ownerID uuid.UUID) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var ids []uuid.UUID
+		var documents []struct {
+			ID          uuid.UUID
+			StoragePath string
+		}
 		if err := tx.Unscoped().
 			Model(&model.Document{}).
 			Joins("JOIN knowledge_bases ON knowledge_bases.id = documents.knowledge_base_id").
@@ -544,10 +556,19 @@ func (r *DocumentRepository) EmptyDeletedByOwner(ctx context.Context, ownerID uu
 			Where("documents.deleted_at IS NOT NULL").
 			Order("documents.id asc").
 			Clauses(clause.Locking{Strength: "UPDATE", Table: clause.Table{Name: "documents"}}).
-			Pluck("documents.id", &ids).Error; err != nil {
+			Select("documents.id, documents.storage_path").
+			Find(&documents).Error; err != nil {
 			return err
 		}
-		for _, id := range ids {
+		paths := make([]string, 0, len(documents))
+		for _, document := range documents {
+			paths = append(paths, document.StoragePath)
+		}
+		if err := enqueueStorageCleanup(tx, paths); err != nil {
+			return err
+		}
+		for _, document := range documents {
+			id := document.ID
 			if err := tx.Where("document_id = ?", id).Delete(&model.DocumentChunk{}).Error; err != nil {
 				return err
 			}
@@ -562,18 +583,18 @@ func (r *DocumentRepository) EmptyDeletedByOwner(ctx context.Context, ownerID uu
 	})
 }
 
-func lockDocumentForPermanentDelete(tx *gorm.DB, documentID uuid.UUID) error {
+func lockDocumentForPermanentDelete(tx *gorm.DB, documentID uuid.UUID) (*model.Document, error) {
 	var document model.Document
 	err := tx.
 		Unscoped().
-		Select("id").
+		Select("id, storage_path").
 		Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("id = ? AND deleted_at IS NOT NULL", documentID).
 		First(&document).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return ErrDocumentNotDeleted
+		return nil, ErrDocumentNotDeleted
 	}
-	return err
+	return &document, err
 }
 
 type RecycleDocumentItem struct {

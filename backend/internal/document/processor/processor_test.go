@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"mime/multipart"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -19,10 +22,93 @@ import (
 	"rag/backend/internal/document/splitter"
 	"rag/backend/internal/model"
 	"rag/backend/internal/repository"
+	"rag/backend/internal/storage"
 )
 
 type structuredParser struct {
 	document parser.ParsedDocument
+}
+
+type pathRecordingParser struct {
+	path string
+}
+
+func (p *pathRecordingParser) ParseDocument(path string, fileType string) (parser.ParsedDocument, error) {
+	p.path = path
+	return parser.ParsedDocument{FileType: fileType, Segments: []parser.Segment{{Content: "remote content"}}}, nil
+}
+
+type materializingStorage struct {
+	requestedLocation string
+	materializedPath  string
+	cleaned           bool
+}
+
+func (*materializingStorage) SaveKnowledgeBaseFile(context.Context, uuid.UUID, *multipart.FileHeader) (string, error) {
+	return "", errors.New("not implemented")
+}
+
+func (*materializingStorage) Delete(context.Context, string) error {
+	return errors.New("not implemented")
+}
+
+func (*materializingStorage) Open(context.Context, string) (io.ReadCloser, storage.ObjectInfo, error) {
+	return nil, storage.ObjectInfo{}, errors.New("not implemented")
+}
+
+func (*materializingStorage) Read(context.Context, string) ([]byte, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (*materializingStorage) Stat(context.Context, string) (storage.ObjectInfo, error) {
+	return storage.ObjectInfo{}, errors.New("not implemented")
+}
+
+func (s *materializingStorage) Materialize(_ context.Context, location string) (string, func(), error) {
+	s.requestedLocation = location
+	temporary, err := os.CreateTemp("", "processor-materialized-*")
+	if err != nil {
+		return "", nil, err
+	}
+	if err := temporary.Close(); err != nil {
+		return "", nil, err
+	}
+	s.materializedPath = temporary.Name()
+	return temporary.Name(), func() {
+		s.cleaned = true
+		_ = os.Remove(temporary.Name())
+	}, nil
+}
+
+func TestProcessMaterializesRemoteObjectAndCleansTemporaryFile(t *testing.T) {
+	fixture := newProcessorTestFixture(t, "txt")
+	location := "minio://rag-documents/object.txt"
+	if err := fixture.db.Model(&model.Document{}).Where("id = ?", fixture.document.ID).Update("storage_path", location).Error; err != nil {
+		t.Fatalf("update storage path: %v", err)
+	}
+	fileStorage := &materializingStorage{}
+	parser := &pathRecordingParser{}
+	processor := NewWithStorage(
+		fixture.documents,
+		fixture.chunks,
+		parser,
+		splitter.New(splitter.DefaultChunkSize, splitter.DefaultChunkOverlap),
+		cardinalityEmbedder{},
+		fileStorage,
+	)
+
+	if err := processor.Process(context.Background(), &fixture.job); err != nil {
+		t.Fatalf("process remote document: %v", err)
+	}
+	if fileStorage.requestedLocation != location || parser.path != fileStorage.materializedPath {
+		t.Fatalf("expected parser to receive materialized path, location=%q parserPath=%q materializedPath=%q", fileStorage.requestedLocation, parser.path, fileStorage.materializedPath)
+	}
+	if !fileStorage.cleaned {
+		t.Fatal("expected materialized file cleanup")
+	}
+	if _, err := os.Stat(fileStorage.materializedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected temporary file to be removed, got %v", err)
+	}
 }
 
 func (p structuredParser) ParseDocument(_ string, _ string) (parser.ParsedDocument, error) {

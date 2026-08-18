@@ -1,18 +1,40 @@
 package repository
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	gormlogger "gorm.io/gorm/logger"
 
 	"rag/backend/internal/model"
 )
+
+func TestEmptyWorkerQueuesDoNotLogRecordNotFoundErrors(t *testing.T) {
+	db := newDocumentRepositoryTestDB(t)
+	var output bytes.Buffer
+	quietDB := db.Session(&gorm.Session{Logger: gormlogger.New(log.New(&output, "", 0), gormlogger.Config{
+		LogLevel:                  gormlogger.Error,
+		IgnoreRecordNotFoundError: false,
+	})})
+	if job, err := NewDocumentRepository(quietDB).ClaimPendingJob(context.Background()); err != nil || job != nil {
+		t.Fatalf("claim empty document queue: job=%#v err=%v", job, err)
+	}
+	if cleanup, err := NewStorageCleanupRepository(quietDB).ClaimPending(context.Background()); err != nil || cleanup != nil {
+		t.Fatalf("claim empty storage cleanup queue: cleanup=%#v err=%v", cleanup, err)
+	}
+	if strings.Contains(output.String(), "record not found") {
+		t.Fatalf("empty worker queues must not emit error logs: %s", output.String())
+	}
+}
 
 func TestClaimPendingJobLocksDocumentBeforeJob(t *testing.T) {
 	db := newDocumentRepositoryTestDB(t)
@@ -111,6 +133,7 @@ func TestPermanentDeleteLocksDocumentBeforeDeletingJobs(t *testing.T) {
 	if len(*lockTargets) == 0 || (*lockTargets)[0] != "documents" {
 		t.Fatalf("expected document lock before child deletion, got %v", *lockTargets)
 	}
+	assertStorageCleanupQueued(t, db, document.StoragePath)
 }
 
 func TestEmptyDeletedByOwnerLocksDocumentsBeforeDeletingJobs(t *testing.T) {
@@ -133,6 +156,7 @@ func TestEmptyDeletedByOwnerLocksDocumentsBeforeDeletingJobs(t *testing.T) {
 	if len(*lockTargets) == 0 || (*lockTargets)[0] != "documents" {
 		t.Fatalf("expected document locks before child deletion, got %v", *lockTargets)
 	}
+	assertStorageCleanupQueued(t, db, document.StoragePath)
 }
 
 func TestKnowledgeBasePermanentDeleteLocksKnowledgeBaseThenDocumentsBeforeDeletingJobs(t *testing.T) {
@@ -166,6 +190,18 @@ func TestKnowledgeBasePermanentDeleteLocksKnowledgeBaseThenDocumentsBeforeDeleti
 	want := []string{"knowledge_bases", "documents"}
 	if !reflect.DeepEqual(*lockTargets, want) {
 		t.Fatalf("expected knowledge base then document locks before cascading job deletion, got %v", *lockTargets)
+	}
+	assertStorageCleanupQueued(t, db, document.StoragePath)
+}
+
+func assertStorageCleanupQueued(t *testing.T, db *gorm.DB, storagePath string) {
+	t.Helper()
+	var count int64
+	if err := db.Table("storage_cleanup_jobs").Where("storage_path = ?", storagePath).Count(&count).Error; err != nil {
+		t.Fatalf("count storage cleanup jobs: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one cleanup job for %q, got %d", storagePath, count)
 	}
 }
 
@@ -408,6 +444,7 @@ func newDocumentRepositoryTestDB(t *testing.T) *gorm.DB {
 		&model.KnowledgeBase{},
 		&model.Document{},
 		&model.DocumentJob{},
+		&model.StorageCleanupJob{},
 		&model.DocumentChunk{},
 	); err != nil {
 		t.Fatalf("auto migrate document repository fixture: %v", err)

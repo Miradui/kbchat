@@ -64,7 +64,7 @@ Redis 可连接
 1. documents 表。
 2. document_jobs 表。
 3. 文件上传 API。
-4. 本地 uploads 存储。
+4. 本地 uploads / MinIO S3 存储。
 5. 文档列表、详情、删除。
 6. 文档状态展示。
 

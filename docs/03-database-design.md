@@ -213,6 +213,24 @@ cancelled
 `document_jobs_status_check`；仅依赖 SQLite `AutoMigrate` 的测试不会重建这条
 PostgreSQL CHECK 约束，因此不能代替该 migration。
 
+## storage_cleanup_jobs
+
+```sql
+CREATE TABLE storage_cleanup_jobs (
+    id UUID PRIMARY KEY,
+    storage_path TEXT NOT NULL UNIQUE,
+    retry_count INT NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMP NULL,
+    locked_at TIMESTAMP NULL,
+    lease_token UUID NULL,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+```
+
+永久删除文档或知识库时，清理任务与业务数据删除在同一数据库事务内写入。对象删除成功后才移除任务；MinIO 或本地存储临时失败时保留 `storage_path` 并持续重试，避免业务行已删除后形成无法定位的孤儿对象。每次领取生成新的 `lease_token`，完成和重试必须匹配当前 token，过期 worker 的迟到结果不能覆盖新领取者。
+
 真实 PostgreSQL 行锁集成测试只读取显式的 `RAG_TEST_POSTGRES_DSN`；未设置时
 测试跳过。设置后测试会创建独立的 `rag_it_<uuid>` schema，并在结束时删除，
 因此该 DSN 应指向允许创建和删除 schema 的专用测试数据库。
