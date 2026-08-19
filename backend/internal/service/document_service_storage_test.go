@@ -55,8 +55,12 @@ type memoryDocumentStorage struct {
 	objects map[string][]byte
 }
 
-func (s *memoryDocumentStorage) SaveKnowledgeBaseFile(context.Context, uuid.UUID, *multipart.FileHeader) (string, error) {
-	return "", fmt.Errorf("not implemented")
+func (s *memoryDocumentStorage) NewKnowledgeBaseFileLocation(uuid.UUID, string) string {
+	return ""
+}
+
+func (s *memoryDocumentStorage) SaveKnowledgeBaseFile(context.Context, string, *multipart.FileHeader) error {
+	return fmt.Errorf("not implemented")
 }
 
 func (s *memoryDocumentStorage) Delete(_ context.Context, location string) error {

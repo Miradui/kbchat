@@ -13,7 +13,7 @@ import (
 const maxStorageCleanupBackoff = 30 * time.Minute
 
 type StorageCleanupStore interface {
-	ClaimPending(context.Context) (*model.StorageCleanupJob, error)
+	ClaimPending(context.Context, time.Duration) (*model.StorageCleanupJob, error)
 	Complete(context.Context, uuid.UUID, uuid.UUID) error
 	Retry(context.Context, uuid.UUID, uuid.UUID, int, time.Time, string) error
 }
@@ -23,11 +23,12 @@ type StorageDeleter interface {
 }
 
 type StorageCleanupWorker struct {
-	jobs       StorageCleanupStore
-	storage    StorageDeleter
-	logger     *zap.Logger
-	interval   time.Duration
-	retryDelay time.Duration
+	jobs             StorageCleanupStore
+	storage          StorageDeleter
+	logger           *zap.Logger
+	interval         time.Duration
+	retryDelay       time.Duration
+	operationTimeout time.Duration
 }
 
 func NewStorageCleanupWorker(jobs StorageCleanupStore, storage StorageDeleter, logger *zap.Logger, options Options) *StorageCleanupWorker {
@@ -37,12 +38,16 @@ func NewStorageCleanupWorker(jobs StorageCleanupStore, storage StorageDeleter, l
 	if options.RetryDelay <= 0 {
 		options.RetryDelay = defaultRetryDelay
 	}
+	if options.OperationTimeout <= 0 {
+		options.OperationTimeout = 2 * time.Minute
+	}
 	return &StorageCleanupWorker{
-		jobs:       jobs,
-		storage:    storage,
-		logger:     logger,
-		interval:   options.Interval,
-		retryDelay: options.RetryDelay,
+		jobs:             jobs,
+		storage:          storage,
+		logger:           logger,
+		interval:         options.Interval,
+		retryDelay:       options.RetryDelay,
+		operationTimeout: options.OperationTimeout,
 	}
 }
 
@@ -63,7 +68,7 @@ func (w *StorageCleanupWorker) Start(ctx context.Context) {
 
 func (w *StorageCleanupWorker) runOnce(ctx context.Context) {
 	for ctx.Err() == nil {
-		cleanup, err := w.jobs.ClaimPending(ctx)
+		cleanup, err := w.jobs.ClaimPending(ctx, w.operationTimeout+time.Minute)
 		if err != nil {
 			if ctx.Err() == nil {
 				w.logger.Error("claim storage cleanup job failed", zap.Error(err))
@@ -82,7 +87,9 @@ func (w *StorageCleanupWorker) process(ctx context.Context, cleanup *model.Stora
 		w.logger.Error("storage cleanup job has no lease token", zap.String("cleanup_job_id", cleanup.ID.String()))
 		return
 	}
-	if err := w.storage.Delete(ctx, cleanup.StoragePath); err != nil {
+	operationCtx, cancel := context.WithTimeout(ctx, w.operationTimeout)
+	defer cancel()
+	if err := w.storage.Delete(operationCtx, cleanup.StoragePath); err != nil {
 		retryCount := cleanup.RetryCount + 1
 		retryAt := time.Now().Add(storageCleanupBackoff(w.retryDelay, retryCount))
 		w.logger.Warn("storage cleanup scheduled for retry",

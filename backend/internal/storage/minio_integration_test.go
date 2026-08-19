@@ -40,8 +40,8 @@ func TestMinIOStorageIntegration(t *testing.T) {
 	}
 
 	content := []byte("MinIO integration verification")
-	location, err := fileStorage.SaveKnowledgeBaseFile(ctx, uuid.New(), multipartFileHeader(t, "验证文档.txt", content))
-	if err != nil {
+	location := fileStorage.NewKnowledgeBaseFileLocation(uuid.New(), "验证文档.txt")
+	if err := fileStorage.SaveKnowledgeBaseFile(ctx, location, multipartFileHeader(t, "验证文档.txt", content)); err != nil {
 		t.Fatalf("save MinIO object: %v", err)
 	}
 	if !strings.HasPrefix(location, minIOScheme+bucket+"/") {

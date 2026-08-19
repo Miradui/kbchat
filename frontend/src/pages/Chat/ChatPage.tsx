@@ -27,7 +27,7 @@ import { downloadBlob } from '../../utils/download';
 import { formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
 import { ChatComposer } from './ChatComposer';
-import { MessageBubble } from './ChatMessage';
+import { CitationCard, MessageBubble } from './ChatMessage';
 import { ChatSessionRail } from './ChatSessionRail';
 import type { ChatSessionScope } from './ChatSessionRail';
 import { useChatSessions } from './useChatSessions';
@@ -64,6 +64,7 @@ export function ChatPage() {
   const sessionBusyRef = useRef(false);
   const sessionExportOperationRef = useRef<symbol | null>(null);
   const feedbackOperationsRef = useRef<Map<string, symbol>>(new Map());
+  const skipSessionScopeSyncRef = useRef(false);
 
   const urlKnowledgeBaseId = searchParams.get('knowledgeBaseId') ?? '';
   const [railScope, setRailScope] = useState<ChatSessionScope>('active');
@@ -82,6 +83,7 @@ export function ChatPage() {
     removeSession,
     reloadKnowledgeBases,
     reloadSessions,
+    loadMoreSessions,
   } = sessionStore;
 
   const thread = useChatThread({
@@ -120,6 +122,16 @@ export function ChatPage() {
       return next;
     }, { replace: true });
   }, [currentSession?.knowledgeBaseId, setSearchParams, urlKnowledgeBaseId]);
+
+  useEffect(() => {
+    if (!sessionId || !currentSession) return;
+    if (skipSessionScopeSyncRef.current) {
+      skipSessionScopeSyncRef.current = false;
+      return;
+    }
+    const nextScope: ChatSessionScope = currentSession.archivedAt ? 'archived' : 'active';
+    setRailScope((current) => current === nextScope ? current : nextScope);
+  }, [currentSession?.archivedAt, currentSession?.id, sessionId]);
 
   useEffect(() => {
     if (!isNarrow) setRailOpen(false);
@@ -174,6 +186,7 @@ export function ChatPage() {
     || Boolean(thread.regeneratingId)
     || Boolean(thread.editingId)
     || Boolean(thread.unconfirmedSend?.checking)
+    || Boolean(thread.stoppedStream?.checking)
     || Boolean(thread.regeneration?.checking);
   const interactionLocked = thread.loading || sessionBusy || threadInteractionPending;
   const canSend = Boolean(activeKnowledgeBase)
@@ -181,7 +194,8 @@ export function ChatPage() {
     && !thread.loading
     && !sessionBusy
     && !thread.editingId
-    && !thread.unconfirmedSend;
+    && !thread.unconfirmedSend
+    && (!thread.stoppedStream || thread.stoppedStream.resumable);
 
   const composerHint = !activeKnowledgeBase
     ? knowledgeBases.length === 0
@@ -293,6 +307,7 @@ export function ChatPage() {
               const restored = await unarchiveChatSession(target.id);
               removeSession(target.id);
               if (activeSessionIdRef.current === target.id) {
+                skipSessionScopeSyncRef.current = true;
                 thread.setSession(restored);
                 void reloadSessions();
               }
@@ -365,6 +380,10 @@ export function ChatPage() {
             selectKnowledgeBase(activeKnowledgeBaseId);
           }}
           onRetry={() => void reloadSessions()}
+          hasMore={sessionStore.hasMoreSessions}
+          loadingMore={sessionStore.sessionsLoadingMore}
+          loadMoreError={sessionStore.loadMoreError}
+          onLoadMore={() => void loadMoreSessions()}
           onRetryKnowledgeBases={() => void reloadKnowledgeBases()}
           onScopeChange={setRailScope}
           scope={railScope}
@@ -427,7 +446,7 @@ export function ChatPage() {
           >
             {thread.loading ? (
               <LoadingSkeleton announce columns={1} compact rows={5} />
-            ) : thread.messages.length === 0 && !thread.pendingQuestion && !thread.failedSend && !thread.unconfirmedSend ? (
+            ) : thread.messages.length === 0 && !thread.pendingQuestion && !thread.failedSend && !thread.unconfirmedSend && !thread.stoppedStream ? (
               sessionId ? null : (
                 <ChatEmptyState
                   knowledgeBases={knowledgeBases}
@@ -506,11 +525,13 @@ export function ChatPage() {
                   />
                 ))}
 
-                {thread.pendingQuestion && (
+                {(thread.pendingQuestion || thread.streamingAnswer || thread.streamingCitations.length > 0) && (
                   <>
-                    <article className="chat-msg chat-msg--user is-pending">
-                      <div className="chat-msg__body"><p className="chat-msg__content">{thread.pendingQuestion}</p></div>
-                    </article>
+                    {thread.pendingQuestion && (
+                      <article className="chat-msg chat-msg--user is-pending">
+                        <div className="chat-msg__body"><p className="chat-msg__content">{thread.pendingQuestion}</p></div>
+                      </article>
+                    )}
                     <article className="chat-msg chat-msg--assistant is-pending">
                       <div className="chat-msg__body">
                         {/*
@@ -533,6 +554,51 @@ export function ChatPage() {
                             </p>
                             <LoadingSkeleton columns={1} compact rows={2} />
                           </>
+                        )}
+                        {thread.streamingCitations.length > 0 && (
+                          <div aria-label="本轮引用来源" className="chat-sources chat-sources--streaming" role="group">
+                            {thread.streamingCitations.map((citation, index) => (
+                              <CitationCard
+                                citation={citation}
+                                focused={false}
+                                index={index + 1}
+                                key={`${citation.documentId}-${citation.chunkId}-${index}`}
+                                knowledgeBaseId={activeKnowledgeBaseId || undefined}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </article>
+                  </>
+                )}
+
+                {thread.stoppedStream && (
+                  <>
+                    <article className="chat-msg chat-msg--user is-pending">
+                      <div className="chat-msg__body"><p className="chat-msg__content">{thread.stoppedStream.question}</p></div>
+                    </article>
+                    <article className="chat-msg chat-msg--assistant is-pending">
+                      <div className="chat-msg__body">
+                        <p className="chat-msg__content">
+                          {thread.stoppedStream.answer || '已停止生成。'}
+                        </p>
+                        <div className="chat-recovery chat-recovery--stopped" role="status">
+                          <strong>{thread.stoppedStream.checking ? '已停止，正在确认结果…' : '已停止生成'}</strong>
+                          <p>{thread.stoppedStream.resumable ? '这段内容尚未写入历史，你可以继续提问。' : '确认完成后即可继续提问。'}</p>
+                        </div>
+                        {thread.stoppedStream.citations.length > 0 && (
+                          <div aria-label="已停止回答的引用来源" className="chat-sources" role="group">
+                            {thread.stoppedStream.citations.map((citation, index) => (
+                              <CitationCard
+                                citation={citation}
+                                focused={false}
+                                index={index + 1}
+                                key={`${citation.documentId}-${citation.chunkId}-${index}`}
+                                knowledgeBaseId={activeKnowledgeBaseId || undefined}
+                              />
+                            ))}
+                          </div>
                         )}
                       </div>
                     </article>
@@ -640,7 +706,10 @@ export function ChatPage() {
             const target = currentSession;
             const archivedSession = await archiveChatSession(target.id);
             removeSession(target.id);
-            if (activeSessionIdRef.current === target.id) thread.setSession(archivedSession);
+            if (activeSessionIdRef.current === target.id) {
+              skipSessionScopeSyncRef.current = true;
+              thread.setSession(archivedSession);
+            }
             setConfirmArchive(false);
             toast.success('会话已归档');
           }, '会话归档失败')}

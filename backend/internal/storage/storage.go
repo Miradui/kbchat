@@ -22,7 +22,8 @@ type ObjectInfo struct {
 }
 
 type Storage interface {
-	SaveKnowledgeBaseFile(context.Context, uuid.UUID, *multipart.FileHeader) (string, error)
+	NewKnowledgeBaseFileLocation(uuid.UUID, string) string
+	SaveKnowledgeBaseFile(context.Context, string, *multipart.FileHeader) error
 	Delete(context.Context, string) error
 	Open(context.Context, string) (io.ReadCloser, ObjectInfo, error)
 	Read(context.Context, string) ([]byte, error)
@@ -62,12 +63,13 @@ func NewFromConfig(cfg config.Config) (Storage, error) {
 
 func newMinIOFromConfig(cfg config.Config) (*MinIOStorage, error) {
 	return NewMinIOStorage(MinIOConfig{
-		Endpoint:  cfg.MinIOEndpoint,
-		AccessKey: cfg.MinIOAccessKey,
-		SecretKey: cfg.MinIOSecretKey,
-		Bucket:    cfg.MinIOBucket,
-		Region:    cfg.MinIORegion,
-		UseSSL:    cfg.MinIOUseSSL,
+		Endpoint:         cfg.MinIOEndpoint,
+		AccessKey:        cfg.MinIOAccessKey,
+		SecretKey:        cfg.MinIOSecretKey,
+		Bucket:           cfg.MinIOBucket,
+		Region:           cfg.MinIORegion,
+		UseSSL:           cfg.MinIOUseSSL,
+		OperationTimeout: cfg.StorageOperationTimeout,
 	})
 }
 
@@ -96,8 +98,12 @@ func (s *RoutedStorage) backend(location string) Storage {
 	return s.local
 }
 
-func (s *RoutedStorage) SaveKnowledgeBaseFile(ctx context.Context, kbID uuid.UUID, file *multipart.FileHeader) (string, error) {
-	return s.primary.SaveKnowledgeBaseFile(ctx, kbID, file)
+func (s *RoutedStorage) NewKnowledgeBaseFileLocation(kbID uuid.UUID, filename string) string {
+	return s.primary.NewKnowledgeBaseFileLocation(kbID, filename)
+}
+
+func (s *RoutedStorage) SaveKnowledgeBaseFile(ctx context.Context, location string, file *multipart.FileHeader) error {
+	return s.backend(location).SaveKnowledgeBaseFile(ctx, location, file)
 }
 
 func (s *RoutedStorage) Delete(ctx context.Context, location string) error {

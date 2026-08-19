@@ -73,7 +73,8 @@ func main() {
 		RetryDelay:  cfg.WorkerRetryDelay,
 	}).Start(workerCtx)
 	go job.NewStorageCleanupWorker(storageCleanupRepo, fileStorage, log, job.Options{
-		RetryDelay: cfg.WorkerRetryDelay,
+		RetryDelay:       cfg.WorkerRetryDelay,
+		OperationTimeout: cfg.StorageOperationTimeout,
 	}).Start(workerCtx)
 
 	r := router.NewWithStorage(cfg, db, log, fileStorage)

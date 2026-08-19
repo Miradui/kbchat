@@ -20,34 +20,36 @@ func NewLocalStorage(root string) *LocalStorage {
 	return &LocalStorage{root: root}
 }
 
-func (s *LocalStorage) SaveKnowledgeBaseFile(ctx context.Context, kbID uuid.UUID, file *multipart.FileHeader) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(filepath.Join(s.root, kbID.String()), 0755); err != nil {
-		return "", err
-	}
+func (s *LocalStorage) NewKnowledgeBaseFileLocation(kbID uuid.UUID, filename string) string {
+	key := knowledgeBaseObjectKey(kbID, filename)
+	return filepath.Join(s.root, filepath.FromSlash(key))
+}
 
-	key := knowledgeBaseObjectKey(kbID, file.Filename)
-	target := filepath.Join(s.root, filepath.FromSlash(key))
+func (s *LocalStorage) SaveKnowledgeBaseFile(ctx context.Context, target string, file *multipart.FileHeader) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		return err
+	}
 
 	src, err := file.Open()
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer src.Close()
 
 	dst, err := os.Create(target)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer dst.Close()
 
 	if _, err := io.Copy(dst, src); err != nil {
-		return "", err
+		return err
 	}
 
-	return target, nil
+	return nil
 }
 
 func (s *LocalStorage) Delete(ctx context.Context, path string) error {

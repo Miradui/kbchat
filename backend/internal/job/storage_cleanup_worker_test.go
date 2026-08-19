@@ -34,12 +34,14 @@ func TestStorageCleanupWorkerRetriesThenCompletes(t *testing.T) {
 }
 
 type fakeStorageCleanupStore struct {
-	pending    *model.StorageCleanupJob
-	retryCount int
-	completed  bool
+	pending       *model.StorageCleanupJob
+	retryCount    int
+	completed     bool
+	leaseDuration time.Duration
 }
 
-func (s *fakeStorageCleanupStore) ClaimPending(context.Context) (*model.StorageCleanupJob, error) {
+func (s *fakeStorageCleanupStore) ClaimPending(_ context.Context, leaseDuration time.Duration) (*model.StorageCleanupJob, error) {
+	s.leaseDuration = leaseDuration
 	pending := s.pending
 	s.pending = nil
 	return pending, nil
@@ -56,9 +58,27 @@ func (s *fakeStorageCleanupStore) Retry(_ context.Context, _, _ uuid.UUID, retry
 }
 
 type fakeStorageDeleter struct {
-	err error
+	err          error
+	deadlineSeen bool
 }
 
-func (d *fakeStorageDeleter) Delete(context.Context, string) error {
+func (d *fakeStorageDeleter) Delete(ctx context.Context, _ string) error {
+	_, d.deadlineSeen = ctx.Deadline()
 	return d.err
+}
+
+func TestStorageCleanupWorkerGivesDeleteAnOperationDeadline(t *testing.T) {
+	leaseToken := uuid.New()
+	cleanup := &model.StorageCleanupJob{ID: uuid.New(), StoragePath: "minio://bucket/object", LeaseToken: &leaseToken}
+	store := &fakeStorageCleanupStore{pending: cleanup}
+	deleter := &fakeStorageDeleter{}
+	worker := NewStorageCleanupWorker(store, deleter, zap.NewNop(), Options{OperationTimeout: time.Second})
+
+	worker.runOnce(context.Background())
+	if !deleter.deadlineSeen {
+		t.Fatal("expected storage cleanup delete to have an operation deadline")
+	}
+	if store.leaseDuration <= time.Second {
+		t.Fatalf("expected lease %s to outlive operation timeout", store.leaseDuration)
+	}
 }

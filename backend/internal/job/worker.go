@@ -33,10 +33,11 @@ type DocumentProcessor interface {
 }
 
 type Options struct {
-	Interval    time.Duration
-	Concurrency int
-	MaxRetries  int
-	RetryDelay  time.Duration
+	Interval         time.Duration
+	Concurrency      int
+	MaxRetries       int
+	RetryDelay       time.Duration
+	OperationTimeout time.Duration
 }
 
 type Worker struct {

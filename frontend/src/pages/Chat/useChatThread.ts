@@ -32,6 +32,16 @@ export type UnconfirmedSend = {
   checking: boolean;
 };
 
+export type StoppedStream = {
+  question: string;
+  answer: string;
+  citations: Citation[];
+  checking: boolean;
+  resumable: boolean;
+};
+
+type ReconcileResult = 'accepted' | 'absent' | 'unknown';
+
 export type RegenerationState = {
   messageId: string;
   kind: 'failed' | 'unconfirmed';
@@ -79,6 +89,7 @@ export function useChatThread({
   /** Answer text accumulated from the current stream; empty when not streaming. */
   const [streamingAnswer, setStreamingAnswer] = useState('');
   const [streamingCitations, setStreamingCitations] = useState<Citation[]>([]);
+  const [stoppedStream, setStoppedStream] = useState<StoppedStream | null>(null);
 
   const activeSessionRef = useRef<string | undefined>(sessionId);
   const mountedRef = useRef(true);
@@ -90,6 +101,9 @@ export function useChatThread({
   const regenerationCheckTokenRef = useRef<symbol | null>(null);
   const draftSendSessionRef = useRef<string | null>(null);
   const sendAbortRef = useRef<AbortController | null>(null);
+  const cancelRequestedRef = useRef<symbol | null>(null);
+  const streamingAnswerRef = useRef('');
+  const streamingCitationsRef = useRef<Citation[]>([]);
   const autoCheckTimersRef = useRef<number[]>([]);
   const reconcileSequenceRef = useRef(0);
   const onSessionsChangedRef = useRef(onSessionsChanged);
@@ -109,6 +123,7 @@ export function useChatThread({
       autoCheckTimersRef.current = [];
       sendAbortRef.current?.abort();
       sendAbortRef.current = null;
+      cancelRequestedRef.current = null;
     };
   }, []);
 
@@ -156,6 +171,7 @@ export function useChatThread({
         if (accepted) {
           pendingChatRequestStore.clear(targetSessionId, storedRequest.clientRequestId);
           setUnconfirmedSend(null);
+          setStoppedStream(null);
         } else {
           setUnconfirmedSend({ request: storedRequest, autoChecksDone: 0, checking: false });
         }
@@ -202,6 +218,9 @@ export function useChatThread({
     setRerankFallback(null);
     setStreamingAnswer('');
     setStreamingCitations([]);
+    setStoppedStream(null);
+    streamingAnswerRef.current = '';
+    streamingCitationsRef.current = [];
     regenerateTokenRef.current = null;
     regenerationCheckTokenRef.current = null;
 
@@ -213,6 +232,7 @@ export function useChatThread({
       setPendingQuestion('');
       setFailedSend(null);
       setUnconfirmedSend(null);
+      setStoppedStream(null);
     }
 
     if (!sessionId) {
@@ -231,12 +251,12 @@ export function useChatThread({
    * Refetches the thread and reports whether the pending request landed.
    * Used by both the automatic checks and the explicit "check again" action.
    */
-  const reconcileSend = useCallback(async (
+  const reconcileSendResult = useCallback(async (
     pending: PendingChatRequest,
     sequence: number,
-  ): Promise<boolean> => {
+  ): Promise<ReconcileResult> => {
     const targetSessionId = pending.sessionId;
-    if (activeSessionRef.current !== targetSessionId) return false;
+    if (activeSessionRef.current !== targetSessionId) return 'unknown';
 
     try {
       const response = await listChatMessages(targetSessionId);
@@ -244,7 +264,7 @@ export function useChatThread({
         !mountedRef.current
         || activeSessionRef.current !== targetSessionId
         || reconcileSequenceRef.current !== sequence
-      ) return false;
+      ) return 'unknown';
       setMessages(response.items);
       const accepted = response.items.some(
         (message) => message.clientRequestId === pending.clientRequestId,
@@ -252,13 +272,19 @@ export function useChatThread({
       if (accepted) {
         pendingChatRequestStore.clear(targetSessionId, pending.clientRequestId);
         setUnconfirmedSend(null);
+        setStoppedStream(null);
         onSessionsChangedRef.current();
       }
-      return accepted;
+      return accepted ? 'accepted' : 'absent';
     } catch {
-      return false;
+      return 'unknown';
     }
   }, []);
+
+  const reconcileSend = useCallback(async (
+    pending: PendingChatRequest,
+    sequence: number,
+  ): Promise<boolean> => (await reconcileSendResult(pending, sequence)) === 'accepted', [reconcileSendResult]);
 
   /** Schedules the background reconciliation attempts for an unconfirmed send. */
   const scheduleAutoChecks = useCallback((pending: PendingChatRequest) => {
@@ -305,6 +331,7 @@ export function useChatThread({
       || editTokenRef.current
     ) return;
     if (unconfirmedSend && !options.resend) return;
+    if (stoppedStream && !stoppedStream.resumable && !options.resend) return;
     if (isDraft && !draftKnowledgeBaseId) return;
 
     const token = Symbol('send-message');
@@ -316,6 +343,10 @@ export function useChatThread({
     setRerankFallback(null);
     setStreamingAnswer('');
     setStreamingCitations([]);
+    setStoppedStream(null);
+    streamingAnswerRef.current = '';
+    streamingCitationsRef.current = [];
+    cancelRequestedRef.current = null;
     setPendingQuestion(question);
 
     // An explicit resend must reuse the original id so the server can dedupe it.
@@ -359,15 +390,22 @@ export function useChatThread({
         { content: question, clientRequestId },
         {
           onDelta: (text) => {
-            if (isCurrent()) setStreamingAnswer((current) => current + text);
+            if (isCurrent()) {
+              streamingAnswerRef.current += text;
+              setStreamingAnswer(streamingAnswerRef.current);
+            }
           },
           onCitations: (citations) => {
-            if (isCurrent()) setStreamingCitations(citations);
+            if (isCurrent()) {
+              streamingCitationsRef.current = citations;
+              setStreamingCitations(citations);
+            }
           },
         },
         streamController.signal,
       );
       if (sendAbortRef.current === streamController) sendAbortRef.current = null;
+      cancelRequestedRef.current = null;
       pendingChatRequestStore.clear(targetSessionId, clientRequestId);
       if (isCurrent()) {
         setRerankFallback(response.rerankFallback?.used ? response.rerankFallback : null);
@@ -377,12 +415,50 @@ export function useChatThread({
       if (!mountedRef.current || sendTokenRef.current !== token || activeSessionRef.current !== targetSessionId) {
         return;
       }
+      const userCancelled = cancelRequestedRef.current === token;
+      cancelRequestedRef.current = null;
       sendTokenRef.current = null;
       if (draftSendSessionRef.current === targetSessionId) draftSendSessionRef.current = null;
+
+      if (userCancelled && messageRequestStarted) {
+        const pending: PendingChatRequest = {
+          sessionId: targetSessionId,
+          question,
+          clientRequestId,
+          createdAt: retryOf?.createdAt ?? new Date().toISOString(),
+        };
+        setStoppedStream({
+          question,
+          answer: streamingAnswerRef.current,
+          citations: streamingCitationsRef.current,
+          checking: true,
+          resumable: false,
+        });
+        setSending(false);
+        setPendingQuestion('');
+        setStreamingAnswer('');
+        setStreamingCitations([]);
+        const result = await reconcileSendResult(pending, ++reconcileSequenceRef.current);
+        if (mountedRef.current && activeSessionRef.current === targetSessionId) {
+          if (result === 'absent') {
+            pendingChatRequestStore.clear(targetSessionId, clientRequestId);
+            setStoppedStream((current) => current ? { ...current, checking: false, resumable: true } : current);
+          } else if (result === 'unknown') {
+            setStoppedStream(null);
+            setUnconfirmedSend({ request: pending, autoChecksDone: 0, checking: false });
+          }
+        }
+        streamingAnswerRef.current = '';
+        streamingCitationsRef.current = [];
+        return;
+      }
+
       // Nothing is persisted until generation finishes, so a partial answer on
       // screen would claim something the server does not have.
       setStreamingAnswer('');
       setStreamingCitations([]);
+      streamingAnswerRef.current = '';
+      streamingCitationsRef.current = [];
 
       if (caught instanceof ApiError && isDefinitiveSendFailure(caught)) {
         // The server rejected it outright, so the id is safe to discard.
@@ -435,6 +511,8 @@ export function useChatThread({
         // must go or the thread would render it twice.
         setStreamingAnswer('');
         setStreamingCitations([]);
+        streamingAnswerRef.current = '';
+        streamingCitationsRef.current = [];
       }
     }
   }, [
@@ -445,7 +523,9 @@ export function useChatThread({
     onSessionsChanged,
     sending,
     sessionId,
+    stoppedStream,
     unconfirmedSend,
+    reconcileSendResult,
   ]);
 
   const checkSendNow = useCallback(async () => {
@@ -669,7 +749,9 @@ export function useChatThread({
   }, [sessionId]);
 
   const cancelSend = useCallback(() => {
-    sendAbortRef.current?.abort();
+    if (!sendAbortRef.current || !sendTokenRef.current) return;
+    cancelRequestedRef.current = sendTokenRef.current;
+    sendAbortRef.current.abort();
   }, []);
 
   const hasPendingWrite = useCallback(() => Boolean(
@@ -678,6 +760,7 @@ export function useChatThread({
     || editTokenRef.current
     || sendCheckTokenRef.current
     || regenerationCheckTokenRef.current
+    || Boolean(activeSessionRef.current && pendingChatRequestStore.get(activeSessionRef.current))
   ), []);
 
   return {
@@ -700,6 +783,7 @@ export function useChatThread({
     rerankFallback,
     streamingAnswer,
     streamingCitations,
+    stoppedStream,
     reload: () => (sessionId ? loadThread(sessionId) : Promise.resolve()),
     send,
     cancelSend,

@@ -59,7 +59,9 @@ type recordedStream struct {
 	done      []*dto.SendChatMessageResponse
 	// failOnDelta aborts from the sink side, which is what a disconnected
 	// client looks like to the service.
-	failOnDelta int
+	failOnDelta       int
+	cancelAfterDeltas int
+	cancel            context.CancelFunc
 }
 
 func (s *recordedStream) Citations(citations []dto.CitationResponse) error {
@@ -72,6 +74,9 @@ func (s *recordedStream) Delta(text string) error {
 		return context.Canceled
 	}
 	s.deltas = append(s.deltas, text)
+	if s.cancelAfterDeltas > 0 && len(s.deltas) >= s.cancelAfterDeltas && s.cancel != nil {
+		s.cancel()
+	}
 	return nil
 }
 
@@ -334,6 +339,36 @@ func TestSendMessageStreamPersistsNothingWhenInterrupted(t *testing.T) {
 	}
 	if got := countAssistantMessages(t, db, session.ID); got != 1 {
 		t.Fatalf("expected exactly one assistant message after resend, got %d", got)
+	}
+}
+
+func TestSendMessageStreamChecksCancellationBeforePersisting(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	db := newChatServiceTestDB(t)
+	user := createChatServiceUser(t, db)
+	kb := createChatServiceKnowledgeBase(t, db, user.ID)
+	session := createChatServiceSession(t, db, user.ID, kb.ID)
+
+	provider := &streamingChatProvider{fakeChatProvider: fakeChatProvider{responses: []string{
+		`{"intent":"knowledge_base","standaloneQuery":"退货","reason":"needs docs"}`,
+		"完整回答",
+	}}}
+	service := newStreamingChatService(t, db, provider, chatStreamRetrieval(uuid.New()))
+	sink := &recordedStream{cancelAfterDeltas: len([]rune("完整回答")), cancel: cancel}
+
+	err := service.SendMessageStream(ctx, user.ID, session.ID, dto.SendChatMessageRequest{
+		Content:         "退货政策是什么",
+		ClientRequestID: uuid.New().String(),
+	}, sink)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation before persistence, got %v", err)
+	}
+	if got := countAssistantMessages(t, db, session.ID); got != 0 {
+		t.Fatalf("a cancelled stream must not persist after its final delta, got %d assistant messages", got)
+	}
+	if len(sink.done) != 0 {
+		t.Fatalf("a cancelled stream must not emit done, got %#v", sink.done)
 	}
 }
 

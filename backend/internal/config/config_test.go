@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -90,13 +91,14 @@ func TestLoadPreservesInvalidMaxUploadSizeForValidation(t *testing.T) {
 
 func TestConfigValidateMinIOStorage(t *testing.T) {
 	base := Config{
-		JWTSecret:       "unit-test-secret-with-at-least-32-bytes",
-		MaxUploadSizeMB: 50,
-		StorageProvider: "minio",
-		MinIOEndpoint:   "http://minio.example.test:9000",
-		MinIOAccessKey:  "test-access-key",
-		MinIOSecretKey:  "test-secret-key",
-		MinIOBucket:     "rag-documents",
+		JWTSecret:               "unit-test-secret-with-at-least-32-bytes",
+		MaxUploadSizeMB:         50,
+		StorageProvider:         "minio",
+		MinIOEndpoint:           "http://minio.example.test:9000",
+		MinIOAccessKey:          "test-access-key",
+		MinIOSecretKey:          "test-secret-key",
+		MinIOBucket:             "rag-documents",
+		StorageOperationTimeout: 2 * time.Minute,
 	}
 	if err := base.Validate(); err != nil {
 		t.Fatalf("expected complete MinIO config to validate: %v", err)

@@ -58,6 +58,7 @@ CHAT_HISTORY_LIMIT=10
 WORKER_CONCURRENCY=2
 WORKER_MAX_RETRIES=3
 WORKER_RETRY_DELAY=10s
+STORAGE_OPERATION_TIMEOUT=2m
 
 VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1
 ```
@@ -90,6 +91,7 @@ VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1
 | `RERANK_MODEL` | `rerank-model-name` | Rerank 模型 |
 | `RERANK_FAILURE_MODE` | `strict` | Rerank 失败策略：`strict` 返回 `RERANK_FAILED`；`fallback` 降级为 vector topK 并标记 `rerankFallback` |
 | `STORAGE_PROVIDER` | `local` | 文档存储实现：`local` 或 `minio` |
+| `STORAGE_OPERATION_TIMEOUT` | `2m` | 单次 MinIO 存储操作、上传失败补偿删除和 cleanup worker 删除的超时，使用 Go duration 格式；仅 MinIO 模式要求为正数 |
 | `UPLOAD_DIR` | `./uploads` | 本地上传目录；MinIO 模式仍用于读取切换前的存量文件 |
 | `MINIO_ENDPOINT` | 无 | MinIO API endpoint，可写 `host:port` 或 `http(s)://host:port`；不得包含路径或凭据 |
 | `MINIO_ACCESS_KEY` | 无 | MinIO access key；仅 `STORAGE_PROVIDER=minio` 时必填；需具备读取 bucket policy 的权限 |

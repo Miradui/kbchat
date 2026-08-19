@@ -18,6 +18,9 @@ export type ChatSessionScope = 'active' | 'archived';
 type ChatSessionRailProps = {
   sessions: ChatSession[];
   sessionTotal: number;
+  hasMore: boolean;
+  loadingMore: boolean;
+  loadMoreError?: string;
   knowledgeBases: KnowledgeBase[];
   knowledgeBaseId: string;
   scope: ChatSessionScope;
@@ -30,6 +33,7 @@ type ChatSessionRailProps = {
   onScopeChange: (scope: ChatSessionScope) => void;
   onNewChat: () => void;
   onRetry: () => void;
+  onLoadMore: () => void;
   onRetryKnowledgeBases?: () => void;
   onNavigate: () => void;
   onCollapse?: () => void;
@@ -38,6 +42,9 @@ type ChatSessionRailProps = {
 export function ChatSessionRail({
   sessions,
   sessionTotal,
+  hasMore,
+  loadingMore,
+  loadMoreError = '',
   knowledgeBases,
   knowledgeBaseId,
   scope,
@@ -50,6 +57,7 @@ export function ChatSessionRail({
   onScopeChange,
   onNewChat,
   onRetry,
+  onLoadMore,
   onRetryKnowledgeBases,
   onNavigate,
   onCollapse,
@@ -69,8 +77,6 @@ export function ChatSessionRail({
       sessions: map.get(bucket) ?? [],
     }));
   }, [sessions]);
-
-  const truncated = sessionTotal > sessions.length;
 
   return (
     <aside aria-label="会话列表" className="chat-rail">
@@ -167,10 +173,14 @@ export function ChatSessionRail({
                 ))}
               </div>
             ))}
-            {truncated && (
-              <p className="chat-rail__more">
-                仅显示最近 {sessions.length} 个会话，共 {sessionTotal} 个。用知识库筛选可以缩小范围。
-              </p>
+            {hasMore && (
+              <div className="chat-rail__more">
+                <Button disabled={disabled || loadingMore} loading={loadingMore} variant="link" onClick={onLoadMore}>
+                  加载更多会话
+                </Button>
+                {loadMoreError && <p className="ui-inline-error" role="alert">{loadMoreError}</p>}
+                <small>已显示 {sessions.length} / {sessionTotal}</small>
+              </div>
             )}
           </>
         )}

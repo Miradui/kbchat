@@ -25,8 +25,10 @@ import (
 )
 
 const (
-	maxPreviewTextBytes        = 1024 * 1024
-	documentIDsRequiredMessage = "文档 ID 不能为空"
+	maxPreviewTextBytes            = 1024 * 1024
+	documentIDsRequiredMessage     = "文档 ID 不能为空"
+	uploadStorageReservationDelay  = 10 * time.Minute
+	defaultStorageOperationTimeout = 2 * time.Minute
 )
 
 type DocumentService struct {
@@ -34,6 +36,7 @@ type DocumentService struct {
 	documents      *repository.DocumentRepository
 	chunks         *repository.ChunkRepository
 	knowledgeBases *repository.KnowledgeBaseRepository
+	storageCleanup *repository.StorageCleanupRepository
 	storage        storage.Storage
 	activities     *ActivityRecorder
 }
@@ -49,6 +52,7 @@ func NewDocumentService(
 	documents *repository.DocumentRepository,
 	chunks *repository.ChunkRepository,
 	knowledgeBases *repository.KnowledgeBaseRepository,
+	storageCleanup *repository.StorageCleanupRepository,
 	storage storage.Storage,
 ) *DocumentService {
 	return &DocumentService{
@@ -56,6 +60,7 @@ func NewDocumentService(
 		documents:      documents,
 		chunks:         chunks,
 		knowledgeBases: knowledgeBases,
+		storageCleanup: storageCleanup,
 		storage:        storage,
 	}
 }
@@ -68,8 +73,16 @@ func (s *DocumentService) Upload(ctx context.Context, ownerID, kbID uuid.UUID, f
 		return nil, err
 	}
 
-	storagePath, err := s.storage.SaveKnowledgeBaseFile(ctx, kbID, file)
-	if err != nil {
+	storagePath := s.storage.NewKnowledgeBaseFileLocation(kbID, file.Filename)
+	if err := s.storageCleanup.Reserve(ctx, storagePath, time.Now().Add(uploadStorageReservationDelay)); err != nil {
+		return nil, apperror.Wrap(http.StatusInternalServerError, "DOCUMENT_UPLOAD_FAILED", "document upload failed", err)
+	}
+	if err := s.storage.SaveKnowledgeBaseFile(ctx, storagePath, file); err != nil {
+		if cleanupErr := s.cleanupUploadedFile(ctx, storagePath); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("delete uploaded file: %w", cleanupErr))
+		} else {
+			s.cancelStorageReservation(ctx, storagePath)
+		}
 		return nil, apperror.Wrap(http.StatusInternalServerError, "DOCUMENT_UPLOAD_FAILED", "document upload failed", err)
 	}
 
@@ -86,9 +99,11 @@ func (s *DocumentService) Upload(ctx context.Context, ownerID, kbID uuid.UUID, f
 		JobType: "process_document",
 		Status:  "pending",
 	}
-	if err := s.documents.CreateWithJob(ctx, document, job, ownerID); err != nil {
-		if cleanupErr := s.storage.Delete(context.WithoutCancel(ctx), storagePath); cleanupErr != nil {
+	if err := s.documents.CreateWithJobAndReleaseStorageReservation(ctx, document, job, ownerID); err != nil {
+		if cleanupErr := s.cleanupUploadedFile(ctx, storagePath); cleanupErr != nil {
 			err = errors.Join(err, fmt.Errorf("delete uploaded file: %w", cleanupErr))
+		} else {
+			s.cancelStorageReservation(ctx, storagePath)
 		}
 		return nil, apperror.Internal(err)
 	}
@@ -96,6 +111,26 @@ func (s *DocumentService) Upload(ctx context.Context, ownerID, kbID uuid.UUID, f
 	s.recordDocumentActivity(ctx, ownerID, ActivityDocumentUploaded, document)
 	res := toDocumentResponse(document, job, s.maxDocumentRetries())
 	return &res, nil
+}
+
+func (s *DocumentService) cleanupUploadedFile(ctx context.Context, storagePath string) error {
+	timeout := s.cfg.StorageOperationTimeout
+	if timeout <= 0 {
+		timeout = defaultStorageOperationTimeout
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	return s.storage.Delete(cleanupCtx, storagePath)
+}
+
+func (s *DocumentService) cancelStorageReservation(ctx context.Context, storagePath string) {
+	timeout := s.cfg.StorageOperationTimeout
+	if timeout <= 0 {
+		timeout = defaultStorageOperationTimeout
+	}
+	cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	_ = s.storageCleanup.CancelReservation(cancelCtx, storagePath)
 }
 
 // List is the knowledge-base-scoped view of the same ledger ListGlobal serves.

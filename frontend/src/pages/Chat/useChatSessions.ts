@@ -13,6 +13,10 @@ import { getErrorMessage } from '../../utils/errors';
  */
 const SESSION_PAGE_SIZE = 50;
 
+function sortSessions(sessions: ChatSession[]) {
+  return [...sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
 type UseChatSessionsOptions = {
   /** Empty string means every knowledge base. */
   knowledgeBaseId?: string;
@@ -30,12 +34,20 @@ export function useChatSessions({
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [knowledgeBasesLoading, setKnowledgeBasesLoading] = useState(true);
   const [sessionsError, setSessionsError] = useState('');
+  const [loadMoreError, setLoadMoreError] = useState('');
+  const [sessionsLoadingMore, setSessionsLoadingMore] = useState(false);
   const [knowledgeBasesError, setKnowledgeBasesError] = useState('');
   const sessionRequestRef = useRef(0);
+  const sessionPageRef = useRef(1);
+  const loadingMoreRef = useRef(false);
   const kbRequestRef = useRef(0);
 
   const loadSessions = useCallback(async () => {
     const request = ++sessionRequestRef.current;
+    sessionPageRef.current = 1;
+    loadingMoreRef.current = false;
+    setLoadMoreError('');
+    setSessionsLoadingMore(false);
     setSessionsLoading(true);
     try {
       const response = await listChatSessions({
@@ -45,8 +57,10 @@ export function useChatSessions({
         pageSize: SESSION_PAGE_SIZE,
       });
       if (sessionRequestRef.current === request) {
-        setSessions(response.items);
-        setSessionTotal(response.total);
+        const total = response.total ?? response.items.length;
+        setSessions(sortSessions(response.items));
+        setSessionTotal(total);
+        sessionPageRef.current = response.page ?? 1;
         setSessionsError('');
       }
     } catch (caught) {
@@ -57,6 +71,39 @@ export function useChatSessions({
       if (sessionRequestRef.current === request) setSessionsLoading(false);
     }
   }, [archived, knowledgeBaseId]);
+
+  const loadMoreSessions = useCallback(async () => {
+    if (loadingMoreRef.current || sessionsLoading || sessions.length >= sessionTotal) return;
+    const request = ++sessionRequestRef.current;
+    const page = sessionPageRef.current + 1;
+    loadingMoreRef.current = true;
+    setSessionsLoadingMore(true);
+    setLoadMoreError('');
+    try {
+      const response = await listChatSessions({
+        archived,
+        knowledgeBaseId: knowledgeBaseId || undefined,
+        page,
+        pageSize: SESSION_PAGE_SIZE,
+      });
+      if (sessionRequestRef.current === request) {
+        setSessions((current) => {
+          const byId = new Map(current.map((session) => [session.id, session]));
+          response.items.forEach((session) => byId.set(session.id, session));
+          return sortSessions([...byId.values()]);
+        });
+        setSessionTotal(response.total ?? Math.max(sessionTotal, sessions.length + response.items.length));
+        sessionPageRef.current = response.page ?? page;
+      }
+    } catch (caught) {
+      if (sessionRequestRef.current === request) {
+        setLoadMoreError(getErrorMessage(caught, '更多会话加载失败'));
+      }
+    } finally {
+      loadingMoreRef.current = false;
+      if (sessionRequestRef.current === request) setSessionsLoadingMore(false);
+    }
+  }, [archived, knowledgeBaseId, sessionTotal, sessions, sessionsLoading]);
 
   const loadKnowledgeBases = useCallback(async () => {
     const request = ++kbRequestRef.current;
@@ -98,13 +145,13 @@ export function useChatSessions({
       const index = current.findIndex((item) => item.id === session.id);
       if (index === -1) {
         setSessionTotal((total) => total + 1);
-        return [session, ...current];
+        return sortSessions([session, ...current]);
       }
       // Single-session responses omit the list-only fields, so keep whatever the
       // list already knows rather than blanking the row.
       const next = [...current];
       next[index] = { ...current[index], ...session };
-      return next;
+      return sortSessions(next);
     });
   }, []);
 
@@ -122,12 +169,16 @@ export function useChatSessions({
   return {
     sessions,
     sessionTotal,
+    hasMoreSessions: sessionTotal > sessions.length,
+    sessionsLoadingMore,
+    loadMoreError,
     knowledgeBases,
     sessionsLoading,
     knowledgeBasesLoading,
     sessionsError,
     knowledgeBasesError,
     reloadSessions: loadSessions,
+    loadMoreSessions,
     reloadKnowledgeBases: loadKnowledgeBases,
     mergeSession,
     removeSession,

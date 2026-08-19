@@ -58,6 +58,14 @@ func NewDocumentRepository(db *gorm.DB) *DocumentRepository {
 }
 
 func (r *DocumentRepository) CreateWithJob(ctx context.Context, document *model.Document, job *model.DocumentJob, updatedByID uuid.UUID) error {
+	return r.createWithJob(ctx, document, job, updatedByID, false)
+}
+
+func (r *DocumentRepository) CreateWithJobAndReleaseStorageReservation(ctx context.Context, document *model.Document, job *model.DocumentJob, updatedByID uuid.UUID) error {
+	return r.createWithJob(ctx, document, job, updatedByID, true)
+}
+
+func (r *DocumentRepository) createWithJob(ctx context.Context, document *model.Document, job *model.DocumentJob, updatedByID uuid.UUID, releaseReservation bool) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(document).Error; err != nil {
 			return err
@@ -66,7 +74,20 @@ func (r *DocumentRepository) CreateWithJob(ctx context.Context, document *model.
 		if err := tx.Create(job).Error; err != nil {
 			return err
 		}
-		return touchKnowledgeBase(tx, document.KnowledgeBaseID, updatedByID, time.Now())
+		if err := touchKnowledgeBase(tx, document.KnowledgeBaseID, updatedByID, time.Now()); err != nil {
+			return err
+		}
+		if releaseReservation {
+			result := tx.Where("storage_path = ? AND locked_at IS NULL", document.StoragePath).
+				Delete(&model.StorageCleanupJob{})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return errors.New("storage cleanup reservation was lost before document commit")
+			}
+		}
+		return nil
 	})
 }
 

@@ -1,4 +1,4 @@
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '../../api/client';
@@ -205,6 +205,37 @@ describe('useChatThread send reconciliation', () => {
     expect(pendingChatRequestStore.get(session.id)?.clientRequestId).toBe(
       result.current.unconfirmedSend?.request.clientRequestId,
     );
+  });
+
+  it('keeps a partial answer visible when the user stops generation', async () => {
+    let handlers: { onDelta?: (text: string) => void } | undefined;
+    let rejectStream!: (reason?: unknown) => void;
+    resourceMocks.sendChatMessageStream.mockImplementation((
+      _sessionId: string,
+      _input: unknown,
+      nextHandlers: { onDelta?: (text: string) => void },
+      signal?: AbortSignal,
+    ) => {
+      handlers = nextHandlers;
+      return new Promise((_resolve, reject) => {
+        rejectStream = reject;
+        signal?.addEventListener('abort', () => rejectStream(new DOMException('aborted', 'AbortError')), { once: true });
+      });
+    });
+
+    const { result } = renderThread();
+    await settleEffects();
+    let sendPromise!: Promise<void>;
+    act(() => {
+      sendPromise = result.current.send('问题');
+    });
+    await waitFor(() => expect(handlers).toBeTruthy());
+    act(() => handlers?.onDelta?.('半截回答'));
+    act(() => result.current.cancelSend());
+    await act(async () => { await sendPromise; });
+    await waitFor(() => expect(result.current.stoppedStream?.answer).toBe('半截回答'));
+    expect(result.current.unconfirmedSend).toBeNull();
+    expect(result.current.sending).toBe(false);
   });
 
   it('aborts the active stream when the thread unmounts', async () => {

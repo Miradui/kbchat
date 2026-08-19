@@ -18,7 +18,7 @@
 -> status=completed
 ```
 
-上传文件先写入配置的存储，再在单个数据库事务中创建 `documents`、`document_jobs` 并刷新知识库 `updatedAt/updatedBy`。任一数据库写入失败时事务必须全部回滚，并删除本次已保存的文件；API 不得在返回失败时留下可被 worker 领取的部分任务。若文件补偿删除本身失败，内部错误链必须同时保留数据库错误和清理错误，不能静默吞掉残留文件信号。
+上传前先按确定的 `storage_path` 写入一个延迟执行的 `storage_cleanup_jobs` 预留，再写入配置的存储。创建 `documents`、`document_jobs` 和刷新知识库 `updatedAt/updatedBy` 在同一事务中完成，并在该事务内释放预留。这样进程在对象写入与数据库提交之间崩溃时，延迟 cleanup worker 会回收孤儿对象；延迟期间不得与在途上传竞争。上传或数据库提交失败时仍应立即尝试删除对象并取消预留；补偿删除失败时内部错误链必须同时保留原错误和清理错误。
 
 MinIO 模式使用私有 bucket，`storage_path` 保存 `minio://bucket/key`，原始文件名不进入对象 key。下载和预览由后端鉴权后代理；worker 解析前把对象物化为临时文件，并在本轮处理结束时清理。切换到 MinIO 后，既有本地 `storage_path` 继续从 `UPLOAD_DIR` 读取，避免存量文档立即失效。
 

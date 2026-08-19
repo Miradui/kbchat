@@ -220,7 +220,9 @@ async function submitWithAutomaticChecksPaused() {
     expect(screen.getByText('正在确认这条消息…')).toBeInTheDocument();
   }, {
     interval: 10,
-    timeout: 1_000,
+    // The full suite runs many jsdom workers concurrently on Windows; keep the
+    // assertion strict while allowing React enough wall-clock time to commit.
+    timeout: 3_000,
   });
 }
 
@@ -377,6 +379,25 @@ describe('ChatPage', () => {
     await waitFor(() => expect(listKnowledgeBases).toHaveBeenCalledTimes(2));
     expect(listChatSessions).toHaveBeenCalledTimes(sessionCallsBeforeRetry);
     expect(await screen.findByLabelText('当前知识库')).toHaveValue(knowledgeBase.id);
+  });
+
+  it('switches the session rail to archived when opening an archived deep link', async () => {
+    const archivedSession = { ...session, archivedAt: '2026-07-01T01:00:00Z' };
+    vi.mocked(getChatSession).mockResolvedValue(archivedSession);
+    vi.mocked(listChatSessions).mockResolvedValue({
+      items: [archivedSession],
+      total: 1,
+      page: 1,
+      pageSize: 50,
+    });
+
+    renderWithRouter(
+      <Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>,
+      ['/chat/s1'],
+    );
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '已归档' })).toHaveAttribute('aria-pressed', 'true'));
+    expect(vi.mocked(listChatSessions)).toHaveBeenLastCalledWith(expect.objectContaining({ archived: true }));
   });
 
   it('does not refresh chat state after an in-flight send outlives the page', async () => {
@@ -760,6 +781,54 @@ describe('ChatPage', () => {
     act(() => handlers?.onDelta?.('第一段'));
 
     expect(Element.prototype.scrollTo).not.toHaveBeenCalled();
+  });
+
+  it('shows streaming citations before the assistant answer is complete', async () => {
+    const stream = deferred<Awaited<ReturnType<typeof sendChatMessage>>>();
+    let handlers: { onCitations?: (citations: ChatMessage['citations']) => void } | undefined;
+    vi.mocked(sendChatMessage).mockImplementation((_sessionId, _input, nextHandlers) => {
+      handlers = nextHandlers;
+      return stream.promise;
+    });
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>,
+      ['/chat/s1'],
+    );
+    await screen.findByText('新对话');
+    await user.type(screen.getByRole('textbox', { name: '输入问题' }), '继续追问');
+    await user.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(handlers).toBeTruthy());
+    act(() => handlers?.onCitations?.([{
+      documentId: 'doc-stream',
+      chunkId: 'chunk-stream',
+      filename: '流式来源.pdf',
+      pageNumber: 3,
+      content: '流式依据',
+      vectorScore: 0.8,
+      rerankScore: 0.9,
+    }]));
+
+    expect(await screen.findByText('流式来源.pdf')).toBeInTheDocument();
+  });
+
+  it('loads more sessions after the first page', async () => {
+    const firstPage = Array.from({ length: 50 }, (_, index) => ({ ...session, id: `s-${index}` }));
+    const nextPage = { ...session, id: 's-50', title: '第 51 个会话' };
+    vi.mocked(listChatSessions)
+      .mockResolvedValueOnce({ items: firstPage, total: 51, page: 1, pageSize: 50 })
+      .mockResolvedValueOnce({ items: [nextPage], total: 51, page: 2, pageSize: 50 });
+
+    renderWithRouter(
+      <Routes><Route path="/chat" element={<ChatPage />} /></Routes>,
+      ['/chat'],
+    );
+
+    const loadMore = await screen.findByRole('button', { name: '加载更多会话' });
+    await userEvent.setup().click(loadMore);
+    await waitFor(() => expect(screen.getByText('第 51 个会话')).toBeInTheDocument());
+    expect(vi.mocked(listChatSessions)).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2, pageSize: 50 }));
   });
 
   it('links each citation to its exact document and chunk', async () => {

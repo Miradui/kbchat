@@ -77,6 +77,7 @@ func newWorkspaceTestServices(t *testing.T) workspaceTestServices {
 	viewRepo := repository.NewKnowledgeBaseViewRepository(db)
 	preferenceRepo := repository.NewKnowledgeBaseWorkspacePreferenceRepository(db)
 	documentRepo := repository.NewDocumentRepository(db)
+	storageCleanupRepo := repository.NewStorageCleanupRepository(db)
 	chunkRepo := repository.NewChunkRepository(db)
 	searchRepo := repository.NewGlobalSearchRepository(db)
 	chatRepo := repository.NewChatRepository(db)
@@ -93,7 +94,7 @@ func newWorkspaceTestServices(t *testing.T) workspaceTestServices {
 		chats:      NewChatService(config.Config{ChatHistoryLimit: 10}, chatRepo, kbRepo, nil, nil, nil),
 		categories: NewKnowledgeBaseCategoryService(categoryRepo, kbRepo),
 		tags:       NewKnowledgeBaseTagService(tagRepo, tagBindingRepo),
-		documents:  NewDocumentService(config.Config{MaxUploadSizeMB: 50}, documentRepo, chunkRepo, kbRepo, storage.NewLocalStorage(uploadRoot)),
+		documents:  NewDocumentService(config.Config{MaxUploadSizeMB: 50}, documentRepo, chunkRepo, kbRepo, storageCleanupRepo, storage.NewLocalStorage(uploadRoot)),
 		search:     NewGlobalSearchService(searchRepo),
 	}
 }
@@ -516,6 +517,10 @@ func TestKnowledgeBaseWorkspaceUploadReportsCleanupFailure(t *testing.T) {
 	if !errors.As(err, &appErr) || !errors.Is(appErr.Err, cleanupErr) {
 		t.Fatalf("expected cleanup failure in internal cause, got %#v", err)
 	}
+	var cleanup model.StorageCleanupJob
+	if err := services.db.First(&cleanup, "storage_path = ?", filepath.Join(services.uploadRoot, "orphan.txt")).Error; err != nil {
+		t.Fatalf("expected failed cleanup to remain durably queued: %v", err)
+	}
 }
 
 type failingCleanupStorage struct {
@@ -523,8 +528,12 @@ type failingCleanupStorage struct {
 	deleteErr error
 }
 
-func (s *failingCleanupStorage) SaveKnowledgeBaseFile(context.Context, uuid.UUID, *multipart.FileHeader) (string, error) {
-	return s.path, nil
+func (s *failingCleanupStorage) NewKnowledgeBaseFileLocation(uuid.UUID, string) string {
+	return s.path
+}
+
+func (s *failingCleanupStorage) SaveKnowledgeBaseFile(context.Context, string, *multipart.FileHeader) error {
+	return nil
 }
 
 func (s *failingCleanupStorage) Delete(context.Context, string) error {

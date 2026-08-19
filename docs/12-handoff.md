@@ -577,3 +577,10 @@ OpenAI-compatible Provider 同样把上游 `data: [DONE]` 作为唯一协议完�
 - 使用官方 `github.com/minio/minio-go/v7` SDK。启动时拒绝带 bucket policy 的 bucket，并容忍多进程同时创建同一 bucket 的竞态；凭据必须能够读取 bucket policy。
 - migration 015 新增 `storage_cleanup_jobs`。单文档永久删除、文档回收站清空及知识库永久删除会在同一事务持久化对象清理任务，cleanup worker 删除成功后移除任务，存储故障时指数退避并持续重试；每次领取使用新的 `lease_token`，旧 worker 的迟到完成或重试不会覆盖当前租约。
 - `STORAGE_PROVIDER=local` 时若仍提供完整 MinIO 配置，会继续读取和清理历史 `minio://` 对象；回切本地存储前不得移除旧 MinIO 配置。
+
+## Storage and Chat Reliability Update (2026-08-19)
+
+- 新增 `STORAGE_OPERATION_TIMEOUT`（默认 `2m`），统一限制 MinIO HTTP 响应头、单次存储操作、上传失败补偿删除和 cleanup worker 删除；MinIO 模式下必须为正数。
+- 上传先持久化延迟 cleanup reservation，再写对象；`documents`/`document_jobs` 提交事务内释放 reservation，覆盖对象上传后进程崩溃而数据库尚未提交的孤儿对象窗口。
+- Chat 会话栏接入「加载更多会话」服务端分页；直接访问归档会话深链会同步到已归档范围。流式 citations 在正文 delta 前到达时也立即展示。
+- 用户主动停止 SSE 后保留已接收内容，并使用原 `clientRequestId` 对账；服务端在生成完成后、持久化前再次检查 context cancellation，避免停止边界上的意外提交。

@@ -28,7 +28,7 @@ func TestEmptyWorkerQueuesDoNotLogRecordNotFoundErrors(t *testing.T) {
 	if job, err := NewDocumentRepository(quietDB).ClaimPendingJob(context.Background()); err != nil || job != nil {
 		t.Fatalf("claim empty document queue: job=%#v err=%v", job, err)
 	}
-	if cleanup, err := NewStorageCleanupRepository(quietDB).ClaimPending(context.Background()); err != nil || cleanup != nil {
+	if cleanup, err := NewStorageCleanupRepository(quietDB).ClaimPending(context.Background(), 0); err != nil || cleanup != nil {
 		t.Fatalf("claim empty storage cleanup queue: cleanup=%#v err=%v", cleanup, err)
 	}
 	if strings.Contains(output.String(), "record not found") {

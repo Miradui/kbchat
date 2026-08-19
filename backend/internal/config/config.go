@@ -11,132 +11,135 @@ import (
 )
 
 const (
-	defaultAppEnv             = "development"
-	defaultServerPort         = "8080"
-	defaultCORSAllowedOrigins = "http://127.0.0.1:5173,http://localhost:5173"
-	defaultDatabaseURL        = "postgres://rag:rag@localhost:5432/rag?sslmode=disable"
-	defaultRedisAddr          = "localhost:6379"
-	defaultRedisDB            = 0
-	defaultJWTExpiresIn       = "24h"
-	defaultModelProvider      = "openai_compatible"
-	defaultChatBaseURL        = "https://api.openai.com/v1"
-	defaultChatModel          = "gpt-4.1-mini"
-	defaultTitleBaseURL       = "https://api.openai.com/v1"
-	defaultTitleModel         = "gpt-4.1-mini"
-	defaultEmbeddingBaseURL   = "https://api.openai.com/v1"
-	defaultEmbeddingModel     = "text-embedding-3-small"
-	defaultEmbeddingDimension = 1536
-	defaultRerankBaseURL      = "https://api.openai.com/v1"
-	defaultRerankModel        = "rerank-model-name"
-	defaultRerankFailureMode  = "strict"
-	defaultStorageProvider    = "local"
-	defaultUploadDir          = "./uploads"
-	defaultMinIOBucket        = "rag-documents"
-	defaultMinIOUseSSL        = false
-	defaultMaxUploadSizeMB    = 50
-	defaultVectorTopN         = 30
-	defaultRerankTopK         = 5
-	defaultScoreThreshold     = 0.3
-	defaultRerankEnabled      = true
-	defaultChatHistoryLimit   = 10
-	defaultWorkerConcurrency  = 2
-	defaultWorkerMaxRetries   = 3
-	defaultWorkerRetryDelay   = 10 * time.Second
-	minJWTSecretBytes         = 32
-	bytesPerMiB               = int64(1024 * 1024)
-	uploadRequestOverhead     = bytesPerMiB
-	maxInt64Value             = int64(1<<63 - 1)
+	defaultAppEnv                  = "development"
+	defaultServerPort              = "8080"
+	defaultCORSAllowedOrigins      = "http://127.0.0.1:5173,http://localhost:5173"
+	defaultDatabaseURL             = "postgres://rag:rag@localhost:5432/rag?sslmode=disable"
+	defaultRedisAddr               = "localhost:6379"
+	defaultRedisDB                 = 0
+	defaultJWTExpiresIn            = "24h"
+	defaultModelProvider           = "openai_compatible"
+	defaultChatBaseURL             = "https://api.openai.com/v1"
+	defaultChatModel               = "gpt-4.1-mini"
+	defaultTitleBaseURL            = "https://api.openai.com/v1"
+	defaultTitleModel              = "gpt-4.1-mini"
+	defaultEmbeddingBaseURL        = "https://api.openai.com/v1"
+	defaultEmbeddingModel          = "text-embedding-3-small"
+	defaultEmbeddingDimension      = 1536
+	defaultRerankBaseURL           = "https://api.openai.com/v1"
+	defaultRerankModel             = "rerank-model-name"
+	defaultRerankFailureMode       = "strict"
+	defaultStorageProvider         = "local"
+	defaultUploadDir               = "./uploads"
+	defaultMinIOBucket             = "rag-documents"
+	defaultMinIOUseSSL             = false
+	defaultMaxUploadSizeMB         = 50
+	defaultVectorTopN              = 30
+	defaultRerankTopK              = 5
+	defaultScoreThreshold          = 0.3
+	defaultRerankEnabled           = true
+	defaultChatHistoryLimit        = 10
+	defaultWorkerConcurrency       = 2
+	defaultWorkerMaxRetries        = 3
+	defaultWorkerRetryDelay        = 10 * time.Second
+	defaultStorageOperationTimeout = 2 * time.Minute
+	minJWTSecretBytes              = 32
+	bytesPerMiB                    = int64(1024 * 1024)
+	uploadRequestOverhead          = bytesPerMiB
+	maxInt64Value                  = int64(1<<63 - 1)
 )
 
 type Config struct {
-	AppEnv             string
-	ServerPort         string
-	CORSAllowedOrigins []string
-	DatabaseURL        string
-	RedisAddr          string
-	RedisPassword      string
-	RedisDB            int
-	JWTSecret          string
-	JWTExpiresIn       string
-	ModelProvider      string
-	ChatBaseURL        string
-	ChatAPIKey         string
-	ChatModel          string
-	TitleBaseURL       string
-	TitleAPIKey        string
-	TitleModel         string
-	EmbeddingBaseURL   string
-	EmbeddingAPIKey    string
-	EmbeddingModel     string
-	EmbeddingDimension int
-	RerankEnabled      bool
-	RerankBaseURL      string
-	RerankAPIKey       string
-	RerankModel        string
-	RerankFailureMode  string
-	StorageProvider    string
-	UploadDir          string
-	MinIOEndpoint      string
-	MinIOAccessKey     string
-	MinIOSecretKey     string
-	MinIOBucket        string
-	MinIORegion        string
-	MinIOUseSSL        bool
-	MaxUploadSizeMB    int
-	VectorTopN         int
-	RerankTopK         int
-	ScoreThreshold     float64
-	ChatHistoryLimit   int
-	WorkerConcurrency  int
-	WorkerMaxRetries   int
-	WorkerRetryDelay   time.Duration
+	AppEnv                  string
+	ServerPort              string
+	CORSAllowedOrigins      []string
+	DatabaseURL             string
+	RedisAddr               string
+	RedisPassword           string
+	RedisDB                 int
+	JWTSecret               string
+	JWTExpiresIn            string
+	ModelProvider           string
+	ChatBaseURL             string
+	ChatAPIKey              string
+	ChatModel               string
+	TitleBaseURL            string
+	TitleAPIKey             string
+	TitleModel              string
+	EmbeddingBaseURL        string
+	EmbeddingAPIKey         string
+	EmbeddingModel          string
+	EmbeddingDimension      int
+	RerankEnabled           bool
+	RerankBaseURL           string
+	RerankAPIKey            string
+	RerankModel             string
+	RerankFailureMode       string
+	StorageProvider         string
+	UploadDir               string
+	MinIOEndpoint           string
+	MinIOAccessKey          string
+	MinIOSecretKey          string
+	MinIOBucket             string
+	MinIORegion             string
+	MinIOUseSSL             bool
+	MaxUploadSizeMB         int
+	VectorTopN              int
+	RerankTopK              int
+	ScoreThreshold          float64
+	ChatHistoryLimit        int
+	WorkerConcurrency       int
+	WorkerMaxRetries        int
+	WorkerRetryDelay        time.Duration
+	StorageOperationTimeout time.Duration
 }
 
 func Load() Config {
 	loadDotEnv()
 
 	return Config{
-		AppEnv:             getEnv("APP_ENV", defaultAppEnv),
-		ServerPort:         getEnv("SERVER_PORT", defaultServerPort),
-		CORSAllowedOrigins: splitCommaSeparated(getEnv("CORS_ALLOWED_ORIGINS", defaultCORSAllowedOrigins)),
-		DatabaseURL:        getEnv("DATABASE_URL", defaultDatabaseURL),
-		RedisAddr:          getEnv("REDIS_ADDR", defaultRedisAddr),
-		RedisPassword:      getEnv("REDIS_PASSWORD", ""),
-		RedisDB:            getEnvInt("REDIS_DB", defaultRedisDB),
-		JWTSecret:          getEnv("JWT_SECRET", ""),
-		JWTExpiresIn:       getEnv("JWT_EXPIRES_IN", defaultJWTExpiresIn),
-		ModelProvider:      getEnv("MODEL_PROVIDER", defaultModelProvider),
-		ChatBaseURL:        normalizedBaseURL(getEnv("CHAT_BASE_URL", getEnv("OPENAI_BASE_URL", defaultChatBaseURL))),
-		ChatAPIKey:         getEnv("CHAT_API_KEY", getEnv("OPENAI_API_KEY", "")),
-		ChatModel:          getEnv("CHAT_MODEL", defaultChatModel),
-		TitleBaseURL:       normalizedBaseURL(getEnv("TITLE_BASE_URL", defaultTitleBaseURL)),
-		TitleAPIKey:        getEnv("TITLE_API_KEY", ""),
-		TitleModel:         getEnv("TITLE_MODEL", defaultTitleModel),
-		EmbeddingBaseURL:   normalizedBaseURL(getEnv("EMBEDDING_BASE_URL", getEnv("OPENAI_BASE_URL", defaultEmbeddingBaseURL))),
-		EmbeddingAPIKey:    getEnv("EMBEDDING_API_KEY", getEnv("OPENAI_API_KEY", "")),
-		EmbeddingModel:     getEnv("EMBEDDING_MODEL", defaultEmbeddingModel),
-		EmbeddingDimension: getEnvInt("EMBEDDING_DIMENSION", defaultEmbeddingDimension),
-		RerankEnabled:      getEnvBool("RERANK_ENABLED", getEnvBool("ENABLE_RERANK", defaultRerankEnabled)),
-		RerankBaseURL:      normalizedBaseURL(getEnv("RERANK_BASE_URL", getEnv("OPENAI_BASE_URL", defaultRerankBaseURL))),
-		RerankAPIKey:       getEnv("RERANK_API_KEY", getEnv("OPENAI_API_KEY", "")),
-		RerankModel:        getEnv("RERANK_MODEL", defaultRerankModel),
-		RerankFailureMode:  normalizeRerankFailureMode(getEnv("RERANK_FAILURE_MODE", defaultRerankFailureMode)),
-		StorageProvider:    normalizeStorageProvider(getEnv("STORAGE_PROVIDER", defaultStorageProvider)),
-		UploadDir:          getEnv("UPLOAD_DIR", defaultUploadDir),
-		MinIOEndpoint:      strings.TrimSpace(getEnv("MINIO_ENDPOINT", "")),
-		MinIOAccessKey:     getEnv("MINIO_ACCESS_KEY", ""),
-		MinIOSecretKey:     getEnv("MINIO_SECRET_KEY", ""),
-		MinIOBucket:        strings.TrimSpace(getEnv("MINIO_BUCKET", defaultMinIOBucket)),
-		MinIORegion:        strings.TrimSpace(getEnv("MINIO_REGION", "")),
-		MinIOUseSSL:        getEnvBool("MINIO_USE_SSL", defaultMinIOUseSSL),
-		MaxUploadSizeMB:    getEnvUploadSizeMB(defaultMaxUploadSizeMB),
-		VectorTopN:         getEnvInt("VECTOR_TOP_N", defaultVectorTopN),
-		RerankTopK:         getEnvInt("RERANK_TOP_K", defaultRerankTopK),
-		ScoreThreshold:     getEnvFloat("SCORE_THRESHOLD", defaultScoreThreshold),
-		ChatHistoryLimit:   getEnvInt("CHAT_HISTORY_LIMIT", defaultChatHistoryLimit),
-		WorkerConcurrency:  getEnvInt("WORKER_CONCURRENCY", defaultWorkerConcurrency),
-		WorkerMaxRetries:   getEnvInt("WORKER_MAX_RETRIES", defaultWorkerMaxRetries),
-		WorkerRetryDelay:   getEnvDuration("WORKER_RETRY_DELAY", defaultWorkerRetryDelay),
+		AppEnv:                  getEnv("APP_ENV", defaultAppEnv),
+		ServerPort:              getEnv("SERVER_PORT", defaultServerPort),
+		CORSAllowedOrigins:      splitCommaSeparated(getEnv("CORS_ALLOWED_ORIGINS", defaultCORSAllowedOrigins)),
+		DatabaseURL:             getEnv("DATABASE_URL", defaultDatabaseURL),
+		RedisAddr:               getEnv("REDIS_ADDR", defaultRedisAddr),
+		RedisPassword:           getEnv("REDIS_PASSWORD", ""),
+		RedisDB:                 getEnvInt("REDIS_DB", defaultRedisDB),
+		JWTSecret:               getEnv("JWT_SECRET", ""),
+		JWTExpiresIn:            getEnv("JWT_EXPIRES_IN", defaultJWTExpiresIn),
+		ModelProvider:           getEnv("MODEL_PROVIDER", defaultModelProvider),
+		ChatBaseURL:             normalizedBaseURL(getEnv("CHAT_BASE_URL", getEnv("OPENAI_BASE_URL", defaultChatBaseURL))),
+		ChatAPIKey:              getEnv("CHAT_API_KEY", getEnv("OPENAI_API_KEY", "")),
+		ChatModel:               getEnv("CHAT_MODEL", defaultChatModel),
+		TitleBaseURL:            normalizedBaseURL(getEnv("TITLE_BASE_URL", defaultTitleBaseURL)),
+		TitleAPIKey:             getEnv("TITLE_API_KEY", ""),
+		TitleModel:              getEnv("TITLE_MODEL", defaultTitleModel),
+		EmbeddingBaseURL:        normalizedBaseURL(getEnv("EMBEDDING_BASE_URL", getEnv("OPENAI_BASE_URL", defaultEmbeddingBaseURL))),
+		EmbeddingAPIKey:         getEnv("EMBEDDING_API_KEY", getEnv("OPENAI_API_KEY", "")),
+		EmbeddingModel:          getEnv("EMBEDDING_MODEL", defaultEmbeddingModel),
+		EmbeddingDimension:      getEnvInt("EMBEDDING_DIMENSION", defaultEmbeddingDimension),
+		RerankEnabled:           getEnvBool("RERANK_ENABLED", getEnvBool("ENABLE_RERANK", defaultRerankEnabled)),
+		RerankBaseURL:           normalizedBaseURL(getEnv("RERANK_BASE_URL", getEnv("OPENAI_BASE_URL", defaultRerankBaseURL))),
+		RerankAPIKey:            getEnv("RERANK_API_KEY", getEnv("OPENAI_API_KEY", "")),
+		RerankModel:             getEnv("RERANK_MODEL", defaultRerankModel),
+		RerankFailureMode:       normalizeRerankFailureMode(getEnv("RERANK_FAILURE_MODE", defaultRerankFailureMode)),
+		StorageProvider:         normalizeStorageProvider(getEnv("STORAGE_PROVIDER", defaultStorageProvider)),
+		UploadDir:               getEnv("UPLOAD_DIR", defaultUploadDir),
+		MinIOEndpoint:           strings.TrimSpace(getEnv("MINIO_ENDPOINT", "")),
+		MinIOAccessKey:          getEnv("MINIO_ACCESS_KEY", ""),
+		MinIOSecretKey:          getEnv("MINIO_SECRET_KEY", ""),
+		MinIOBucket:             strings.TrimSpace(getEnv("MINIO_BUCKET", defaultMinIOBucket)),
+		MinIORegion:             strings.TrimSpace(getEnv("MINIO_REGION", "")),
+		MinIOUseSSL:             getEnvBool("MINIO_USE_SSL", defaultMinIOUseSSL),
+		MaxUploadSizeMB:         getEnvUploadSizeMB(defaultMaxUploadSizeMB),
+		VectorTopN:              getEnvInt("VECTOR_TOP_N", defaultVectorTopN),
+		RerankTopK:              getEnvInt("RERANK_TOP_K", defaultRerankTopK),
+		ScoreThreshold:          getEnvFloat("SCORE_THRESHOLD", defaultScoreThreshold),
+		ChatHistoryLimit:        getEnvInt("CHAT_HISTORY_LIMIT", defaultChatHistoryLimit),
+		WorkerConcurrency:       getEnvInt("WORKER_CONCURRENCY", defaultWorkerConcurrency),
+		WorkerMaxRetries:        getEnvInt("WORKER_MAX_RETRIES", defaultWorkerMaxRetries),
+		WorkerRetryDelay:        getEnvDuration("WORKER_RETRY_DELAY", defaultWorkerRetryDelay),
+		StorageOperationTimeout: getEnvDuration("STORAGE_OPERATION_TIMEOUT", defaultStorageOperationTimeout),
 	}
 }
 
@@ -172,6 +175,9 @@ func validateStorageConfig(c Config) error {
 			if strings.TrimSpace(item.value) == "" {
 				return fmt.Errorf("%s is required when STORAGE_PROVIDER=minio", item.name)
 			}
+		}
+		if c.StorageOperationTimeout <= 0 {
+			return fmt.Errorf("STORAGE_OPERATION_TIMEOUT must be greater than zero")
 		}
 		return nil
 	default:

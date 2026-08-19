@@ -12,6 +12,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
@@ -21,20 +22,22 @@ import (
 const minIOScheme = "minio://"
 
 type MinIOConfig struct {
-	Endpoint  string
-	AccessKey string
-	SecretKey string
-	Bucket    string
-	Region    string
-	UseSSL    bool
+	Endpoint         string
+	AccessKey        string
+	SecretKey        string
+	Bucket           string
+	Region           string
+	UseSSL           bool
+	OperationTimeout time.Duration
 }
 
 type MinIOStorage struct {
-	client      *minio.Client
-	bucket      string
-	region      string
-	bucketMu    sync.Mutex
-	bucketReady bool
+	client           *minio.Client
+	bucket           string
+	region           string
+	operationTimeout time.Duration
+	bucketMu         sync.Mutex
+	bucketReady      bool
 }
 
 func NewMinIOStorage(cfg MinIOConfig) (*MinIOStorage, error) {
@@ -45,15 +48,24 @@ func NewMinIOStorage(cfg MinIOConfig) (*MinIOStorage, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.OperationTimeout <= 0 {
+		cfg.OperationTimeout = 2 * time.Minute
+	}
+	transport, err := minio.DefaultTransport(secure)
+	if err != nil {
+		return nil, fmt.Errorf("create MinIO transport: %w", err)
+	}
+	transport.ResponseHeaderTimeout = cfg.OperationTimeout
 	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
-		Secure: secure,
-		Region: cfg.Region,
+		Creds:     credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
+		Secure:    secure,
+		Region:    cfg.Region,
+		Transport: transport,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create MinIO client: %w", err)
 	}
-	return &MinIOStorage{client: client, bucket: cfg.Bucket, region: cfg.Region}, nil
+	return &MinIOStorage{client: client, bucket: cfg.Bucket, region: cfg.Region, operationTimeout: cfg.OperationTimeout}, nil
 }
 
 func (s *MinIOStorage) EnsureReady(ctx context.Context) error {
@@ -85,22 +97,31 @@ func normalizeMinIOEndpoint(value string, configuredSSL bool) (string, bool, err
 	return parsed.Host, parsed.Scheme == "https", nil
 }
 
-func (s *MinIOStorage) SaveKnowledgeBaseFile(ctx context.Context, kbID uuid.UUID, file *multipart.FileHeader) (string, error) {
-	if err := s.ensureBucket(ctx); err != nil {
-		return "", err
+func (s *MinIOStorage) NewKnowledgeBaseFileLocation(kbID uuid.UUID, filename string) string {
+	return minIOScheme + s.bucket + "/" + knowledgeBaseObjectKey(kbID, filename)
+}
+
+func (s *MinIOStorage) SaveKnowledgeBaseFile(ctx context.Context, location string, file *multipart.FileHeader) error {
+	operationCtx, cancel := s.operationContext(ctx)
+	defer cancel()
+	if err := s.ensureBucket(operationCtx); err != nil {
+		return err
 	}
 	source, err := file.Open()
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer source.Close()
 
-	key := knowledgeBaseObjectKey(kbID, file.Filename)
-	contentType := mime.TypeByExtension(path.Ext(key))
-	if _, err := s.client.PutObject(ctx, s.bucket, key, source, file.Size, minio.PutObjectOptions{ContentType: contentType}); err != nil {
-		return "", fmt.Errorf("put MinIO object: %w", err)
+	key, err := s.objectKey(location)
+	if err != nil {
+		return err
 	}
-	return minIOScheme + s.bucket + "/" + key, nil
+	contentType := mime.TypeByExtension(path.Ext(key))
+	if _, err := s.client.PutObject(operationCtx, s.bucket, key, source, file.Size, minio.PutObjectOptions{ContentType: contentType}); err != nil {
+		return fmt.Errorf("put MinIO object: %w", err)
+	}
+	return nil
 }
 
 func (s *MinIOStorage) Delete(ctx context.Context, location string) error {
@@ -111,7 +132,9 @@ func (s *MinIOStorage) Delete(ctx context.Context, location string) error {
 	if err != nil {
 		return err
 	}
-	if err := s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{}); err != nil {
+	operationCtx, cancel := s.operationContext(ctx)
+	defer cancel()
+	if err := s.client.RemoveObject(operationCtx, s.bucket, key, minio.RemoveObjectOptions{}); err != nil {
 		return fmt.Errorf("remove MinIO object: %w", err)
 	}
 	return nil
@@ -122,15 +145,18 @@ func (s *MinIOStorage) Open(ctx context.Context, location string) (io.ReadCloser
 	if err != nil {
 		return nil, ObjectInfo{}, err
 	}
-	stat, err := s.client.StatObject(ctx, s.bucket, key, minio.StatObjectOptions{})
+	operationCtx, cancel := s.operationContext(ctx)
+	stat, err := s.client.StatObject(operationCtx, s.bucket, key, minio.StatObjectOptions{})
 	if err != nil {
+		cancel()
 		return nil, ObjectInfo{}, minIOStorageError(err)
 	}
-	object, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
+	object, err := s.client.GetObject(operationCtx, s.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
+		cancel()
 		return nil, ObjectInfo{}, minIOStorageError(err)
 	}
-	return object, ObjectInfo{Size: stat.Size, LastModified: stat.LastModified}, nil
+	return &cancelReadCloser{ReadCloser: object, cancel: cancel}, ObjectInfo{Size: stat.Size, LastModified: stat.LastModified}, nil
 }
 
 func (s *MinIOStorage) Read(ctx context.Context, location string) ([]byte, error) {
@@ -148,7 +174,9 @@ func (s *MinIOStorage) Stat(ctx context.Context, location string) (ObjectInfo, e
 	if err != nil {
 		return ObjectInfo{}, err
 	}
-	stat, err := s.client.StatObject(ctx, s.bucket, key, minio.StatObjectOptions{})
+	operationCtx, cancel := s.operationContext(ctx)
+	defer cancel()
+	stat, err := s.client.StatObject(operationCtx, s.bucket, key, minio.StatObjectOptions{})
 	if err != nil {
 		return ObjectInfo{}, minIOStorageError(err)
 	}
@@ -205,6 +233,24 @@ func (s *MinIOStorage) ensureBucket(ctx context.Context) error {
 	}
 	s.bucketReady = true
 	return nil
+}
+
+func (s *MinIOStorage) operationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if s.operationTimeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, s.operationTimeout)
+}
+
+type cancelReadCloser struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (r *cancelReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	r.cancel()
+	return err
 }
 
 func (s *MinIOStorage) ensurePrivateBucket(ctx context.Context) error {

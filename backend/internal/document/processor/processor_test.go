@@ -44,8 +44,12 @@ type materializingStorage struct {
 	cleaned           bool
 }
 
-func (*materializingStorage) SaveKnowledgeBaseFile(context.Context, uuid.UUID, *multipart.FileHeader) (string, error) {
-	return "", errors.New("not implemented")
+func (*materializingStorage) NewKnowledgeBaseFileLocation(uuid.UUID, string) string {
+	return ""
+}
+
+func (*materializingStorage) SaveKnowledgeBaseFile(context.Context, string, *multipart.FileHeader) error {
+	return errors.New("not implemented")
 }
 
 func (*materializingStorage) Delete(context.Context, string) error {

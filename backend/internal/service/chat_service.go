@@ -598,6 +598,12 @@ func (s *ChatService) SendMessageStream(
 	if err != nil {
 		return err
 	}
+	// The provider may finish at the same moment the client disconnects. Check
+	// cancellation once more before entering the persistence transaction so a
+	// user-requested stop cannot commit a response that no longer has a reader.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	userMessage, assistantMessage, err := buildChatMessagePair(session.ID, clientRequestID, content, generated)
 	if err != nil {

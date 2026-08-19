@@ -13,7 +13,7 @@ import (
 	"rag/backend/internal/model"
 )
 
-const storageCleanupLockTimeout = 5 * time.Minute
+const defaultStorageCleanupLeaseDuration = 5 * time.Minute
 
 var ErrStorageCleanupLeaseLost = errors.New("storage cleanup lease lost")
 
@@ -25,14 +25,30 @@ func NewStorageCleanupRepository(db *gorm.DB) *StorageCleanupRepository {
 	return &StorageCleanupRepository{db: db}
 }
 
-func (r *StorageCleanupRepository) ClaimPending(ctx context.Context) (*model.StorageCleanupJob, error) {
+// Reserve records an object before it is uploaded. The delayed attempt keeps a
+// crash between object upload and document commit recoverable without allowing
+// the worker to race an in-flight upload.
+func (r *StorageCleanupRepository) Reserve(ctx context.Context, storagePath string, nextAttemptAt time.Time) error {
+	return enqueueStorageCleanupAt(r.db.WithContext(ctx), []string{storagePath}, &nextAttemptAt)
+}
+
+func (r *StorageCleanupRepository) CancelReservation(ctx context.Context, storagePath string) error {
+	return r.db.WithContext(ctx).
+		Where("storage_path = ? AND locked_at IS NULL", storagePath).
+		Delete(&model.StorageCleanupJob{}).Error
+}
+
+func (r *StorageCleanupRepository) ClaimPending(ctx context.Context, leaseDuration time.Duration) (*model.StorageCleanupJob, error) {
 	var claimed *model.StorageCleanupJob
+	if leaseDuration <= 0 {
+		leaseDuration = defaultStorageCleanupLeaseDuration
+	}
 	now := time.Now()
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var job model.StorageCleanupJob
 		query := tx.
 			Where("next_attempt_at IS NULL OR next_attempt_at <= ?", now).
-			Where("locked_at IS NULL OR locked_at <= ?", now.Add(-storageCleanupLockTimeout)).
+			Where("locked_at IS NULL OR locked_at <= ?", now.Add(-leaseDuration)).
 			Order("created_at asc, id asc")
 		if tx.Dialector.Name() == "postgres" {
 			query = query.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
@@ -92,12 +108,16 @@ func (r *StorageCleanupRepository) Retry(ctx context.Context, id, leaseToken uui
 }
 
 func enqueueStorageCleanup(tx *gorm.DB, paths []string) error {
+	return enqueueStorageCleanupAt(tx, paths, nil)
+}
+
+func enqueueStorageCleanupAt(tx *gorm.DB, paths []string, nextAttemptAt *time.Time) error {
 	for _, storagePath := range paths {
 		storagePath = strings.TrimSpace(storagePath)
 		if storagePath == "" {
 			continue
 		}
-		job := model.StorageCleanupJob{StoragePath: storagePath}
+		job := model.StorageCleanupJob{StoragePath: storagePath, NextAttemptAt: nextAttemptAt}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "storage_path"}},
 			DoNothing: true,

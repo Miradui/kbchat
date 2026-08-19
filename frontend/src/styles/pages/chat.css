@@ -65,6 +65,10 @@
   line-height: var(--lh-normal);
   padding: var(--s-2);
 }
+.chat-rail__more .ui-button--link {
+  min-height: 36px;
+  padding: var(--s-2);
+}
 
 /* ---------------- Main column ---------------- */
 .chat-main {
