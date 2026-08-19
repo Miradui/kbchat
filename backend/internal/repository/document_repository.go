@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -499,6 +500,7 @@ func (r *DocumentRepository) RecoverRunningJobs(ctx context.Context) error {
 		Where("status = ? AND job_type = ?", "running", "process_document").
 		Updates(map[string]any{
 			"status":     "pending",
+			"progress":   0,
 			"locked_at":  nil,
 			"updated_at": now,
 		}).Error
@@ -660,7 +662,10 @@ func (r *DocumentRepository) ListDeletedByOwner(ctx context.Context, ownerID uui
 // already finalized — the write is refused with ErrDocumentJobCancelled so the
 // processor aborts instead of overwriting the terminal state and burning more
 // embedding calls.
-func (r *DocumentRepository) UpdateStatus(ctx context.Context, documentID, jobID uuid.UUID, status string, errorMessage string) error {
+func (r *DocumentRepository) UpdateStatus(ctx context.Context, documentID, jobID uuid.UUID, status string, progress int, errorMessage string) error {
+	if progress < 0 || progress > 100 {
+		return fmt.Errorf("document job progress must be between 0 and 100")
+	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := guardRunningDocumentJob(tx, documentID, jobID); err != nil {
 			return err
@@ -677,6 +682,18 @@ func (r *DocumentRepository) UpdateStatus(ctx context.Context, documentID, jobID
 		}
 		if result.RowsAffected != 1 {
 			return gorm.ErrRecordNotFound
+		}
+		jobResult := tx.Model(&model.DocumentJob{}).
+			Where("id = ? AND document_id = ? AND status = ? AND job_type = ?", jobID, documentID, "running", "process_document").
+			Updates(map[string]any{
+				"progress":   progress,
+				"updated_at": time.Now(),
+			})
+		if jobResult.Error != nil {
+			return jobResult.Error
+		}
+		if jobResult.RowsAffected != 1 {
+			return ErrDocumentJobCancelled
 		}
 		return nil
 	})
@@ -957,14 +974,18 @@ func (r *DocumentRepository) finalizeJob(
 			return gorm.ErrRecordNotFound
 		}
 
+		jobUpdates := map[string]any{
+			"status":        status,
+			"error_message": errorMessage,
+			"locked_at":     nil,
+			"updated_at":    now,
+		}
+		if status == "completed" {
+			jobUpdates["progress"] = 100
+		}
 		jobResult := tx.Model(&model.DocumentJob{}).
 			Where("id = ? AND status = ? AND job_type = ?", jobID, "running", "process_document").
-			Updates(map[string]any{
-				"status":        status,
-				"error_message": errorMessage,
-				"locked_at":     nil,
-				"updated_at":    now,
-			})
+			Updates(jobUpdates)
 		if jobResult.Error != nil {
 			return jobResult.Error
 		}
@@ -984,6 +1005,7 @@ func (r *DocumentRepository) RetryJob(ctx context.Context, jobID uuid.UUID, retr
 		Updates(map[string]any{
 			"status":        "pending",
 			"retry_count":   retryCount,
+			"progress":      0,
 			"error_message": message,
 			"locked_at":     retryAt,
 			"updated_at":    time.Now(),

@@ -98,3 +98,21 @@ func TestChatFeedbackMigrationCanBeReapplied(t *testing.T) {
 		}
 	}
 }
+
+func TestDocumentJobProgressMigrationCanBeReapplied(t *testing.T) {
+	sqlBytes, err := os.ReadFile("../../migrations/016_document_job_progress.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+
+	sql := string(sqlBytes)
+	for _, fragment := range []string{
+		"ADD COLUMN IF NOT EXISTS progress",
+		"DROP CONSTRAINT IF EXISTS document_jobs_progress_check",
+		"progress BETWEEN 0 AND 100",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Fatalf("expected migration to contain %q", fragment)
+		}
+	}
+}

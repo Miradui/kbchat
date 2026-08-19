@@ -107,6 +107,7 @@ func (r *ChunkRepository) PublishByDocument(
 			).
 			Updates(map[string]any{
 				"status":        "completed",
+				"progress":      100,
 				"error_message": "",
 				"locked_at":     nil,
 				"updated_at":    now,

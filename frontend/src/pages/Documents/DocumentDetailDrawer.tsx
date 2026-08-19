@@ -24,7 +24,7 @@ import type { DocumentChunk, DocumentItem, DocumentPreviewResponse } from '../..
 import { formatBytes, formatDateTime } from '../../utils/format';
 import { getDocumentProcessingErrorMessage, getErrorMessage } from '../../utils/errors';
 import { DocumentProgress } from './DocumentProgress';
-import { documentStatusLabel, documentStatusTone } from './documentDisplay';
+import { documentDisplayStatusLabel, documentDisplayStatusTone } from './documentDisplay';
 
 const CHUNK_PAGE_SIZE = 20;
 
@@ -298,15 +298,15 @@ export function DocumentDetailDrawer({
                     <strong>{document.filename}</strong>
                     <small>{knowledgeBaseName ?? document.knowledgeBaseId}</small>
                   </div>
-                  <Badge tone={documentStatusTone(document.status)}>
-                    {documentStatusLabel(document.status)}
+                  <Badge tone={documentDisplayStatusTone(document.status, document.jobStatus)}>
+                    {documentDisplayStatusLabel(document.status, document.jobStatus)}
                   </Badge>
                 </section>
 
                 <DocumentProgress document={document} />
 
                 {document.status === 'failed' && (
-                  <p className="ui-inline-error" role="alert">
+                  <p className={document.jobStatus === 'cancelled' ? 'ui-muted' : 'ui-inline-error'} role={document.jobStatus === 'cancelled' ? undefined : 'alert'}>
                     {getDocumentProcessingErrorMessage(document.errorMessage)}
                   </p>
                 )}

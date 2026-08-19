@@ -38,6 +38,8 @@ import { DocumentProgress } from './DocumentProgress';
 import { DocumentRecycleBinDrawer } from './DocumentRecycleBinDrawer';
 import {
   documentStatuses,
+  documentDisplayStatusLabel,
+  documentDisplayStatusTone,
   documentStatusLabel,
   documentStatusTone,
   isTerminalDocumentStatus,
@@ -455,8 +457,8 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
                       )}
                       <td data-label="状态">
                         <div className="doc-status-cell">
-                          <Badge tone={documentStatusTone(document.status)}>
-                            {documentStatusLabel(document.status)}
+                          <Badge tone={documentDisplayStatusTone(document.status, document.jobStatus)}>
+                            {documentDisplayStatusLabel(document.status, document.jobStatus)}
                           </Badge>
                           {!isTerminalDocumentStatus(document.status) && (
                             <DocumentProgress compact document={document} />

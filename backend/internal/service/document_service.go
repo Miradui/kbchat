@@ -756,6 +756,11 @@ func documentProgress(status string, job *model.DocumentJob, maxRetries int) doc
 		info.JobStatus = job.Status
 	}
 	info.RetryCount = job.RetryCount
+	if job.Status == "completed" {
+		info.Progress = 100
+	} else if job.Progress > 0 {
+		info.Progress = job.Progress
+	}
 	if job.Status == "pending" && job.LockedAt != nil {
 		info.NextRetryAt = job.LockedAt
 	}

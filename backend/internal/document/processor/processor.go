@@ -17,6 +17,13 @@ import (
 
 const embeddingBatchSize = 16
 
+const (
+	parsingProgress  = 10
+	chunkingProgress = 30
+	embeddingStart   = 50
+	embeddingEnd     = 95
+)
+
 type Processor struct {
 	documents *repository.DocumentRepository
 	chunks    *repository.ChunkRepository
@@ -77,7 +84,7 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 		return fmt.Errorf("document %s not found", job.DocumentID)
 	}
 
-	if err := p.documents.UpdateStatus(ctx, document.ID, job.ID, "parsing", ""); err != nil {
+	if err := p.documents.UpdateStatus(ctx, document.ID, job.ID, "parsing", parsingProgress, ""); err != nil {
 		return err
 	}
 	localPath := document.StoragePath
@@ -97,7 +104,7 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 		return err
 	}
 
-	if err := p.documents.UpdateStatus(ctx, document.ID, job.ID, "chunking", ""); err != nil {
+	if err := p.documents.UpdateStatus(ctx, document.ID, job.ID, "chunking", chunkingProgress, ""); err != nil {
 		return err
 	}
 	parts := p.splitter.SplitDocument(parsedDocument)
@@ -108,7 +115,7 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 		return err
 	}
 
-	if err := p.documents.UpdateStatus(ctx, document.ID, job.ID, "embedding", ""); err != nil {
+	if err := p.documents.UpdateStatus(ctx, document.ID, job.ID, "embedding", embeddingStart, ""); err != nil {
 		return err
 	}
 
@@ -161,6 +168,10 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 				Metadata:        metadata,
 				Embedding:       pgvector.NewVector(vector),
 			})
+		}
+		progress := embeddingStart + (end*(embeddingEnd-embeddingStart))/len(parts)
+		if err := p.documents.UpdateStatus(ctx, document.ID, job.ID, "embedding", progress, ""); err != nil {
+			return err
 		}
 
 	}

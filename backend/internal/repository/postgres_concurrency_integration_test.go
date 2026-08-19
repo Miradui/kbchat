@@ -192,7 +192,7 @@ func createPostgresConcurrencyTables(t *testing.T, db *gorm.DB) {
 		`CREATE TABLE users (id UUID PRIMARY KEY, username TEXT, password_hash TEXT)`,
 		`CREATE TABLE knowledge_bases (id UUID PRIMARY KEY, owner_id UUID, name TEXT, deleted_at TIMESTAMPTZ)`,
 		`CREATE TABLE documents (id UUID PRIMARY KEY, knowledge_base_id UUID, uploader_id UUID, filename TEXT, storage_path TEXT, status TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, deleted_at TIMESTAMPTZ)`,
-		`CREATE TABLE document_jobs (id UUID PRIMARY KEY, document_id UUID, job_type TEXT, status TEXT)`,
+		`CREATE TABLE document_jobs (id UUID PRIMARY KEY, document_id UUID, job_type TEXT, status TEXT, progress SMALLINT NOT NULL DEFAULT 0)`,
 		`CREATE TABLE document_chunks (id UUID PRIMARY KEY, document_id UUID, knowledge_base_id UUID)`,
 		`CREATE TABLE chat_sessions (id UUID PRIMARY KEY, user_id UUID, knowledge_base_id UUID, title TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, deleted_at TIMESTAMPTZ)`,
 		`CREATE TABLE chat_messages (id UUID PRIMARY KEY, session_id UUID, role TEXT, content TEXT)`,

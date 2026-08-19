@@ -1171,7 +1171,7 @@ func TestDocumentCancelIsFinalAgainstALateWorker(t *testing.T) {
 	}
 	// Stage writes are scoped to the claiming job, so an in-flight processor
 	// cannot walk the document back to "embedding".
-	if err := repo.UpdateStatus(ctx, document.ID, job.ID, "embedding", ""); !errors.Is(err, repository.ErrDocumentJobCancelled) {
+	if err := repo.UpdateStatus(ctx, document.ID, job.ID, "embedding", 50, ""); !errors.Is(err, repository.ErrDocumentJobCancelled) {
 		t.Fatalf("expected ErrDocumentJobCancelled, got %v", err)
 	}
 

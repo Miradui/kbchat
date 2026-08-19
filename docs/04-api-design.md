@@ -652,12 +652,12 @@ pageSize
 
 响应项包含 `knowledgeBaseId` 和 `knowledgeBaseName`。
 
-文档列表和详情响应都会补充处理进度字段，字段来自 `documents.status` 和最新 `document_jobs` 任务，不返回精细伪造进度：
+文档列表和详情响应都会补充处理进度字段。`progress` 来自最新 `document_jobs.progress` 的持久化真实值；没有该值的旧后端客户端才按 `documents.status` 使用兼容阶段进度：
 
 ```json
 {
   "jobStatus": "pending|running|failed|completed|cancelled",
-  "progress": 75,
+  "progress": 83,
   "stage": "uploaded|parsing|chunking|embedding|completed|failed",
   "retryCount": 1,
   "maxRetries": 3,
@@ -665,7 +665,7 @@ pageSize
 }
 ```
 
-`nextRetryAt` 无重试计划时为 `null`。稳定进度映射为 `uploaded=0`、`parsing=25`、`chunking=50`、`embedding=75`、`completed=100`、`failed=0`。失败状态以 `status=failed` 和 `stage=failed` 单独表达，不得伪装为已完成进度。
+`nextRetryAt` 无重试计划时为 `null`。新任务从 `0` 开始；解析为 `10`，切分为 `30`，Embedding 从 `50` 开始，按已完成批次推进到最多 `95`，发布成功为 `100`。取消仍返回 `status=failed`，但 `jobStatus=cancelled`，前端必须显示“已取消”而非“失败”。失败任务保留最后一次已持久化进度，不得伪装为已完成进度。
 
 `errorMessage` 只返回用户可读的业务提示。模型配置、网络、文件系统等原始技术错误保留在服务端日志和内部任务记录中，不得通过公开 DTO 返回。
 

@@ -1946,6 +1946,7 @@ func TestDocumentResponsesExposeLatestJobProgress(t *testing.T) {
 		DocumentID: doc.ID,
 		JobType:    "process_document",
 		Status:     "running",
+		Progress:   83,
 		RetryCount: 2,
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
@@ -1961,7 +1962,7 @@ func TestDocumentResponsesExposeLatestJobProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get document detail: %v", err)
 	}
-	if detail.JobStatus != "running" || detail.Stage != "embedding" || detail.Progress != 75 {
+	if detail.JobStatus != "running" || detail.Stage != "embedding" || detail.Progress != 83 {
 		t.Fatalf("expected running embedding progress on detail, got %#v", detail)
 	}
 	if detail.RetryCount != 2 || detail.MaxRetries != 5 || detail.NextRetryAt != nil {
@@ -1972,7 +1973,7 @@ func TestDocumentResponsesExposeLatestJobProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list knowledge base documents: %v", err)
 	}
-	if len(kbList.Items) != 1 || kbList.Items[0].JobStatus != "running" || kbList.Items[0].Progress != 75 {
+	if len(kbList.Items) != 1 || kbList.Items[0].JobStatus != "running" || kbList.Items[0].Progress != 83 {
 		t.Fatalf("expected progress fields on knowledge base document list, got %#v", kbList.Items)
 	}
 
@@ -1980,7 +1981,7 @@ func TestDocumentResponsesExposeLatestJobProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list global documents: %v", err)
 	}
-	if len(globalList.Items) != 1 || globalList.Items[0].JobStatus != "running" || globalList.Items[0].Progress != 75 {
+	if len(globalList.Items) != 1 || globalList.Items[0].JobStatus != "running" || globalList.Items[0].Progress != 83 {
 		t.Fatalf("expected progress fields on global document list, got %#v", globalList.Items)
 	}
 }

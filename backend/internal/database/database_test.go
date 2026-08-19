@@ -36,6 +36,9 @@ func TestValidateSchemaRejectsMissingChatFeedbackColumns(t *testing.T) {
 	if err := db.Exec(`CREATE TABLE chat_messages (id TEXT PRIMARY KEY)`).Error; err != nil {
 		t.Fatalf("create chat_messages: %v", err)
 	}
+	if err := db.Exec(`CREATE TABLE document_jobs (id TEXT PRIMARY KEY, progress INTEGER)`).Error; err != nil {
+		t.Fatalf("create document_jobs: %v", err)
+	}
 
 	err = validateSchema(context.Background(), db)
 	if err == nil {
@@ -60,6 +63,9 @@ func TestValidateSchemaAcceptsChatFeedbackColumns(t *testing.T) {
 	)`).Error; err != nil {
 		t.Fatalf("create chat_messages: %v", err)
 	}
+	if err := db.Exec(`CREATE TABLE document_jobs (id TEXT PRIMARY KEY, progress INTEGER)`).Error; err != nil {
+		t.Fatalf("create document_jobs: %v", err)
+	}
 	if err := db.AutoMigrate(&model.StorageCleanupJob{}); err != nil {
 		t.Fatalf("migrate storage cleanup jobs: %v", err)
 	}
@@ -80,6 +86,9 @@ func TestValidateSchemaRejectsIncompleteStorageCleanupTable(t *testing.T) {
 		feedback_updated_at DATETIME
 	)`).Error; err != nil {
 		t.Fatalf("create chat_messages: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE document_jobs (id TEXT PRIMARY KEY, progress INTEGER)`).Error; err != nil {
+		t.Fatalf("create document_jobs: %v", err)
 	}
 	if err := db.Exec(`CREATE TABLE storage_cleanup_jobs (id TEXT PRIMARY KEY, storage_path TEXT)`).Error; err != nil {
 		t.Fatalf("create incomplete cleanup table: %v", err)

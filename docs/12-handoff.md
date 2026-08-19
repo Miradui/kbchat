@@ -584,3 +584,9 @@ OpenAI-compatible Provider 同样把上游 `data: [DONE]` 作为唯一协议完�
 - 上传先持久化延迟 cleanup reservation，再写对象；`documents`/`document_jobs` 提交事务内释放 reservation，覆盖对象上传后进程崩溃而数据库尚未提交的孤儿对象窗口。
 - Chat 会话栏接入「加载更多会话」服务端分页；直接访问归档会话深链会同步到已归档范围。流式 citations 在正文 delta 前到达时也立即展示。
 - 用户主动停止 SSE 后保留已接收内容，并使用原 `clientRequestId` 对账；服务端在生成完成后、持久化前再次检查 context cancellation，避免停止边界上的意外提交。
+
+## Product Roadmap P1 Update (2026-08-19)
+
+- 新增 `docs/15-product-improvement-roadmap.md`，明确文档可观测性、RAG 质量运营、部署健康、首次使用、权限协作和移动端的分阶段目标与验收标准。
+- migration 016 为 `document_jobs` 增加持久化 `progress`（0-100）。解析为 10、切分为 30、Embedding 按真实批次从 50 推进到 95、chunks 原子发布后为 100；重试从 0 重新处理，服务重启不会把已提交进度退回阶段默认值。
+- 取消任务继续保持 `documents.status=failed`、`jobStatus=cancelled` 的兼容契约，但列表和详情现在显示“已取消”与中性状态，不再把取消误报为失败。

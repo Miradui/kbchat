@@ -13,9 +13,9 @@
 -> status=chunking
 -> 文本切片
 -> status=embedding
--> 生成 Embedding
+-> 按批次生成 Embedding，并持久化 50-95 的真实处理进度
 -> 写入 document_chunks
--> status=completed
+-> 原子发布 chunks，status=completed，progress=100
 ```
 
 上传前先按确定的 `storage_path` 写入一个延迟执行的 `storage_cleanup_jobs` 预留，再写入配置的存储。创建 `documents`、`document_jobs` 和刷新知识库 `updatedAt/updatedBy` 在同一事务中完成，并在该事务内释放预留。这样进程在对象写入与数据库提交之间崩溃时，延迟 cleanup worker 会回收孤儿对象；延迟期间不得与在途上传竞争。上传或数据库提交失败时仍应立即尝试删除对象并取消预留；补偿删除失败时内部错误链必须同时保留原错误和清理错误。
@@ -32,6 +32,8 @@ documents.error_message=失败原因
 document_jobs.status=failed
 document_jobs.error_message=失败原因
 ```
+
+`document_jobs.progress` 是 0-100 的持久化字段。服务重启后保留最近一次已提交的进度；重试会从 0 重新处理，取消不会把进度伪装成失败或完成，用户通过 `jobStatus=cancelled` 区分取消原因。migration 016 会为已有任务按当前阶段填充初始值，并可重复执行。
 
 当前 MVP worker 按单服务实例运行。worker 启动时会把上一次进程中断遗留的 `running` 任务恢复为 `pending` 并重新领取，避免服务重启后文档永久卡住。该策略不支持多个服务实例同时共享同一任务表；如需多实例部署，必须改为带租约到期时间和心跳续租的领取协议。
 

@@ -501,6 +501,13 @@ func TestProcessPreservesExistingChunksWhenLaterEmbeddingBatchMismatches(t *test
 			if embedder.calls != 2 {
 				t.Fatalf("expected mismatch on second embedding batch, got %d calls", embedder.calls)
 			}
+			var storedJob model.DocumentJob
+			if queryErr := fixture.db.First(&storedJob, "id = ?", fixture.job.ID).Error; queryErr != nil {
+				t.Fatalf("read progress after first completed batch: %v", queryErr)
+			}
+			if storedJob.Progress <= 50 || storedJob.Progress >= 100 {
+				t.Fatalf("expected persisted intermediate embedding progress, got %d", storedJob.Progress)
+			}
 			chunks, listErr := fixture.chunks.ListByDocument(ctx, fixture.document.ID)
 			if listErr != nil {
 				t.Fatalf("list chunks after later mismatch: %v", listErr)

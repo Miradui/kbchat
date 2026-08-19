@@ -143,6 +143,7 @@ type DocumentJob struct {
 	JobType      string     `gorm:"size:64;not null" json:"jobType"`
 	Status       string     `gorm:"size:32;default:pending" json:"status"`
 	RetryCount   int        `json:"retryCount"`
+	Progress     int        `gorm:"not null;default:0" json:"progress"`
 	ErrorMessage string     `json:"errorMessage"`
 	LockedAt     *time.Time `json:"lockedAt"`
 	CreatedAt    time.Time  `json:"createdAt"`

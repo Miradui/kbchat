@@ -34,7 +34,8 @@ export function DocumentProgress({ compact = false, document }: DocumentProgress
   const progress = document.progress ?? progressForStage(stage);
   const retryCount = document.retryCount ?? 0;
   const maxRetries = document.maxRetries ?? 0;
-  const tone = stage === 'failed' ? 'danger' : stage === 'completed' ? '' : 'warn';
+  const cancelled = document.jobStatus === 'cancelled';
+  const tone = cancelled ? '' : stage === 'failed' ? 'danger' : stage === 'completed' ? '' : 'warn';
 
   if (compact) {
     return (
@@ -48,7 +49,7 @@ export function DocumentProgress({ compact = false, document }: DocumentProgress
   return (
     <section aria-label={`${document.filename} 处理进度`} className="doc-progress">
       <header>
-        <strong>{stageLabels[stage]}</strong>
+        <strong>{cancelled ? '已取消' : stageLabels[stage]}</strong>
         <span className="ui-num">{progress}%</span>
       </header>
       <ProgressBar label="处理进度" progress={progress} tone={tone} />

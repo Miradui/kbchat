@@ -31,4 +31,13 @@ describe('DocumentProgress', () => {
     expect(screen.getByText('任务 处理中')).toBeInTheDocument();
     expect(screen.queryByText(/Parsing|running/)).not.toBeInTheDocument();
   });
+
+  it('presents a cancelled job separately from a processing failure', () => {
+    render(<DocumentProgress document={{ ...document, jobStatus: 'cancelled', progress: 62 }} />);
+
+    expect(screen.getByText('已取消')).toBeInTheDocument();
+    expect(screen.getByText('任务 已取消')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: '处理进度' })).toHaveAttribute('aria-valuenow', '62');
+    expect(screen.queryByText('处理失败')).not.toBeInTheDocument();
+  });
 });

@@ -1,5 +1,5 @@
 import type { BadgeTone } from '../../components/ui/Badge';
-import type { DocumentStatus } from '../../types/api';
+import type { DocumentJobStatus, DocumentStatus } from '../../types/api';
 
 export const documentStatuses: DocumentStatus[] = [
   'uploaded',
@@ -27,10 +27,18 @@ export function documentStatusLabel(status: DocumentStatus): string {
   return statusLabels[status];
 }
 
+export function documentDisplayStatusLabel(status: DocumentStatus, jobStatus?: DocumentJobStatus): string {
+  return jobStatus === 'cancelled' ? '已取消' : documentStatusLabel(status);
+}
+
 export function documentStatusTone(status: DocumentStatus): BadgeTone {
   if (status === 'completed') return 'ok';
   if (status === 'failed') return 'danger';
   return 'warn';
+}
+
+export function documentDisplayStatusTone(status: DocumentStatus, jobStatus?: DocumentJobStatus): BadgeTone {
+  return jobStatus === 'cancelled' ? 'neutral' : documentStatusTone(status);
 }
 
 export function isTerminalDocumentStatus(status: DocumentStatus): boolean {

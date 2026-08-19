@@ -42,9 +42,14 @@ func AutoMigrate(ctx context.Context, db *gorm.DB) error {
 }
 
 func validateSchema(ctx context.Context, db *gorm.DB) error {
+	migrator := db.WithContext(ctx).Migrator()
+	if !migrator.HasColumn(&model.DocumentJob{}, "progress") {
+		return fmt.Errorf(
+			"database schema incompatible: document_jobs missing progress; apply migration 016 (migrations/016_document_job_progress.sql)",
+		)
+	}
 	requiredColumns := []string{"feedback_rating", "feedback_updated_at"}
 	missing := make([]string, 0, len(requiredColumns))
-	migrator := db.WithContext(ctx).Migrator()
 	for _, column := range requiredColumns {
 		if !migrator.HasColumn(&model.ChatMessage{}, column) {
 			missing = append(missing, column)
