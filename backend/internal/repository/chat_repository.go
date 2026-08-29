@@ -350,12 +350,22 @@ func (r *ChatRepository) UpdateMessageFeedback(
 	return nil
 }
 
+// chatEmptyCitationsSQL is the single definition of "this answer cited nothing".
+//
+// The cast covers all three ways an empty citation set has been stored across the
+// column's history: SQL NULL, the JSON literal `null`, and an empty array. Shared
+// by the overview, the negative-feedback list and the gap list so a change to the
+// storage shape cannot leave one of them disagreeing with the others.
+const chatEmptyCitationsSQL = `COALESCE(CAST(chat_messages.citations AS TEXT), '[]') IN ('', 'null', '[]')`
+
 type ChatQualityOverview struct {
-	AnswerCount           int64
-	FeedbackCount         int64
-	PositiveFeedbackCount int64
-	NegativeFeedbackCount int64
-	WithoutCitationsCount int64
+	AnswerCount             int64
+	FeedbackCount           int64
+	PositiveFeedbackCount   int64
+	NegativeFeedbackCount   int64
+	KnowledgeAnswerCount    int64
+	WithoutCitationsCount   int64
+	UnclassifiedAnswerCount int64
 }
 
 type ChatQualityFeedbackItem struct {
@@ -385,10 +395,258 @@ func (r *ChatRepository) GetQualityOverview(
 			COALESCE(SUM(CASE WHEN chat_messages.feedback_rating IS NOT NULL THEN 1 ELSE 0 END), 0) AS feedback_count,
 			COALESCE(SUM(CASE WHEN chat_messages.feedback_rating = 'positive' THEN 1 ELSE 0 END), 0) AS positive_feedback_count,
 			COALESCE(SUM(CASE WHEN chat_messages.feedback_rating = 'negative' THEN 1 ELSE 0 END), 0) AS negative_feedback_count,
-			COALESCE(SUM(CASE WHEN COALESCE(CAST(chat_messages.citations AS TEXT), '[]') IN ('', 'null', '[]') THEN 1 ELSE 0 END), 0) AS without_citations_count
+			COALESCE(SUM(CASE WHEN chat_messages.intent = 'knowledge_base' THEN 1 ELSE 0 END), 0) AS knowledge_answer_count,
+			COALESCE(SUM(CASE WHEN chat_messages.intent = 'knowledge_base' AND `+chatEmptyCitationsSQL+` THEN 1 ELSE 0 END), 0) AS without_citations_count,
+			COALESCE(SUM(CASE WHEN chat_messages.intent IS NULL THEN 1 ELSE 0 END), 0) AS unclassified_answer_count
 		`).
 		Scan(&overview).Error
 	return overview, err
+}
+
+// Gap categories. `no_citations` is one row per knowledge answer that retrieved
+// nothing; `repeated_rewrite` is one row per cluster of rephrasings of the same
+// question inside one session.
+const (
+	ChatKnowledgeGapNoCitations     = "no_citations"
+	ChatKnowledgeGapRepeatedRewrite = "repeated_rewrite"
+)
+
+// chatRepeatedRewriteMinOccurrences is the cluster threshold: a single ask is not
+// evidence of anything, two phrasings of one question is the weakest signal worth
+// showing an operator.
+const chatRepeatedRewriteMinOccurrences = 2
+
+type ChatKnowledgeGapItem struct {
+	Category string
+	// MessageID identifies the single answer behind a no_citations row. It is nil
+	// for a repeated_rewrite cluster, which spans several answers by definition.
+	MessageID         *uuid.UUID
+	SessionID         uuid.UUID
+	SessionTitle      string
+	KnowledgeBaseID   uuid.UUID
+	KnowledgeBaseName string
+	Question          string
+	RetrievalQuery    string
+	OccurrenceCount   int64
+	UngroundedCount   int64
+	FirstSeenAt       time.Time
+	LastSeenAt        time.Time
+}
+
+// chatQuestionForAnswerSQL resolves the user question an assistant answer replied
+// to, preferring the idempotency pairing and falling back to the nearest earlier
+// user message for answers written before that pairing existed.
+const chatQuestionForAnswerSQL = `COALESCE(
+	(SELECT paired.content FROM chat_messages AS paired
+	 WHERE paired.session_id = chat_messages.session_id
+	   AND paired.role = 'user'
+	   AND paired.client_request_id = chat_messages.client_request_id
+	 ORDER BY paired.created_at DESC, paired.id DESC LIMIT 1),
+	(SELECT previous.content FROM chat_messages AS previous
+	 WHERE previous.session_id = chat_messages.session_id
+	   AND previous.role = 'user'
+	   AND (previous.created_at < chat_messages.created_at
+	        OR (previous.created_at = chat_messages.created_at AND previous.id < chat_messages.id))
+	 ORDER BY previous.created_at DESC, previous.id DESC LIMIT 1),
+	''
+)`
+
+// noCitationGapScope is knowledge-intent answers that retrieved nothing.
+//
+// Restricted to intent = 'knowledge_base' so conversation answers, which are
+// given an empty citation array on purpose, are not reported as knowledge gaps.
+// Rows with NULL intent predate intent tracking and are excluded rather than
+// assumed.
+func noCitationGapScope(
+	db *gorm.DB,
+	ownerID uuid.UUID,
+	knowledgeBaseID *uuid.UUID,
+	startAt, endAt time.Time,
+) *gorm.DB {
+	return chatQualityScope(db, ownerID, knowledgeBaseID, startAt, endAt).
+		Where("chat_messages.intent = ?", "knowledge_base").
+		Where(chatEmptyCitationsSQL)
+}
+
+// repeatedRewriteGapScope is the pre-grouping row set for rewrite clusters.
+//
+// client_request_id IS NOT NULL excludes regenerations: only the send paths set
+// it, so a nil value means the answer came from someone asking for another
+// attempt at the same question rather than from a user rephrasing it. Counting
+// regenerations here would turn "I want a better answer" into "the knowledge base
+// cannot answer this", which are different problems.
+func repeatedRewriteGapScope(
+	db *gorm.DB,
+	ownerID uuid.UUID,
+	knowledgeBaseID *uuid.UUID,
+	startAt, endAt time.Time,
+) *gorm.DB {
+	return chatQualityScope(db, ownerID, knowledgeBaseID, startAt, endAt).
+		Where("chat_messages.intent = ?", "knowledge_base").
+		Where("chat_messages.retrieval_query_norm IS NOT NULL").
+		Where("chat_messages.client_request_id IS NOT NULL")
+}
+
+func (r *ChatRepository) CountNoCitationGaps(
+	ctx context.Context,
+	ownerID uuid.UUID,
+	knowledgeBaseID *uuid.UUID,
+	startAt, endAt time.Time,
+) (int64, error) {
+	var total int64
+	err := noCitationGapScope(r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt).
+		Count(&total).Error
+	return total, err
+}
+
+func (r *ChatRepository) ListNoCitationGaps(
+	ctx context.Context,
+	ownerID uuid.UUID,
+	knowledgeBaseID *uuid.UUID,
+	startAt, endAt time.Time,
+	offset, limit int,
+) ([]ChatKnowledgeGapItem, error) {
+	type row struct {
+		MessageID         uuid.UUID
+		SessionID         uuid.UUID
+		SessionTitle      string
+		KnowledgeBaseID   uuid.UUID
+		KnowledgeBaseName string
+		Question          string
+		RetrievalQuery    string
+		CreatedAt         time.Time
+	}
+	var rows []row
+	err := noCitationGapScope(r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt).
+		Select(`
+			chat_messages.id AS message_id,
+			chat_messages.session_id AS session_id,
+			chat_sessions.title AS session_title,
+			chat_sessions.knowledge_base_id AS knowledge_base_id,
+			knowledge_bases.name AS knowledge_base_name,
+			` + chatQuestionForAnswerSQL + ` AS question,
+			COALESCE(chat_messages.retrieval_query, '') AS retrieval_query,
+			chat_messages.created_at AS created_at
+		`).
+		// id breaks ties on created_at so repeated requests for one page cannot
+		// return a different slice.
+		Order("chat_messages.created_at DESC, chat_messages.id DESC").
+		Limit(limit).
+		Offset(offset).
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	items := make([]ChatKnowledgeGapItem, 0, len(rows))
+	for i := range rows {
+		messageID := rows[i].MessageID
+		items = append(items, ChatKnowledgeGapItem{
+			Category:          ChatKnowledgeGapNoCitations,
+			MessageID:         &messageID,
+			SessionID:         rows[i].SessionID,
+			SessionTitle:      rows[i].SessionTitle,
+			KnowledgeBaseID:   rows[i].KnowledgeBaseID,
+			KnowledgeBaseName: rows[i].KnowledgeBaseName,
+			Question:          rows[i].Question,
+			RetrievalQuery:    rows[i].RetrievalQuery,
+			OccurrenceCount:   1,
+			UngroundedCount:   1,
+			FirstSeenAt:       rows[i].CreatedAt,
+			LastSeenAt:        rows[i].CreatedAt,
+		})
+	}
+	return items, nil
+}
+
+// repeatedRewriteGroups is the grouped query shared by the count and the page so
+// the HAVING threshold cannot drift between them.
+func repeatedRewriteGroups(
+	db *gorm.DB,
+	ownerID uuid.UUID,
+	knowledgeBaseID *uuid.UUID,
+	startAt, endAt time.Time,
+) *gorm.DB {
+	return repeatedRewriteGapScope(db, ownerID, knowledgeBaseID, startAt, endAt).
+		Select(`
+			chat_messages.session_id AS session_id,
+			chat_messages.retrieval_query_norm AS retrieval_query_norm,
+			chat_sessions.title AS session_title,
+			chat_sessions.knowledge_base_id AS knowledge_base_id,
+			knowledge_bases.name AS knowledge_base_name,
+			COUNT(*) AS occurrence_count,
+			COALESCE(SUM(CASE WHEN ` + chatEmptyCitationsSQL + ` THEN 1 ELSE 0 END), 0) AS ungrounded_count,
+			MIN(chat_messages.retrieval_query) AS retrieval_query,
+			MIN(chat_messages.created_at) AS first_seen_at,
+			MAX(chat_messages.created_at) AS last_seen_at
+		`).
+		Group("chat_messages.session_id, chat_messages.retrieval_query_norm, chat_sessions.title, chat_sessions.knowledge_base_id, knowledge_bases.name").
+		Having("COUNT(*) >= ?", chatRepeatedRewriteMinOccurrences)
+}
+
+func (r *ChatRepository) CountRepeatedRewriteGaps(
+	ctx context.Context,
+	ownerID uuid.UUID,
+	knowledgeBaseID *uuid.UUID,
+	startAt, endAt time.Time,
+) (int64, error) {
+	// Counting groups needs the grouped query as a subquery: COUNT(*) applied to
+	// it directly would count rows inside each group instead of the groups.
+	groups := repeatedRewriteGroups(r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt)
+	var total int64
+	err := r.db.WithContext(ctx).Table("(?) AS clusters", groups).Count(&total).Error
+	return total, err
+}
+
+func (r *ChatRepository) ListRepeatedRewriteGaps(
+	ctx context.Context,
+	ownerID uuid.UUID,
+	knowledgeBaseID *uuid.UUID,
+	startAt, endAt time.Time,
+	offset, limit int,
+) ([]ChatKnowledgeGapItem, error) {
+	type row struct {
+		SessionID          uuid.UUID
+		RetrievalQueryNorm string
+		SessionTitle       string
+		KnowledgeBaseID    uuid.UUID
+		KnowledgeBaseName  string
+		OccurrenceCount    int64
+		UngroundedCount    int64
+		RetrievalQuery     string
+		FirstSeenAt        time.Time
+		LastSeenAt         time.Time
+	}
+	var rows []row
+	err := repeatedRewriteGroups(r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt).
+		// session_id and the normalized query are the group key, so ordering by
+		// them after last_seen_at makes the sequence total and pagination stable.
+		Order("last_seen_at DESC, session_id DESC, retrieval_query_norm ASC").
+		Limit(limit).
+		Offset(offset).
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	items := make([]ChatKnowledgeGapItem, 0, len(rows))
+	for i := range rows {
+		items = append(items, ChatKnowledgeGapItem{
+			Category:          ChatKnowledgeGapRepeatedRewrite,
+			SessionID:         rows[i].SessionID,
+			SessionTitle:      rows[i].SessionTitle,
+			KnowledgeBaseID:   rows[i].KnowledgeBaseID,
+			KnowledgeBaseName: rows[i].KnowledgeBaseName,
+			// The cluster's members normalize to one key, so they differ only in
+			// case, punctuation and spacing. Any member is a fair label; MIN keeps
+			// the choice deterministic.
+			Question:        rows[i].RetrievalQuery,
+			RetrievalQuery:  rows[i].RetrievalQuery,
+			OccurrenceCount: rows[i].OccurrenceCount,
+			UngroundedCount: rows[i].UngroundedCount,
+			FirstSeenAt:     rows[i].FirstSeenAt,
+			LastSeenAt:      rows[i].LastSeenAt,
+		})
+	}
+	return items, nil
 }
 
 func (r *ChatRepository) ListNegativeFeedback(
@@ -403,9 +661,9 @@ func (r *ChatRepository) ListNegativeFeedback(
 		db := chatQualityScope(r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt).
 			Where("chat_messages.feedback_rating = ?", "negative")
 		if hasCitations != nil {
-			predicate := "COALESCE(CAST(chat_messages.citations AS TEXT), '[]') NOT IN ('', 'null', '[]')"
+			predicate := "NOT (" + chatEmptyCitationsSQL + ")"
 			if !*hasCitations {
-				predicate = "COALESCE(CAST(chat_messages.citations AS TEXT), '[]') IN ('', 'null', '[]')"
+				predicate = chatEmptyCitationsSQL
 			}
 			db = db.Where(predicate)
 		}

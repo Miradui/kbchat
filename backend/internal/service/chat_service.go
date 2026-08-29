@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
@@ -419,18 +420,187 @@ func (s *ChatService) GetQualityOverview(
 	if overview.FeedbackCount > 0 {
 		positiveRate = float64(overview.PositiveFeedbackCount) / float64(overview.FeedbackCount)
 	}
+	// Denominator is knowledge answers, not all answers: dividing by AnswerCount
+	// would let a burst of small talk make the knowledge gap look like it shrank.
+	withoutCitationsRate := float64(0)
+	if overview.KnowledgeAnswerCount > 0 {
+		withoutCitationsRate = float64(overview.WithoutCitationsCount) / float64(overview.KnowledgeAnswerCount)
+	}
 	return &dto.ChatQualityOverviewResponse{
-		Period:                period,
-		StartAt:               startAt,
-		EndAt:                 endAt,
-		AnswerCount:           overview.AnswerCount,
-		FeedbackCount:         overview.FeedbackCount,
-		PositiveFeedbackCount: overview.PositiveFeedbackCount,
-		NegativeFeedbackCount: overview.NegativeFeedbackCount,
-		WithoutCitationsCount: overview.WithoutCitationsCount,
-		FeedbackCoverage:      feedbackCoverage,
-		PositiveRate:          positiveRate,
+		Period:                  period,
+		StartAt:                 startAt,
+		EndAt:                   endAt,
+		AnswerCount:             overview.AnswerCount,
+		FeedbackCount:           overview.FeedbackCount,
+		PositiveFeedbackCount:   overview.PositiveFeedbackCount,
+		NegativeFeedbackCount:   overview.NegativeFeedbackCount,
+		KnowledgeAnswerCount:    overview.KnowledgeAnswerCount,
+		WithoutCitationsCount:   overview.WithoutCitationsCount,
+		UnclassifiedAnswerCount: overview.UnclassifiedAnswerCount,
+		FeedbackCoverage:        feedbackCoverage,
+		PositiveRate:            positiveRate,
+		WithoutCitationsRate:    withoutCitationsRate,
 	}, nil
+}
+
+// ChatKnowledgeGapCategoryAll requests both categories in one page.
+const ChatKnowledgeGapCategoryAll = "all"
+
+// ListKnowledgeGaps reports questions the knowledge base is failing to answer.
+//
+// Two categories ship here. `no_citations` is a knowledge-intent answer that
+// retrieved nothing, which for this pipeline is the same condition as the
+// program's fixed "insufficient basis" refusal: citations come from the retrieved
+// items, so an empty citation set means retrieval returned nothing and the refusal
+// text was used. The roadmap lists those as separate buckets, but they are one
+// condition here and are reported as one. The genuinely distinct third case, a
+// model refusing despite having citations, needs a signal this pipeline does not
+// record and is P2 work.
+//
+// `repeated_rewrite` is a user rephrasing one question inside a session.
+func (s *ChatService) ListKnowledgeGaps(
+	ctx context.Context,
+	userID uuid.UUID,
+	query dto.ChatKnowledgeGapQuery,
+) (*dto.ChatKnowledgeGapListResponse, error) {
+	period := normalizePeriod(query.Period)
+	category := strings.TrimSpace(query.Category)
+	if category == "" {
+		category = ChatKnowledgeGapCategoryAll
+	}
+	switch category {
+	case ChatKnowledgeGapCategoryAll,
+		repository.ChatKnowledgeGapNoCitations,
+		repository.ChatKnowledgeGapRepeatedRewrite:
+	default:
+		// Rejected rather than coerced to "all": silently widening a filter would
+		// show an operator a list that is not the one they asked for.
+		return nil, apperror.Validation(map[string]any{
+			"category": "category must be one of all, no_citations, repeated_rewrite",
+		})
+	}
+	if err := s.validateQualityKnowledgeBase(ctx, userID, query.KnowledgeBaseID); err != nil {
+		return nil, err
+	}
+
+	page, pageSize := query.Page, query.PageSize
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	endAt := time.Now().UTC()
+	startAt := periodStart(endAt, period)
+
+	noCitationsTotal, err := s.chats.CountNoCitationGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	repeatedRewriteTotal, err := s.chats.CountRepeatedRewriteGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+
+	offset := (page - 1) * pageSize
+	response := &dto.ChatKnowledgeGapListResponse{
+		Items:                make([]dto.ChatKnowledgeGapItemResponse, 0, pageSize),
+		Page:                 page,
+		PageSize:             pageSize,
+		NoCitationsTotal:     noCitationsTotal,
+		RepeatedRewriteTotal: repeatedRewriteTotal,
+	}
+
+	var items []repository.ChatKnowledgeGapItem
+	switch category {
+	case repository.ChatKnowledgeGapNoCitations:
+		response.Total = noCitationsTotal
+		items, err = s.chats.ListNoCitationGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt, offset, pageSize)
+	case repository.ChatKnowledgeGapRepeatedRewrite:
+		response.Total = repeatedRewriteTotal
+		items, err = s.chats.ListRepeatedRewriteGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt, offset, pageSize)
+	default:
+		response.Total = noCitationsTotal + repeatedRewriteTotal
+		items, err = s.listCombinedKnowledgeGaps(
+			ctx, userID, query.KnowledgeBaseID, startAt, endAt, offset, pageSize, noCitationsTotal,
+		)
+	}
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+
+	for i := range items {
+		var messageID *string
+		if items[i].MessageID != nil {
+			id := items[i].MessageID.String()
+			messageID = &id
+		}
+		response.Items = append(response.Items, dto.ChatKnowledgeGapItemResponse{
+			Category:          items[i].Category,
+			MessageID:         messageID,
+			SessionID:         items[i].SessionID.String(),
+			SessionTitle:      items[i].SessionTitle,
+			KnowledgeBaseID:   items[i].KnowledgeBaseID.String(),
+			KnowledgeBaseName: items[i].KnowledgeBaseName,
+			Question:          items[i].Question,
+			RetrievalQuery:    items[i].RetrievalQuery,
+			OccurrenceCount:   items[i].OccurrenceCount,
+			UngroundedCount:   items[i].UngroundedCount,
+			FirstSeenAt:       items[i].FirstSeenAt,
+			LastSeenAt:        items[i].LastSeenAt,
+		})
+	}
+	return response, nil
+}
+
+// listCombinedKnowledgeGaps pages across both categories as one sequence: every
+// no_citations row, then every repeated_rewrite cluster.
+//
+// The two are concatenated rather than interleaved by recency because they are not
+// comparable units — one row is a single answer, the other is a cluster — so a
+// merged "most recent first" ordering would imply a ranking that does not exist.
+// Only the slice each category contributes to the requested page is fetched, so
+// neither full result set is loaded.
+func (s *ChatService) listCombinedKnowledgeGaps(
+	ctx context.Context,
+	userID uuid.UUID,
+	knowledgeBaseID *uuid.UUID,
+	startAt, endAt time.Time,
+	offset, pageSize int,
+	noCitationsTotal int64,
+) ([]repository.ChatKnowledgeGapItem, error) {
+	items := make([]repository.ChatKnowledgeGapItem, 0, pageSize)
+	firstCount := int(noCitationsTotal)
+
+	if offset < firstCount {
+		limit := pageSize
+		if remaining := firstCount - offset; remaining < limit {
+			limit = remaining
+		}
+		first, err := s.chats.ListNoCitationGaps(ctx, userID, knowledgeBaseID, startAt, endAt, offset, limit)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, first...)
+	}
+
+	if len(items) >= pageSize {
+		return items, nil
+	}
+	secondOffset := offset - firstCount
+	if secondOffset < 0 {
+		secondOffset = 0
+	}
+	second, err := s.chats.ListRepeatedRewriteGaps(
+		ctx, userID, knowledgeBaseID, startAt, endAt, secondOffset, pageSize-len(items),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return append(items, second...), nil
 }
 
 func (s *ChatService) ListNegativeFeedback(
@@ -794,7 +964,31 @@ func buildChatMessagePair(
 		}
 		assistantMessage.RerankFallback = datatypes.JSON(fallbackJSON)
 	}
+	applyGeneratedProvenance(assistantMessage, generated)
 	return userMessage, assistantMessage, nil
+}
+
+// applyGeneratedProvenance records which intent produced an answer and, for
+// knowledge answers, the canonical query retrieval actually ran.
+//
+// Shared by the send paths and by regenerate so an answer's intent is recorded
+// the same way regardless of how it was produced. Every field stays nil when
+// unknown: a NULL intent means "written before this was tracked", and quality
+// metrics scope on intent precisely so they can exclude those rows instead of
+// silently counting them as something they are not.
+func applyGeneratedProvenance(message *model.ChatMessage, generated generatedChatAnswer) {
+	if generated.intent != "" {
+		intent := generated.intent
+		message.Intent = &intent
+	}
+	retrievalQuery := strings.TrimSpace(generated.retrievalQuery)
+	if retrievalQuery == "" {
+		return
+	}
+	message.RetrievalQuery = &retrievalQuery
+	if norm := normalizeRetrievalQuery(retrievalQuery); norm != "" {
+		message.RetrievalQueryNorm = &norm
+	}
 }
 
 func sendMessageResponseFromPair(clientRequestID uuid.UUID, content string, messages []model.ChatMessage) (*dto.SendChatMessageResponse, error) {
@@ -883,6 +1077,12 @@ func (s *ChatService) RegenerateMessage(ctx context.Context, userID, sessionID, 
 		Content:   generated.answer,
 		Citations: generated.citationJSON,
 	}
+	// Intent is recorded here too, or every regenerated answer would be missing
+	// from the intent-scoped metrics. ClientRequestID stays nil, which is what
+	// keeps regenerations out of repeated-rewrite clustering: that signal is about
+	// a user rephrasing a question, not about asking for another attempt at the
+	// same one.
+	applyGeneratedProvenance(assistantMessage, generated)
 	if err := s.chats.CreateMessagesIfUnchanged(ctx, chatMessageIDs(messages), assistantMessage); err != nil {
 		if errors.Is(err, repository.ErrChatMessageChanged) {
 			return nil, apperror.New(http.StatusConflict, "CHAT_MESSAGE_CHANGED", "conversation changed while the answer was being regenerated")
@@ -1000,6 +1200,13 @@ type generatedChatAnswer struct {
 	citations      []dto.CitationResponse
 	citationJSON   datatypes.JSON
 	rerankFallback *dto.RerankFallbackResponse
+	// intent is the classification this turn was routed on. retrievalQuery is the
+	// canonical question actually sent to retrieval, set only for
+	// knowledge_base intent. Both are persisted so quality metrics can tell a
+	// knowledge answer with no sources apart from a conversation answer that
+	// correctly has none.
+	intent         string
+	retrievalQuery string
 }
 
 // answerHooks lets the streaming path observe generation without forking it.
@@ -1076,6 +1283,9 @@ func (s *ChatService) generateAnswerWithHooks(
 			answer:       answer,
 			citations:    citations,
 			citationJSON: datatypes.JSON(citationJSON),
+			intent:       chatIntentConversation,
+			// No retrievalQuery: this branch never reaches retrieval, and an empty
+			// one keeps conversation answers out of rewrite clustering entirely.
 		}, nil
 	}
 
@@ -1126,6 +1336,8 @@ func (s *ChatService) generateAnswerWithHooks(
 		citations:      citations,
 		citationJSON:   datatypes.JSON(citationJSON),
 		rerankFallback: searchRes.RerankFallback,
+		intent:         chatIntentKnowledgeBase,
+		retrievalQuery: retrievalQuery,
 	}, nil
 }
 
@@ -1328,6 +1540,31 @@ func buildIntentClassificationMessages(question string, history []model.ChatMess
 		Content: "当前用户问题：\n" + strings.TrimSpace(question),
 	})
 	return messages
+}
+
+// normalizeRetrievalQuery reduces a canonical retrieval query to the form used to
+// group repeated rewrites of one question.
+//
+// It lowercases, drops punctuation and symbols, and removes whitespace entirely
+// rather than collapsing it to a single space. Dropping it matters because this
+// corpus is Chinese-primary and CJK spacing is inconsistent: "退货 政策" and
+// "退货政策" are the same question and must land in the same cluster.
+//
+// Returns "" when nothing survives, which callers treat as "not groupable" and
+// store as NULL rather than as an empty-string group that would collect every
+// punctuation-only query together.
+func normalizeRetrievalQuery(query string) string {
+	var b strings.Builder
+	b.Grow(len(query))
+	for _, r := range query {
+		switch {
+		case unicode.IsSpace(r), unicode.IsPunct(r), unicode.IsSymbol(r):
+			continue
+		default:
+			b.WriteRune(unicode.ToLower(r))
+		}
+	}
+	return b.String()
 }
 
 func parseChatIntentOutput(raw string, question string) chatIntentDecision {

@@ -103,9 +103,19 @@ type ChatQualityOverviewResponse struct {
 	FeedbackCount         int64     `json:"feedbackCount"`
 	PositiveFeedbackCount int64     `json:"positiveFeedbackCount"`
 	NegativeFeedbackCount int64     `json:"negativeFeedbackCount"`
-	WithoutCitationsCount int64     `json:"withoutCitationsCount"`
-	FeedbackCoverage      float64   `json:"feedbackCoverage"`
-	PositiveRate          float64   `json:"positiveRate"`
+	// KnowledgeAnswerCount is the denominator for WithoutCitationsCount, which
+	// counts only knowledge-intent answers: a conversation answer has no sources
+	// by design and is not a knowledge gap.
+	KnowledgeAnswerCount  int64 `json:"knowledgeAnswerCount"`
+	WithoutCitationsCount int64 `json:"withoutCitationsCount"`
+	// UnclassifiedAnswerCount is answers stored before intent was tracked. They
+	// are excluded from every intent-scoped number above and reported separately
+	// so a client can disclose the blind spot instead of presenting a rate that
+	// quietly understates it.
+	UnclassifiedAnswerCount int64   `json:"unclassifiedAnswerCount"`
+	FeedbackCoverage        float64 `json:"feedbackCoverage"`
+	PositiveRate            float64 `json:"positiveRate"`
+	WithoutCitationsRate    float64 `json:"withoutCitationsRate"`
 }
 
 type ChatQualityFeedbackQuery struct {
@@ -135,6 +145,42 @@ type ChatQualityFeedbackListResponse struct {
 	Total    int64                             `json:"total"`
 	Page     int                               `json:"page"`
 	PageSize int                               `json:"pageSize"`
+}
+
+type ChatKnowledgeGapQuery struct {
+	Period          string
+	KnowledgeBaseID *uuid.UUID
+	Category        string
+	Page            int
+	PageSize        int
+}
+
+type ChatKnowledgeGapItemResponse struct {
+	Category string `json:"category"`
+	// MessageID is null for a repeated_rewrite cluster, which spans several
+	// answers. Present for no_citations, where one row is one answer.
+	MessageID         *string   `json:"messageId"`
+	SessionID         string    `json:"sessionId"`
+	SessionTitle      string    `json:"sessionTitle"`
+	KnowledgeBaseID   string    `json:"knowledgeBaseId"`
+	KnowledgeBaseName string    `json:"knowledgeBaseName"`
+	Question          string    `json:"question"`
+	RetrievalQuery    string    `json:"retrievalQuery"`
+	OccurrenceCount   int64     `json:"occurrenceCount"`
+	UngroundedCount   int64     `json:"ungroundedCount"`
+	FirstSeenAt       time.Time `json:"firstSeenAt"`
+	LastSeenAt        time.Time `json:"lastSeenAt"`
+}
+
+type ChatKnowledgeGapListResponse struct {
+	Items    []ChatKnowledgeGapItemResponse `json:"items"`
+	Total    int64                          `json:"total"`
+	Page     int                            `json:"page"`
+	PageSize int                            `json:"pageSize"`
+	// Per-category totals stay available regardless of the requested category so a
+	// client can label the filter without a second round trip.
+	NoCitationsTotal     int64 `json:"noCitationsTotal"`
+	RepeatedRewriteTotal int64 `json:"repeatedRewriteTotal"`
 }
 
 type ChatMessageListResponse struct {

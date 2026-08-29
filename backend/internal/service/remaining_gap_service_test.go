@@ -102,14 +102,17 @@ func TestChatQualityOverviewAndNegativeFeedbackAreOwnerScoped(t *testing.T) {
 	}
 	clientRequestID := uuid.New()
 	negative, positive := "negative", "positive"
+	knowledgeIntent, conversationIntent := chatIntentKnowledgeBase, chatIntentConversation
+	returnQuery, invoiceQuery := "如何退货", "需要发票吗"
+	returnQueryNorm, invoiceQueryNorm := normalizeRetrievalQuery(returnQuery), normalizeRetrievalQuery(invoiceQuery)
 	feedbackAt := base.Add(3 * time.Minute)
 	messages := []model.ChatMessage{
 		{SessionID: ownedSession.ID, ClientRequestID: &clientRequestID, Role: "user", Content: "如何退货？", CreatedAt: base},
-		{SessionID: ownedSession.ID, ClientRequestID: &clientRequestID, Role: "assistant", Content: "请在三十天内申请。", Citations: datatypes.JSON(citations), RerankFallback: datatypes.JSON(fallback), FeedbackRating: &negative, FeedbackUpdatedAt: &feedbackAt, CreatedAt: base.Add(time.Minute)},
+		{SessionID: ownedSession.ID, ClientRequestID: &clientRequestID, Role: "assistant", Content: "请在三十天内申请。", Citations: datatypes.JSON(citations), RerankFallback: datatypes.JSON(fallback), FeedbackRating: &negative, FeedbackUpdatedAt: &feedbackAt, Intent: &knowledgeIntent, RetrievalQuery: &returnQuery, RetrievalQueryNorm: &returnQueryNorm, CreatedAt: base.Add(time.Minute)},
 		{SessionID: ownedSession.ID, Role: "user", Content: "需要发票吗？", CreatedAt: base.Add(4 * time.Minute)},
-		{SessionID: ownedSession.ID, Role: "assistant", Content: "当前资料无法确认。", FeedbackRating: &positive, FeedbackUpdatedAt: &feedbackAt, CreatedAt: base.Add(5 * time.Minute)},
-		{SessionID: ownedSession.ID, Role: "assistant", Content: "未评价回答", CreatedAt: base.Add(6 * time.Minute)},
-		{SessionID: otherSession.ID, Role: "assistant", Content: "不应泄露", FeedbackRating: &negative, FeedbackUpdatedAt: &feedbackAt, CreatedAt: base.Add(7 * time.Minute)},
+		{SessionID: ownedSession.ID, Role: "assistant", Content: "当前资料无法确认。", FeedbackRating: &positive, FeedbackUpdatedAt: &feedbackAt, Intent: &knowledgeIntent, RetrievalQuery: &invoiceQuery, RetrievalQueryNorm: &invoiceQueryNorm, CreatedAt: base.Add(5 * time.Minute)},
+		{SessionID: ownedSession.ID, Role: "assistant", Content: "未评价回答", Intent: &conversationIntent, CreatedAt: base.Add(6 * time.Minute)},
+		{SessionID: otherSession.ID, Role: "assistant", Content: "不应泄露", FeedbackRating: &negative, FeedbackUpdatedAt: &feedbackAt, Intent: &knowledgeIntent, CreatedAt: base.Add(7 * time.Minute)},
 	}
 	if err := services.db.Create(&messages).Error; err != nil {
 		t.Fatalf("create quality messages: %v", err)
@@ -119,11 +122,14 @@ func TestChatQualityOverviewAndNegativeFeedbackAreOwnerScoped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("quality overview: %v", err)
 	}
+	// withoutCitationsCount only counts knowledge_base answers, so the conversation
+	// answer that legitimately carries no citations must not inflate it.
 	if overview.AnswerCount != 3 || overview.FeedbackCount != 2 || overview.PositiveFeedbackCount != 1 ||
-		overview.NegativeFeedbackCount != 1 || overview.WithoutCitationsCount != 2 {
+		overview.NegativeFeedbackCount != 1 || overview.WithoutCitationsCount != 1 ||
+		overview.KnowledgeAnswerCount != 2 || overview.UnclassifiedAnswerCount != 0 {
 		t.Fatalf("unexpected overview counts: %#v", overview)
 	}
-	if overview.FeedbackCoverage != float64(2)/3 || overview.PositiveRate != 0.5 {
+	if overview.FeedbackCoverage != float64(2)/3 || overview.PositiveRate != 0.5 || overview.WithoutCitationsRate != 0.5 {
 		t.Fatalf("unexpected overview ratios: %#v", overview)
 	}
 

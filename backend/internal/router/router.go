@@ -200,6 +200,7 @@ func NewWithStorage(cfg config.Config, db *gorm.DB, logger *zap.Logger, fileStor
 	protected.POST("/chat/messages/:messageId/feedback", chatHandler.SetMessageFeedback)
 	protected.GET("/chat/quality/overview", chatHandler.QualityOverview)
 	protected.GET("/chat/quality/negative-feedback", chatHandler.ListNegativeFeedback)
+	protected.GET("/chat/quality/knowledge-gaps", chatHandler.ListKnowledgeGaps)
 	protected.GET("/search", globalSearchHandler.Search)
 	protected.GET("/search/suggest", globalSearchHandler.Suggest)
 	protected.GET("/search/export", globalSearchHandler.Export)

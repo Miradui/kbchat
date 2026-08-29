@@ -311,6 +311,35 @@ func (h *ChatHandler) ListNegativeFeedback(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
+func (h *ChatHandler) ListKnowledgeGaps(c *gin.Context) {
+	userID, ok := currentUserIDOrError(c)
+	if !ok {
+		return
+	}
+	period, ok := qualityPeriod(c)
+	if !ok {
+		return
+	}
+	knowledgeBaseID, ok := optionalUUIDQuery(c, "knowledgeBaseId")
+	if !ok {
+		return
+	}
+	// category is validated in the service so the rule holds for every caller
+	// rather than only for requests arriving through this handler.
+	res, err := h.chats.ListKnowledgeGaps(c.Request.Context(), userID, dto.ChatKnowledgeGapQuery{
+		Period:          period,
+		KnowledgeBaseID: knowledgeBaseID,
+		Category:        c.Query("category"),
+		Page:            queryInt(c, "page", 1),
+		PageSize:        queryInt(c, "pageSize", 20),
+	})
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
 func qualityPeriod(c *gin.Context) (string, bool) {
 	period := c.Query("period")
 	if period == "" {

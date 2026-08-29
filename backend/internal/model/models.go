@@ -211,7 +211,14 @@ type ChatMessage struct {
 	RerankFallback    datatypes.JSON `gorm:"type:jsonb" json:"rerankFallback"`
 	FeedbackRating    *string        `gorm:"size:16" json:"feedbackRating"`
 	FeedbackUpdatedAt *time.Time     `json:"feedbackUpdatedAt"`
-	CreatedAt         time.Time      `json:"createdAt"`
+	// Intent, RetrievalQuery and RetrievalQueryNorm stay nullable so a
+	// pre-migration answer with no recorded intent remains distinguishable from
+	// one classified as empty. Quality metrics must exclude NULL rather than
+	// counting it as zero.
+	Intent             *string   `gorm:"size:32" json:"intent"`
+	RetrievalQuery     *string   `json:"retrievalQuery"`
+	RetrievalQueryNorm *string   `json:"-"`
+	CreatedAt          time.Time `json:"createdAt"`
 }
 
 func (m *ChatMessage) BeforeCreate(_ *gorm.DB) error {
