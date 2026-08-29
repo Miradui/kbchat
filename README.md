@@ -1,6 +1,6 @@
-# RAG Knowledge Base
+# kbchat
 
-RAG Knowledge Base is an MVP knowledge-base and chat application. The backend is built with Gin, GORM, PostgreSQL, Redis, JWT, pgvector, and OpenAI-compatible model providers. The frontend is a Vite React workspace for login, knowledge bases, documents, search, and chat.
+kbchat is an MVP knowledge-base and chat application. The backend is built with Gin, GORM, PostgreSQL, Redis, JWT, pgvector, and OpenAI-compatible model providers. The frontend is a Vite React workspace for login, knowledge bases, documents, search, and chat.
 
 ## Current Scope
 

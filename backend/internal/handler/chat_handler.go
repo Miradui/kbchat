@@ -11,9 +11,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"rag/backend/internal/apperror"
-	"rag/backend/internal/dto"
-	"rag/backend/internal/service"
+	"kbchat/backend/internal/apperror"
+	"kbchat/backend/internal/dto"
+	"kbchat/backend/internal/service"
 )
 
 type ChatHandler struct {
@@ -249,6 +249,91 @@ func (h *ChatHandler) SetMessageFeedback(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, res)
+}
+
+func (h *ChatHandler) QualityOverview(c *gin.Context) {
+	userID, ok := currentUserIDOrError(c)
+	if !ok {
+		return
+	}
+	period, ok := qualityPeriod(c)
+	if !ok {
+		return
+	}
+	knowledgeBaseID, ok := optionalUUIDQuery(c, "knowledgeBaseId")
+	if !ok {
+		return
+	}
+	res, err := h.chats.GetQualityOverview(c.Request.Context(), userID, dto.ChatQualityOverviewQuery{
+		Period:          period,
+		KnowledgeBaseID: knowledgeBaseID,
+	})
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+func (h *ChatHandler) ListNegativeFeedback(c *gin.Context) {
+	userID, ok := currentUserIDOrError(c)
+	if !ok {
+		return
+	}
+	period, ok := qualityPeriod(c)
+	if !ok {
+		return
+	}
+	knowledgeBaseID, ok := optionalUUIDQuery(c, "knowledgeBaseId")
+	if !ok {
+		return
+	}
+	var hasCitations *bool
+	if value := c.Query("hasCitations"); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			RespondError(c, apperror.Validation(map[string]any{"hasCitations": "hasCitations 只接受 true 或 false"}))
+			return
+		}
+		hasCitations = &parsed
+	}
+	res, err := h.chats.ListNegativeFeedback(c.Request.Context(), userID, dto.ChatQualityFeedbackQuery{
+		Period:          period,
+		KnowledgeBaseID: knowledgeBaseID,
+		HasCitations:    hasCitations,
+		Page:            queryInt(c, "page", 1),
+		PageSize:        queryInt(c, "pageSize", 20),
+	})
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+func qualityPeriod(c *gin.Context) (string, bool) {
+	period := c.Query("period")
+	if period == "" {
+		return "month", true
+	}
+	if period != "day" && period != "month" {
+		RespondError(c, apperror.Validation(map[string]any{"period": "period 只接受 day 或 month"}))
+		return "", false
+	}
+	return period, true
+}
+
+func optionalUUIDQuery(c *gin.Context, name string) (*uuid.UUID, bool) {
+	value := c.Query(name)
+	if value == "" {
+		return nil, true
+	}
+	parsed, err := uuid.Parse(value)
+	if err != nil {
+		RespondError(c, apperror.Validation(map[string]any{name: name + " is invalid"}))
+		return nil, false
+	}
+	return &parsed, true
 }
 
 func (h *ChatHandler) ExportSession(c *gin.Context) {

@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"rag/backend/internal/model"
+	"kbchat/backend/internal/model"
 )
 
 const maxStorageCleanupBackoff = 30 * time.Minute

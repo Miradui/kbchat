@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm/clause"
 	gormlogger "gorm.io/gorm/logger"
 
-	"rag/backend/internal/model"
+	"kbchat/backend/internal/model"
 )
 
 func TestEmptyWorkerQueuesDoNotLogRecordNotFoundErrors(t *testing.T) {

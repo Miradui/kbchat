@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"rag/backend/internal/dto"
-	"rag/backend/internal/model"
+	"kbchat/backend/internal/dto"
+	"kbchat/backend/internal/model"
 )
 
 type ChatRepository struct {
@@ -347,6 +348,129 @@ func (r *ChatRepository) UpdateMessageFeedback(
 		return ErrChatMessageNotFound
 	}
 	return nil
+}
+
+type ChatQualityOverview struct {
+	AnswerCount           int64
+	FeedbackCount         int64
+	PositiveFeedbackCount int64
+	NegativeFeedbackCount int64
+	WithoutCitationsCount int64
+}
+
+type ChatQualityFeedbackItem struct {
+	MessageID         uuid.UUID
+	SessionID         uuid.UUID
+	SessionTitle      string
+	KnowledgeBaseID   uuid.UUID
+	KnowledgeBaseName string
+	Question          string
+	Answer            string
+	Citations         datatypes.JSON
+	RerankFallback    datatypes.JSON
+	CreatedAt         time.Time
+	FeedbackUpdatedAt time.Time
+}
+
+func (r *ChatRepository) GetQualityOverview(
+	ctx context.Context,
+	ownerID uuid.UUID,
+	knowledgeBaseID *uuid.UUID,
+	startAt, endAt time.Time,
+) (ChatQualityOverview, error) {
+	var overview ChatQualityOverview
+	err := chatQualityScope(r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt).
+		Select(`
+			COUNT(*) AS answer_count,
+			COALESCE(SUM(CASE WHEN chat_messages.feedback_rating IS NOT NULL THEN 1 ELSE 0 END), 0) AS feedback_count,
+			COALESCE(SUM(CASE WHEN chat_messages.feedback_rating = 'positive' THEN 1 ELSE 0 END), 0) AS positive_feedback_count,
+			COALESCE(SUM(CASE WHEN chat_messages.feedback_rating = 'negative' THEN 1 ELSE 0 END), 0) AS negative_feedback_count,
+			COALESCE(SUM(CASE WHEN COALESCE(CAST(chat_messages.citations AS TEXT), '[]') IN ('', 'null', '[]') THEN 1 ELSE 0 END), 0) AS without_citations_count
+		`).
+		Scan(&overview).Error
+	return overview, err
+}
+
+func (r *ChatRepository) ListNegativeFeedback(
+	ctx context.Context,
+	ownerID uuid.UUID,
+	knowledgeBaseID *uuid.UUID,
+	hasCitations *bool,
+	startAt, endAt time.Time,
+	offset, limit int,
+) ([]ChatQualityFeedbackItem, int64, error) {
+	base := func() *gorm.DB {
+		db := chatQualityScope(r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt).
+			Where("chat_messages.feedback_rating = ?", "negative")
+		if hasCitations != nil {
+			predicate := "COALESCE(CAST(chat_messages.citations AS TEXT), '[]') NOT IN ('', 'null', '[]')"
+			if !*hasCitations {
+				predicate = "COALESCE(CAST(chat_messages.citations AS TEXT), '[]') IN ('', 'null', '[]')"
+			}
+			db = db.Where(predicate)
+		}
+		return db
+	}
+
+	var total int64
+	if err := base().Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var items []ChatQualityFeedbackItem
+	err := base().
+		Select(`
+			chat_messages.id AS message_id,
+			chat_messages.session_id AS session_id,
+			chat_sessions.title AS session_title,
+			chat_sessions.knowledge_base_id AS knowledge_base_id,
+			knowledge_bases.name AS knowledge_base_name,
+			COALESCE(
+				(SELECT paired.content FROM chat_messages AS paired
+				 WHERE paired.session_id = chat_messages.session_id
+				   AND paired.role = 'user'
+				   AND paired.client_request_id = chat_messages.client_request_id
+				 ORDER BY paired.created_at DESC, paired.id DESC LIMIT 1),
+				(SELECT previous.content FROM chat_messages AS previous
+				 WHERE previous.session_id = chat_messages.session_id
+				   AND previous.role = 'user'
+				   AND (previous.created_at < chat_messages.created_at
+				        OR (previous.created_at = chat_messages.created_at AND previous.id < chat_messages.id))
+				 ORDER BY previous.created_at DESC, previous.id DESC LIMIT 1),
+				''
+			) AS question,
+			chat_messages.content AS answer,
+			chat_messages.citations AS citations,
+			chat_messages.rerank_fallback AS rerank_fallback,
+			chat_messages.created_at AS created_at,
+			chat_messages.feedback_updated_at AS feedback_updated_at
+		`).
+		Order("chat_messages.feedback_updated_at DESC, chat_messages.id DESC").
+		Limit(limit).
+		Offset(offset).
+		Scan(&items).Error
+	return items, total, err
+}
+
+func chatQualityScope(
+	db *gorm.DB,
+	ownerID uuid.UUID,
+	knowledgeBaseID *uuid.UUID,
+	startAt, endAt time.Time,
+) *gorm.DB {
+	db = db.Model(&model.ChatMessage{}).
+		Joins("JOIN chat_sessions ON chat_sessions.id = chat_messages.session_id").
+		Joins("JOIN knowledge_bases ON knowledge_bases.id = chat_sessions.knowledge_base_id").
+		Where("chat_messages.role = ?", "assistant").
+		Where("chat_sessions.user_id = ?", ownerID).
+		Where("chat_sessions.deleted_at IS NULL").
+		Where("knowledge_bases.owner_id = ?", ownerID).
+		Where("knowledge_bases.deleted_at IS NULL").
+		Where("chat_messages.created_at >= ? AND chat_messages.created_at < ?", startAt, endAt)
+	if knowledgeBaseID != nil {
+		db = db.Where("chat_sessions.knowledge_base_id = ?", *knowledgeBaseID)
+	}
+	return db
 }
 
 func (r *ChatRepository) FindMessagesByClientRequestID(ctx context.Context, sessionID, clientRequestID uuid.UUID) ([]model.ChatMessage, error) {

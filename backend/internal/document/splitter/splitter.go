@@ -5,7 +5,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"rag/backend/internal/document/parser"
+	"kbchat/backend/internal/document/parser"
 )
 
 const (

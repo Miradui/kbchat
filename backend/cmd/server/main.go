@@ -7,18 +7,18 @@ import (
 
 	"go.uber.org/zap"
 
-	"rag/backend/internal/cache"
-	"rag/backend/internal/config"
-	"rag/backend/internal/database"
-	"rag/backend/internal/document/parser"
-	"rag/backend/internal/document/processor"
-	"rag/backend/internal/document/splitter"
-	"rag/backend/internal/job"
-	"rag/backend/internal/logger"
-	embeddingprovider "rag/backend/internal/provider/embedding"
-	"rag/backend/internal/repository"
-	"rag/backend/internal/router"
-	"rag/backend/internal/storage"
+	"kbchat/backend/internal/cache"
+	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/database"
+	"kbchat/backend/internal/document/parser"
+	"kbchat/backend/internal/document/processor"
+	"kbchat/backend/internal/document/splitter"
+	"kbchat/backend/internal/job"
+	"kbchat/backend/internal/logger"
+	embeddingprovider "kbchat/backend/internal/provider/embedding"
+	"kbchat/backend/internal/repository"
+	"kbchat/backend/internal/router"
+	"kbchat/backend/internal/storage"
 )
 
 func main() {

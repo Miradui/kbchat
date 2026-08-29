@@ -37,6 +37,7 @@ export type AppShellProps = {
 const sectionLabels: Record<AppSection, string> = {
   home: '首页',
   chat: 'AI 问答',
+  quality: '质量运营',
   'knowledge-bases': '知识库',
   documents: '文档',
   tags: '标签',

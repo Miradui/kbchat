@@ -11,7 +11,7 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
-	"rag/backend/internal/model"
+	"kbchat/backend/internal/model"
 )
 
 func TestStorageCleanupRepositoryClaimRetryAndComplete(t *testing.T) {

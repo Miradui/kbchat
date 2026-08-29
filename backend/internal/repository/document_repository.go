@@ -12,7 +12,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"rag/backend/internal/model"
+	"kbchat/backend/internal/model"
 )
 
 type GlobalDocumentListItem struct {

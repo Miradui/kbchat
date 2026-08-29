@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"rag/backend/internal/config"
-	corererank "rag/backend/internal/rerank"
+	"kbchat/backend/internal/config"
+	corererank "kbchat/backend/internal/rerank"
 )
 
 type OpenAICompatibleProvider struct {

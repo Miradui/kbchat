@@ -7,12 +7,12 @@ import (
 
 	"github.com/pgvector/pgvector-go"
 
-	"rag/backend/internal/document/parser"
-	"rag/backend/internal/document/splitter"
-	"rag/backend/internal/embedding"
-	"rag/backend/internal/model"
-	"rag/backend/internal/repository"
-	"rag/backend/internal/storage"
+	"kbchat/backend/internal/document/parser"
+	"kbchat/backend/internal/document/splitter"
+	"kbchat/backend/internal/embedding"
+	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/repository"
+	"kbchat/backend/internal/storage"
 )
 
 const embeddingBatchSize = 16

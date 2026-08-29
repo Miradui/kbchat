@@ -18,11 +18,11 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
-	"rag/backend/internal/document/parser"
-	"rag/backend/internal/document/splitter"
-	"rag/backend/internal/model"
-	"rag/backend/internal/repository"
-	"rag/backend/internal/storage"
+	"kbchat/backend/internal/document/parser"
+	"kbchat/backend/internal/document/splitter"
+	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/repository"
+	"kbchat/backend/internal/storage"
 )
 
 type structuredParser struct {

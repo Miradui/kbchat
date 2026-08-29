@@ -4,9 +4,9 @@ import (
 	"context"
 	"strings"
 
-	"rag/backend/internal/apperror"
-	"rag/backend/internal/dto"
-	"rag/backend/internal/repository"
+	"kbchat/backend/internal/apperror"
+	"kbchat/backend/internal/dto"
+	"kbchat/backend/internal/repository"
 )
 
 type UserService struct {

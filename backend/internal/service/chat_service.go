@@ -13,13 +13,13 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
 
-	"rag/backend/internal/apperror"
-	chatcore "rag/backend/internal/chat"
-	"rag/backend/internal/config"
-	"rag/backend/internal/dto"
-	"rag/backend/internal/model"
-	"rag/backend/internal/repository"
-	titlecore "rag/backend/internal/title"
+	"kbchat/backend/internal/apperror"
+	chatcore "kbchat/backend/internal/chat"
+	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/dto"
+	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/repository"
+	titlecore "kbchat/backend/internal/title"
 )
 
 type chatRetrievalService interface {
@@ -394,6 +394,122 @@ func (s *ChatService) SetMessageFeedback(
 		Rating:    rating,
 		UpdatedAt: updatedAt,
 	}, nil
+}
+
+func (s *ChatService) GetQualityOverview(
+	ctx context.Context,
+	userID uuid.UUID,
+	query dto.ChatQualityOverviewQuery,
+) (*dto.ChatQualityOverviewResponse, error) {
+	period := normalizePeriod(query.Period)
+	if err := s.validateQualityKnowledgeBase(ctx, userID, query.KnowledgeBaseID); err != nil {
+		return nil, err
+	}
+	endAt := time.Now().UTC()
+	startAt := periodStart(endAt, period)
+	overview, err := s.chats.GetQualityOverview(ctx, userID, query.KnowledgeBaseID, startAt, endAt)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	feedbackCoverage := float64(0)
+	if overview.AnswerCount > 0 {
+		feedbackCoverage = float64(overview.FeedbackCount) / float64(overview.AnswerCount)
+	}
+	positiveRate := float64(0)
+	if overview.FeedbackCount > 0 {
+		positiveRate = float64(overview.PositiveFeedbackCount) / float64(overview.FeedbackCount)
+	}
+	return &dto.ChatQualityOverviewResponse{
+		Period:                period,
+		StartAt:               startAt,
+		EndAt:                 endAt,
+		AnswerCount:           overview.AnswerCount,
+		FeedbackCount:         overview.FeedbackCount,
+		PositiveFeedbackCount: overview.PositiveFeedbackCount,
+		NegativeFeedbackCount: overview.NegativeFeedbackCount,
+		WithoutCitationsCount: overview.WithoutCitationsCount,
+		FeedbackCoverage:      feedbackCoverage,
+		PositiveRate:          positiveRate,
+	}, nil
+}
+
+func (s *ChatService) ListNegativeFeedback(
+	ctx context.Context,
+	userID uuid.UUID,
+	query dto.ChatQualityFeedbackQuery,
+) (*dto.ChatQualityFeedbackListResponse, error) {
+	period := normalizePeriod(query.Period)
+	if err := s.validateQualityKnowledgeBase(ctx, userID, query.KnowledgeBaseID); err != nil {
+		return nil, err
+	}
+	page, pageSize := query.Page, query.PageSize
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	endAt := time.Now().UTC()
+	startAt := periodStart(endAt, period)
+	items, total, err := s.chats.ListNegativeFeedback(
+		ctx, userID, query.KnowledgeBaseID, query.HasCitations, startAt, endAt, (page-1)*pageSize, pageSize,
+	)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	response := &dto.ChatQualityFeedbackListResponse{
+		Items:    make([]dto.ChatQualityFeedbackItemResponse, 0, len(items)),
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}
+	for i := range items {
+		citations := []dto.CitationResponse{}
+		if len(items[i].Citations) > 0 {
+			if err := json.Unmarshal(items[i].Citations, &citations); err != nil {
+				return nil, apperror.Internal(err)
+			}
+		}
+		var fallback *dto.RerankFallbackResponse
+		if len(items[i].RerankFallback) > 0 {
+			var stored dto.RerankFallbackResponse
+			if err := json.Unmarshal(items[i].RerankFallback, &stored); err != nil {
+				return nil, apperror.Internal(err)
+			}
+			fallback = &stored
+		}
+		response.Items = append(response.Items, dto.ChatQualityFeedbackItemResponse{
+			MessageID:         items[i].MessageID.String(),
+			SessionID:         items[i].SessionID.String(),
+			SessionTitle:      items[i].SessionTitle,
+			KnowledgeBaseID:   items[i].KnowledgeBaseID.String(),
+			KnowledgeBaseName: items[i].KnowledgeBaseName,
+			Question:          items[i].Question,
+			Answer:            items[i].Answer,
+			Citations:         citations,
+			RerankFallback:    fallback,
+			CreatedAt:         items[i].CreatedAt,
+			FeedbackUpdatedAt: items[i].FeedbackUpdatedAt,
+		})
+	}
+	return response, nil
+}
+
+func (s *ChatService) validateQualityKnowledgeBase(ctx context.Context, userID uuid.UUID, knowledgeBaseID *uuid.UUID) error {
+	if knowledgeBaseID == nil {
+		return nil
+	}
+	kb, err := s.knowledgeBases.FindByIDAndOwner(ctx, *knowledgeBaseID, userID)
+	if err != nil {
+		return apperror.Internal(err)
+	}
+	if kb == nil {
+		return apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "knowledge base not found")
+	}
+	return nil
 }
 
 func (s *ChatService) ExportSession(ctx context.Context, userID, sessionID uuid.UUID) (*ExportFile, error) {

@@ -11,10 +11,10 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
 
-	"rag/backend/internal/apperror"
-	"rag/backend/internal/dto"
-	"rag/backend/internal/model"
-	"rag/backend/internal/repository"
+	"kbchat/backend/internal/apperror"
+	"kbchat/backend/internal/dto"
+	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/repository"
 )
 
 var defaultRetrievalConfig = dto.RetrievalConfig{

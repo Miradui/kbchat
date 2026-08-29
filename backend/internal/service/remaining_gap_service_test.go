@@ -16,9 +16,9 @@ import (
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
-	"rag/backend/internal/apperror"
-	"rag/backend/internal/dto"
-	"rag/backend/internal/model"
+	"kbchat/backend/internal/apperror"
+	"kbchat/backend/internal/dto"
+	"kbchat/backend/internal/model"
 )
 
 func TestChatMessageFeedbackPersistsAndIsOwnerScoped(t *testing.T) {
@@ -75,6 +75,105 @@ func TestChatMessageFeedbackPersistsAndIsOwnerScoped(t *testing.T) {
 	_, err = services.chats.SetMessageFeedback(ctx, owner.ID, assistantMessage.ID, "maybe")
 	assertAppErrorCode(t, err, "VALIDATION_ERROR")
 }
+
+func TestChatQualityOverviewAndNegativeFeedbackAreOwnerScoped(t *testing.T) {
+	services := newWorkspaceTestServices(t)
+	ctx := context.Background()
+	owner := createWorkspaceUser(t, services.db, "quality-owner")
+	other := createWorkspaceUser(t, services.db, "quality-other")
+	ownedKB := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "产品知识库", "private", time.Now())
+	otherKB := createWorkspaceKB(t, services.db, other.ID, uuid.Nil, "机密知识库", "private", time.Now())
+	ownedSession := createWorkspaceChatSession(t, services.db, owner.ID, ownedKB.ID, "退货政策")
+	otherSession := createWorkspaceChatSession(t, services.db, other.ID, otherKB.ID, "机密会话")
+
+	base := time.Now().UTC().Add(-time.Hour)
+	citations, err := json.Marshal([]dto.CitationResponse{{
+		DocumentID: "document-id",
+		ChunkID:    "chunk-id",
+		Filename:   "policy.pdf",
+		Content:    "三十天内可退货。",
+	}})
+	if err != nil {
+		t.Fatalf("marshal citations: %v", err)
+	}
+	fallback, err := json.Marshal(dto.RerankFallbackResponse{Used: true, Reason: "provider timeout"})
+	if err != nil {
+		t.Fatalf("marshal fallback: %v", err)
+	}
+	clientRequestID := uuid.New()
+	negative, positive := "negative", "positive"
+	feedbackAt := base.Add(3 * time.Minute)
+	messages := []model.ChatMessage{
+		{SessionID: ownedSession.ID, ClientRequestID: &clientRequestID, Role: "user", Content: "如何退货？", CreatedAt: base},
+		{SessionID: ownedSession.ID, ClientRequestID: &clientRequestID, Role: "assistant", Content: "请在三十天内申请。", Citations: datatypes.JSON(citations), RerankFallback: datatypes.JSON(fallback), FeedbackRating: &negative, FeedbackUpdatedAt: &feedbackAt, CreatedAt: base.Add(time.Minute)},
+		{SessionID: ownedSession.ID, Role: "user", Content: "需要发票吗？", CreatedAt: base.Add(4 * time.Minute)},
+		{SessionID: ownedSession.ID, Role: "assistant", Content: "当前资料无法确认。", FeedbackRating: &positive, FeedbackUpdatedAt: &feedbackAt, CreatedAt: base.Add(5 * time.Minute)},
+		{SessionID: ownedSession.ID, Role: "assistant", Content: "未评价回答", CreatedAt: base.Add(6 * time.Minute)},
+		{SessionID: otherSession.ID, Role: "assistant", Content: "不应泄露", FeedbackRating: &negative, FeedbackUpdatedAt: &feedbackAt, CreatedAt: base.Add(7 * time.Minute)},
+	}
+	if err := services.db.Create(&messages).Error; err != nil {
+		t.Fatalf("create quality messages: %v", err)
+	}
+
+	overview, err := services.chats.GetQualityOverview(ctx, owner.ID, dto.ChatQualityOverviewQuery{Period: "month"})
+	if err != nil {
+		t.Fatalf("quality overview: %v", err)
+	}
+	if overview.AnswerCount != 3 || overview.FeedbackCount != 2 || overview.PositiveFeedbackCount != 1 ||
+		overview.NegativeFeedbackCount != 1 || overview.WithoutCitationsCount != 2 {
+		t.Fatalf("unexpected overview counts: %#v", overview)
+	}
+	if overview.FeedbackCoverage != float64(2)/3 || overview.PositiveRate != 0.5 {
+		t.Fatalf("unexpected overview ratios: %#v", overview)
+	}
+
+	page, err := services.chats.ListNegativeFeedback(ctx, owner.ID, dto.ChatQualityFeedbackQuery{
+		Period:          "month",
+		KnowledgeBaseID: &ownedKB.ID,
+		HasCitations:    boolPointer(true),
+		Page:            1,
+		PageSize:        20,
+	})
+	if err != nil {
+		t.Fatalf("list negative feedback: %v", err)
+	}
+	if page.Total != 1 || len(page.Items) != 1 {
+		t.Fatalf("expected one owned negative answer, got %#v", page)
+	}
+	item := page.Items[0]
+	if item.MessageID != messages[1].ID.String() || item.Question != "如何退货？" || item.Answer != "请在三十天内申请。" {
+		t.Fatalf("unexpected feedback item: %#v", item)
+	}
+	if len(item.Citations) != 1 || item.Citations[0].Filename != "policy.pdf" || item.RerankFallback == nil || !item.RerankFallback.Used {
+		t.Fatalf("expected citations and fallback evidence, got %#v", item)
+	}
+
+	withoutCitations, err := services.chats.ListNegativeFeedback(ctx, owner.ID, dto.ChatQualityFeedbackQuery{
+		Period:       "month",
+		HasCitations: boolPointer(false),
+		Page:         1,
+		PageSize:     20,
+	})
+	if err != nil {
+		t.Fatalf("list negative feedback without citations: %v", err)
+	}
+	if withoutCitations.Total != 0 || len(withoutCitations.Items) != 0 {
+		t.Fatalf("expected citation filter to exclude the owned negative answer, got %#v", withoutCitations)
+	}
+
+	if err := services.db.Delete(&ownedSession).Error; err != nil {
+		t.Fatalf("soft delete owned session: %v", err)
+	}
+	afterDelete, err := services.chats.GetQualityOverview(ctx, owner.ID, dto.ChatQualityOverviewQuery{Period: "month"})
+	if err != nil {
+		t.Fatalf("quality overview after delete: %v", err)
+	}
+	if afterDelete.AnswerCount != 0 || afterDelete.FeedbackCoverage != 0 || afterDelete.PositiveRate != 0 {
+		t.Fatalf("deleted sessions and empty ratios must be excluded, got %#v", afterDelete)
+	}
+}
+
+func boolPointer(value bool) *bool { return &value }
 
 func TestChatSessionExportUsesOwnedMessagesAndCitations(t *testing.T) {
 	services := newWorkspaceTestServices(t)

@@ -12,8 +12,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"rag/backend/internal/model"
-	"rag/backend/internal/storage"
+	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/storage"
 )
 
 func TestDocumentDownloadAndPreviewUseConfiguredStorage(t *testing.T) {

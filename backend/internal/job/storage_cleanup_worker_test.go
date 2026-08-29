@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"rag/backend/internal/model"
+	"kbchat/backend/internal/model"
 )
 
 func TestStorageCleanupWorkerRetriesThenCompletes(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"rag/backend/internal/config"
+	"kbchat/backend/internal/config"
 )
 
 func Open(cfg config.Config) *redis.Client {

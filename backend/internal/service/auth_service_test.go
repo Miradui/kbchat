@@ -13,11 +13,11 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
-	"rag/backend/internal/auth"
-	"rag/backend/internal/config"
-	"rag/backend/internal/dto"
-	"rag/backend/internal/model"
-	"rag/backend/internal/repository"
+	"kbchat/backend/internal/auth"
+	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/dto"
+	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/repository"
 )
 
 func TestAuthConcurrentPasswordChangesCompareAndSwapCurrentHash(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"rag/backend/internal/auth"
-	"rag/backend/internal/config"
+	"kbchat/backend/internal/auth"
+	"kbchat/backend/internal/config"
 )
 
 const CurrentUserIDKey = "currentUserID"

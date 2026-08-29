@@ -5,7 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"rag/backend/internal/service"
+	"kbchat/backend/internal/service"
 )
 
 type ActivityHandler struct {

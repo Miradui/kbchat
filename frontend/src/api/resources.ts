@@ -6,6 +6,10 @@ import type {
   ChatFeedbackRating,
   ChatMessageFeedback,
   ChatMessageListResponse,
+  ChatQualityFeedbackListResponse,
+  ChatQualityFeedbackParams,
+  ChatQualityOverview,
+  ChatQualityOverviewParams,
   ChatSession,
   ChatSessionListParams,
   Citation,
@@ -634,6 +638,18 @@ export function setChatMessageFeedback(
     method: 'POST',
     body: { rating },
   });
+}
+
+export function getChatQualityOverview(
+  params: ChatQualityOverviewParams = {},
+): Promise<ChatQualityOverview> {
+  return apiRequest<ChatQualityOverview>(withQuery('/chat/quality/overview', params));
+}
+
+export function listNegativeChatFeedback(
+  params: ChatQualityFeedbackParams = {},
+): Promise<ChatQualityFeedbackListResponse> {
+  return apiRequest<ChatQualityFeedbackListResponse>(withQuery('/chat/quality/negative-feedback', params));
 }
 
 export function sendChatMessage(

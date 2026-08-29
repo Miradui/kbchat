@@ -5,10 +5,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"rag/backend/internal/apperror"
-	"rag/backend/internal/dto"
-	"rag/backend/internal/middleware"
-	"rag/backend/internal/service"
+	"kbchat/backend/internal/apperror"
+	"kbchat/backend/internal/dto"
+	"kbchat/backend/internal/middleware"
+	"kbchat/backend/internal/service"
 )
 
 type AuthHandler struct {

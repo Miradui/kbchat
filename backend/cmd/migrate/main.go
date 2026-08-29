@@ -13,8 +13,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
-	"rag/backend/internal/config"
-	"rag/backend/internal/logger"
+	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/logger"
 )
 
 func main() {

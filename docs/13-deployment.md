@@ -311,7 +311,7 @@ SEED_DISPLAY_NAME='Administrator' \
 
 ```ini
 [Unit]
-Description=RAG Knowledge Base Backend
+Description=kbchat Backend
 After=network-online.target docker.service
 Wants=network-online.target
 

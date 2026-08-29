@@ -5,10 +5,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"rag/backend/internal/apperror"
-	"rag/backend/internal/dto"
-	"rag/backend/internal/model"
-	"rag/backend/internal/repository"
+	"kbchat/backend/internal/apperror"
+	"kbchat/backend/internal/dto"
+	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/repository"
 )
 
 // Activity actions. These strings are part of the public API: the frontend maps

@@ -9,8 +9,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"rag/backend/internal/dto"
-	"rag/backend/internal/model"
+	"kbchat/backend/internal/dto"
+	"kbchat/backend/internal/model"
 )
 
 type KnowledgeBaseTagRepository struct {

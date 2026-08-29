@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"rag/backend/internal/document/parser"
+	"kbchat/backend/internal/document/parser"
 )
 
 func TestSplitPreservesHeadingPathMetadataAndContentPrefix(t *testing.T) {

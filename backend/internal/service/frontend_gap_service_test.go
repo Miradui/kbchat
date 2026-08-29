@@ -13,13 +13,13 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"rag/backend/internal/apperror"
-	"rag/backend/internal/auth"
-	"rag/backend/internal/config"
-	"rag/backend/internal/dto"
-	"rag/backend/internal/model"
-	"rag/backend/internal/repository"
-	"rag/backend/internal/retrieval"
+	"kbchat/backend/internal/apperror"
+	"kbchat/backend/internal/auth"
+	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/dto"
+	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/repository"
+	"kbchat/backend/internal/retrieval"
 )
 
 // assertAppError fails unless err is an apperror with the given public code.

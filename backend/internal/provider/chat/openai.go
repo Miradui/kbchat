@@ -14,8 +14,8 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
-	chatcore "rag/backend/internal/chat"
-	"rag/backend/internal/config"
+	chatcore "kbchat/backend/internal/chat"
+	"kbchat/backend/internal/config"
 )
 
 type OpenAICompatibleProvider struct {

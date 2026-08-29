@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"rag/backend/internal/model"
+	"kbchat/backend/internal/model"
 )
 
 func TestChunkRepositoryReplaceByDocumentRollsBackLaterBatchFailure(t *testing.T) {

@@ -9,8 +9,8 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
-	"rag/backend/internal/config"
-	titlecore "rag/backend/internal/title"
+	"kbchat/backend/internal/config"
+	titlecore "kbchat/backend/internal/title"
 )
 
 type OpenAICompatibleProvider struct {

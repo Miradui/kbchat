@@ -1,4 +1,4 @@
-module rag/backend
+module kbchat/backend
 
 go 1.25.0
 

@@ -8,7 +8,7 @@ import (
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	"rag/backend/internal/model"
+	"kbchat/backend/internal/model"
 )
 
 func TestAutoMigrateModelsIncludeOperationalTables(t *testing.T) {

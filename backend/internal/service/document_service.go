@@ -16,12 +16,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"rag/backend/internal/apperror"
-	"rag/backend/internal/config"
-	"rag/backend/internal/dto"
-	"rag/backend/internal/model"
-	"rag/backend/internal/repository"
-	"rag/backend/internal/storage"
+	"kbchat/backend/internal/apperror"
+	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/dto"
+	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/repository"
+	"kbchat/backend/internal/storage"
 )
 
 const (

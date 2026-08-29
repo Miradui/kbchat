@@ -11,7 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"rag/backend/internal/config"
+	"kbchat/backend/internal/config"
 )
 
 var ErrNotFound = errors.New("stored object not found")

@@ -4,6 +4,7 @@ import {
   Library,
   MessageSquareText,
   Plus,
+  ScanSearch,
   Tags,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -12,6 +13,7 @@ import { Link } from 'react-router-dom';
 export type AppSection =
   | 'home'
   | 'chat'
+  | 'quality'
   | 'knowledge-bases'
   | 'documents'
   | 'tags'
@@ -32,6 +34,7 @@ const groups: Array<{ label: string; items: NavItem[] }> = [
     items: [
       { to: '/home', label: '首页', section: 'home', icon: Home },
       { to: '/chat', label: 'AI 问答', section: 'chat', icon: MessageSquareText },
+      { to: '/quality', label: '质量运营', section: 'quality', icon: ScanSearch },
     ],
   },
   {

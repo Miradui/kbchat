@@ -9,8 +9,8 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"rag/backend/internal/model"
-	"rag/backend/internal/repository"
+	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/repository"
 )
 
 const (

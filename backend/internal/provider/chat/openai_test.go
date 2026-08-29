@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	chatcore "rag/backend/internal/chat"
-	"rag/backend/internal/config"
+	chatcore "kbchat/backend/internal/chat"
+	"kbchat/backend/internal/config"
 )
 
 func newOpenAIStreamTestProvider(serverURL string) *OpenAICompatibleProvider {

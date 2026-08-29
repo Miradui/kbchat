@@ -13,12 +13,12 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	chatcore "rag/backend/internal/chat"
-	"rag/backend/internal/config"
-	"rag/backend/internal/dto"
-	"rag/backend/internal/model"
-	chatprovider "rag/backend/internal/provider/chat"
-	"rag/backend/internal/repository"
+	chatcore "kbchat/backend/internal/chat"
+	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/dto"
+	"kbchat/backend/internal/model"
+	chatprovider "kbchat/backend/internal/provider/chat"
+	"kbchat/backend/internal/repository"
 )
 
 // streamingChatProvider is a fakeChatProvider that also implements

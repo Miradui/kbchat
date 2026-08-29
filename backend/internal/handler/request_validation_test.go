@@ -10,7 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"rag/backend/internal/middleware"
+	"kbchat/backend/internal/middleware"
 )
 
 func TestBatchHandlersReturnReadableInvalidBodyError(t *testing.T) {

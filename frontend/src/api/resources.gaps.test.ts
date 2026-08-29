@@ -4,8 +4,10 @@ import { apiBlobRequest, apiRequest, apiUploadRequest } from './client';
 import {
   exportChatSession,
   exportGlobalSearch,
+  getChatQualityOverview,
   getSystemCapabilities,
   listChatSessions,
+  listNegativeChatFeedback,
   listDocuments,
   setChatMessageFeedback,
   unarchiveChatSession,
@@ -81,6 +83,24 @@ describe('frontend gap resources', () => {
     });
     expect(apiBlobRequest).toHaveBeenCalledWith('/chat/sessions/session-1/export');
     expect(apiBlobRequest).toHaveBeenCalledWith('/search/export?q=%E9%80%80%E8%B4%A7&type=document');
+  });
+
+  it('loads quality overview and filtered negative feedback with encoded params', () => {
+    vi.mocked(apiRequest).mockResolvedValue({});
+
+    void getChatQualityOverview({ period: 'day', knowledgeBaseId: 'kb-1' });
+    void listNegativeChatFeedback({
+      period: 'month',
+      knowledgeBaseId: 'kb-1',
+      hasCitations: false,
+      page: 2,
+      pageSize: 10,
+    });
+
+    expect(apiRequest).toHaveBeenCalledWith('/chat/quality/overview?period=day&knowledgeBaseId=kb-1');
+    expect(apiRequest).toHaveBeenCalledWith(
+      '/chat/quality/negative-feedback?period=month&knowledgeBaseId=kb-1&hasCitations=false&page=2&pageSize=10',
+    );
   });
 
   it('uses the progress-aware upload transport', () => {

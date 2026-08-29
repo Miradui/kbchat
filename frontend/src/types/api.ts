@@ -542,9 +542,56 @@ export type ChatMessage = {
 export type ChatFeedbackRating = 'positive' | 'negative';
 
 export type ChatMessageFeedback = {
-  messageId: string;
-  rating: ChatFeedbackRating;
-  updatedAt: string;
+	messageId: string;
+	rating: ChatFeedbackRating;
+	updatedAt: string;
+};
+
+export type ChatQualityPeriod = 'day' | 'month';
+
+export type ChatQualityOverviewParams = {
+	period?: ChatQualityPeriod;
+	knowledgeBaseId?: string;
+};
+
+export type ChatQualityOverview = {
+	period: ChatQualityPeriod;
+	startAt: string;
+	endAt: string;
+	answerCount: number;
+	feedbackCount: number;
+	positiveFeedbackCount: number;
+	negativeFeedbackCount: number;
+	withoutCitationsCount: number;
+	feedbackCoverage: number;
+	positiveRate: number;
+};
+
+export type ChatQualityFeedbackParams = ChatQualityOverviewParams & {
+	hasCitations?: boolean;
+	page?: number;
+	pageSize?: number;
+};
+
+export type ChatQualityFeedbackItem = {
+	messageId: string;
+	sessionId: string;
+	sessionTitle: string;
+	knowledgeBaseId: string;
+	knowledgeBaseName: string;
+	question: string;
+	answer: string;
+	citations: Citation[];
+	rerankFallback: KnowledgeBaseRerankFallback | null;
+	createdAt: string;
+	feedbackUpdatedAt: string;
+};
+
+export type ChatQualityFeedbackListResponse = {
+	items: ChatQualityFeedbackItem[];
+	total: number;
+	page: number;
+	pageSize: number;
 };
 
 export type ChatMessageListResponse = {

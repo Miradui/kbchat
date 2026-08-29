@@ -8,8 +8,8 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
-	"rag/backend/internal/config"
-	"rag/backend/internal/model"
+	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/model"
 )
 
 func Open(cfg config.Config) (*gorm.DB, error) {

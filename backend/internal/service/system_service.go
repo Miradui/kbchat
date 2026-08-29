@@ -1,10 +1,10 @@
 package service
 
 import (
-	"rag/backend/internal/auth"
-	"rag/backend/internal/config"
-	"rag/backend/internal/dto"
-	"rag/backend/internal/retrieval"
+	"kbchat/backend/internal/auth"
+	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/dto"
+	"kbchat/backend/internal/retrieval"
 )
 
 type SystemService struct {

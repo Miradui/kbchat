@@ -7,12 +7,12 @@ import (
 
 	"go.uber.org/zap"
 
-	"rag/backend/internal/auth"
-	"rag/backend/internal/config"
-	"rag/backend/internal/database"
-	"rag/backend/internal/logger"
-	"rag/backend/internal/model"
-	"rag/backend/internal/repository"
+	"kbchat/backend/internal/auth"
+	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/database"
+	"kbchat/backend/internal/logger"
+	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/repository"
 )
 
 func main() {

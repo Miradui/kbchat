@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"rag/backend/internal/config"
-	corererank "rag/backend/internal/rerank"
+	"kbchat/backend/internal/config"
+	corererank "kbchat/backend/internal/rerank"
 )
 
 func TestOpenAICompatibleProviderRerankPostsDocumentsAndMapsScores(t *testing.T) {

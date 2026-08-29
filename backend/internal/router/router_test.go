@@ -12,13 +12,13 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
-	"rag/backend/internal/auth"
-	"rag/backend/internal/config"
-	"rag/backend/internal/dto"
-	"rag/backend/internal/logger"
-	"rag/backend/internal/model"
-	rerankprovider "rag/backend/internal/provider/rerank"
-	corererank "rag/backend/internal/rerank"
+	"kbchat/backend/internal/auth"
+	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/dto"
+	"kbchat/backend/internal/logger"
+	"kbchat/backend/internal/model"
+	rerankprovider "kbchat/backend/internal/provider/rerank"
+	corererank "kbchat/backend/internal/rerank"
 )
 
 func TestHealthz(t *testing.T) {

@@ -90,6 +90,53 @@ type ChatMessageFeedbackResponse struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+type ChatQualityOverviewQuery struct {
+	Period          string
+	KnowledgeBaseID *uuid.UUID
+}
+
+type ChatQualityOverviewResponse struct {
+	Period                string    `json:"period"`
+	StartAt               time.Time `json:"startAt"`
+	EndAt                 time.Time `json:"endAt"`
+	AnswerCount           int64     `json:"answerCount"`
+	FeedbackCount         int64     `json:"feedbackCount"`
+	PositiveFeedbackCount int64     `json:"positiveFeedbackCount"`
+	NegativeFeedbackCount int64     `json:"negativeFeedbackCount"`
+	WithoutCitationsCount int64     `json:"withoutCitationsCount"`
+	FeedbackCoverage      float64   `json:"feedbackCoverage"`
+	PositiveRate          float64   `json:"positiveRate"`
+}
+
+type ChatQualityFeedbackQuery struct {
+	Period          string
+	KnowledgeBaseID *uuid.UUID
+	HasCitations    *bool
+	Page            int
+	PageSize        int
+}
+
+type ChatQualityFeedbackItemResponse struct {
+	MessageID         string                  `json:"messageId"`
+	SessionID         string                  `json:"sessionId"`
+	SessionTitle      string                  `json:"sessionTitle"`
+	KnowledgeBaseID   string                  `json:"knowledgeBaseId"`
+	KnowledgeBaseName string                  `json:"knowledgeBaseName"`
+	Question          string                  `json:"question"`
+	Answer            string                  `json:"answer"`
+	Citations         []CitationResponse      `json:"citations"`
+	RerankFallback    *RerankFallbackResponse `json:"rerankFallback"`
+	CreatedAt         time.Time               `json:"createdAt"`
+	FeedbackUpdatedAt time.Time               `json:"feedbackUpdatedAt"`
+}
+
+type ChatQualityFeedbackListResponse struct {
+	Items    []ChatQualityFeedbackItemResponse `json:"items"`
+	Total    int64                             `json:"total"`
+	Page     int                               `json:"page"`
+	PageSize int                               `json:"pageSize"`
+}
+
 type ChatMessageListResponse struct {
 	Items []ChatMessageResponse `json:"items"`
 }

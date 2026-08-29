@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"rag/backend/internal/model"
+	"kbchat/backend/internal/model"
 )
 
 func TestWorkerRetriesFailedJobBeforeMarkingDocumentFailed(t *testing.T) {

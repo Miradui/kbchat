@@ -11,13 +11,13 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
-	"rag/backend/internal/apperror"
-	chatcore "rag/backend/internal/chat"
-	"rag/backend/internal/config"
-	"rag/backend/internal/dto"
-	"rag/backend/internal/model"
-	"rag/backend/internal/repository"
-	titlecore "rag/backend/internal/title"
+	"kbchat/backend/internal/apperror"
+	chatcore "kbchat/backend/internal/chat"
+	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/dto"
+	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/repository"
+	titlecore "kbchat/backend/internal/title"
 )
 
 type fakeChatProvider struct {

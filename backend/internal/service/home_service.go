@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"rag/backend/internal/dto"
+	"kbchat/backend/internal/dto"
 )
 
 // HomeSummaryItemLimit is how many rows each home list carries. The server owns

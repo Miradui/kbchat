@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"rag/backend/internal/config"
+	"kbchat/backend/internal/config"
 )
 
 func TestOpenAICompatibleProviderRejectsDuplicateResponseIndex(t *testing.T) {

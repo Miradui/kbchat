@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"rag/backend/internal/model"
+	"kbchat/backend/internal/model"
 )
 
 const defaultStorageCleanupLeaseDuration = 5 * time.Minute

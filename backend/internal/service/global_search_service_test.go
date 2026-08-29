@@ -8,8 +8,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"rag/backend/internal/apperror"
-	"rag/backend/internal/dto"
+	"kbchat/backend/internal/apperror"
+	"kbchat/backend/internal/dto"
 )
 
 func TestGlobalSearchReturnsFairStablePageAndTotal(t *testing.T) {

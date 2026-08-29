@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"rag/backend/internal/dto"
+	"kbchat/backend/internal/dto"
 )
 
 func TestKnowledgeBaseTagsCRUDAndUsageRules(t *testing.T) {

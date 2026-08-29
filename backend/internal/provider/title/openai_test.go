@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"rag/backend/internal/config"
-	titlecore "rag/backend/internal/title"
+	"kbchat/backend/internal/config"
+	titlecore "kbchat/backend/internal/title"
 )
 
 func TestOpenAICompatibleProviderSummarizesTitle(t *testing.T) {

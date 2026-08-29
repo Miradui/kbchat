@@ -6,7 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"rag/backend/internal/apperror"
+	"kbchat/backend/internal/apperror"
 )
 
 func RespondError(c *gin.Context, err error) {

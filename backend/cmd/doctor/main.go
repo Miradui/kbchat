@@ -6,10 +6,10 @@ import (
 
 	"go.uber.org/zap"
 
-	"rag/backend/internal/cache"
-	"rag/backend/internal/config"
-	"rag/backend/internal/database"
-	"rag/backend/internal/logger"
+	"kbchat/backend/internal/cache"
+	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/database"
+	"kbchat/backend/internal/logger"
 )
 
 func main() {

@@ -5,7 +5,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"rag/backend/internal/config"
+	"kbchat/backend/internal/config"
 )
 
 func New(cfg config.Config) *zap.Logger {

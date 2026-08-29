@@ -9,7 +9,7 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
-	"rag/backend/internal/config"
+	"kbchat/backend/internal/config"
 )
 
 type OpenAICompatibleProvider struct {

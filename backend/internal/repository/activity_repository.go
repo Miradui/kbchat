@@ -6,7 +6,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"rag/backend/internal/model"
+	"kbchat/backend/internal/model"
 )
 
 type ActivityRepository struct {

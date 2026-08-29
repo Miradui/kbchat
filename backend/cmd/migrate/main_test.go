@@ -116,3 +116,20 @@ func TestDocumentJobProgressMigrationCanBeReapplied(t *testing.T) {
 		}
 	}
 }
+
+func TestChatQualityFeedbackIndexMigrationCanBeReapplied(t *testing.T) {
+	sqlBytes, err := os.ReadFile("../../migrations/017_chat_quality_feedback_index.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	sql := string(sqlBytes)
+	for _, fragment := range []string{
+		"CREATE INDEX IF NOT EXISTS idx_chat_messages_negative_feedback",
+		"feedback_updated_at DESC",
+		"WHERE role = 'assistant' AND feedback_rating = 'negative'",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Fatalf("expected migration to contain %q", fragment)
+		}
+	}
+}

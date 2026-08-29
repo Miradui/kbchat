@@ -7,9 +7,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"rag/backend/internal/apperror"
-	"rag/backend/internal/config"
-	"rag/backend/internal/dto"
+	"kbchat/backend/internal/apperror"
+	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/dto"
 )
 
 func TestDocumentBatchOperationsReturnReadableEmptySelectionError(t *testing.T) {

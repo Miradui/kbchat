@@ -9,18 +9,18 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
-	"rag/backend/internal/config"
-	"rag/backend/internal/handler"
-	"rag/backend/internal/middleware"
-	chatprovider "rag/backend/internal/provider/chat"
-	embeddingprovider "rag/backend/internal/provider/embedding"
-	rerankprovider "rag/backend/internal/provider/rerank"
-	titleprovider "rag/backend/internal/provider/title"
-	"rag/backend/internal/repository"
-	"rag/backend/internal/rerank"
-	"rag/backend/internal/retrieval"
-	"rag/backend/internal/service"
-	"rag/backend/internal/storage"
+	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/handler"
+	"kbchat/backend/internal/middleware"
+	chatprovider "kbchat/backend/internal/provider/chat"
+	embeddingprovider "kbchat/backend/internal/provider/embedding"
+	rerankprovider "kbchat/backend/internal/provider/rerank"
+	titleprovider "kbchat/backend/internal/provider/title"
+	"kbchat/backend/internal/repository"
+	"kbchat/backend/internal/rerank"
+	"kbchat/backend/internal/retrieval"
+	"kbchat/backend/internal/service"
+	"kbchat/backend/internal/storage"
 )
 
 func New(cfg config.Config, db *gorm.DB, logger *zap.Logger) *gin.Engine {
@@ -198,6 +198,8 @@ func NewWithStorage(cfg config.Config, db *gorm.DB, logger *zap.Logger, fileStor
 	protected.POST("/chat/sessions/:id/messages/:messageId/regenerate", chatHandler.RegenerateMessage)
 	protected.GET("/chat/sessions/:id/export", chatHandler.ExportSession)
 	protected.POST("/chat/messages/:messageId/feedback", chatHandler.SetMessageFeedback)
+	protected.GET("/chat/quality/overview", chatHandler.QualityOverview)
+	protected.GET("/chat/quality/negative-feedback", chatHandler.ListNegativeFeedback)
 	protected.GET("/search", globalSearchHandler.Search)
 	protected.GET("/search/suggest", globalSearchHandler.Suggest)
 	protected.GET("/search/export", globalSearchHandler.Export)

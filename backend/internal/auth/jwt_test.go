@@ -7,7 +7,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
-	"rag/backend/internal/config"
+	"kbchat/backend/internal/config"
 )
 
 func TestGenerateTokenRejectsUnsafeJWTSecret(t *testing.T) {
