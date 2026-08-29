@@ -67,6 +67,17 @@ func newWorkspaceTestServices(t *testing.T) workspaceTestServices {
 	); err != nil {
 		t.Fatalf("auto migrate: %v", err)
 	}
+	// AutoMigrate drops the WHERE clause of the partial index from
+	// migrations/018_chat_message_intent_and_retrieval_query.sql, so create it
+	// explicitly: it is what keeps rewrite-cluster lookups off conversation and
+	// unclassified answers.
+	if err := db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_chat_messages_retrieval_query_norm
+		ON chat_messages(session_id, retrieval_query_norm)
+		WHERE role = 'assistant' AND retrieval_query_norm IS NOT NULL
+	`).Error; err != nil {
+		t.Fatalf("create chat message retrieval query index: %v", err)
+	}
 
 	kbRepo := repository.NewKnowledgeBaseRepository(db)
 	categoryRepo := repository.NewKnowledgeBaseCategoryRepository(db)

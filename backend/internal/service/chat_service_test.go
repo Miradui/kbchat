@@ -644,6 +644,16 @@ func newChatServiceTestDB(t *testing.T) *gorm.DB {
 	`).Error; err != nil {
 		t.Fatalf("create chat message idempotency index: %v", err)
 	}
+	// Same reason for the retrieval-query index from
+	// migrations/018_chat_message_intent_and_retrieval_query.sql: the WHERE clause
+	// is what keeps rewrite-cluster lookups off conversation and unclassified rows.
+	if err := db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_chat_messages_retrieval_query_norm
+		ON chat_messages(session_id, retrieval_query_norm)
+		WHERE role = 'assistant' AND retrieval_query_norm IS NOT NULL
+	`).Error; err != nil {
+		t.Fatalf("create chat message retrieval query index: %v", err)
+	}
 	return db
 }
 
