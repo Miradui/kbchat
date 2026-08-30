@@ -669,6 +669,41 @@ pageSize
 
 `errorMessage` 只返回用户可读的业务提示。模型配置、网络、文件系统等原始技术错误保留在服务端日志和内部任务记录中，不得通过公开 DTO 返回。
 
+文档列表和详情响应还包含错误分类、版本关系与过期提示字段：
+
+```json
+{
+  "errorCode": "empty_content",
+  "supersededById": null,
+  "supersededAt": null,
+  "isStale": false,
+  "staleAfterDays": 180
+}
+```
+
+`errorCode` 是封闭集合，与 `backend/migrations/019_document_versions_and_answer_status.sql`
+的 CHECK 约束一一对应：
+
+| 值 | 含义 |
+| --- | --- |
+| `unsupported_type` | 格式不受支持。集合内保留但处理阶段不会产生：上传校验先返回 400 |
+| `corrupt_file` | 容器本身无法解析（截断的 PDF 等） |
+| `encoding_invalid` | 文本编码不是合法 UTF-8 |
+| `empty_content` | 解析成功但没有可提取文字（扫描件、纯图片 PDF） |
+| `embedding_failed` | 向量化调用失败，文件本身无问题 |
+| `storage_failed` | 读取对象存储失败 |
+| `cancelled` | 任务被取消 |
+| `internal` | 未识别的错误。**不猜具体原因**：错误的具体分类会让用户去修错的地方 |
+
+未失败的文档不返回 `errorCode`（`omitempty`）；019 之前记录的失败也没有该字段，客户端必须
+能回落到中性文案。
+
+`isStale` 只是展示提示，不是判断：文档超过 `staleAfterDays` 没有更新即为 true。它**不影响
+检索**，过期文档照常被检索和引用。`staleAfterDays` 回显服务端阈值（`STALE_DOCUMENT_AFTER_DAYS`，
+默认 180），`0` 表示该提示在服务端关闭。
+
+`supersededById` 非空表示这一行是历史版本，已被该 id 的文档取代。
+
 ### POST /documents/batch-delete
 
 批量软删除当前用户拥有的文档，采用 all-or-nothing 语义。
@@ -718,6 +753,8 @@ field: file
 
 内部复用知识库文档上传流程，仍必须校验目标知识库 owner。
 
+支持 `allowDuplicate` 表单字段，语义与 `POST /knowledge-bases/:kbId/documents` 一致。
+
 ### POST /knowledge-bases/:kbId/documents
 
 请求：
@@ -741,6 +778,41 @@ field: file
 ```
 
 上传成功后必须创建文档处理任务。
+
+**重复内容检测**。上传按 SHA-256 内容哈希在同一知识库内查重，命中时返回 409：
+
+```json
+{
+  "error": {
+    "code": "DOCUMENT_DUPLICATE_CONTENT",
+    "message": "知识库中已存在内容相同的文档",
+    "details": {
+      "existingDocumentId": "document_uuid",
+      "existingFilename": "policy.md",
+      "existingStatus": "completed",
+      "existingUploadedAt": "2026-06-08T00:00:00Z"
+    }
+  }
+}
+```
+
+按内容哈希而不是文件名：改名重传是最常见的重复情形，按名字查重会漏掉它；同名但内容不同是
+正常的版本更新，按名字查重会误报。
+
+409 而不是 400：请求本身是合法的，服务端只是基于知识库当前状态拒绝，同一个请求带上
+`allowDuplicate` 就会成功。`details` 点名冲突文档而不只是报告"存在重复"，因为客户端要据此
+让用户选择替换还是保留两份。**`storagePath` 不出现在 `details` 里**：那是部署拓扑，渲染
+对话框不需要它。
+
+用户选择保留两份时，重传同一文件并带上表单字段：
+
+```text
+field: allowDuplicate=true
+```
+
+只有字面量 `true` 生效，其他值按默认处理（拒绝）。选择替换时改用
+`POST /documents/:id/replace`。服务端不会自动替换：用户可能只是重复点了上传，静默替换会在
+没有确认的情况下让旧文档的 chunk 消失。
 
 上传传输进度由前端通过 `XMLHttpRequest.upload.onprogress` 的 `loaded / total`
 字节计算真实百分比；接口本身不新增进度字段。传输达到 100% 只表示 multipart
@@ -874,6 +946,28 @@ Content-Disposition: attachment
 ### POST /documents/:id/reprocess
 
 安全排队重处理任务。旧 chunks 会保留到新 Embedding 全部成功并事务替换；活动任务复用和 worker 收尾窗口的后继任务语义与批量接口一致。
+
+### POST /documents/:id/replace
+
+用新文件替换已有文档，并留下版本链。请求为 multipart/form-data：
+
+```text
+field: file
+```
+
+成功返回 **201** 和新文档（结构与 `GET /documents/:id` 相同）：替换产生的是一个有自己 id 的
+新文档，客户端必须跟着新 id 看处理进度。新文档继承原文档的 `knowledgeBaseId`，文件类型与
+大小按新文件计算。
+
+替换是"新建一份 + 归档旧的"，不是原地覆盖。原地覆盖会让一次失败的重新解析毁掉本来可用的
+文档：旧 chunk 已删、新 chunk 没建出来，知识库直接少一块内容。新文档走完整处理流程，成功
+建出来之后才把旧文档标记为被取代（`supersededById` / `supersededAt`）。旧文档保留，可追溯，
+它的 chunk 也不会被这个接口删除。
+
+版本链只有一层活动版本：已经被替换过的文档再次替换返回 409 `DOCUMENT_ALREADY_SUPERSEDED`，
+客户端应改为替换最新版本。
+
+替换不做重复内容检测——用户已经明确表达了替换意图。
 
 ### GET /documents/:id/chunks
 
@@ -1387,6 +1481,7 @@ assistant 消息为 `{ "messageId", "rating", "updatedAt" }`。消息列表、�
     "content": "差旅报销通常需要提交发票、行程单和审批单。",
     "citations": [],
     "feedback": null,
+    "answerStatus": "answered",
     "createdAt": "2026-07-26T10:00:01Z"
   },
   "answer": "差旅报销通常需要提交发票、行程单和审批单。",
@@ -1404,6 +1499,26 @@ assistant 消息为 `{ "messageId", "rating", "updatedAt" }`。消息列表、�
   "rerankFallback": null
 }
 ```
+
+`answerStatus` 是封闭集合，值域由 migration 019 的 CHECK 约束固定：
+
+| 值 | 含义 | 用户该做什么 |
+| --- | --- | --- |
+| `answered` | 正常回答 | — |
+| `no_basis` | 知识型提问，检索成功但没有命中，用固定拒答文案 | 补充相关文档 |
+| `retrieval_failed` | 检索本身失败（向量化失败、DB 失败） | 稍后重试；与知识库资料无关 |
+| `model_refused` | 有引用但模型仍然拒答 | 与知识库资料是否齐全无关 |
+
+user 消息恒为 `null`。**019 之前的 assistant 消息也是 `null`**：客户端必须把 `null` 当作
+「未知」而不是 `answered`，否则会静默地把历史回答重新标注一遍。历史数据不回填，理由见
+`GET /chat/quality/knowledge-gaps`。
+
+`model_refused` 依赖模型遵从 system prompt 里的固定标记：识别不到标记就算 `answered`。这是
+故意的取舍——启发式会把「根据资料，X 不适用于 Y」这种正常回答误判成拒答，宁可少报不可误报。
+因此这一类**天然偏少报**，计数是下限而不是真实值。
+
+`retrieval_failed` 是本阶段新增的行为：这种情况此前直接冒泡成 HTTP 错误，会话里什么都不留，
+用户刷新后连自己问过什么都看不到。现在先写一条带用户可读文案的 assistant 消息，再返回错误。
 
 `clientRequestId` 必须是 UUID，幂等作用域为当前 session。同一 session 内重复提交相同 `clientRequestId` 和相同 `content` 时，服务端只持久化一对 user/assistant 消息，并始终返回这对消息；已存在完整消息对的后续请求不会再次调用模型。同一 ID 对应不同内容时返回 `409 IDEMPOTENCY_KEY_REUSED`。Provider 或事务在消息落库前失败时，客户端可复用原 ID 重试。两个同时到达且都早于首次落库的请求可能各自调用一次 Provider，但唯一约束会阻止重复消息落库；若业务要求 Provider 调用也全局至多一次，需要另行引入持久化请求状态与并发协调机制。
 
@@ -1625,18 +1740,30 @@ MVP 语义：
 返回知识库回答不好的问题，供运营决定补哪些资料。
 
 查询参数：`period`、`knowledgeBaseId`、`category`、`page`（默认 1）、`pageSize`
-（默认 20，上限 100）。`category` 只接受 `no_citations`、`repeated_rewrite`，或不传
-（等于两类合并）。传入其他值返回 `VALIDATION_ERROR`，不会退化成「全部」——把未知筛选
-条件当成全部，会让调用方看到一个并非自己请求的列表。
+（默认 20，上限 100）。`category` 只接受 `no_citations`、`retrieval_failed`、
+`model_refused`、`repeated_rewrite`，或不传（等于四类合并）。传入其他值返回
+`VALIDATION_ERROR`，不会退化成「全部」——把未知筛选条件当成全部，会让调用方看到一个并非
+自己请求的列表。
 
-两个类别：
+四个类别，前三类来自 `chat_messages.answer_status`（migration 019），第四类是聚类：
 
-1. `no_citations`：`intent = 'knowledge_base'` 且 citations 为空的单条回答。对知识型
-   提问，「检索不到内容」和「依据不足所以拒答」是同一件事：citations 由 rerank 结果推导，
-   固定拒答话术恰好在结果为空时使用，所以这里不重复拆成两类。
-2. `repeated_rewrite`：同一会话内 `retrieval_query_norm` 相同的回答被分到一组，组内
+1. `no_citations`：`answer_status = 'no_basis'`，即知识型提问检索成功但没有命中，用了固定
+   拒答文案。**补文档能解决。**
+2. `retrieval_failed`：`answer_status = 'retrieval_failed'`，检索本身失败（向量化失败、DB
+   失败）。**补文档解决不了**，要查的是服务状态，所以必须和上一类分开。
+3. `model_refused`：`answer_status = 'model_refused'`，有引用但模型仍然拒答。同样与知识库
+   资料是否齐全无关。
+4. `repeated_rewrite`：同一会话内 `retrieval_query_norm` 相同的回答被分到一组，组内
    条数 >= 2 才算一个缺口。归一化会去掉大小写、标点和空白，所以「退货 政策」和
    「退货政策」属于同一组（中文分词空格不稳定，保留空白会把同一个问题拆成两组）。
+
+不传 `category` 时四类**顺序拼接**返回，不按时间交错：前三类是单条回答，第四类是聚类，
+不是可比较的单位，按时间混排会让分页里出现语义不一致的相邻行。
+
+`answer_status` 是 019 之后才写入的，**019 之前的行没有状态**。这些行留在 `no_citations`
+里，所以 `retrievalFailedTotal` / `modelRefusedTotal` 为 0 只表示「尚未观察到」，不表示
+「从未发生」。历史数据不回填：无法从已有列推断当时到底是检索失败还是没有命中，猜出来的
+分类比空着更糟。
 
 `repeated_rewrite` 只统计 `client_request_id IS NOT NULL` 的回答，即排除 regenerate：
 只有发送路径会写 `client_request_id`，为空说明用户是在同一个问题上要求重新生成，而不是
@@ -1678,6 +1805,8 @@ MVP 语义：
   "page": 1,
   "pageSize": 20,
   "noCitationsTotal": 1,
+  "retrievalFailedTotal": 0,
+  "modelRefusedTotal": 0,
   "repeatedRewriteTotal": 1
 }
 ```
@@ -1691,8 +1820,11 @@ MVP 语义：
   大小写、标点和空白，取任意一条都能代表，`MIN` 只是让结果确定。
 - `occurrenceCount`：`no_citations` 恒为 1；`repeated_rewrite` 为组内回答条数。
 - `ungroundedCount`：其中 citations 为空的条数。
-- `noCitationsTotal` / `repeatedRewriteTotal`：无论请求哪个 `category` 都返回，方便调用
-  方标注筛选器而不必再发一次请求。
+- `messageId`：`retrieval_failed` 与 `model_refused` 同 `no_citations`，是具体回答 ID。
+- `occurrenceCount`：`retrieval_failed` 与 `model_refused` 同 `no_citations`，恒为 1。
+- `noCitationsTotal` / `retrievalFailedTotal` / `modelRefusedTotal` /
+  `repeatedRewriteTotal`：无论请求哪个 `category` 都返回，方便调用方标注筛选器而不必再发
+  一次请求。后两个计数只覆盖 019 之后的数据，见上文。
 
 排序与分页：`no_citations` 按 `created_at DESC, id DESC`；`repeated_rewrite` 按
 `last_seen_at DESC, session_id DESC, retrieval_query_norm ASC`。两者都以完整的组键或
@@ -1965,3 +2097,13 @@ OpenAI 兼容接口里没有免费的 ping。为了检查而发一次 completion
 - 新增 `PUT /knowledge-bases/workspace-preference`
 - 当前批量接口仅覆盖知识库工作台主操作，且全部按 owner 维度校验
 - 当前批量接口采用 all-or-nothing 语义，不返回部分成功结果
+
+## P2 首次使用与知识库质量
+
+- 新增 `POST /documents/:id/replace`（201 + 新文档，旧文档标记 `supersededById`）
+- `POST /documents` 与 `POST /knowledge-bases/:kbId/documents` 新增 `allowDuplicate` 表单字段
+- 内容重复返回 409 `DOCUMENT_DUPLICATE_CONTENT`，`details` 点名冲突文档
+- 替换已被替换过的文档返回 409 `DOCUMENT_ALREADY_SUPERSEDED`
+- 文档响应新增 `errorCode`、`supersededById`、`supersededAt`、`isStale`、`staleAfterDays`
+- 会话消息新增 `answerStatus`，`GET /chat/knowledge-gaps` 的 `category` 扩展到四类
+- `errorCode` 与 `answerStatus` 都是封闭集合，值域由 migration 019 的 CHECK 约束固定

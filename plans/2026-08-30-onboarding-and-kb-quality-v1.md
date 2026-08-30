@@ -87,86 +87,86 @@ Y"误判成拒答。改为在 system prompt 里要求模型在无法作答时输
 
 ## Implementation Plan
 
-1. [ ] **migration 019**：`documents` 加 `content_hash`、`superseded_by_id`、
+1. [x] **migration 019**：`documents` 加 `content_hash`、`superseded_by_id`、
    `superseded_at`、`error_code`；`chat_messages` 加 `answer_status` 及 CHECK 约束；
    为 `(knowledge_base_id, content_hash)` 建部分唯一索引以外的普通索引（不建唯一索引：
    用户可以显式选择保留两份）。同步 `model` 结构体。
    *Rationale*：迁移是 schema 的唯一真相来源，GORM 不 AutoMigrate 既有结构。
    *Affected*：`backend/migrations/019_*.sql`、`internal/model/models.go`。
 
-2. [ ] **上传时计算内容哈希**：在 `SaveKnowledgeBaseFile` 的流上算 SHA-256，写入
+2. [x] **上传时计算内容哈希**：在 `SaveKnowledgeBaseFile` 的流上算 SHA-256，写入
    `content_hash`。
    *Rationale*：边写边算，不额外读一遍文件；哈希必须在建 document 之前拿到。
    *Affected*：`internal/service/document_service.go`、`internal/storage/`。
 
-3. [ ] **重复检测 + 409**：新增 `DocumentRepository.FindByContentHash`（带 owner 校
+3. [x] **重复检测 + 409**：新增 `DocumentRepository.FindByContentHash`（带 owner 校
    验），`Upload` 命中且未带 `allowDuplicate` 时返回 `DOCUMENT_DUPLICATE_CONTENT`，
    payload 带冲突文档信息。命中后必须清理已写入的对象和存储预留。
    *Rationale*：不清理会在每次重复上传时泄漏一个孤儿对象。
    *Affected*：`document_service.go`、`document_repository.go`、`dto/document.go`、
    `handler/document_handler.go`。
 
-4. [ ] **替换接口**：`POST /knowledge-bases/:id/documents/:documentId/replace`，上传新
+4. [x] **替换接口**：`POST /knowledge-bases/:id/documents/:documentId/replace`，上传新
    文件、走完整处理、成功后把旧文档标记 superseded。
    *Rationale*：新建+归档而不是原地覆盖，一次失败的解析不会毁掉原本可用的内容。
    *Affected*：`document_service.go`、`document_repository.go`、`router.go`、
    `handler/document_handler.go`。
 
-5. [ ] **解析异常分类**：processor/parser 错误映射到封闭 `errorCode` 集合
+5. [x] **解析异常分类**：processor/parser 错误映射到封闭 `errorCode` 集合
    （`unsupported_type`、`corrupt_file`、`encoding_invalid`、`empty_content`、
    `embedding_failed`、`storage_failed`、`internal`），写入 `documents.error_code`。
    *Rationale*：用户需要的是"这个文件能怎么修"，不是 `parse pdf page 3: EOF`。
    *Affected*：`internal/document/processor/`、`internal/document/parser/`、
    `repository/document_repository.go`、`dto/document.go`。
 
-6. [ ] **过期提醒**：`STALE_DOCUMENT_AFTER_DAYS` 配置（默认 180，0 关闭），
+6. [x] **过期提醒**：`STALE_DOCUMENT_AFTER_DAYS` 配置（默认 180，0 关闭），
    `DocumentResponse` 增加 `staleAfterDays` 与 `isStale`。
    *Rationale*：阈值来自配置而不是硬编码，前后端用同一个值，不会漂移。
    *Affected*：`internal/config/config.go`、`dto/document.go`、`document_service.go`。
 
-7. [ ] **answerStatus 落库**：`generatedChatAnswer` 增加 `answerStatus`，在
+7. [x] **answerStatus 落库**：`generatedChatAnswer` 增加 `answerStatus`，在
    `applyGeneratedProvenance` 这个单一写入点写库；`no_basis` 与 `answered` 先接上。
    *Rationale*：沿用 018 的单一写入点约定，分散写入迟早漂移出不自洽的行。
    *Affected*：`internal/service/chat_service.go`。
 
-8. [ ] **检索失败也落库**：检索出错时写一条 `retrieval_failed` 的 assistant 消息再返回
+8. [x] **检索失败也落库**：检索出错时写一条 `retrieval_failed` 的 assistant 消息再返回
    错误，附带用户可读文案。
    *Rationale*：现在这种情况会话里什么都不留，用户刷新后看不到自己问过什么。
    *Affected*：`chat_service.go`。
 
-9. [ ] **模型拒答标记**：system prompt 增加固定标记要求，服务端识别后归类为
+9. [x] **模型拒答标记**：system prompt 增加固定标记要求，服务端识别后归类为
    `model_refused` 并把标记从可见文案剥掉。
    *Rationale*：启发式会把"根据资料，X 不适用于 Y"误判成拒答；识别不到标记就算
    `answered`，宁可少报不可误报。
    *Affected*：`chat_service.go`（prompt 构建与回答后处理）。
 
-10. [ ] **知识缺口按 answerStatus 分类**：`ListKnowledgeGaps` 用 `answer_status` 区分三
+10. [x] **知识缺口按 answerStatus 分类**：`ListKnowledgeGaps` 用 `answer_status` 区分三
     种情况，更新 `chat_service.go:461-466` 那段注释（它现在说这是 P2 待办）。
     *Rationale*：交付 4 的可观测出口就是这个列表，否则新状态没人看得见。
     *Affected*：`chat_service.go`、`repository/chat_repository.go`、`dto/chat.go`。
 
-11. [ ] **后端测试**：哈希稳定性与重复检测（含孤儿对象清理断言）、替换成功与失败路径、
+11. [x] **后端测试**：哈希稳定性与重复检测（含孤儿对象清理断言）、替换成功与失败路径、
     错误分类映射表、过期阈值边界（含 0 关闭）、四种 answerStatus 各自落库、检索失败留
     痕、拒答标记被剥离且不误报。
 
-12. [ ] **前端：上传完成引导**。文档处理完成后提示可开始提问，带跳转到问答的入口。
+12. [x] **前端：上传完成引导**。文档处理完成后提示可开始提问，带跳转到问答的入口。
     *Affected*：`frontend/src/pages/Documents/DocumentsPage.tsx`。
 
-13. [ ] **前端：重复文件对话框**。409 时弹窗给"替换"与"保留两份"两个选择。
+13. [x] **前端：重复文件对话框**。409 时弹窗给"替换"与"保留两份"两个选择。
     *Affected*：`DocumentsPage.tsx`、`src/api/resources.ts`、`src/types/api.ts`。
 
-14. [ ] **前端：解析异常与过期提示**。按 `errorCode` 显示中文可行动文案（未知代码回落中
+14. [x] **前端：解析异常与过期提示**。按 `errorCode` 显示中文可行动文案（未知代码回落中
     性文案），过期文档显示提示。
     *Affected*：`DocumentsPage.tsx`、知识库概览页。
 
-15. [ ] **前端：三种失败状态区分**。聊天里按 `answerStatus` 显示不同提示，质量页知识缺口
+15. [x] **前端：三种失败状态区分**。聊天里按 `answerStatus` 显示不同提示，质量页知识缺口
     按新分类展示。
     *Affected*：`pages/Chat/`、`pages/Quality/QualityPage.tsx`。
 
-16. [ ] **前端测试**：重复对话框两个分支、错误代码映射含未知回落、过期提示阈值、三种
+16. [x] **前端测试**：重复对话框两个分支、错误代码映射含未知回落、过期提示阈值、三种
     answerStatus 的渲染差异、上传完成引导出现时机。
 
-17. [ ] **文档**：`04-api-design.md` 记录新字段与新接口、封闭集合、409 契约；roadmap 标记
+17. [x] **文档**：`04-api-design.md` 记录新字段与新接口、封闭集合、409 契约；roadmap 标记
     完成；handoff 记录 019 不回填的理由、替换的语义、拒答标记的局限（依赖模型遵从提示，
     不遵从时会少报）。
 

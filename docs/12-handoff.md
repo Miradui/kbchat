@@ -783,3 +783,112 @@ SQLite 把时间存成 RFC3339 文本，驱动绑定的是带本地偏移量的�
   以及断开某一项后对应行变成 `down` 且 reason 合理。
 - migration 018（上一阶段）仍未对真实 PostgreSQL 执行过。
 - `dev` 分支尚未推送到 origin，也未获授权推送。
+
+## Onboarding and Knowledge Base Quality (2026-08-31)
+
+本轮在 `dev` 分支完成 `docs/15-product-improvement-roadmap.md` 中「P2 首次使用与知识库
+质量」的四项交付：导入后的引导、重复内容检测、文档版本替换与过期/解析异常提示、回答无
+依据的三分类。下一项是「P2 权限与协作」。
+
+新增数据库列由 `backend/migrations/019_document_versions_and_answer_status.sql` 引入：
+`documents.error_code`、`superseded_by_id`、`superseded_at`、`content_hash`，以及
+`chat_messages.answer_status`。两个封闭集合（`error_code` 8 值、`answer_status` 4 值）在
+Go 常量和 SQL CHECK 里各写一份，字段口径见 `docs/04-api-design.md`。
+
+### 019 为什么不回填
+
+`error_code` 和 `answer_status` 对历史行留空，没有 UPDATE 语句去填。
+
+原因是现有列里没有能反推出结论的信息。`documents.error_message` 是自由文本，把它映射到
+8 值封闭集合等于对生产数据做正则猜测，猜错的那部分会永久地以「确定的分类」呈现给用户。
+`chat_messages` 更彻底：里面没有任何字段能区分「知识库里没有依据」、「检索调用失败」和
+「模型拒答」——三种情况过去都只留下一段没有引用的回答。
+
+由此产生的读取口径必须被知道：`GET /chat/quality/knowledge-gaps` 里的
+`retrievalFailedTotal` 和 `modelRefusedTotal` 为 0 表示**尚未观测到**，不表示历史上没有
+发生过。同理，历史文档的 `errorCode` 为空时前端走中性兜底文案，不猜原因。若之后要补历史
+分布，正确做法是新开一次按时间窗的重放，而不是在迁移里猜。
+
+### 替换是「新建一份 + 归档旧的」，不是原地覆盖
+
+`POST /documents/:id/replace` 返回 201 和**新的 document id**，旧行保留并写上
+`superseded_by_id` / `superseded_at`。
+
+不做原地覆盖的理由是失败模式：原地覆盖必须先删旧分块再写新分块，中间任何一步失败（解析
+异常、向量化失败、存储抖动）都会留下一个既没有旧内容也没有新内容的文档，而用户以为自己
+只是换了个版本。新建一份则让失败只影响新行，旧版本仍可被检索和引用。
+
+代价是同一份资料会占两行，需要靠 `supersededById` 过链条。已有回答里的引用因此仍能追溯
+到当时真正使用的那一版——这是刻意保留的属性，不要为了「清理」去删除被取代的行。
+重复替换由 `internal/service/document_replace.go:42` 用 409 `DOCUMENT_ALREADY_SUPERSEDED`
+拒绝，避免同一条链上长出分叉。
+
+### 拒答标记依赖模型遵从提示，不遵从时会少报
+
+`model_refused` 的判定方式是：系统提示要求模型在因内容本身不适合回答而拒答时，把
+`refusalMarker`（`internal/service/chat_refusal.go`）单独放在回复第一行，服务端按标记识
+别并把它从回复里摘掉。只有出现在最开头才算——回答中间提到这个标记的不是拒答，按拒答处理
+会丢掉一个可用的回答。模型没有输出标记时，这次回答被记为 `answered`。
+
+流式路径上有一个 `refusalGate`：它只缓冲标记长度的字符，一旦前缀不可能匹配就整段放行，
+所以正常回答的延迟是几个字符而不是一行。**标记因此永远不会流到客户端**，改动这段时要连
+带跑 `chat_refusal_test.go` 里跨 delta 边界的用例。
+
+提示里还有一条 load-bearing 的规则：知识片段不足**不算**拒答。少了它模型会把「资料没覆
+盖」也打上标记，而那是 `no_basis`，在调用 provider 之前就已经判定完了——混在一起等于把知
+识库为空的责任记到模型头上。
+
+**所以 `modelRefusedTotal` 是下界，不是准确值。** 本轮对真实 deepseek-v4-flash 端点验证
+过标记会被遵从；其他 provider、其他模型、以及同一模型换提示模板之后都可能不遵从，届时统
+计会静默地偏低，而不会报错。
+
+曾考虑用启发式兜底（检测「无法回答」「没有提到」之类措辞），最后否掉了：这类措辞在正常
+回答里同样出现，「根据资料，X 不适用于 Y」会被误判成拒答。少报一部分拒答只是统计偏低，
+把正常回答误判成拒答会让用户看到一个不存在的问题，后者更贵。
+
+### 检索失败会落库，但请求仍然返回错误
+
+`recordRetrievalFailure`（`internal/service/chat_retrieval_failure.go`）在检索基础设施出
+错时把用户的问题和一条 `retrieval_failed` 的回答写进会话，然后**照旧把错误返回给调用方**。
+落库不是为了假装请求成功，是为了不把用户刚打的字弄丢——否则请求 500、什么都没写，问题从
+会话里消失了。
+
+两点容易踩：
+
+- 只有基础设施失败才落库。`isRetrievalInfrastructureFailure` 刻意排除
+  `KNOWLEDGE_BASE_NOT_FOUND`（是客户端错误，写进会话既误导用户，又等于告诉他这个 id 存
+  在）和客户端断开（没人看，客户端会用同一个幂等键重发）。`CHAT_COMPLETION_FAILED` 也不
+  算：provider 在生成阶段失败时手里已经有可用内容了，记成检索失败是在怪错阶段。
+- 它用与成功回合相同的 `clientRequestID` 写入，所以同键重发会**重放这条失败**而不是悄悄
+  生成第二个回合。客户端要重试必须换一个新的 id。
+
+### 过期只提醒，不参与检索
+
+`isStale` / `staleAfterDays` 是纯展示字段。检索、重排、引用的代码路径都不读它，排序里也
+没有按新鲜度的加权。
+
+理由是新鲜度和相关性不是同一个维度：一份两年没动的规范可能正是唯一正确的答案来源，把它
+降权会让检索悄悄地变差，而用户看到的只是回答质量下降，没有任何线索指向「因为它旧」。提
+醒放在文档列表和详情抽屉里，由人决定要不要更新。前端文案明确写了「检索和引用不受影响」。
+
+### 重复内容是一个问题，不是一个失败
+
+上传时命中同知识库内相同 `content_hash` 会返回 409 `DOCUMENT_DUPLICATE_CONTENT`，
+details 带 `existingDocumentId` / `existingFilename` / `existingStatus` /
+`existingUploadedAt`，刻意不带 `storagePath`。带 `allowDuplicate=true` 重传表示「保留两
+份」。
+
+前端把它做成导入对话框里的行内选择而不是弹窗：一个批次可能同时撞出多个冲突，一个文件弹
+一次会强迫用户按系统给的顺序逐个回答。行内选择时批次其余文件继续上传，对话框保持打开，
+只有最后一个待决冲突被处理完才关闭。
+
+### 本环境未能验证的部分
+
+- **migration 019 没有对真实 PostgreSQL 执行过。** 两个 CHECK 约束和局部索引只在内存
+  SQLite 下测过，而 SQLite 的 AutoMigrate 既不强制 CHECK 也不复现局部索引的 `WHERE`
+  子句——测试因此显式建索引，并解析迁移文件来发现封闭集合漂移。真实环境首次迁移后应确认
+  两个 CHECK 存在，且写入集合外的值会被数据库拒绝。
+- migration 018（上一阶段）同样仍未对真实 PostgreSQL 执行过。
+- 拒答标记只在 deepseek-v4-flash 上验证过，见上。
+- `dev` 分支尚未推送到 origin，也未获授权推送。
+

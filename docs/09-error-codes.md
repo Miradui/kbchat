@@ -39,6 +39,8 @@
 | 404 | `DOCUMENT_FILE_NOT_FOUND` | 文档原始文件不存在 |
 | 400 | `DOCUMENT_TYPE_UNSUPPORTED` | 不支持的文档类型 |
 | 400 | `FILE_TOO_LARGE_FOR_PREVIEW` | 文档过大，无法在线预览 |
+| 409 | `DOCUMENT_DUPLICATE_CONTENT` | 知识库中已存在内容相同的文档 |
+| 409 | `DOCUMENT_ALREADY_SUPERSEDED` | 该文档已被替换，请替换最新版本 |
 | 500 | `DOCUMENT_UPLOAD_FAILED` | 文档上传失败 |
 | 500 | `DOCUMENT_PROCESS_FAILED` | 文档处理失败 |
 | 404 | `CATEGORY_NOT_FOUND` | 分类不存在 |
@@ -95,6 +97,35 @@
   }
 }
 ```
+
+## 重复内容冲突示例
+
+```json
+{
+  "code": "DOCUMENT_DUPLICATE_CONTENT",
+  "message": "知识库中已存在内容相同的文档",
+  "details": {
+    "existingDocumentId": "uuid",
+    "existingFilename": "policy.md",
+    "existingStatus": "completed",
+    "existingUploadedAt": "2026-06-08T00:00:00Z"
+  }
+}
+```
+
+409 而不是 400：请求本身合法，服务端只是基于知识库当前状态拒绝，带上 `allowDuplicate=true`
+的同一请求会成功。`details` 点名冲突文档，因为客户端要据此让用户选择替换还是保留两份；
+`storagePath` 不出现在 `details` 里，那是部署拓扑。
+
+## 文档处理错误分类
+
+`documents.errorCode` 是与 HTTP 错误码无关的另一套封闭集合，描述的是异步处理失败的原因而不是
+请求的结果。取值与含义见 `docs/04-api-design.md` 的 `GET /documents`。两条约束：
+
+1. 未识别的失败归 `internal`，不猜具体原因。错误的具体分类会让用户去修错的地方，比承认服务端
+   不知道更糟。
+2. 解析器和 Provider 的原始错误文本只进服务端日志和任务记录，不进 `errorCode` 也不进
+   `errorMessage`。分类给用户，原文给日志。
 
 ## AI 开发约束
 
