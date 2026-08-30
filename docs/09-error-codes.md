@@ -86,6 +86,57 @@
 }
 ```
 
+## 权限不足示例
+
+知识库相关接口在「能到达资源、但角色不够」时返回 403：
+
+```json
+{
+  "code": "FORBIDDEN",
+  "message": "只有编辑者及以上可以修改知识库内容",
+  "details": {
+    "role": "viewer",
+    "capability": "content.write",
+    "requiredRole": "editor"
+  }
+}
+```
+
+`code` 恒为 `FORBIDDEN`，`message` 按缺失的能力换措辞——「无权限访问该资源」这一句让用户
+无法判断该去申请更高角色还是就此放弃。`details` 三个字段都不敏感：调用者在成员名单里
+本来就看得到自己的角色。
+
+| 字段 | 说明 |
+| --- | --- |
+| `role` | 调用者当前角色：`viewer` / `editor` / `manager` / `owner` |
+| `capability` | 被拒绝的能力，取值见 `docs/04-api-design.md` 的能力矩阵 |
+| `requiredRole` | 该能力要求的最低角色 |
+
+### 什么时候不是 403 而是 404
+
+| 情况 | 结果 |
+| --- | --- |
+| 非 owner 且非成员 | 404 |
+| 知识库已软删除 | 404 |
+| 成员身份已被撤销 | 404 |
+| 请求的是别人的会话 | 404 |
+| 是成员但角色不够 | 403 |
+
+没有任何立场时一律 404。返回 403 等于确认这个 id 存在，会把资源是否存在泄露给无关用户；
+403 只在调用者确实能到达资源、仅仅角色不够时出现。
+
+404 的 `code` 按**调用方问的那个资源**命名，即使拒绝来自它所属的知识库：
+
+| 请求的 id | code |
+| --- | --- |
+| 文档 | `DOCUMENT_NOT_FOUND` |
+| 会话 | `RESOURCE_NOT_FOUND` |
+| 知识库 | `KNOWLEDGE_BASE_NOT_FOUND` |
+
+用知识库的错误码回答一个文档请求，会让调用方以为自己传错了文档 id。
+`internal/service/access_contract_test.go` 逐接口锁住这份对应关系，
+`internal/router/access_status_test.go` 锁住它们在 HTTP 上的形状。
+
 ## 文档处理错误示例
 
 ```json
@@ -134,4 +185,8 @@
 3. 前端必须优先展示 `message`。
 4. 业务代码必须使用稳定 `code`，不要用动态字符串作为错误码。
 5. 401 和 403 必须区分：未登录是 401，无权限是 403。
+6. 403 和 404 必须按上文「什么时候不是 403 而是 404」区分：没有立场用 404，角色不够用 403。
+   不要为了「信息更清楚」把无立场的情况改成 403。
+7. 403 的 `details` 必须带 `role`、`capability`、`requiredRole`，由
+   `authz.ForbiddenCapability` 统一构造，不要在各处手写。
 

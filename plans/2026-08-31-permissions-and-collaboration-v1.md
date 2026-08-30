@@ -176,6 +176,6 @@ roadmap），不改 `users.role`。
     *Affected*：`frontend/src/types/api.ts`、`pages/KnowledgeBase/MembersPanel.tsx`、
     文档与会话页面的操作入口。
 
-11. [ ] **文档**：`04-api-design.md` 记录能力矩阵、`effectiveRole` 字段、404/403 口径；
+11. [x] **文档**：`04-api-design.md` 记录能力矩阵、`effectiveRole` 字段、404/403 口径；
     `09-error-codes.md` 记录 403 场景；roadmap 标记完成；handoff 记录 `member` 被改写成
     `viewer` 的理由、`visibility` 暂不参与鉴权、以及护栏位置变化带来的风险。

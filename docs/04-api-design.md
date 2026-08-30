@@ -232,6 +232,113 @@ chatSession.deleted / chatSession.restored
 - 各列表元素结构分别与 `GET /knowledge-bases`、`GET /documents`、`GET /chat/sessions` 的列表项一致
 - 该接口只做聚合，复用上述各资源的 service：归属校验和软删除过滤规则仍然只有一份
 
+## 权限与能力矩阵
+
+访问控制的判定单位是**能力**，不是接口。每个知识库相关接口声明它需要哪个能力，
+调用者在该知识库上的角色决定是否放行。角色有四个，成员表只能保存前三个：
+
+| 角色 | 来源 |
+| --- | --- |
+| `viewer` | `knowledge_base_members.role` |
+| `editor` | `knowledge_base_members.role` |
+| `manager` | `knowledge_base_members.role` |
+| `owner` | `knowledge_bases.owner_id`，不是成员行 |
+
+角色是升级关系：`viewer < editor < manager < owner`，上位角色拥有下位角色的全部能力。
+
+| 能力 | 含义 | viewer | editor | manager | owner |
+| --- | --- | --- | --- | --- | --- |
+| `kb.read` | 读取知识库详情、统计、收藏、浏览记录 | ✓ | ✓ | ✓ | ✓ |
+| `kb.search` | 检索该知识库，含全局搜索命中 | ✓ | ✓ | ✓ | ✓ |
+| `kb.write` | 修改名称、描述、分类、标签、visibility | | | ✓ | ✓ |
+| `kb.delete` | 软删除与恢复知识库 | | | | ✓ |
+| `document.read` | 文档列表、详情、预览、分块 | ✓ | ✓ | ✓ | ✓ |
+| `document.download` | 下载原始上传文件 | | ✓ | ✓ | ✓ |
+| `content.write` | 上传、替换、改元数据、重新处理、软删除与恢复 | | ✓ | ✓ | ✓ |
+| `content.purge` | 永久删除（单个与批量） | | | ✓ | ✓ |
+| `chat.use` | 创建会话与提问 | ✓ | ✓ | ✓ | ✓ |
+| `chat.export` | 导出会话记录 | ✓ | ✓ | ✓ | ✓ |
+| `feedback.write` | 对收到的回答评分 | ✓ | ✓ | ✓ | ✓ |
+| `quality.read` | 问答质量运营数据 | | | ✓ | ✓ |
+| `members.read` | 读取成员名单 | | | ✓ | ✓ |
+| `members.write` | 增删改成员 | | | ✓ | ✓ |
+
+矩阵的唯一定义在 `backend/internal/access/capability.go` 的 `minRole`。这张表由该
+map 生成，改代码不改表就会与实现不一致；`internal/access/capability_test.go` 锁住
+每一格，`internal/service/access_contract_test.go` 按接口逐个断言。
+
+### 为什么几个能力放在看起来偏高的位置
+
+- `document.download` 归 editor，不是 viewer。分界不是「能否看到内容」——viewer 通过
+  分块和引用已经读到了正文。原始文件带着索引里没有的东西：修订记录、批注、嵌入对象、
+  作者信息。
+- `quality.read` 归 manager。这份数据聚合的是**别人**问了什么、怎么评分的，比编辑内容
+  更进一步，暴露的是同事的使用情况。
+- `content.purge` 归 manager 而不是 owner。永久删除不可逆，但只让 owner 能清空回收站
+  就废掉了委派的意义。整个知识库的删除仍然是 owner 独有的 `kb.delete`。
+- `kb.delete` 只归 owner。删掉容器和整理容器里的东西不是同一件事，被委派管理某个知识库
+  的人不应该能把这个知识库本身移除。
+
+### effectiveRole 与 capabilities
+
+知识库响应带上调用者自己的位置：
+
+```json
+{
+  "id": "uuid",
+  "name": "制度库",
+  "effectiveRole": "editor",
+  "capabilities": ["kb.read", "kb.search", "document.read", "document.download", "content.write", "chat.use", "chat.export", "feedback.write"]
+}
+```
+
+`capabilities` 是 `effectiveRole` 在上表中的那一行，顺序与 `access.Capabilities` 一致。
+两个字段只用于前端隐藏按钮，不是授权依据：服务端每个请求都会重新判定，所以前端漏判只会
+出现一个点了报 403 的按钮，不会放开任何权限。
+
+`capabilities` 为空数组表示无任何能力，不会是 `null`——客户端不必区分「空」和「未知」。
+
+### 404 与 403 的口径
+
+| 情况 | 状态码 |
+| --- | --- |
+| 不是 owner 也不是成员 | 404 |
+| 知识库已软删除 | 404 |
+| 成员身份已被撤销 | 404 |
+| 是成员但角色不够 | 403 |
+
+没有任何立场时一律 404：返回 403 等于确认这个 id 存在，会把资源是否存在泄露给无关用户。
+只有能到达资源、仅仅是角色不够时才返回 403，此时 `details` 点名缺什么：
+
+```json
+{
+  "code": "FORBIDDEN",
+  "message": "当前角色无权执行该操作",
+  "details": {
+    "role": "viewer",
+    "capability": "content.write",
+    "requiredRole": "editor"
+  }
+}
+```
+
+404 的错误码按**调用方问的那个资源**命名，即使拒绝来自它所属的知识库：文档 id 回
+`DOCUMENT_NOT_FOUND`，会话 id 回 `RESOURCE_NOT_FOUND`，知识库 id 回
+`KNOWLEDGE_BASE_NOT_FOUND`。用知识库的错误码回答一个文档请求，会让调用方以为自己
+传错了 id。
+
+### 会话的两道判定
+
+会话接口先按 `chat_sessions.user_id` 过滤，再检查知识库上的 `chat.use`。两道判定都会
+产出 404，但由不同输入触发：别人的会话 id 在第一道就被挡住，自己的会话在所属知识库不再
+可达时（成员被撤销、知识库被删除）由第二道挡住。
+
+### 列表接口
+
+跨知识库的列表（文档、搜索、聊天回收站、质量运营）无法逐行判定，可达性写在查询里：
+`owner_id = 当前用户 OR 存在角色满足该能力的成员行`。角色集合由
+`access.MemberRolesWith(capability)` 给出，不在 SQL 里另写一份。
+
 ## Knowledge Bases
 
 ### GET /knowledge-base-categories
@@ -380,7 +487,16 @@ updatedBy
 
 知识库创建、详情和更新响应不返回上述列表聚合字段。
 
-当前阶段 `created` 和 `managed` 都等价于当前用户拥有的知识库；`visibility` 只用于展示，不改变 owner 权限。
+`scope` 的三种可达范围：
+
+- `created`：`owner_id` 是当前用户，与成员身份无关。
+- `managed`：owner 或角色为 `manager` 的成员。owner 计入其中——一个把创建者排除在外的
+  「我管理的」列表读起来像 bug，不像筛选。
+- 其余（`all`、`favorite`、`recent`）：owner 或任意角色的成员。
+
+`visibility` 只用于展示，不参与访问控制：`public` 不会让非成员读到知识库。
+
+列表项带 `effectiveRole` 与 `capabilities`，含义见「权限与能力矩阵」。
 
 ### GET /knowledge-bases/workspace-preference
 
@@ -440,7 +556,7 @@ period=month|day
 }
 ```
 
-统计口径与全局统计相同（排除软删除的文档与会话，浏览量和问答数只算当前用户），只是把范围收窄到这一个知识库。非当前用户 owner 的知识库返回 `KNOWLEDGE_BASE_NOT_FOUND`。
+需要 `kb.read`。统计口径与全局统计相同（排除软删除的文档与会话，浏览量和问答数只算当前用户），只是把范围收窄到这一个知识库。无立场时返回 `KNOWLEDGE_BASE_NOT_FOUND`。
 
 **这些聚合刻意不放进 `GET /knowledge-bases/:id`**：知识库的 create / update / detail 响应不返回 list-only 聚合字段，需要趋势数据就单独请求本接口。
 
@@ -527,7 +643,9 @@ period=month|day
 
 ### GET /knowledge-bases/:id/permissions
 
-返回当前知识库的真实成员权限视图。`owner` 始终来自 `knowledge_bases.owner_id`，并固定出现在 `managers[0]`，成员表只保存 `manager` / `member`。
+需要 `members.read`。返回当前知识库的真实成员权限视图。`owner` 始终来自
+`knowledge_bases.owner_id`，并固定出现在 `managers[0]`，成员表只保存
+`viewer` / `editor` / `manager`。
 
 ```json
 {
@@ -561,15 +679,19 @@ period=month|day
       "username": "member",
       "displayName": "Member",
       "avatarUrl": "",
-      "role": "member"
+      "role": "viewer"
     }
   ]
 }
 ```
 
+`managers` 是 owner 与 manager，`members` 是 editor 与 viewer；分组只为展示，
+真实判定看每个人的 `role`。
+
 ### PUT /knowledge-bases/:id/permissions
 
-允许 owner 或 manager 更新展示用 `visibility`。`visibility` 仍不改变知识库主数据访问控制。
+需要 `kb.write`（manager 起）。更新展示用 `visibility`。`visibility` 不参与访问控制：
+`public` 不会让非成员读到知识库，只影响列表里的标记与筛选。
 
 ```json
 {
@@ -579,39 +701,45 @@ period=month|day
 
 ### POST /knowledge-bases/:id/members
 
-新增或覆盖知识库成员角色。当前允许 owner 或 manager 管理成员；owner 不能通过成员接口新增、降级或删除。
+需要 `members.write`（manager 起）。新增或覆盖知识库成员角色。owner 不能通过成员接口
+新增、降级或删除。
 
 ```json
 {
   "userId": "user_uuid",
-  "role": "manager"
+  "role": "editor"
 }
 ```
 
 `role` 支持：
 
 ```text
+viewer
+editor
 manager
-member
 ```
+
+`owner` 不可授予：它来自 `knowledge_bases.owner_id`，不是成员表里的一行。传 `owner`
+返回 400 `OWNER_MEMBER_IMMUTABLE`，其它非法值返回 400 `INVALID_MEMBER_ROLE`。
+旧值 `member` 已不再接受：migration 020 把这些行改写为 `viewer`。
 
 ### PUT /knowledge-bases/:id/members/:userId
 
-更新成员角色。不能更新 owner。
+需要 `members.write`。更新成员角色，取值同上。不能更新 owner。
 
 ```json
 {
-  "role": "member"
+  "role": "viewer"
 }
 ```
 
 ### DELETE /knowledge-bases/:id/members/:userId
 
-删除成员。不能删除 owner。
+需要 `members.write`。删除成员。不能删除 owner。
 
 ### GET /knowledge-bases/:id
 
-必须校验 `owner_id`。
+需要 `kb.read`。
 
 ### PUT /knowledge-bases/:id
 
@@ -632,7 +760,7 @@ member
 
 ### DELETE /knowledge-bases/:id
 
-必须校验 `owner_id`。
+需要 `kb.delete`（owner 独有）。
 
 ## Documents
 
@@ -751,7 +879,7 @@ field: knowledgeBaseId
 field: file
 ```
 
-内部复用知识库文档上传流程，仍必须校验目标知识库 owner。
+内部复用知识库文档上传流程，仍需要目标知识库的 `content.write`。
 
 支持 `allowDuplicate` 表单字段，语义与 `POST /knowledge-bases/:kbId/documents` 一致。
 
@@ -859,11 +987,11 @@ field: allowDuplicate=true
 
 ### GET /documents/:id
 
-必须通过 document 所属 knowledge_base 校验 owner。
+需要所属知识库的 `document.read`。
 
 ### GET /documents/:id/download
 
-下载原始上传文件。必须通过 document 所属 knowledge_base 校验 owner。响应为文件流，设置：
+下载原始上传文件。需要所属知识库的 `document.download`（editor 起）。响应为文件流，设置：
 
 ```text
 Content-Type: 按文件类型推断
@@ -874,7 +1002,7 @@ Content-Disposition: attachment
 
 ### GET /documents/:id/preview
 
-预览原始上传文件。必须通过 document 所属 knowledge_base 校验 owner。
+预览原始上传文件。需要所属知识库的 `document.read`。
 
 `txt` / `md` 返回文本内容；`pdf` 和其他文件返回文件预览元信息，前端可使用 `downloadUrl` 打开浏览器/PDF 预览。文本预览当前限制为 1MB，超出返回 `FILE_TOO_LARGE_FOR_PREVIEW`。
 
@@ -984,7 +1112,7 @@ chunkId=chunk_uuid
 
 `chunkId` 可选。提供时，只返回路径参数所指定文档内对应 UUID 的 chunk；UUID
 格式不合法返回 `VALIDATION_ERROR`，chunk 不存在或属于其他文档时返回空分页结果。
-该查询仍通过文档所属知识库的 `owner_id` 校验所有权，无权访问时返回
+该查询按文档所属知识库的 `document.read` 判定，无权访问时返回
 `DOCUMENT_NOT_FOUND`。`chunkId` 与 `q` 同时提供时，两项条件同时生效。
 
 响应：
@@ -1967,7 +2095,7 @@ OpenAI 兼容接口里没有免费的 ping。为了检查而发一次 completion
 
 1. API 字段使用 camelCase。
 2. 数据库字段使用 snake_case。
-3. 任何知识库相关接口必须做 owner 权限校验。
+3. 任何知识库相关接口必须走能力矩阵判定，不要在 repository 里写 `owner_id = ?`。
 4. citations 只能来自最终进入 Prompt 的 rerank chunks。
 5. 不要返回未授权资源是存在还是不存在的敏感细节；可统一返回 `RESOURCE_NOT_FOUND` 或 `FORBIDDEN`。
 
@@ -2056,21 +2184,27 @@ OpenAI 兼容接口里没有免费的 ping。为了检查而发一次 completion
 
 清空当前用户 owner 的知识库回收站，采用 all-or-nothing 语义。
 
+知识库回收站刻意保持 owner 独有，不走能力矩阵：`kb.delete` 本来就只有 owner，而回收站
+是 owner 的私有空间——manager 对躺在里面的知识库应该拿到 404，而不是一个「确认它在那里」
+的 403。恢复与批量永久删除同理。
+
 ### GET /documents/recycle-bin
 
-返回当前用户已删除文档列表。
+返回调用者在有 `content.write` 的知识库下的已删除文档，跨知识库聚合。
 
 ### POST /documents/:id/restore
 
-恢复当前用户已删除文档。
+恢复已删除文档。需要所属知识库的 `content.write`。
 
 ### DELETE /documents/recycle-bin/:id
 
-永久删除当前用户 owner 的、已在回收站中的文档，并清理 chunks 和处理任务。文件对象通过同事务写入的持久化清理任务异步删除。
+永久删除已在回收站中的文档，需要所属知识库的 `content.purge`（manager 起），并清理 chunks 和处理任务。文件对象通过同事务写入的持久化清理任务异步删除。
 
 ### POST /documents/recycle-bin/empty
 
-清空当前用户 owner 的文档回收站，数据库删除与全部对象清理任务采用 all-or-nothing 事务语义；对象由后台 worker 删除并在失败时持续重试。
+清空调用者有 `content.purge` 的知识库下的文档回收站，数据库删除与全部对象清理任务采用 all-or-nothing 事务语义；对象由后台 worker 删除并在失败时持续重试。
+
+注意列出与清空用的是两个不同能力：editor 看得到自己删掉的文档并能恢复，但清空要 manager。
 
 ## P1 权限设置扩展
 
@@ -2082,6 +2216,7 @@ OpenAI 兼容接口里没有免费的 ping。为了检查而发一次 completion
 - 新增 `DELETE /knowledge-bases/:id/members/:userId`
 - `owner` 始终来自 `knowledge_bases.owner_id`，成员表只保存 `manager` / `member`
 - owner 和 manager 可管理成员；owner 不能被删除或降级
+- P2 已把成员角色改为 `viewer` / `editor` / `manager`，见「权限与能力矩阵」
 
 ## P1 批量操作兼容扩展
 
@@ -2107,3 +2242,17 @@ OpenAI 兼容接口里没有免费的 ping。为了检查而发一次 completion
 - 文档响应新增 `errorCode`、`supersededById`、`supersededAt`、`isStale`、`staleAfterDays`
 - 会话消息新增 `answerStatus`，`GET /chat/knowledge-gaps` 的 `category` 扩展到四类
 - `errorCode` 与 `answerStatus` 都是封闭集合，值域由 migration 019 的 CHECK 约束固定
+
+## P2 权限与协作
+
+- 成员角色从 `manager` / `member` 改为 `viewer` / `editor` / `manager`；migration 020
+  把既有 `member` 行改写为 `viewer`
+- 判定单位从「是不是 owner」改为 14 个能力，矩阵见「权限与能力矩阵」
+- 知识库响应新增 `effectiveRole` 与 `capabilities`
+- 无立场（非 owner 非成员、知识库已删除、成员已撤销）一律 404；角色不够才 403，
+  `details` 带 `role`、`capability`、`requiredRole`
+- 404 的错误码按调用方问的资源命名，不按拒绝来源命名
+- 下载、导出、质量运营数据、永久删除各自校验独立能力，不再一律等同 owner
+- 跨知识库列表的可达性写在查询里，角色集合来自 `access.MemberRolesWith`
+- 知识库回收站保持 owner 独有，不走矩阵（回收站是 owner 的私有空间）
+- 本阶段不引入组织树、SSO 或通用策略引擎

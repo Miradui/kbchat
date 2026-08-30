@@ -788,7 +788,7 @@ SQLite 把时间存成 RFC3339 文本，驱动绑定的是带本地偏移量的�
 
 本轮在 `dev` 分支完成 `docs/15-product-improvement-roadmap.md` 中「P2 首次使用与知识库
 质量」的四项交付：导入后的引导、重复内容检测、文档版本替换与过期/解析异常提示、回答无
-依据的三分类。下一项是「P2 权限与协作」。
+依据的三分类。
 
 新增数据库列由 `backend/migrations/019_document_versions_and_answer_status.sql` 引入：
 `documents.error_code`、`superseded_by_id`、`superseded_at`、`content_hash`，以及
@@ -892,3 +892,104 @@ details 带 `existingDocumentId` / `existingFilename` / `existingStatus` /
 - 拒答标记只在 deepseek-v4-flash 上验证过，见上。
 - `dev` 分支尚未推送到 origin，也未获授权推送。
 
+## Permissions and Collaboration (2026-08-31)
+
+本轮在 `dev` 分支完成 `docs/15-product-improvement-roadmap.md` 中「P2 权限与协作」的四项
+交付：三值成员角色与行为矩阵、下载/导出/质量运营/永久删除分别校验、逐资源 ID 的契约测试、
+不引入组织树与策略引擎。下一项是「P2 搜索、移动端与无障碍」。
+
+判定单位从「是不是 owner」改为 14 个能力，矩阵的唯一定义在
+`backend/internal/access/capability.go` 的 `minRole`。`docs/04-api-design.md` 里那张表由
+这个 map 生成。角色是升级关系 `viewer < editor < manager < owner`，成员表只保存前三个，
+`owner` 来自 `knowledge_bases.owner_id`。
+
+### 授权判定从 repository 搬到 service，这是本轮最大的风险
+
+原来每个 repository 方法自己带 `WHERE owner_id = ?`，授权藏在数据访问里。一个能力对应多个
+接口时这种写法无处表达，所以判定移到 `internal/authz` 的显式决策。
+
+代价说清楚：**漏掉一个调用点现在就是一个授权漏洞，编译期没有任何提示。** 以前忘记校验会
+拿不到数据，现在忘记校验就是放行。三道补偿：
+
+1. 全部 owner-scoped 辅助函数已删除，不是留着不用——留着就会有人调。
+2. 跨知识库列表只有一个共享谓词，角色集合来自 `access.MemberRolesWith(capability)`，SQL 里
+   不另写一份。
+3. 两张契约表逐接口断言：`internal/service/access_contract_test.go` 断言产生哪个应用错误，
+   `internal/router/access_status_test.go` 断言这些错误在 HTTP 上的形状。新增接口必须在表里
+   加一行。
+
+### internal/authz 为什么是独立包
+
+判定需要被 `internal/service` 和 `internal/retrieval` 同时使用，而 service 已经 import
+retrieval。放在 service 里会形成循环，所以单独成包。计划文档里没有这一层，是实现时才发现的。
+
+### 没有立场返回 404，角色不够才 403
+
+返回 403 等于确认这个 id 存在。非成员、已删除知识库、已撤销成员三种情况一律 404；只有调用者
+确实能到达资源、仅仅角色不够时才 403，此时 `details` 带 `role`、`capability`、`requiredRole`
+——「无权限访问该资源」这一句让用户无法判断该申请更高角色还是放弃。
+
+404 的错误码按**调用方问的那个资源**命名，不按拒绝来源命名：文档 id 回 `DOCUMENT_NOT_FOUND`
+即使拒绝来自它所属的知识库。用知识库的错误码回答文档请求，会让调用方以为自己传错了 id。
+
+### 会话有两道判定，测试必须两种输入都问
+
+`findSession` 先按 `chat_sessions.user_id` 过滤，只有调用者拥有该会话时才会走到知识库的
+`chat.use` 检查。写测试时如果只用「别人的会话 id」去问，第一道就挡住了，第二道那段扁平化
+成 `RESOURCE_NOT_FOUND` 的代码永远不被执行——把它改成 `return err` 测试全绿。
+
+这是本轮变异测试实际抓到的一个漏洞（M5 起初存活）。修的是测试：404 用例现在同时用 owner 的
+id 和调用者自己的 id 各问一遍。被撤销的成员仍然持有自己的会话记录，所以后者是真实场景，不是
+凑出来的边界。
+
+### member 改名 viewer，不保留旧值
+
+旧的 `member` 在新矩阵里没有对应位置。继续接受这个名字会往库里写一个解析不出任何权限的值。
+`backend/migrations/020_member_roles.sql` 把既有行改写为 `viewer`，接口不再接受 `member`，
+传入返回 400 `INVALID_MEMBER_ROLE`。
+
+### visibility 不参与授权
+
+`public` 只影响列表里的标记与筛选，不会让非成员读到知识库。让它参与授权等于引入第二套判定，
+与角色矩阵必然打架。这一点在 P1 就是这样，本轮只是写清楚。
+
+### 几个能力放在看起来偏高的位置
+
+- **`document.download` 归 editor。** 分界不是「能否看到内容」——viewer 通过分块和引用已经
+  读到了正文。原始文件带着索引里没有的东西：修订记录、批注、嵌入对象、作者信息。
+- **`quality.read` 归 manager。** 这份数据聚合的是别人问了什么、怎么评分的，暴露的是同事的
+  使用情况，比编辑内容更进一步。
+- **`content.purge` 归 manager 而不是 owner。** 永久删除不可逆，但只让 owner 能清空回收站
+  就废掉了委派的意义。
+- **`kb.delete` 只归 owner。** 删掉容器和整理容器里的东西不是同一件事。
+
+### 两个回收站的口径不同，这是故意的
+
+- **知识库回收站保持 owner 独有，不走矩阵。** `kb.delete` 本来就只有 owner，而回收站是
+  owner 的私有空间：manager 对躺在里面的知识库应该拿到 404，而不是一个确认它存在的 403。
+- **文档回收站列出用 `content.write`、清空用 `content.purge`。** editor 看得到自己删掉的
+  文档并能恢复，不可逆的清空要 manager。计划文档写的是两者都用 `content.purge`，实现时改了。
+- **聊天回收站用 `chat.use`。** 会话属于调用者本人，能提问就能管理自己的会话记录。计划文档
+  写的是 `content.purge`，实现时改了。
+
+### 前端的能力读取是展示层，不是授权
+
+知识库响应带 `effectiveRole` 和 `capabilities`，前端通过 `frontend/src/utils/access.ts`
+一个入口读取。两个字段都是可选的：老服务端不返回时按「未知」处理，控件照常显示，让服务端去
+拒绝——而不是把界面变成只读。未知角色则一律拒绝。
+
+方向是刻意不对称的：漏判只会出现一个点了报 403 的按钮，不会放开任何权限。
+
+永远不隐藏的两处：收藏（写的是调用者自己的书签，不是知识库）和检索配置（值只读可见，因为
+它们解释了一个回答为什么引用了这些内容）。能力永远拿不到的入口是**移除**而不是禁用——灰掉的
+菜单项会让用户去找那个并不存在的开关。
+
+### 本环境未能验证的部分
+
+- **migration 020 没有对真实 PostgreSQL 执行过。** 角色列的 CHECK 约束和 `member` →
+  `viewer` 的改写只在内存 SQLite 下测过，而 SQLite 的 AutoMigrate 不强制 CHECK。真实环境
+  首次迁移后应确认：CHECK 存在、写入 `member` 被数据库拒绝、且没有残留的 `member` 行。
+- migration 018 和 019（上两阶段）同样仍未对真实 PostgreSQL 执行过。
+- **多用户协作路径没有在真实环境走过。** 契约测试覆盖了状态码与错误码，但两个真实账号在同一
+  知识库上的完整协作流程（邀请、降级、撤销后对方界面的表现）只在测试里验证过。
+- `dev` 分支尚未推送到 origin，也未获授权推送。
