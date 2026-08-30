@@ -11,6 +11,8 @@ import { Button } from '../../components/ui/Button';
 import { Pagination } from '../../components/ui/Pagination';
 import { AppShell } from '../../layouts/AppShell';
 import { SearchCombobox, suggestionHref } from './SearchCombobox';
+import { searchGuidance } from './searchGuidance';
+import type { SearchGuidance } from './searchGuidance';
 import type { GlobalSearchResult, GlobalSearchResultType, SearchHighlight } from '../../types/api';
 import { downloadBlob } from '../../utils/download';
 import { getErrorMessage } from '../../utils/errors';
@@ -54,6 +56,10 @@ export function SearchPage() {
   const [draft, setDraft] = useState(submittedQuery);
   const [items, setItems] = useState<GlobalSearchResult[]>([]);
   const [total, setTotal] = useState(0);
+  const [hasOtherTypes, setHasOtherTypes] = useState(false);
+  // What the last completed search was for. Needed because "no results" and "not
+  // searched yet" look identical in `items`/`loading`.
+  const [settled, setSettled] = useState<{ query: string; type: SearchType; total: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [exportError, setExportError] = useState('');
@@ -101,6 +107,7 @@ export function SearchPage() {
       setTotal(0);
       setError('');
       setLoading(false);
+      setSettled(null);
       return;
     }
 
@@ -118,6 +125,7 @@ export function SearchPage() {
         if (!controller.signal.aborted) {
           setItems(response.items);
           setTotal(response.total);
+          setSettled({ query: submittedQuery, type: selectedType, total: response.total });
         }
       })
       .catch((caught: unknown) => {
@@ -132,6 +140,63 @@ export function SearchPage() {
     return () => controller.abort();
   }, [reloadKey, selectedPage, selectedPageSize, selectedType, submittedQuery]);
 
+  // Only asked when a filtered search came back empty: the guidance may claim other
+  // types have results, and that claim needs evidence. `pageSize: 1` because the
+  // count is the whole answer -- the rows are thrown away.
+  //
+  // Gated on `settled` rather than on `!loading && items.length === 0`, because those
+  // two are also the state before the first search has run: `loading` is still false
+  // in the commit that starts it, so the looser condition fires a probe on mount for
+  // a query that has not been searched yet.
+  useEffect(() => {
+    setHasOtherTypes(false);
+    if (!settled || settled.query !== submittedQuery || settled.type !== selectedType) return;
+    if (settled.total > 0 || selectedType === 'all') return;
+
+    const controller = new AbortController();
+    void globalSearch({ query: submittedQuery, type: 'all', page: 1, pageSize: 1 }, controller.signal)
+      .then((response) => {
+        if (!controller.signal.aborted) setHasOtherTypes(response.total > 0);
+      })
+      // A failed probe just means the guidance stays generic, which is the honest
+      // fallback: it cannot claim results exist elsewhere without having seen them.
+      .catch(() => undefined);
+
+    return () => controller.abort();
+  }, [selectedType, settled, submittedQuery]);
+
+  const guidance = useMemo(
+    () => searchGuidance(submittedQuery, selectedType, hasOtherTypes),
+    [hasOtherTypes, selectedType, submittedQuery],
+  );
+
+  function guidanceAction(current: SearchGuidance): ReactNode {
+    if (!current.action) return null;
+    if (current.action.kind === 'clearType') {
+      return (
+        <Button onClick={() => writeParams(submittedQuery, 'all', 1)} variant="secondary">
+          查看全部类型
+        </Button>
+      );
+    }
+    const { query } = current.action;
+    return (
+      <Button
+        onClick={() => {
+          // The effect above syncs `draft` from the URL, so this is not what puts the
+          // new query in the box -- it closes the one render where `draft` still holds
+          // the old query while the URL holds the new one, which is a window the
+          // debounce effect below could use to write the old query straight back.
+          setDraft(query);
+          writeParams(query, selectedType, 1);
+        }}
+        variant="secondary"
+      >
+        改搜「{query}」
+      </Button>
+    );
+  }
+
   // In `all` mode the backend interleaves types, so group them for scanning.
   const groups = useMemo(() => {
     if (selectedType !== 'all') return [{ type: null, items }];
@@ -140,11 +205,14 @@ export function SearchPage() {
       .filter((group) => group.items.length > 0);
   }, [items, selectedType]);
 
+  // The empty case announces the guidance title rather than a generic "没有匹配结果",
+  // so what a screen reader hears is what the page shows. It also means the reason
+  // reaches someone who never sees the button below it.
   const status = loading
     ? '正在搜索'
     : error || !submittedQuery
       ? ''
-      : items.length === 0 ? '没有匹配结果' : `找到 ${total} 条结果`;
+      : items.length === 0 ? guidance.title : `找到 ${total} 条结果`;
 
   function writeParams(query: string, type: SearchType, page = 1) {
     setSearchParams((current) => updateParams(current, query, type, page, selectedPageSize));
@@ -224,7 +292,11 @@ export function SearchPage() {
           ) : !submittedQuery ? (
             <EmptyState description="可搜索知识库名称、文件名与内容片段。" title="输入关键词开始搜索" />
           ) : items.length === 0 ? (
-            <EmptyState description="尝试更短的关键词，或切换结果类型。" title="没有匹配结果" />
+            <EmptyState
+              action={guidanceAction(guidance)}
+              description={guidance.description}
+              title={guidance.title}
+            />
           ) : (
             groups.map((group) => (
               <div className="search-group" key={group.type ?? 'flat'}>

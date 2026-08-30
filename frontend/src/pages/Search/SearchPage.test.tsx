@@ -162,13 +162,17 @@ describe('SearchPage', () => {
       <><SearchPage /><RouterProbe /></>,
       ['/before', '/search?q=old&type=document&scope=owned'],
     );
-    await waitFor(() => expect(mockedSearch).toHaveBeenCalledOnce());
+    // Two calls, not one: the empty result under `type=document` also triggers the
+    // probe that checks whether other types have matches.
+    await waitFor(() => expect(mockedSearch).toHaveBeenCalledTimes(2));
+    const before = mockedSearch.mock.calls.length;
 
     await user.clear(screen.getByLabelText('搜索关键词'));
     await user.click(screen.getByRole('button', { name: '搜索' }));
 
     expect(screen.getByLabelText('当前位置')).toHaveTextContent('/search?type=document&scope=owned');
-    expect(mockedSearch).toHaveBeenCalledOnce();
+    // An empty q must not search at all, so the count is unchanged.
+    expect(mockedSearch).toHaveBeenCalledTimes(before);
     await user.click(screen.getByRole('button', { name: '返回上一页' }));
     expect(screen.getByLabelText('当前位置')).toHaveTextContent('/search?q=old&type=document&scope=owned');
   });
@@ -307,5 +311,156 @@ describe('SearchPage', () => {
     const blob = new Blob(['csv'], { type: 'text/csv' });
     await act(async () => exported.resolve(blob));
     expect(downloadBlob).toHaveBeenCalledWith(blob, '搜索结果.csv');
+  });
+});
+
+/**
+ * `searchGuidance` is unit-tested on its own; these cover the wiring the unit tests
+ * cannot see -- when the probe request is allowed to happen, and what the offered
+ * button actually does to the URL.
+ */
+describe('SearchPage empty-result guidance', () => {
+  it('probes for other types when a filtered search comes back empty', async () => {
+    mockedSearch.mockImplementation((params) =>
+      Promise.resolve(params.type === 'all' ? searchResponse([chunkResult], 3) : searchResponse([])),
+    );
+    renderWithRouter(<SearchPage />, ['/search?q=policy&type=document']);
+
+    // Waiting on the probe call, not on the title: `没有匹配的文档` is also the
+    // pre-probe fallback title, so waiting for it resolves before the probe fires.
+    await waitFor(() => expect(mockedSearch).toHaveBeenCalledWith(
+      { query: 'policy', type: 'all', page: 1, pageSize: 1 },
+      expect.any(AbortSignal),
+    ));
+    expect(await screen.findByText(/其他类型下有匹配结果/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '没有匹配的文档' })).toBeInTheDocument();
+  });
+
+  it('does not probe when the type filter is already all', async () => {
+    mockedSearch.mockResolvedValue(searchResponse([]));
+    renderWithRouter(<SearchPage />, ['/search?q=policy']);
+
+    await screen.findByRole('heading', { name: '没有匹配结果' });
+    // One call only: with no filter to blame there is nothing a probe could tell us.
+    expect(mockedSearch).toHaveBeenCalledOnce();
+  });
+
+  it('does not probe when the search returned results', async () => {
+    mockedSearch.mockResolvedValue(searchResponse([documentResult]));
+    renderWithRouter(<SearchPage />, ['/search?q=policy&type=document']);
+
+    await screen.findByText('员工手册文档');
+    expect(mockedSearch).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the guidance generic when the probe itself fails', async () => {
+    mockedSearch.mockImplementation((params) =>
+      params.type === 'all' ? Promise.reject(new Error('boom')) : Promise.resolve(searchResponse([])),
+    );
+    renderWithRouter(<SearchPage />, ['/search?q=policy&type=document']);
+
+    await screen.findByRole('heading', { name: '没有匹配的文档' });
+    await waitFor(() => expect(mockedSearch).toHaveBeenCalledTimes(2));
+
+    // A failed probe must not surface as a search error, and must not let the page
+    // claim other types have results.
+    expect(screen.queryByText('搜索失败')).not.toBeInTheDocument();
+    expect(screen.queryByText(/其他类型下有匹配结果/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看全部类型' })).toBeInTheDocument();
+  });
+
+  it('announces the specific reason rather than a generic one', async () => {
+    mockedSearch.mockImplementation((params) =>
+      Promise.resolve(params.type === 'all' ? searchResponse([chunkResult], 3) : searchResponse([])),
+    );
+    renderWithRouter(<SearchPage />, ['/search?q=policy&type=document']);
+
+    await screen.findByRole('heading', { name: '没有匹配的文档' });
+    // The live region has to say what the page says; announcing the generic text
+    // while the screen shows a specific title tells a screen-reader user less than
+    // everyone else gets.
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('没有匹配的文档'));
+  });
+
+  it('drops the previous probe answer before the next one lands', async () => {
+    const secondProbe = deferred<GlobalSearchResponse>();
+    let probes = 0;
+    mockedSearch.mockImplementation((params) => {
+      if (params.type === 'all' && params.pageSize === 1) {
+        probes += 1;
+        return probes === 1 ? Promise.resolve(searchResponse([chunkResult], 3)) : secondProbe.promise;
+      }
+      return Promise.resolve(searchResponse([]));
+    });
+    const user = userEvent.setup();
+    renderWithRouter(<SearchPage />, ['/search?q=policy&type=document']);
+
+    await screen.findByText(/其他类型下有匹配结果/);
+
+    await user.clear(screen.getByLabelText('搜索关键词'));
+    await user.type(screen.getByLabelText('搜索关键词'), 'unrelated');
+    await user.click(screen.getByRole('button', { name: '搜索' }));
+    await waitFor(() => expect(probes).toBe(2));
+
+    // The second probe has not answered yet, so the page must not still be showing
+    // the first query's conclusion about a different query's results.
+    expect(screen.queryByText(/其他类型下有匹配结果/)).not.toBeInTheDocument();
+
+    await act(async () => secondProbe.resolve(searchResponse([], 0)));
+    expect(screen.queryByText(/其他类型下有匹配结果/)).not.toBeInTheDocument();
+  });
+
+  it('clears the type filter from the URL when the offered button is used', async () => {
+    mockedSearch.mockImplementation((params) =>
+      Promise.resolve(params.type === 'all' && params.pageSize === 1
+        ? searchResponse([chunkResult], 3)
+        : searchResponse([])),
+    );
+    const user = userEvent.setup();
+    renderWithRouter(<><SearchPage /><RouterProbe /></>, ['/search?q=policy&type=document']);
+
+    await screen.findByRole('heading', { name: '没有匹配的文档' });
+    await user.click(screen.getByRole('button', { name: '查看全部类型' }));
+
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/search?q=policy');
+    expect(screen.getByLabelText('当前位置')).not.toHaveTextContent('type=document');
+  });
+
+  it('rewrites both the URL and the input when a shorter query is offered', async () => {
+    mockedSearch.mockResolvedValue(searchResponse([]));
+    const user = userEvent.setup();
+    renderWithRouter(<><SearchPage /><RouterProbe /></>, ['/search?q=%E5%B9%B4%E5%81%87%20%E7%94%B3%E8%AF%B7%E6%B5%81%E7%A8%8B']);
+
+    await screen.findByRole('heading', { name: '没有匹配结果' });
+    await user.click(screen.getByRole('button', { name: '改搜「申请流程」' }));
+
+    await waitFor(() => expect(mockedSearch).toHaveBeenCalledWith(
+      { query: '申请流程', type: 'all', page: 1, pageSize: 20 },
+      expect.any(AbortSignal),
+    ));
+    // The box follows the URL, or the next Enter would re-run the old query. The
+    // URL->draft effect also does this, so this asserts the end state, not who set it.
+    expect(screen.getByLabelText('搜索关键词')).toHaveValue('申请流程');
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent('q=%E7%94%B3%E8%AF%B7%E6%B5%81%E7%A8%8B');
+  });
+
+  it('runs the offered query at once instead of waiting for the debounce', async () => {
+    mockedSearch.mockResolvedValue(searchResponse([]));
+    renderWithRouter(<SearchPage />, ['/search?q=%E5%B9%B4%E5%81%87%20%E7%94%B3%E8%AF%B7%E6%B5%81%E7%A8%8B']);
+    await screen.findByRole('heading', { name: '没有匹配结果' });
+
+    // fireEvent, not userEvent: userEvent's own waits need the clock, and the whole
+    // point here is to never advance it.
+    vi.useFakeTimers();
+    mockedSearch.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: '改搜「申请流程」' }));
+
+    // Without the explicit URL write the new query would still arrive, but only after
+    // the 300ms draft debounce -- a button press should not feel like typing.
+    await act(async () => undefined);
+    expect(mockedSearch).toHaveBeenCalledWith(
+      { query: '申请流程', type: 'all', page: 1, pageSize: 20 },
+      expect.any(AbortSignal),
+    );
   });
 });
