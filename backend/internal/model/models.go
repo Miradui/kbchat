@@ -113,20 +113,32 @@ type KnowledgeBaseWorkspacePreference struct {
 }
 
 type Document struct {
-	ID              uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
-	KnowledgeBaseID uuid.UUID      `gorm:"type:uuid;not null;index" json:"knowledgeBaseId"`
-	KnowledgeBase   KnowledgeBase  `gorm:"foreignKey:KnowledgeBaseID" json:"-"`
-	UploaderID      uuid.UUID      `gorm:"type:uuid;not null;index" json:"uploaderId"`
-	Uploader        User           `gorm:"foreignKey:UploaderID" json:"-"`
-	Filename        string         `gorm:"size:255;not null" json:"filename"`
-	FileType        string         `gorm:"size:32" json:"fileType"`
-	FileSize        int64          `json:"fileSize"`
-	StoragePath     string         `gorm:"not null" json:"storagePath"`
-	Status          string         `gorm:"size:32;default:uploaded" json:"status"`
-	ErrorMessage    string         `json:"errorMessage"`
-	CreatedAt       time.Time      `json:"createdAt"`
-	UpdatedAt       time.Time      `json:"updatedAt"`
-	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+	ID              uuid.UUID     `gorm:"type:uuid;primaryKey" json:"id"`
+	KnowledgeBaseID uuid.UUID     `gorm:"type:uuid;not null;index" json:"knowledgeBaseId"`
+	KnowledgeBase   KnowledgeBase `gorm:"foreignKey:KnowledgeBaseID" json:"-"`
+	UploaderID      uuid.UUID     `gorm:"type:uuid;not null;index" json:"uploaderId"`
+	Uploader        User          `gorm:"foreignKey:UploaderID" json:"-"`
+	Filename        string        `gorm:"size:255;not null" json:"filename"`
+	FileType        string        `gorm:"size:32" json:"fileType"`
+	FileSize        int64         `json:"fileSize"`
+	StoragePath     string        `gorm:"not null" json:"storagePath"`
+	Status          string        `gorm:"size:32;default:uploaded" json:"status"`
+	ErrorMessage    string        `json:"errorMessage"`
+	// ContentHash is SHA-256 of the uploaded bytes, hex encoded. Nullable because
+	// pre-migration rows were never hashed; a NULL never matches a new upload, so
+	// duplicate detection fails open rather than blocking a legitimate file.
+	ContentHash *string `gorm:"size:64;index" json:"contentHash"`
+	// SupersededByID points at the document that replaced this one. NULL means
+	// current. The superseded row is kept so a replacement whose processing fails
+	// does not leave the knowledge base with neither version.
+	SupersededByID *uuid.UUID `gorm:"type:uuid" json:"supersededById"`
+	SupersededAt   *time.Time `json:"supersededAt"`
+	// ErrorCode is the classified processing failure. ErrorMessage keeps the raw
+	// text for diagnosis; this is what the UI maps to actionable copy.
+	ErrorCode string         `gorm:"size:32" json:"errorCode"`
+	CreatedAt time.Time      `json:"createdAt"`
+	UpdatedAt time.Time      `json:"updatedAt"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (d *Document) BeforeCreate(_ *gorm.DB) error {
@@ -215,10 +227,14 @@ type ChatMessage struct {
 	// pre-migration answer with no recorded intent remains distinguishable from
 	// one classified as empty. Quality metrics must exclude NULL rather than
 	// counting it as zero.
-	Intent             *string   `gorm:"size:32" json:"intent"`
-	RetrievalQuery     *string   `json:"retrievalQuery"`
-	RetrievalQueryNorm *string   `json:"-"`
-	CreatedAt          time.Time `json:"createdAt"`
+	Intent             *string `gorm:"size:32" json:"intent"`
+	RetrievalQuery     *string `json:"retrievalQuery"`
+	RetrievalQueryNorm *string `json:"-"`
+	// AnswerStatus separates a normal answer from the three failure modes:
+	// no_basis, retrieval_failed and model_refused. Nullable and not backfilled,
+	// so pre-migration answers stay distinguishable from answered ones.
+	AnswerStatus *string   `gorm:"size:32" json:"answerStatus"`
+	CreatedAt    time.Time `json:"createdAt"`
 }
 
 func (m *ChatMessage) BeforeCreate(_ *gorm.DB) error {
