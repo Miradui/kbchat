@@ -54,6 +54,11 @@ var (
 // service layer can tell a cancel apart from a genuine processing failure.
 const DocumentJobCancelledMessage = "document job cancelled by user"
 
+// DocumentErrorCodeCancelled duplicates processor.ErrorCodeCancelled rather than
+// importing it: the processor already depends on this package, so referencing it
+// from here would be an import cycle.
+const DocumentErrorCodeCancelled = "cancelled"
+
 func NewDocumentRepository(db *gorm.DB) *DocumentRepository {
 	return &DocumentRepository{db: db}
 }
@@ -249,6 +254,7 @@ func (r *DocumentRepository) softDeleteAndCancelJobs(ctx context.Context, docume
 				Updates(map[string]any{
 					"status":        "failed",
 					"error_message": DocumentJobCancelledMessage,
+					"error_code":    DocumentErrorCodeCancelled,
 					"updated_at":    now,
 				}).Error; err != nil {
 				return err
@@ -866,6 +872,7 @@ func (r *DocumentRepository) CancelActiveJob(ctx context.Context, documentID, ac
 			Updates(map[string]any{
 				"status":        "failed",
 				"error_message": DocumentJobCancelledMessage,
+				"error_code":    DocumentErrorCodeCancelled,
 				"updated_at":    now,
 			}).Error; err != nil {
 			return err
@@ -893,7 +900,7 @@ func deferChunkKnowledgeBaseConstraint(tx *gorm.DB) error {
 }
 
 func (r *DocumentRepository) CompleteJob(ctx context.Context, jobID uuid.UUID) error {
-	err := r.finalizeJob(ctx, jobID, "completed", "")
+	err := r.finalizeJob(ctx, jobID, "completed", "", "")
 	if !errors.Is(err, errDocumentJobNotRunning) {
 		return err
 	}
@@ -915,7 +922,15 @@ func (r *DocumentRepository) CompleteJob(ctx context.Context, jobID uuid.UUID) e
 }
 
 func (r *DocumentRepository) FailJob(ctx context.Context, jobID uuid.UUID, message string) error {
-	return r.finalizeJob(ctx, jobID, "failed", message)
+	return r.finalizeJob(ctx, jobID, "failed", message, "")
+}
+
+// FailJobWithCode is FailJob plus the closed-set classification of why. Separate
+// from FailJob so the existing callers and their tests keep working; the code only
+// lands on the document, not the job, because the job already carries the raw
+// message and a job is an attempt while the code describes the document.
+func (r *DocumentRepository) FailJobWithCode(ctx context.Context, jobID uuid.UUID, message, errorCode string) error {
+	return r.finalizeJob(ctx, jobID, "failed", message, errorCode)
 }
 
 func (r *DocumentRepository) finalizeJob(
@@ -923,6 +938,7 @@ func (r *DocumentRepository) finalizeJob(
 	jobID uuid.UUID,
 	status string,
 	errorMessage string,
+	errorCode string,
 ) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var job model.DocumentJob
@@ -965,7 +981,11 @@ func (r *DocumentRepository) finalizeJob(
 			Updates(map[string]any{
 				"status":        status,
 				"error_message": errorMessage,
-				"updated_at":    now,
+				// Always written, so a document that succeeds after a classified
+				// failure stops showing the old reason. NULL rather than "" on
+				// success: the CHECK constraint admits NULL or a failure code.
+				"error_code": nullableErrorCode(errorCode),
+				"updated_at": now,
 			})
 		if documentResult.Error != nil {
 			return documentResult.Error
@@ -1010,6 +1030,13 @@ func (r *DocumentRepository) RetryJob(ctx context.Context, jobID uuid.UUID, retr
 			"locked_at":     retryAt,
 			"updated_at":    time.Now(),
 		}).Error
+}
+
+func nullableErrorCode(errorCode string) any {
+	if errorCode == "" {
+		return nil
+	}
+	return errorCode
 }
 
 func isTerminalDocumentStatus(status string) bool {

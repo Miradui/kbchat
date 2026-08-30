@@ -135,7 +135,10 @@ type Document struct {
 	SupersededAt   *time.Time `json:"supersededAt"`
 	// ErrorCode is the classified processing failure. ErrorMessage keeps the raw
 	// text for diagnosis; this is what the UI maps to actionable copy.
-	ErrorCode string         `gorm:"size:32" json:"errorCode"`
+	//
+	// A pointer, not a string: the CHECK constraint in migration 019 admits NULL or
+	// one of the closed values, so an empty string would make every insert fail.
+	ErrorCode *string        `gorm:"size:32" json:"errorCode"`
 	CreatedAt time.Time      `json:"createdAt"`
 	UpdatedAt time.Time      `json:"updatedAt"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`

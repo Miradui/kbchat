@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"kbchat/backend/internal/document/processor"
 	"kbchat/backend/internal/model"
 	"kbchat/backend/internal/repository"
 )
@@ -25,6 +26,7 @@ type DocumentStore interface {
 	ClaimPendingJob(ctx context.Context) (*model.DocumentJob, error)
 	CompleteJob(ctx context.Context, jobID uuid.UUID) error
 	FailJob(ctx context.Context, jobID uuid.UUID, message string) error
+	FailJobWithCode(ctx context.Context, jobID uuid.UUID, message, errorCode string) error
 	RetryJob(ctx context.Context, jobID uuid.UUID, retryCount int, retryAt time.Time, message string) error
 }
 
@@ -194,7 +196,11 @@ func (w *Worker) process(ctx context.Context, job *model.DocumentJob) {
 			zap.Int("max_retries", w.maxRetries),
 			zap.Error(err),
 		)
-		if failErr := w.documents.FailJob(ctx, job.ID, message); failErr != nil {
+		// Classified only on the terminal failure: a retry is still in progress, so
+		// stamping a code on it would show the user a reason for something the
+		// server is about to try again.
+		errorCode := processor.ClassifyError(err)
+		if failErr := w.documents.FailJobWithCode(ctx, job.ID, message, errorCode); failErr != nil {
 			w.logger.Error("finalize failed document job failed",
 				zap.String("job_id", job.ID.String()),
 				zap.String("document_id", job.DocumentID.String()),

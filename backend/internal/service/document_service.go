@@ -725,10 +725,17 @@ func toDocumentResponse(document *model.Document, job *model.DocumentJob, maxRet
 		NextRetryAt:     progress.NextRetryAt,
 		CreatedAt:       document.CreatedAt,
 		UpdatedAt:       document.UpdatedAt,
-		ErrorCode:       document.ErrorCode,
+		ErrorCode:       stringValue(document.ErrorCode),
 		SupersededByID:  supersededByID(document.SupersededByID),
 		SupersededAt:    document.SupersededAt,
 	}
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func supersededByID(id *uuid.UUID) *string {

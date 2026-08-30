@@ -3,6 +3,7 @@ package job
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,8 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"kbchat/backend/internal/document/parser"
+	"kbchat/backend/internal/document/processor"
 	"kbchat/backend/internal/model"
 )
 
@@ -107,6 +110,35 @@ func TestWorkerProcessesJobsConcurrently(t *testing.T) {
 	}
 }
 
+func TestWorkerClassifiesTerminalFailuresButNotRetries(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeDocumentStore()
+	failing := &fakeProcessor{err: fmt.Errorf("parse md: %w", parser.ErrEncodingInvalid)}
+	worker := NewWorkerWithOptions(store, failing, zap.NewNop(), Options{
+		Concurrency: 1,
+		MaxRetries:  1,
+		RetryDelay:  time.Minute,
+	})
+
+	// A retry is still in progress, so nothing is classified yet: stamping a
+	// reason now would show the user a verdict for work the server is redoing.
+	worker.process(ctx, &model.DocumentJob{ID: uuid.New(), DocumentID: uuid.New(), Status: "running"})
+	if store.retryCalls != 1 {
+		t.Fatalf("expected one retry, got %d", store.retryCalls)
+	}
+	if store.lastErrorCode != "" {
+		t.Fatalf("expected no classification on a retry, got %q", store.lastErrorCode)
+	}
+
+	worker.process(ctx, &model.DocumentJob{ID: uuid.New(), DocumentID: uuid.New(), Status: "running", RetryCount: 1})
+	if store.failedJobs != 1 {
+		t.Fatalf("expected one terminal failure, got %d", store.failedJobs)
+	}
+	if store.lastErrorCode != processor.ErrorCodeEncodingInvalid {
+		t.Fatalf("expected %q, got %q", processor.ErrorCodeEncodingInvalid, store.lastErrorCode)
+	}
+}
+
 func TestWorkerRecoversInterruptedJobsBeforeClaiming(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -142,6 +174,7 @@ type fakeDocumentStore struct {
 	lastRetryAt     time.Time
 	lastStatus      string
 	lastError       string
+	lastErrorCode   string
 	onRecover       func()
 }
 
@@ -202,6 +235,16 @@ func (s *fakeDocumentStore) FailJob(_ context.Context, _ uuid.UUID, message stri
 
 	s.failedJobs++
 	s.lastError = message
+	return nil
+}
+
+func (s *fakeDocumentStore) FailJobWithCode(_ context.Context, _ uuid.UUID, message, errorCode string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.failedJobs++
+	s.lastError = message
+	s.lastErrorCode = errorCode
 	return nil
 }
 

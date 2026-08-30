@@ -1,12 +1,25 @@
 package parser
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/ledongthuc/pdf"
+)
+
+// Sentinel causes, wrapped into the returned errors so a caller can tell why a
+// document failed without matching on message text. The wrapped error still
+// carries the detail (which page, which file type) for the server log.
+var (
+	// ErrEncodingInvalid means the bytes are not valid UTF-8. Distinct from a
+	// corrupt file: the container was readable, the text inside was not.
+	ErrEncodingInvalid = errors.New("content is not valid UTF-8")
+	// ErrCorruptFile means the container itself could not be read -- a truncated
+	// or malformed PDF, not a text encoding problem.
+	ErrCorruptFile = errors.New("file could not be read")
 )
 
 type Parser interface {
@@ -50,7 +63,7 @@ func (p *DefaultParser) ParseDocument(path string, fileType string) (ParsedDocum
 			return ParsedDocument{}, err
 		}
 		if !utf8.Valid(content) {
-			return ParsedDocument{}, fmt.Errorf("parse %s: content is not valid UTF-8", fileType)
+			return ParsedDocument{}, fmt.Errorf("parse %s: %w", fileType, ErrEncodingInvalid)
 		}
 		return ParsedDocument{
 			FileType: fileType,
@@ -68,7 +81,7 @@ func (p *DefaultParser) ParseDocument(path string, fileType string) (ParsedDocum
 			return ParsedDocument{}, err
 		}
 		if !utf8.Valid(content) {
-			return ParsedDocument{}, fmt.Errorf("parse %s: content is not valid UTF-8", fileType)
+			return ParsedDocument{}, fmt.Errorf("parse %s: %w", fileType, ErrEncodingInvalid)
 		}
 		return ParsedDocument{
 			FileType: fileType,
@@ -84,7 +97,11 @@ func normalizeFileType(fileType string) string {
 func parsePDFSegments(path string) ([]Segment, error) {
 	file, reader, err := pdf.Open(path)
 	if err != nil {
-		return nil, err
+		// A PDF that will not open is corrupt from the user's point of view even
+		// when the underlying library calls it something else. os.Open failures
+		// reach here too, but a missing local copy is already a storage error by
+		// the time the processor asked for it.
+		return nil, fmt.Errorf("open pdf: %w: %w", ErrCorruptFile, err)
 	}
 	defer file.Close()
 
@@ -106,10 +123,10 @@ func collectPDFSegments(pageCount int, readPage func(pageNumber int) (string, er
 	for pageNumber := 1; pageNumber <= pageCount; pageNumber++ {
 		content, err := readPage(pageNumber)
 		if err != nil {
-			return nil, fmt.Errorf("parse pdf page %d: %w", pageNumber, err)
+			return nil, fmt.Errorf("parse pdf page %d: %w: %w", pageNumber, ErrCorruptFile, err)
 		}
 		if !utf8.ValidString(content) {
-			return nil, fmt.Errorf("parse pdf page %d: content is not valid UTF-8", pageNumber)
+			return nil, fmt.Errorf("parse pdf page %d: %w", pageNumber, ErrEncodingInvalid)
 		}
 		content = strings.TrimSpace(strings.TrimPrefix(content, "\ufeff"))
 		if content == "" {

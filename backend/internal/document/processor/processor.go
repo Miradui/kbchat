@@ -3,6 +3,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/pgvector/pgvector-go"
@@ -16,6 +17,20 @@ import (
 )
 
 const embeddingBatchSize = 16
+
+// ErrEmptyContent means parsing succeeded but produced nothing to index. It is a
+// separate cause from a corrupt file because the advice differs: a scanned PDF
+// with no text layer is not damaged, it just needs OCR before it is useful.
+var ErrEmptyContent = errors.New("document contains no extractable text")
+
+// ErrEmbeddingFailed wraps any failure from the embedding provider. The document
+// is fine in this case -- the fix is to retry once the provider recovers, which is
+// different advice from anything wrong with the file.
+var ErrEmbeddingFailed = errors.New("embedding failed")
+
+// ErrStorageFailed means the stored object could not be fetched, so nothing was
+// ever parsed. The document's content is not implicated.
+var ErrStorageFailed = errors.New("storage read failed")
 
 const (
 	parsingProgress  = 10
@@ -92,7 +107,9 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 	if p.storage != nil {
 		localPath, cleanup, err = p.storage.Materialize(ctx, document.StoragePath)
 		if err != nil {
-			return err
+			// The object could not be fetched, so nothing was parsed: this is a
+			// storage problem, not a problem with the document's content.
+			return fmt.Errorf("%w: %w", ErrStorageFailed, err)
 		}
 	}
 	defer cleanup()
@@ -109,7 +126,7 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 	}
 	parts := p.splitter.SplitDocument(parsedDocument)
 	if len(parts) == 0 {
-		return fmt.Errorf("document contains no extractable text")
+		return ErrEmptyContent
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -140,10 +157,16 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 
 		embeddings, err := p.embedder.EmbedTexts(ctx, texts)
 		if err != nil {
-			return err
+			// Marked here rather than sniffed later: this is the only place that
+			// knows the failure came from the embedding provider, and the provider
+			// errors themselves are plain fmt.Errorf values.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return err
+			}
+			return fmt.Errorf("%w: %w", ErrEmbeddingFailed, err)
 		}
 		if err := validateEmbeddingCount(len(texts), len(embeddings)); err != nil {
-			return err
+			return fmt.Errorf("%w: %w", ErrEmbeddingFailed, err)
 		}
 		if err := ctx.Err(); err != nil {
 			return err

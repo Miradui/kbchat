@@ -93,8 +93,16 @@ func TestCollectPDFSegmentsReportsTheFailingPage(t *testing.T) {
 		}
 		return "content", nil
 	})
-	if err == nil || err.Error() != "parse pdf page 3: decode failed" {
+	if err == nil {
+		t.Fatal("expected an error for the failing page")
+	}
+	// The page number and the underlying cause both stay in the message for the
+	// server log; the sentinel is what the caller classifies on.
+	if !strings.Contains(err.Error(), "page 3") || !strings.Contains(err.Error(), "decode failed") {
 		t.Fatalf("expected page-specific error, got %v", err)
+	}
+	if !errors.Is(err, ErrCorruptFile) {
+		t.Fatalf("expected ErrCorruptFile, got %v", err)
 	}
 }
 
