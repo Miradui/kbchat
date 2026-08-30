@@ -17,6 +17,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+
+	"kbchat/backend/internal/observability"
 )
 
 const minIOScheme = "minio://"
@@ -70,6 +72,23 @@ func NewMinIOStorage(cfg MinIOConfig) (*MinIOStorage, error) {
 
 func (s *MinIOStorage) EnsureReady(ctx context.Context) error {
 	return s.ensureBucket(ctx)
+}
+
+// CheckHealth verifies the bucket is reachable without creating or modifying
+// anything, so it is safe to call from a request handler. A missing bucket is
+// reported as observability.ErrNotFound rather than being silently created,
+// because a bucket that vanished is an operational fact worth surfacing.
+func (s *MinIOStorage) CheckHealth(ctx context.Context) error {
+	probeCtx, cancel := s.operationContext(ctx)
+	defer cancel()
+	exists, err := s.client.BucketExists(probeCtx, s.bucket)
+	if err != nil {
+		return fmt.Errorf("check MinIO bucket: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("MinIO bucket is absent: %w", observability.ErrNotFound)
+	}
+	return nil
 }
 
 func normalizeMinIOEndpoint(value string, configuredSSL bool) (string, bool, error) {

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 
 	"github.com/google/uuid"
+
+	"kbchat/backend/internal/observability"
 )
 
 type LocalStorage struct {
@@ -105,6 +107,20 @@ func (s *LocalStorage) Materialize(ctx context.Context, path string) (string, fu
 		return "", nil, err
 	}
 	return path, func() {}, nil
+}
+
+// CheckHealth verifies the upload root exists and is a directory. A full disk is
+// not detectable this cheaply, but a root that was never created or was mounted
+// away is the failure that actually silently breaks uploads.
+func (s *LocalStorage) CheckHealth(_ context.Context) error {
+	info, err := os.Stat(s.root)
+	if err != nil {
+		return fmt.Errorf("stat upload directory: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("upload path is not a directory: %w", observability.ErrNotFound)
+	}
+	return nil
 }
 
 func localStorageError(err error) error {

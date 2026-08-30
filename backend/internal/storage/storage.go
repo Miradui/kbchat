@@ -42,6 +42,25 @@ func EnsureReady(ctx context.Context, fileStorage Storage) error {
 	return nil
 }
 
+// healthChecker is the read-only counterpart of readinessChecker.
+type healthChecker interface {
+	CheckHealth(context.Context) error
+}
+
+// CheckHealth probes storage without changing it.
+//
+// EnsureReady is deliberately not reused here: for MinIO it creates the bucket
+// and applies a policy, which is correct at boot and wrong behind an HTTP
+// handler, where it would let an authenticated GET recreate a bucket an operator
+// removed on purpose. Backends without the capability report healthy, matching
+// EnsureReady's optional-interface shape.
+func CheckHealth(ctx context.Context, fileStorage Storage) error {
+	if checker, ok := fileStorage.(healthChecker); ok {
+		return checker.CheckHealth(ctx)
+	}
+	return nil
+}
+
 func NewFromConfig(cfg config.Config) (Storage, error) {
 	local := NewLocalStorage(cfg.UploadDir)
 	if strings.ToLower(strings.TrimSpace(cfg.StorageProvider)) != "minio" {
@@ -132,6 +151,24 @@ func (s *RoutedStorage) EnsureReady(ctx context.Context) error {
 	}
 	if s.remote != nil && s.remote != s.primary {
 		return EnsureReady(ctx, s.remote)
+	}
+	return nil
+}
+
+// CheckHealth reports the worst state across the backends this router can serve
+// from. A healthy primary is not enough: documents already stored on the other
+// backend become unreadable if it is down, so both are probed.
+func (s *RoutedStorage) CheckHealth(ctx context.Context) error {
+	if err := CheckHealth(ctx, s.primary); err != nil {
+		return err
+	}
+	if s.remote != nil && s.remote != s.primary {
+		if err := CheckHealth(ctx, s.remote); err != nil {
+			return err
+		}
+	}
+	if s.local != nil && s.local != s.primary && s.local != s.remote {
+		return CheckHealth(ctx, s.local)
 	}
 	return nil
 }
