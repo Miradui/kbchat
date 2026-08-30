@@ -25,7 +25,10 @@ type gapAnswer struct {
 	retrievalQuery  string
 	withCitations   bool
 	noClientRequest bool
-	createdAt       time.Time
+	// answerStatus is left empty to mean NULL, which is what a row written before
+	// migration 019 looks like. Tests about the three failure modes must set it.
+	answerStatus string
+	createdAt    time.Time
 }
 
 func createGapAnswer(t *testing.T, db *gorm.DB, spec gapAnswer) model.ChatMessage {
@@ -72,6 +75,10 @@ func createGapAnswer(t *testing.T, db *gorm.DB, spec gapAnswer) model.ChatMessag
 			`[{"documentId":"` + uuid.NewString() + `","chunkId":"` + uuid.NewString() +
 				`","filename":"policy.pdf","content":"三十天内可退货。"}]`,
 		))
+	}
+	if spec.answerStatus != "" {
+		status := spec.answerStatus
+		answer.AnswerStatus = &status
 	}
 	if err := db.Create(&answer).Error; err != nil {
 		t.Fatalf("create gap answer: %v", err)

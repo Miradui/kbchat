@@ -185,7 +185,12 @@ type ChatKnowledgeGapListResponse struct {
 	PageSize int                            `json:"pageSize"`
 	// Per-category totals stay available regardless of the requested category so a
 	// client can label the filter without a second round trip.
-	NoCitationsTotal     int64 `json:"noCitationsTotal"`
+	NoCitationsTotal int64 `json:"noCitationsTotal"`
+	// RetrievalFailedTotal and ModelRefusedTotal only count turns recorded after
+	// migration 019 added answer_status. Older rows have no status and stay in
+	// NoCitationsTotal, so a zero here means "not observed yet", not "never happened".
+	RetrievalFailedTotal int64 `json:"retrievalFailedTotal"`
+	ModelRefusedTotal    int64 `json:"modelRefusedTotal"`
 	RepeatedRewriteTotal int64 `json:"repeatedRewriteTotal"`
 }
 

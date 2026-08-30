@@ -456,16 +456,20 @@ const ChatKnowledgeGapCategoryAll = "all"
 
 // ListKnowledgeGaps reports questions the knowledge base is failing to answer.
 //
-// Two categories ship here. `no_citations` is a knowledge-intent answer that
-// retrieved nothing, which for this pipeline is the same condition as the
-// program's fixed "insufficient basis" refusal: citations come from the retrieved
-// items, so an empty citation set means retrieval returned nothing and the refusal
-// text was used. The roadmap lists those as separate buckets, but they are one
-// condition here and are reported as one. The genuinely distinct third case, a
-// model refusing despite having citations, needs a signal this pipeline does not
-// record and is P2 work.
+// Four categories ship here, and the split matters because the fix differs:
 //
-// `repeated_rewrite` is a user rephrasing one question inside a session.
+//   - `no_citations`: retrieval succeeded and found nothing. Someone should upload
+//     the missing content.
+//   - `retrieval_failed`: retrieval itself broke, so whether the content exists is
+//     unknown. Nothing to upload; the system needs fixing.
+//   - `model_refused`: the provider declined despite having content in hand. Not a
+//     knowledge base problem at all.
+//   - `repeated_rewrite`: a user rephrasing one question inside a session.
+//
+// The first three all produce an empty citation set, which is why they were one
+// bucket before chat_messages.answer_status existed. Answers written before
+// migration 019 have a NULL status and stay in no_citations rather than being
+// relabelled on a guess.
 func (s *ChatService) ListKnowledgeGaps(
 	ctx context.Context,
 	userID uuid.UUID,
@@ -479,12 +483,14 @@ func (s *ChatService) ListKnowledgeGaps(
 	switch category {
 	case ChatKnowledgeGapCategoryAll,
 		repository.ChatKnowledgeGapNoCitations,
+		repository.ChatKnowledgeGapRetrievalFailed,
+		repository.ChatKnowledgeGapModelRefused,
 		repository.ChatKnowledgeGapRepeatedRewrite:
 	default:
 		// Rejected rather than coerced to "all": silently widening a filter would
 		// show an operator a list that is not the one they asked for.
 		return nil, apperror.Validation(map[string]any{
-			"category": "category must be one of all, no_citations, repeated_rewrite",
+			"category": "category must be one of all, no_citations, retrieval_failed, model_refused, repeated_rewrite",
 		})
 	}
 	if err := s.validateQualityKnowledgeBase(ctx, userID, query.KnowledgeBaseID); err != nil {
@@ -508,6 +514,14 @@ func (s *ChatService) ListKnowledgeGaps(
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
+	retrievalFailedTotal, err := s.chats.CountRetrievalFailedGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	modelRefusedTotal, err := s.chats.CountModelRefusedGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
 	repeatedRewriteTotal, err := s.chats.CountRepeatedRewriteGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt)
 	if err != nil {
 		return nil, apperror.Internal(err)
@@ -519,6 +533,8 @@ func (s *ChatService) ListKnowledgeGaps(
 		Page:                 page,
 		PageSize:             pageSize,
 		NoCitationsTotal:     noCitationsTotal,
+		RetrievalFailedTotal: retrievalFailedTotal,
+		ModelRefusedTotal:    modelRefusedTotal,
 		RepeatedRewriteTotal: repeatedRewriteTotal,
 	}
 
@@ -527,13 +543,24 @@ func (s *ChatService) ListKnowledgeGaps(
 	case repository.ChatKnowledgeGapNoCitations:
 		response.Total = noCitationsTotal
 		items, err = s.chats.ListNoCitationGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt, offset, pageSize)
+	case repository.ChatKnowledgeGapRetrievalFailed:
+		response.Total = retrievalFailedTotal
+		items, err = s.chats.ListRetrievalFailedGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt, offset, pageSize)
+	case repository.ChatKnowledgeGapModelRefused:
+		response.Total = modelRefusedTotal
+		items, err = s.chats.ListModelRefusedGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt, offset, pageSize)
 	case repository.ChatKnowledgeGapRepeatedRewrite:
 		response.Total = repeatedRewriteTotal
 		items, err = s.chats.ListRepeatedRewriteGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt, offset, pageSize)
 	default:
-		response.Total = noCitationsTotal + repeatedRewriteTotal
+		response.Total = noCitationsTotal + retrievalFailedTotal + modelRefusedTotal + repeatedRewriteTotal
 		items, err = s.listCombinedKnowledgeGaps(
-			ctx, userID, query.KnowledgeBaseID, startAt, endAt, offset, pageSize, noCitationsTotal,
+			ctx, userID, query.KnowledgeBaseID, startAt, endAt, offset, pageSize,
+			combinedGapTotals{
+				noCitations:     noCitationsTotal,
+				retrievalFailed: retrievalFailedTotal,
+				modelRefused:    modelRefusedTotal,
+			},
 		)
 	}
 	if err != nil {
@@ -564,51 +591,94 @@ func (s *ChatService) ListKnowledgeGaps(
 	return response, nil
 }
 
-// listCombinedKnowledgeGaps pages across both categories as one sequence: every
-// no_citations row, then every repeated_rewrite cluster.
+// combinedGapTotals carries the counts the combined pager needs to know where each
+// category's share of a page begins. The last category has no field: once the
+// counted ones are exhausted the remainder of the page is entirely its own, so a
+// count for it would never be read.
+type combinedGapTotals struct {
+	noCitations     int64
+	retrievalFailed int64
+	modelRefused    int64
+}
+
+// gapSegment is one category's contribution to the combined listing: how many rows
+// it has, and how to fetch a window of them.
+type gapSegment struct {
+	total int64
+	list  func(ctx context.Context, offset, limit int) ([]repository.ChatKnowledgeGapItem, error)
+}
+
+// listCombinedKnowledgeGaps pages across every category as one sequence: all
+// no_citations rows, then retrieval_failed, then model_refused, then the
+// repeated_rewrite clusters.
 //
-// The two are concatenated rather than interleaved by recency because they are not
-// comparable units — one row is a single answer, the other is a cluster — so a
-// merged "most recent first" ordering would imply a ranking that does not exist.
-// Only the slice each category contributes to the requested page is fetched, so
-// neither full result set is loaded.
+// The categories are concatenated rather than interleaved by recency because they
+// are not comparable units — three of them are single answers, the fourth is a
+// cluster — so a merged "most recent first" ordering would imply a ranking that
+// does not exist. Only the slice each category contributes to the requested page is
+// fetched, so no full result set is ever loaded.
 func (s *ChatService) listCombinedKnowledgeGaps(
 	ctx context.Context,
 	userID uuid.UUID,
 	knowledgeBaseID *uuid.UUID,
 	startAt, endAt time.Time,
 	offset, pageSize int,
-	noCitationsTotal int64,
+	totals combinedGapTotals,
 ) ([]repository.ChatKnowledgeGapItem, error) {
-	items := make([]repository.ChatKnowledgeGapItem, 0, pageSize)
-	firstCount := int(noCitationsTotal)
+	segments := []gapSegment{
+		{
+			total: totals.noCitations,
+			list: func(ctx context.Context, offset, limit int) ([]repository.ChatKnowledgeGapItem, error) {
+				return s.chats.ListNoCitationGaps(ctx, userID, knowledgeBaseID, startAt, endAt, offset, limit)
+			},
+		},
+		{
+			total: totals.retrievalFailed,
+			list: func(ctx context.Context, offset, limit int) ([]repository.ChatKnowledgeGapItem, error) {
+				return s.chats.ListRetrievalFailedGaps(ctx, userID, knowledgeBaseID, startAt, endAt, offset, limit)
+			},
+		},
+		{
+			total: totals.modelRefused,
+			list: func(ctx context.Context, offset, limit int) ([]repository.ChatKnowledgeGapItem, error) {
+				return s.chats.ListModelRefusedGaps(ctx, userID, knowledgeBaseID, startAt, endAt, offset, limit)
+			},
+		},
+	}
 
-	if offset < firstCount {
-		limit := pageSize
-		if remaining := firstCount - offset; remaining < limit {
-			limit = remaining
+	items := make([]repository.ChatKnowledgeGapItem, 0, pageSize)
+	// Consumed as the categories are walked: each one the page starts past shifts
+	// the offset down by its own size, so what reaches a category is its local
+	// offset rather than the global one.
+	remainingOffset := offset
+	for _, segment := range segments {
+		count := int(segment.total)
+		if remainingOffset >= count {
+			remainingOffset -= count
+			continue
 		}
-		first, err := s.chats.ListNoCitationGaps(ctx, userID, knowledgeBaseID, startAt, endAt, offset, limit)
+		limit := pageSize - len(items)
+		if available := count - remainingOffset; available < limit {
+			limit = available
+		}
+		window, err := segment.list(ctx, remainingOffset, limit)
 		if err != nil {
 			return nil, err
 		}
-		items = append(items, first...)
+		items = append(items, window...)
+		remainingOffset = 0
+		if len(items) >= pageSize {
+			return items, nil
+		}
 	}
 
-	if len(items) >= pageSize {
-		return items, nil
-	}
-	secondOffset := offset - firstCount
-	if secondOffset < 0 {
-		secondOffset = 0
-	}
-	second, err := s.chats.ListRepeatedRewriteGaps(
-		ctx, userID, knowledgeBaseID, startAt, endAt, secondOffset, pageSize-len(items),
+	tail, err := s.chats.ListRepeatedRewriteGaps(
+		ctx, userID, knowledgeBaseID, startAt, endAt, remainingOffset, pageSize-len(items),
 	)
 	if err != nil {
 		return nil, err
 	}
-	return append(items, second...), nil
+	return append(items, tail...), nil
 }
 
 func (s *ChatService) ListNegativeFeedback(

@@ -403,12 +403,22 @@ func (r *ChatRepository) GetQualityOverview(
 	return overview, err
 }
 
-// Gap categories. `no_citations` is one row per knowledge answer that retrieved
-// nothing; `repeated_rewrite` is one row per cluster of rephrasings of the same
-// question inside one session.
+// Gap categories.
+//
+// `no_citations` is one row per knowledge answer that retrieved nothing, and
+// `repeated_rewrite` is one row per cluster of rephrasings of the same question
+// inside one session. `retrieval_failed` and `model_refused` split out the two
+// cases that used to be counted as no_citations: all three produce an empty
+// citation set, but only no_citations is a statement about the knowledge base.
+//
+// The split is driven by chat_messages.answer_status, so it only applies to rows
+// written after migration 019. Older rows have a NULL status and stay in
+// no_citations, which is where they were before -- see noCitationGapScope.
 const (
 	ChatKnowledgeGapNoCitations     = "no_citations"
 	ChatKnowledgeGapRepeatedRewrite = "repeated_rewrite"
+	ChatKnowledgeGapRetrievalFailed = "retrieval_failed"
+	ChatKnowledgeGapModelRefused    = "model_refused"
 )
 
 // chatRepeatedRewriteMinOccurrences is the cluster threshold: a single ask is not
@@ -451,12 +461,18 @@ const chatQuestionForAnswerSQL = `COALESCE(
 	''
 )`
 
-// noCitationGapScope is knowledge-intent answers that retrieved nothing.
+// noCitationGapScope is knowledge-intent answers where the knowledge base itself
+// had nothing to offer.
 //
 // Restricted to intent = 'knowledge_base' so conversation answers, which are
 // given an empty citation array on purpose, are not reported as knowledge gaps.
 // Rows with NULL intent predate intent tracking and are excluded rather than
 // assumed.
+//
+// A retrieval failure or a model refusal also has no citations but is not this
+// condition, so both are excluded. NULL answer_status is kept: those rows predate
+// migration 019 and an empty citation set is the only evidence available for them,
+// which is exactly what this category meant before the status existed.
 func noCitationGapScope(
 	db *gorm.DB,
 	ownerID uuid.UUID,
@@ -465,7 +481,28 @@ func noCitationGapScope(
 ) *gorm.DB {
 	return chatQualityScope(db, ownerID, knowledgeBaseID, startAt, endAt).
 		Where("chat_messages.intent = ?", "knowledge_base").
-		Where(chatEmptyCitationsSQL)
+		Where(chatEmptyCitationsSQL).
+		Where(
+			"(chat_messages.answer_status IS NULL OR chat_messages.answer_status NOT IN ?)",
+			[]string{ChatKnowledgeGapRetrievalFailed, ChatKnowledgeGapModelRefused},
+		)
+}
+
+// answerStatusGapScope is answers carrying one specific answer_status.
+//
+// Unlike noCitationGapScope this does not filter on citations: a model refusal has
+// content in hand and may well have citations attached, and that is precisely what
+// makes it a different problem from an empty knowledge base.
+func answerStatusGapScope(
+	db *gorm.DB,
+	ownerID uuid.UUID,
+	knowledgeBaseID *uuid.UUID,
+	startAt, endAt time.Time,
+	answerStatus string,
+) *gorm.DB {
+	return chatQualityScope(db, ownerID, knowledgeBaseID, startAt, endAt).
+		Where("chat_messages.intent = ?", "knowledge_base").
+		Where("chat_messages.answer_status = ?", answerStatus)
 }
 
 // repeatedRewriteGapScope is the pre-grouping row set for rewrite clusters.
@@ -499,11 +536,96 @@ func (r *ChatRepository) CountNoCitationGaps(
 	return total, err
 }
 
+// CountRetrievalFailedGaps counts turns where retrieval itself broke, so an
+// operator can tell "the knowledge base is missing content" apart from "the system
+// was failing during this period".
+func (r *ChatRepository) CountRetrievalFailedGaps(
+	ctx context.Context,
+	ownerID uuid.UUID,
+	knowledgeBaseID *uuid.UUID,
+	startAt, endAt time.Time,
+) (int64, error) {
+	var total int64
+	err := answerStatusGapScope(
+		r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt,
+		ChatKnowledgeGapRetrievalFailed,
+	).Count(&total).Error
+	return total, err
+}
+
+// CountModelRefusedGaps counts turns the provider declined. Uploading documents
+// will not fix these, which is why they are counted separately.
+func (r *ChatRepository) CountModelRefusedGaps(
+	ctx context.Context,
+	ownerID uuid.UUID,
+	knowledgeBaseID *uuid.UUID,
+	startAt, endAt time.Time,
+) (int64, error) {
+	var total int64
+	err := answerStatusGapScope(
+		r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt,
+		ChatKnowledgeGapModelRefused,
+	).Count(&total).Error
+	return total, err
+}
+
+func (r *ChatRepository) ListRetrievalFailedGaps(
+	ctx context.Context,
+	ownerID uuid.UUID,
+	knowledgeBaseID *uuid.UUID,
+	startAt, endAt time.Time,
+	offset, limit int,
+) ([]ChatKnowledgeGapItem, error) {
+	return r.listSingleAnswerGaps(
+		ctx,
+		answerStatusGapScope(
+			r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt,
+			ChatKnowledgeGapRetrievalFailed,
+		),
+		ChatKnowledgeGapRetrievalFailed,
+		offset, limit,
+	)
+}
+
+func (r *ChatRepository) ListModelRefusedGaps(
+	ctx context.Context,
+	ownerID uuid.UUID,
+	knowledgeBaseID *uuid.UUID,
+	startAt, endAt time.Time,
+	offset, limit int,
+) ([]ChatKnowledgeGapItem, error) {
+	return r.listSingleAnswerGaps(
+		ctx,
+		answerStatusGapScope(
+			r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt,
+			ChatKnowledgeGapModelRefused,
+		),
+		ChatKnowledgeGapModelRefused,
+		offset, limit,
+	)
+}
+
 func (r *ChatRepository) ListNoCitationGaps(
 	ctx context.Context,
 	ownerID uuid.UUID,
 	knowledgeBaseID *uuid.UUID,
 	startAt, endAt time.Time,
+	offset, limit int,
+) ([]ChatKnowledgeGapItem, error) {
+	return r.listSingleAnswerGaps(
+		ctx,
+		noCitationGapScope(r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt),
+		ChatKnowledgeGapNoCitations,
+		offset, limit,
+	)
+}
+
+// listSingleAnswerGaps pages one-row-per-answer categories. Shared by all three so
+// the projection, ordering and tie-break cannot drift between them.
+func (r *ChatRepository) listSingleAnswerGaps(
+	_ context.Context,
+	scope *gorm.DB,
+	category string,
 	offset, limit int,
 ) ([]ChatKnowledgeGapItem, error) {
 	type row struct {
@@ -517,7 +639,7 @@ func (r *ChatRepository) ListNoCitationGaps(
 		CreatedAt         time.Time
 	}
 	var rows []row
-	err := noCitationGapScope(r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt).
+	err := scope.
 		Select(`
 			chat_messages.id AS message_id,
 			chat_messages.session_id AS session_id,
@@ -541,7 +663,7 @@ func (r *ChatRepository) ListNoCitationGaps(
 	for i := range rows {
 		messageID := rows[i].MessageID
 		items = append(items, ChatKnowledgeGapItem{
-			Category:          ChatKnowledgeGapNoCitations,
+			Category:          category,
 			MessageID:         &messageID,
 			SessionID:         rows[i].SessionID,
 			SessionTitle:      rows[i].SessionTitle,
