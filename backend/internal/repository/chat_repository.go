@@ -558,6 +558,37 @@ func (r *ChatRepository) ListNoCitationGaps(
 	return items, nil
 }
 
+// parseAggregatedTime reads a timestamp that came out of MIN()/MAX().
+//
+// PostgreSQL keeps the column type through the aggregate and returns a time.Time,
+// but SQLite loses the type affinity and returns text, so scanning straight into
+// time.Time works in production and fails in the test suite. Scanning as text and
+// parsing here works on both, which is the same approach the workspace listing
+// takes for MAX(viewed_at).
+//
+// A value that parses in no known layout yields the zero time rather than an
+// error: this feeds a diagnostic list, so losing one cluster's timestamps is
+// better than failing the whole page.
+func parseAggregatedTime(value string) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+	formats := []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999Z07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	}
+	for _, format := range formats {
+		if parsed, err := time.Parse(format, value); err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
+}
+
 // repeatedRewriteGroups is the grouped query shared by the count and the page so
 // the HAVING threshold cannot drift between them.
 func repeatedRewriteGroups(
@@ -613,8 +644,8 @@ func (r *ChatRepository) ListRepeatedRewriteGaps(
 		OccurrenceCount    int64
 		UngroundedCount    int64
 		RetrievalQuery     string
-		FirstSeenAt        time.Time
-		LastSeenAt         time.Time
+		FirstSeenAt        string
+		LastSeenAt         string
 	}
 	var rows []row
 	err := repeatedRewriteGroups(r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt).
@@ -642,8 +673,8 @@ func (r *ChatRepository) ListRepeatedRewriteGaps(
 			RetrievalQuery:  rows[i].RetrievalQuery,
 			OccurrenceCount: rows[i].OccurrenceCount,
 			UngroundedCount: rows[i].UngroundedCount,
-			FirstSeenAt:     rows[i].FirstSeenAt,
-			LastSeenAt:      rows[i].LastSeenAt,
+			FirstSeenAt:     parseAggregatedTime(rows[i].FirstSeenAt),
+			LastSeenAt:      parseAggregatedTime(rows[i].LastSeenAt),
 		})
 	}
 	return items, nil
