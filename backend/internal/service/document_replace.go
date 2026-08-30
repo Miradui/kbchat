@@ -96,7 +96,7 @@ func (s *DocumentService) Replace(
 	}
 
 	s.recordDocumentActivity(ctx, ownerID, ActivityDocumentUploaded, document)
-	res := toDocumentResponse(document, job, s.maxDocumentRetries())
+	res := toDocumentResponse(document, job, s.maxDocumentRetries(), s.staleAfterDays())
 	return &res, nil
 }
 

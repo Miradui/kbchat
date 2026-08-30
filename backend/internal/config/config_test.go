@@ -159,3 +159,41 @@ func TestExampleEnvironmentEnablesRerank(t *testing.T) {
 		t.Fatalf("expected standard RAG example to enable rerank, got %q", got)
 	}
 }
+
+func TestValidateRejectsNegativeStaleDocumentThreshold(t *testing.T) {
+	// Rejected rather than clamped: a negative threshold would mark every document
+	// stale on upload, and reading it as "disabled" would hide the typo.
+	err := (Config{
+		JWTSecret:              strings.Repeat("a", 32),
+		MaxUploadSizeMB:        50,
+		StorageProvider:        "local",
+		StaleDocumentAfterDays: -1,
+	}).Validate()
+	if err == nil || !strings.Contains(err.Error(), "STALE_DOCUMENT_AFTER_DAYS") {
+		t.Fatalf("expected STALE_DOCUMENT_AFTER_DAYS validation error, got %v", err)
+	}
+}
+
+func TestValidateAcceptsDisabledStaleDocumentThreshold(t *testing.T) {
+	// 0 is the documented way to turn the flag off, so it must stay valid.
+	err := (Config{
+		JWTSecret:              strings.Repeat("a", 32),
+		MaxUploadSizeMB:        50,
+		StorageProvider:        "local",
+		StaleDocumentAfterDays: 0,
+	}).Validate()
+	if err != nil {
+		t.Fatalf("expected a disabled threshold to be valid, got %v", err)
+	}
+}
+
+func TestDefaultStaleDocumentThresholdMatchesTheExampleEnvironment(t *testing.T) {
+	values, err := godotenv.Read("../../../.env.example")
+	if err != nil {
+		t.Fatalf("read example environment: %v", err)
+	}
+	want := strconv.Itoa(defaultStaleDocumentAfterDays)
+	if got := values["STALE_DOCUMENT_AFTER_DAYS"]; got != want {
+		t.Fatalf("example environment and code default disagree: example %q, default %q", got, want)
+	}
+}

@@ -32,6 +32,13 @@ type DocumentResponse struct {
 	// tells the client this row is history rather than a live document.
 	SupersededByID *string    `json:"supersededById"`
 	SupersededAt   *time.Time `json:"supersededAt"`
+
+	// IsStale is a display hint, not a judgement: the document has gone longer than
+	// the configured threshold without an update. It never affects retrieval.
+	IsStale bool `json:"isStale"`
+	// StaleAfterDays echoes the threshold so the client can explain the flag
+	// instead of asserting it. 0 means the flag is disabled server-side.
+	StaleAfterDays int `json:"staleAfterDays"`
 }
 
 type GlobalDocumentListQuery struct {
@@ -61,6 +68,12 @@ type GlobalDocumentResponse struct {
 	NextRetryAt       *time.Time `json:"nextRetryAt"`
 	CreatedAt         time.Time  `json:"createdAt"`
 	UpdatedAt         time.Time  `json:"updatedAt"`
+
+	ErrorCode      string     `json:"errorCode,omitempty"`
+	SupersededByID *string    `json:"supersededById"`
+	SupersededAt   *time.Time `json:"supersededAt"`
+	IsStale        bool       `json:"isStale"`
+	StaleAfterDays int        `json:"staleAfterDays"`
 }
 
 type GlobalDocumentListResponse struct {

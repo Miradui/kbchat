@@ -143,7 +143,7 @@ func (s *DocumentService) UploadWithOptions(
 	}
 
 	s.recordDocumentActivity(ctx, ownerID, ActivityDocumentUploaded, document)
-	res := toDocumentResponse(document, job, s.maxDocumentRetries())
+	res := toDocumentResponse(document, job, s.maxDocumentRetries(), s.staleAfterDays())
 	return &res, nil
 }
 
@@ -209,7 +209,12 @@ func (s *DocumentService) ListGlobal(ctx context.Context, ownerID uuid.UUID, que
 		PageSize: pageSize,
 	}
 	for i := range items {
-		res.Items = append(res.Items, toGlobalDocumentResponse(&items[i], jobForDocument(jobsByDocumentID, items[i].ID), s.maxDocumentRetries()))
+		res.Items = append(res.Items, toGlobalDocumentResponse(
+			&items[i],
+			jobForDocument(jobsByDocumentID, items[i].ID),
+			s.maxDocumentRetries(),
+			s.staleAfterDays(),
+		))
 	}
 	return &res, nil
 }
@@ -223,7 +228,7 @@ func (s *DocumentService) Get(ctx context.Context, ownerID, documentID uuid.UUID
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
-	res := toDocumentResponse(document, job, s.maxDocumentRetries())
+	res := toDocumentResponse(document, job, s.maxDocumentRetries(), s.staleAfterDays())
 	return &res, nil
 }
 
@@ -326,7 +331,7 @@ func (s *DocumentService) Reprocess(ctx context.Context, ownerID, documentID uui
 		document.Status = "uploaded"
 		document.ErrorMessage = ""
 	}
-	res := toDocumentResponse(document, job, s.maxDocumentRetries())
+	res := toDocumentResponse(document, job, s.maxDocumentRetries(), s.staleAfterDays())
 	return &res, nil
 }
 
@@ -517,7 +522,7 @@ func (s *DocumentService) Update(ctx context.Context, ownerID, documentID uuid.U
 		if err != nil {
 			return nil, apperror.Internal(err)
 		}
-		res := toDocumentResponse(document, job, s.maxDocumentRetries())
+		res := toDocumentResponse(document, job, s.maxDocumentRetries(), s.staleAfterDays())
 		return &res, nil
 	}
 
@@ -540,7 +545,7 @@ func (s *DocumentService) Update(ctx context.Context, ownerID, documentID uuid.U
 		// Only a move is worth a timeline entry; a rename is visible in place.
 		s.recordDocumentActivity(ctx, ownerID, ActivityDocumentMoved, updated)
 	}
-	res := toDocumentResponse(updated, job, s.maxDocumentRetries())
+	res := toDocumentResponse(updated, job, s.maxDocumentRetries(), s.staleAfterDays())
 	return &res, nil
 }
 
@@ -566,7 +571,7 @@ func (s *DocumentService) CancelJob(ctx context.Context, ownerID, documentID uui
 		return nil, err
 	}
 	s.recordDocumentActivity(ctx, ownerID, ActivityDocumentCancelled, updated)
-	res := toDocumentResponse(updated, job, s.maxDocumentRetries())
+	res := toDocumentResponse(updated, job, s.maxDocumentRetries(), s.staleAfterDays())
 	return &res, nil
 }
 
@@ -701,7 +706,9 @@ type documentProgressInfo struct {
 	NextRetryAt *time.Time
 }
 
-func toDocumentResponse(document *model.Document, job *model.DocumentJob, maxRetries int) dto.DocumentResponse {
+// toDocumentResponse takes staleAfterDays rather than reading the config so the
+// mapper stays a pure function; the service passes its configured value in.
+func toDocumentResponse(document *model.Document, job *model.DocumentJob, maxRetries int, staleAfterDays int) dto.DocumentResponse {
 	var errorMessage *string
 	if document.ErrorMessage != "" {
 		message := publicDocumentErrorMessage(document.ErrorMessage)
@@ -728,6 +735,8 @@ func toDocumentResponse(document *model.Document, job *model.DocumentJob, maxRet
 		ErrorCode:       stringValue(document.ErrorCode),
 		SupersededByID:  supersededByID(document.SupersededByID),
 		SupersededAt:    document.SupersededAt,
+		IsStale:         isStaleDocument(document, staleAfterDays, time.Now()),
+		StaleAfterDays:  staleAfterDays,
 	}
 }
 
@@ -766,7 +775,12 @@ func toGlobalDocumentRepoQuery(query dto.GlobalDocumentListQuery) (repository.Gl
 	return res, nil
 }
 
-func toGlobalDocumentResponse(document *repository.GlobalDocumentListItem, job *model.DocumentJob, maxRetries int) dto.GlobalDocumentResponse {
+func toGlobalDocumentResponse(
+	document *repository.GlobalDocumentListItem,
+	job *model.DocumentJob,
+	maxRetries int,
+	staleAfterDays int,
+) dto.GlobalDocumentResponse {
 	var errorMessage *string
 	if document.ErrorMessage != "" {
 		message := publicDocumentErrorMessage(document.ErrorMessage)
@@ -790,6 +804,15 @@ func toGlobalDocumentResponse(document *repository.GlobalDocumentListItem, job *
 		NextRetryAt:       progress.NextRetryAt,
 		CreatedAt:         document.CreatedAt,
 		UpdatedAt:         document.UpdatedAt,
+		ErrorCode:         stringValue(document.ErrorCode),
+		SupersededByID:    supersededByID(document.SupersededByID),
+		SupersededAt:      document.SupersededAt,
+		IsStale: isStaleDocument(&model.Document{
+			Status:         document.Status,
+			SupersededByID: document.SupersededByID,
+			UpdatedAt:      document.UpdatedAt,
+		}, staleAfterDays, time.Now()),
+		StaleAfterDays: staleAfterDays,
 	}
 }
 

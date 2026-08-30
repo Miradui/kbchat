@@ -43,6 +43,7 @@ const (
 	defaultWorkerMaxRetries        = 3
 	defaultWorkerRetryDelay        = 10 * time.Second
 	defaultStorageOperationTimeout = 2 * time.Minute
+	defaultStaleDocumentAfterDays  = 180
 	minJWTSecretBytes              = 32
 	bytesPerMiB                    = int64(1024 * 1024)
 	uploadRequestOverhead          = bytesPerMiB
@@ -50,40 +51,46 @@ const (
 )
 
 type Config struct {
-	AppEnv                  string
-	ServerPort              string
-	CORSAllowedOrigins      []string
-	DatabaseURL             string
-	RedisAddr               string
-	RedisPassword           string
-	RedisDB                 int
-	JWTSecret               string
-	JWTExpiresIn            string
-	ModelProvider           string
-	ChatBaseURL             string
-	ChatAPIKey              string
-	ChatModel               string
-	TitleBaseURL            string
-	TitleAPIKey             string
-	TitleModel              string
-	EmbeddingBaseURL        string
-	EmbeddingAPIKey         string
-	EmbeddingModel          string
-	EmbeddingDimension      int
-	RerankEnabled           bool
-	RerankBaseURL           string
-	RerankAPIKey            string
-	RerankModel             string
-	RerankFailureMode       string
-	StorageProvider         string
-	UploadDir               string
-	MinIOEndpoint           string
-	MinIOAccessKey          string
-	MinIOSecretKey          string
-	MinIOBucket             string
-	MinIORegion             string
-	MinIOUseSSL             bool
-	MaxUploadSizeMB         int
+	AppEnv             string
+	ServerPort         string
+	CORSAllowedOrigins []string
+	DatabaseURL        string
+	RedisAddr          string
+	RedisPassword      string
+	RedisDB            int
+	JWTSecret          string
+	JWTExpiresIn       string
+	ModelProvider      string
+	ChatBaseURL        string
+	ChatAPIKey         string
+	ChatModel          string
+	TitleBaseURL       string
+	TitleAPIKey        string
+	TitleModel         string
+	EmbeddingBaseURL   string
+	EmbeddingAPIKey    string
+	EmbeddingModel     string
+	EmbeddingDimension int
+	RerankEnabled      bool
+	RerankBaseURL      string
+	RerankAPIKey       string
+	RerankModel        string
+	RerankFailureMode  string
+	StorageProvider    string
+	UploadDir          string
+	MinIOEndpoint      string
+	MinIOAccessKey     string
+	MinIOSecretKey     string
+	MinIOBucket        string
+	MinIORegion        string
+	MinIOUseSSL        bool
+	MaxUploadSizeMB    int
+	// StaleDocumentAfterDays is how long a processed document goes without being
+	// updated before the UI flags it as possibly out of date. 0 disables the flag.
+	// A document is never deleted or down-weighted in retrieval for being stale:
+	// old is not the same as wrong, and silently demoting content the user still
+	// relies on would make answers worse with no way to see why.
+	StaleDocumentAfterDays  int
 	VectorTopN              int
 	RerankTopK              int
 	ScoreThreshold          float64
@@ -132,6 +139,7 @@ func Load() Config {
 		MinIORegion:             strings.TrimSpace(getEnv("MINIO_REGION", "")),
 		MinIOUseSSL:             getEnvBool("MINIO_USE_SSL", defaultMinIOUseSSL),
 		MaxUploadSizeMB:         getEnvUploadSizeMB(defaultMaxUploadSizeMB),
+		StaleDocumentAfterDays:  getEnvInt("STALE_DOCUMENT_AFTER_DAYS", defaultStaleDocumentAfterDays),
 		VectorTopN:              getEnvInt("VECTOR_TOP_N", defaultVectorTopN),
 		RerankTopK:              getEnvInt("RERANK_TOP_K", defaultRerankTopK),
 		ScoreThreshold:          getEnvFloat("SCORE_THRESHOLD", defaultScoreThreshold),
@@ -149,6 +157,12 @@ func (c Config) Validate() error {
 	}
 	if err := validateMaxUploadSizeMB(c.MaxUploadSizeMB); err != nil {
 		return err
+	}
+	// Rejected rather than clamped: a negative threshold would mark every document
+	// stale on upload, and silently reading it as "disabled" would hide the typo
+	// that caused it.
+	if c.StaleDocumentAfterDays < 0 {
+		return fmt.Errorf("STALE_DOCUMENT_AFTER_DAYS must not be negative")
 	}
 	return validateStorageConfig(c)
 }

@@ -24,6 +24,9 @@ type GlobalDocumentListItem struct {
 	FileSize          int64
 	Status            string
 	ErrorMessage      string
+	ErrorCode         *string
+	SupersededByID    *uuid.UUID
+	SupersededAt      *time.Time
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 }
@@ -142,6 +145,9 @@ func (r *DocumentRepository) ListByOwner(ctx context.Context, ownerID uuid.UUID,
 			documents.file_size AS file_size,
 			documents.status AS status,
 			documents.error_message AS error_message,
+			documents.error_code AS error_code,
+			documents.superseded_by_id AS superseded_by_id,
+			documents.superseded_at AS superseded_at,
 			documents.created_at AS created_at,
 			documents.updated_at AS updated_at
 		`).
