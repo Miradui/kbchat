@@ -164,12 +164,19 @@ instead of crashing.
   string into it would make the metric look better exactly when retrieval is failing.
   Affected areas: `backend/internal/service/chat_service.go`.
 
-- [ ] 5. Emit each timing to the logger as well as the recorder. Add the durations and the
-  fallback flag as zap fields on the existing request-scoped logging path so an incident can
-  be reconstructed after a restart. Rationale: the recorder is explicitly volatile by design
-  decision; without a durable trail the phase would ship an observability feature that
-  forgets everything on deploy. Affected areas: `backend/internal/service/chat_service.go`,
-  `backend/internal/retrieval/service.go`.
+- [ ] 5. Give the recorder an optional zap logger so timings are durable. No service currently
+  takes a `*zap.Logger` (grep: zero matches in `internal/service` and `internal/retrieval`),
+  and threading one into two services to write log lines would be a wide change for a narrow
+  purpose. Instead the recorder gains `WithLogger`, wired once in the router, and exposes
+  `RecordChatTiming(fields)` which writes a single structured line per chat request carrying
+  retrieval, first-token and generation durations plus the fallback flag. Provider failures
+  log at warn with the classified reason **and** the raw error — logs are server-side and are
+  where an incident actually gets diagnosed; the sanitization constraint applies to the API
+  response, not to the operator's own log. Rationale: the recorder is volatile by design, so
+  without a durable trail this phase would ship observability that forgets everything on
+  deploy; one summary line per request keeps that trail useful instead of drowning it in a
+  line per sample. Affected areas: `backend/internal/observability/`,
+  `backend/internal/service/chat_service.go`.
 
 - [ ] 6. Add the read-only storage probe. `CheckHealth(ctx) error` on `MinIOStorage` using
   `BucketExists` (returning a distinct error when the bucket is absent), on `RoutedStorage`

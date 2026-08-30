@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -12,6 +13,7 @@ import (
 	"kbchat/backend/internal/dto"
 	"kbchat/backend/internal/embedding"
 	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/observability"
 	"kbchat/backend/internal/repository"
 	"kbchat/backend/internal/rerank"
 )
@@ -52,6 +54,15 @@ type Service struct {
 	knowledgeBases knowledgeBaseFinder
 	embedder       embedding.Provider
 	reranker       rerank.Provider
+	metrics        *observability.Recorder
+}
+
+// SetRecorder wires retrieval timings and provider outcomes into the diagnostics
+// endpoint. Optional, following the SetActivityRecorder precedent, so the
+// constructor signature and its existing callers stay unchanged. The recorder is
+// nil-safe, so an unset one simply records nothing.
+func (s *Service) SetRecorder(recorder *observability.Recorder) {
+	s.metrics = recorder
 }
 
 func NewService(
@@ -81,7 +92,17 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 
 	options := s.resolveSearchOptions(kb, req)
 
+	// Timed from here rather than from function entry: the ownership lookup above
+	// is an authorization check, not retrieval work, and including it would make
+	// the metric partly a measure of how often callers pass bad IDs.
+	retrievalStart := time.Now()
+
+	embeddingStart := time.Now()
 	embeddings, err := s.embedder.EmbedTexts(ctx, []string{req.Query})
+	s.metrics.RecordProviderResult(observability.ProviderEmbedding, err)
+	if err == nil {
+		s.metrics.ObserveSince(observability.MetricEmbedding, embeddingStart)
+	}
 	if err != nil {
 		return nil, apperror.Wrap(500, "EMBEDDING_FAILED", "知识检索暂时不可用，请稍后重试", err)
 	}
@@ -100,7 +121,12 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 	rerankStageStatus := "disabled"
 	var rerankFallback *dto.RerankFallbackResponse
 	if options.enableRerank {
+		rerankStart := time.Now()
 		rerankCandidates, err = s.rerank(ctx, req.Query, vectorCandidates, 0)
+		s.metrics.RecordProviderResult(observability.ProviderRerank, err)
+		if err == nil {
+			s.metrics.ObserveSince(observability.MetricRerank, rerankStart)
+		}
 		if err != nil {
 			if s.cfg.RerankFailureMode == rerankFailureModeFallback {
 				candidates = filterSearchResults(vectorCandidates, options.scoreThreshold, false)
@@ -110,6 +136,7 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 					Used:   true,
 					Reason: rerankFallbackProviderError,
 				}
+				s.metrics.RecordRerankFallback(rerankFallbackProviderError)
 			} else {
 				return nil, apperror.Wrap(500, "RERANK_FAILED", "知识检索排序暂时不可用，请稍后重试", err)
 			}
@@ -135,6 +162,8 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 			RerankScore: item.RerankScore,
 		})
 	}
+
+	s.metrics.ObserveSince(observability.MetricRetrieval, retrievalStart)
 
 	res := &dto.SearchResponse{Items: items, RerankFallback: rerankFallback}
 	if req.Debug {

@@ -13,6 +13,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // Metric names recorded by the chat and retrieval paths. They are exported so
@@ -82,6 +84,7 @@ type Recorder struct {
 	providers map[string]*providerHealth
 	fallbacks map[string]uint64
 	now       func() time.Time
+	logger    *zap.Logger
 }
 
 func NewRecorder() *Recorder {
@@ -91,6 +94,27 @@ func NewRecorder() *Recorder {
 		fallbacks: map[string]uint64{},
 		now:       time.Now,
 	}
+}
+
+// WithLogger attaches the durable trail. The in-memory figures reset on restart
+// by design, so the log is where an incident gets reconstructed afterwards.
+// Logging lives here rather than in the services because no service currently
+// takes a logger, and threading one through two of them to emit a few fields
+// would be a wide change for a narrow purpose.
+func (r *Recorder) WithLogger(logger *zap.Logger) *Recorder {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.logger = logger
+	return r
+}
+
+func (r *Recorder) log() *zap.Logger {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.logger
 }
 
 // ObserveDuration records one timing sample. Negative values are dropped: a
@@ -138,10 +162,58 @@ func (r *Recorder) RecordProviderResult(provider string, err error) {
 		health.successCount++
 		return
 	}
+	reason := Classify(err)
 	health.lastFailureAt = now
-	health.lastReason = Classify(err)
+	health.lastReason = reason
 	health.failureCount++
 	health.failures = appendWithinWindow(health.failures, now, recentFailureWindow)
+
+	// The raw error is logged deliberately. The no-secrets constraint applies to
+	// the API response, not to the operator's own server log, which is where a
+	// provider outage actually gets diagnosed.
+	if r.logger != nil {
+		r.logger.Warn("provider call failed",
+			zap.String("provider", provider),
+			zap.String("reason", string(reason)),
+			zap.Error(err),
+		)
+	}
+}
+
+// ChatTiming is one chat request's durations. Zero values mean the stage did not
+// run: a conversation-intent answer has no retrieval, and a locally generated
+// refusal has no first token from the model.
+type ChatTiming struct {
+	Retrieval      time.Duration
+	FirstToken     time.Duration
+	Generation     time.Duration
+	Intent         string
+	RerankFallback bool
+}
+
+// RecordChatTiming writes the durable summary line for one chat request. The
+// samples themselves are recorded at their own call sites; this exists so the
+// per-request picture survives a restart.
+func (r *Recorder) RecordChatTiming(timing ChatTiming) {
+	if r == nil {
+		return
+	}
+	logger := r.log()
+	if logger == nil {
+		return
+	}
+	fields := []zap.Field{
+		zap.String("intent", timing.Intent),
+		zap.Duration("generationDuration", timing.Generation),
+		zap.Bool("rerankFallback", timing.RerankFallback),
+	}
+	if timing.Retrieval > 0 {
+		fields = append(fields, zap.Duration("retrievalDuration", timing.Retrieval))
+	}
+	if timing.FirstToken > 0 {
+		fields = append(fields, zap.Duration("firstTokenLatency", timing.FirstToken))
+	}
+	logger.Info("chat answer timing", fields...)
 }
 
 // RecordRerankFallback counts a degraded retrieval. The reason is one of the

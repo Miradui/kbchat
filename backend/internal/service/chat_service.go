@@ -19,6 +19,7 @@ import (
 	"kbchat/backend/internal/config"
 	"kbchat/backend/internal/dto"
 	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/observability"
 	"kbchat/backend/internal/repository"
 	titlecore "kbchat/backend/internal/title"
 )
@@ -35,12 +36,19 @@ type ChatService struct {
 	chatProvider   chatcore.Provider
 	titleProvider  titlecore.Provider
 	activities     *ActivityRecorder
+	metrics        *observability.Recorder
 }
 
 // SetActivityRecorder wires the workspace timeline. Optional; see the
 // KnowledgeBaseService counterpart.
 func (s *ChatService) SetActivityRecorder(recorder *ActivityRecorder) {
 	s.activities = recorder
+}
+
+// SetRecorder wires generation timings into the diagnostics endpoint. Optional
+// and nil-safe, for the same reason as SetActivityRecorder.
+func (s *ChatService) SetRecorder(recorder *observability.Recorder) {
+	s.metrics = recorder
 }
 
 const (
@@ -1229,24 +1237,40 @@ func (s *ChatService) generateAnswer(ctx context.Context, userID uuid.UUID, sess
 
 // complete runs the chat provider, streaming when both the provider supports it
 // and the caller wants deltas. The returned answer is authoritative either way.
-func (s *ChatService) complete(ctx context.Context, messages []chatcore.Message, onDelta func(string) error) (string, error) {
+//
+// The returned duration is first-token latency, and is zero unless the provider
+// genuinely streamed. A non-streaming provider's single synthetic delta arrives
+// only once the whole completion is done, so counting it would record generation
+// time under a metric operators read as "time until the user sees something".
+func (s *ChatService) complete(ctx context.Context, messages []chatcore.Message, onDelta func(string) error) (string, time.Duration, error) {
+	start := time.Now()
 	if onDelta != nil {
 		if streamer, ok := s.chatProvider.(chatcore.StreamingProvider); ok {
-			return streamer.ChatStream(ctx, messages, onDelta)
+			var firstToken time.Duration
+			answer, err := streamer.ChatStream(ctx, messages, func(delta string) error {
+				if firstToken == 0 {
+					firstToken = time.Since(start)
+					s.metrics.ObserveDuration(observability.MetricChatFirstToken, firstToken)
+				}
+				return onDelta(delta)
+			})
+			s.metrics.RecordProviderResult(observability.ProviderChat, err)
+			return answer, firstToken, err
 		}
 	}
 	answer, err := s.chatProvider.Chat(ctx, messages)
+	s.metrics.RecordProviderResult(observability.ProviderChat, err)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	// A non-streaming provider still has to look like a stream to the client, so
 	// the whole answer is delivered as a single delta.
 	if onDelta != nil && answer != "" {
 		if err := onDelta(answer); err != nil {
-			return "", err
+			return "", 0, err
 		}
 	}
-	return answer, nil
+	return answer, 0, nil
 }
 
 func (s *ChatService) generateAnswerWithHooks(
@@ -1257,10 +1281,26 @@ func (s *ChatService) generateAnswerWithHooks(
 	history []model.ChatMessage,
 	hooks answerHooks,
 ) (generatedChatAnswer, error) {
+	generationStart := time.Now()
+	timing := observability.ChatTiming{}
+	// Recorded on every exit path, including failures: how long a broken provider
+	// takes to fail is exactly what an operator needs during an incident.
+	defer func() {
+		timing.Generation = time.Since(generationStart)
+		s.metrics.ObserveDuration(observability.MetricChatGeneration, timing.Generation)
+		s.metrics.RecordChatTiming(timing)
+	}()
+
+	// Classification is itself a chat provider call, and it is the first one to
+	// break when the provider is down, so its outcome is recorded too. Without
+	// this the diagnostics page would report zero provider failures during an
+	// outage that fails every question before generation is even reached.
 	intent, err := classifyChatIntent(ctx, s.chatProvider, question, history, s.cfg.ChatHistoryLimit)
+	s.metrics.RecordProviderResult(observability.ProviderChat, err)
 	if err != nil {
 		return generatedChatAnswer{}, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "回答生成失败，请稍后重试", err)
 	}
+	timing.Intent = intent.Intent
 
 	if intent.Intent == chatIntentConversation {
 		citations := []dto.CitationResponse{}
@@ -1271,7 +1311,8 @@ func (s *ChatService) generateAnswerWithHooks(
 				return generatedChatAnswer{}, err
 			}
 		}
-		answer, err := s.complete(ctx, buildConversationAnswerMessages(question, history, s.cfg.ChatHistoryLimit), hooks.onDelta)
+		answer, firstToken, err := s.complete(ctx, buildConversationAnswerMessages(question, history, s.cfg.ChatHistoryLimit), hooks.onDelta)
+		timing.FirstToken = firstToken
 		if err != nil {
 			return generatedChatAnswer{}, chatCompletionError(err)
 		}
@@ -1298,12 +1339,18 @@ func (s *ChatService) generateAnswerWithHooks(
 		retrievalQuery = question
 	}
 
+	// Retrieval records its own metric internally; this measurement exists so the
+	// per-request summary line can attribute the split between retrieval and
+	// generation without reading the aggregate.
+	retrievalStart := time.Now()
 	searchRes, err := s.retrieval.Search(ctx, userID, session.KnowledgeBaseID, dto.SearchRequest{
 		Query: retrievalQuery,
 	})
+	timing.Retrieval = time.Since(retrievalStart)
 	if err != nil {
 		return generatedChatAnswer{}, err
 	}
+	timing.RerankFallback = searchRes.RerankFallback != nil && searchRes.RerankFallback.Used
 
 	citations := citationsFromSearch(searchRes.Items)
 	if hooks.onCitations != nil {
@@ -1314,11 +1361,16 @@ func (s *ChatService) generateAnswerWithHooks(
 
 	answer := "当前知识库中未找到足够依据回答该问题。"
 	if len(searchRes.Items) > 0 {
-		answer, err = s.complete(ctx, buildAnswerMessages(question, searchRes.Items, history, s.cfg.ChatHistoryLimit), hooks.onDelta)
+		var firstToken time.Duration
+		answer, firstToken, err = s.complete(ctx, buildAnswerMessages(question, searchRes.Items, history, s.cfg.ChatHistoryLimit), hooks.onDelta)
+		timing.FirstToken = firstToken
 		if err != nil {
 			return generatedChatAnswer{}, chatCompletionError(err)
 		}
 	} else if hooks.onDelta != nil {
+		// The refusal below never reaches the provider, so no first-token latency is
+		// recorded for it. Averaging a locally generated string into that metric
+		// would make it look best exactly when retrieval is failing.
 		// The refusal never reaches the provider, so stream it explicitly rather
 		// than letting the client sit on an empty answer until `done`.
 		if err := hooks.onDelta(answer); err != nil {
