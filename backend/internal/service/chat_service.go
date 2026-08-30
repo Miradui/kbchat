@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
 
+	"kbchat/backend/internal/access"
 	"kbchat/backend/internal/apperror"
 	chatcore "kbchat/backend/internal/chat"
 	"kbchat/backend/internal/config"
@@ -87,12 +88,8 @@ func (s *ChatService) CreateSession(ctx context.Context, userID uuid.UUID, req d
 		return nil, apperror.Validation(map[string]any{"knowledgeBaseId": "knowledge base id is invalid"})
 	}
 
-	kb, err := s.knowledgeBases.FindByIDAndOwner(ctx, kbID, userID)
-	if err != nil {
-		return nil, apperror.Internal(err)
-	}
-	if kb == nil {
-		return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "knowledge base not found")
+	if _, err := s.authorizeKnowledgeBase(ctx, userID, kbID, access.CapChatUse); err != nil {
+		return nil, err
 	}
 
 	title := strings.TrimSpace(req.Title)
@@ -130,7 +127,7 @@ func (s *ChatService) ListSessions(ctx context.Context, userID uuid.UUID, query 
 	}
 	query.Q = strings.TrimSpace(query.Q)
 
-	items, total, err := s.chats.ListSessions(ctx, userID, query, (page-1)*pageSize, pageSize)
+	items, total, err := s.chats.ListSessions(ctx, userID, access.MemberRolesWith(access.CapChatUse), query, (page-1)*pageSize, pageSize)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -168,7 +165,7 @@ func truncateRunes(value string, limit int) string {
 }
 
 func (s *ChatService) GetSession(ctx context.Context, userID, sessionID uuid.UUID) (*dto.ChatSessionResponse, error) {
-	session, err := s.findSession(ctx, userID, sessionID)
+	session, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +174,7 @@ func (s *ChatService) GetSession(ctx context.Context, userID, sessionID uuid.UUI
 }
 
 func (s *ChatService) UpdateSession(ctx context.Context, userID, sessionID uuid.UUID, req dto.UpdateChatSessionRequest) (*dto.ChatSessionResponse, error) {
-	session, err := s.findSession(ctx, userID, sessionID)
+	session, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +186,7 @@ func (s *ChatService) UpdateSession(ctx context.Context, userID, sessionID uuid.
 		return nil, apperror.Internal(err)
 	}
 	session.Title = title
-	updated, err := s.findSession(ctx, userID, sessionID)
+	updated, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +197,7 @@ func (s *ChatService) UpdateSession(ctx context.Context, userID, sessionID uuid.
 // DeleteSession soft deletes and keeps the messages, matching the knowledge base
 // and document recycle bins. See docs/14-frontend-api-gaps.md G15.
 func (s *ChatService) DeleteSession(ctx context.Context, userID, sessionID uuid.UUID) error {
-	session, err := s.findSession(ctx, userID, sessionID)
+	session, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
 		return err
 	}
@@ -213,7 +210,7 @@ func (s *ChatService) DeleteSession(ctx context.Context, userID, sessionID uuid.
 
 func (s *ChatService) ListRecycleBin(ctx context.Context, userID uuid.UUID, page, pageSize int) (*dto.RecycleBinListResponse, error) {
 	page, pageSize = normalizedRecyclePage(page, pageSize)
-	items, total, err := s.chats.ListDeletedSessions(ctx, userID, (page-1)*pageSize, pageSize)
+	items, total, err := s.chats.ListDeletedSessions(ctx, userID, access.MemberRolesWith(access.CapChatUse), (page-1)*pageSize, pageSize)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -237,7 +234,7 @@ func (s *ChatService) ListRecycleBin(ctx context.Context, userID uuid.UUID, page
 }
 
 func (s *ChatService) RestoreSession(ctx context.Context, userID, sessionID uuid.UUID) (*dto.ChatSessionResponse, error) {
-	if _, err := s.findDeletedSession(ctx, userID, sessionID); err != nil {
+	if _, err := s.authorizeDeletedSession(ctx, userID, sessionID, access.CapChatUse); err != nil {
 		return nil, err
 	}
 	if err := s.chats.RestoreSession(ctx, sessionID); err != nil {
@@ -246,7 +243,7 @@ func (s *ChatService) RestoreSession(ctx context.Context, userID, sessionID uuid
 		}
 		return nil, apperror.Internal(err)
 	}
-	restored, err := s.findSession(ctx, userID, sessionID)
+	restored, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +257,7 @@ func (s *ChatService) recordSessionActivity(ctx context.Context, userID uuid.UUI
 		return
 	}
 	knowledgeBaseName := ""
-	if kb, err := s.knowledgeBases.FindByIDAndOwner(ctx, session.KnowledgeBaseID, userID); err == nil && kb != nil {
+	if kb, err := s.knowledgeBases.FindByID(ctx, session.KnowledgeBaseID); err == nil && kb != nil {
 		knowledgeBaseName = kb.Name
 	}
 	knowledgeBaseID := session.KnowledgeBaseID
@@ -275,7 +272,7 @@ func (s *ChatService) recordSessionActivity(ctx context.Context, userID uuid.UUI
 }
 
 func (s *ChatService) PermanentDeleteSession(ctx context.Context, userID, sessionID uuid.UUID) error {
-	if _, err := s.findDeletedSession(ctx, userID, sessionID); err != nil {
+	if _, err := s.authorizeDeletedSession(ctx, userID, sessionID, access.CapChatUse); err != nil {
 		return err
 	}
 	if err := s.chats.PermanentDeleteSession(ctx, sessionID); err != nil {
@@ -288,34 +285,14 @@ func (s *ChatService) PermanentDeleteSession(ctx context.Context, userID, sessio
 }
 
 func (s *ChatService) EmptyRecycleBin(ctx context.Context, userID uuid.UUID) error {
-	if err := s.chats.EmptyDeletedSessions(ctx, userID); err != nil {
+	if err := s.chats.EmptyDeletedSessions(ctx, userID, access.MemberRolesWith(access.CapChatUse)); err != nil {
 		return apperror.Internal(err)
 	}
 	return nil
 }
 
-// findDeletedSession applies the same double ownership check as findSession: the
-// session must be the caller's and its knowledge base must still be theirs.
-func (s *ChatService) findDeletedSession(ctx context.Context, userID, sessionID uuid.UUID) (*model.ChatSession, error) {
-	session, err := s.chats.FindDeletedSessionByIDAndUser(ctx, sessionID, userID)
-	if err != nil {
-		return nil, apperror.Internal(err)
-	}
-	if session == nil {
-		return nil, apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
-	}
-	kb, err := s.knowledgeBases.FindByIDAndOwner(ctx, session.KnowledgeBaseID, userID)
-	if err != nil {
-		return nil, apperror.Internal(err)
-	}
-	if kb == nil {
-		return nil, apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
-	}
-	return session, nil
-}
-
 func (s *ChatService) ArchiveSession(ctx context.Context, userID, sessionID uuid.UUID) (*dto.ChatSessionResponse, error) {
-	session, err := s.findSession(ctx, userID, sessionID)
+	session, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +303,7 @@ func (s *ChatService) ArchiveSession(ctx context.Context, userID, sessionID uuid
 	if err := s.chats.ArchiveSession(ctx, session.ID, time.Now()); err != nil {
 		return nil, apperror.Internal(err)
 	}
-	archived, err := s.findSession(ctx, userID, sessionID)
+	archived, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +312,7 @@ func (s *ChatService) ArchiveSession(ctx context.Context, userID, sessionID uuid
 }
 
 func (s *ChatService) UnarchiveSession(ctx context.Context, userID, sessionID uuid.UUID) (*dto.ChatSessionResponse, error) {
-	session, err := s.findSession(ctx, userID, sessionID)
+	session, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
 		return nil, err
 	}
@@ -346,7 +323,7 @@ func (s *ChatService) UnarchiveSession(ctx context.Context, userID, sessionID uu
 	if err := s.chats.UnarchiveSession(ctx, session.ID, time.Now()); err != nil {
 		return nil, apperror.Internal(err)
 	}
-	restored, err := s.findSession(ctx, userID, sessionID)
+	restored, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +332,7 @@ func (s *ChatService) UnarchiveSession(ctx context.Context, userID, sessionID uu
 }
 
 func (s *ChatService) ListMessages(ctx context.Context, userID, sessionID uuid.UUID) (*dto.ChatMessageListResponse, error) {
-	session, err := s.findSession(ctx, userID, sessionID)
+	session, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +358,7 @@ func (s *ChatService) SetMessageFeedback(
 	if rating != "positive" && rating != "negative" {
 		return nil, apperror.Validation(map[string]any{"rating": "rating must be positive or negative"})
 	}
-	message, err := s.chats.FindMessageByIDAndOwner(ctx, messageID, userID)
+	message, err := s.chats.FindMessageByIDAndOwner(ctx, messageID, userID, access.MemberRolesWith(access.CapFeedbackWrite))
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -746,22 +723,22 @@ func (s *ChatService) ListNegativeFeedback(
 	return response, nil
 }
 
+// validateQualityKnowledgeBase checks the quality.read capability on the filter.
+//
+// A nil filter is not a no-op any more than a set one: it means "every knowledge
+// base I can see", and the repository scopes those rows to what the caller may read.
+// Returning early here only skips the per-knowledge-base check, which has nothing to
+// check.
 func (s *ChatService) validateQualityKnowledgeBase(ctx context.Context, userID uuid.UUID, knowledgeBaseID *uuid.UUID) error {
 	if knowledgeBaseID == nil {
 		return nil
 	}
-	kb, err := s.knowledgeBases.FindByIDAndOwner(ctx, *knowledgeBaseID, userID)
-	if err != nil {
-		return apperror.Internal(err)
-	}
-	if kb == nil {
-		return apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "knowledge base not found")
-	}
-	return nil
+	_, err := s.authorizeKnowledgeBase(ctx, userID, *knowledgeBaseID, access.CapQualityRead)
+	return err
 }
 
 func (s *ChatService) ExportSession(ctx context.Context, userID, sessionID uuid.UUID) (*ExportFile, error) {
-	session, err := s.findSession(ctx, userID, sessionID)
+	session, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatExport)
 	if err != nil {
 		return nil, err
 	}
@@ -769,7 +746,8 @@ func (s *ChatService) ExportSession(ctx context.Context, userID, sessionID uuid.
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
-	kb, err := s.knowledgeBases.FindByIDAndOwner(ctx, session.KnowledgeBaseID, userID)
+	// The knowledge base is re-read for its name only; access was already decided.
+	kb, err := s.knowledgeBases.FindByID(ctx, session.KnowledgeBaseID)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -828,7 +806,7 @@ func writeExportCitations(builder *strings.Builder, raw datatypes.JSON) {
 }
 
 func (s *ChatService) SendMessage(ctx context.Context, userID, sessionID uuid.UUID, req dto.SendChatMessageRequest) (*dto.SendChatMessageResponse, error) {
-	session, err := s.findSession(ctx, userID, sessionID)
+	session, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
 		return nil, err
 	}
@@ -925,7 +903,7 @@ func (s *ChatService) SendMessageStream(
 	req dto.SendChatMessageRequest,
 	sink ChatStreamSink,
 ) error {
-	session, err := s.findSession(ctx, userID, sessionID)
+	session, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
 		return err
 	}
@@ -1123,7 +1101,7 @@ func sendMessageResponseFromPair(clientRequestID uuid.UUID, content string, mess
 }
 
 func (s *ChatService) RegenerateMessage(ctx context.Context, userID, sessionID, messageID uuid.UUID) (*dto.RegenerateChatMessageResponse, error) {
-	session, err := s.findSession(ctx, userID, sessionID)
+	session, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
 		return nil, err
 	}
@@ -1198,7 +1176,7 @@ func (s *ChatService) EditMessageAndRegenerate(
 	userID, sessionID, messageID uuid.UUID,
 	req dto.EditChatMessageRequest,
 ) (*dto.SendChatMessageResponse, error) {
-	session, err := s.findSession(ctx, userID, sessionID)
+	session, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
 		return nil, err
 	}
@@ -1525,25 +1503,6 @@ func chatCompletionError(err error) error {
 		return err
 	}
 	return apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "回答生成失败，请稍后重试", err)
-}
-
-func (s *ChatService) findSession(ctx context.Context, userID, sessionID uuid.UUID) (*model.ChatSession, error) {
-	session, err := s.chats.FindSessionByIDAndUser(ctx, sessionID, userID)
-	if err != nil {
-		return nil, apperror.Internal(err)
-	}
-	if session == nil {
-		return nil, apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
-	}
-
-	kb, err := s.knowledgeBases.FindByIDAndOwner(ctx, session.KnowledgeBaseID, userID)
-	if err != nil {
-		return nil, apperror.Internal(err)
-	}
-	if kb == nil {
-		return nil, apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
-	}
-	return session, nil
 }
 
 func (s *ChatService) updateSessionTitleIfNeeded(ctx context.Context, session *model.ChatSession, question string, answer string) {

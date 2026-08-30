@@ -54,13 +54,19 @@ type ChatSessionListItem struct {
 // ListSessions returns one page of the caller's sessions. Ownership is enforced
 // twice on purpose: the session must belong to the user and the knowledge base
 // behind it must still be owned by the same user and not deleted.
-func (r *ChatRepository) ListSessions(ctx context.Context, userID uuid.UUID, query dto.ChatSessionListQuery, offset, limit int) ([]ChatSessionListItem, int64, error) {
+// ListSessions lists the caller's own sessions in knowledge bases they can still
+// reach. memberRoles are the roles holding the chat capability, from the matrix.
+//
+// A session is not shown once its knowledge base is out of reach, even though the
+// session row is the caller's: the transcript quotes content they no longer have
+// access to.
+func (r *ChatRepository) ListSessions(ctx context.Context, userID uuid.UUID, memberRoles []string, query dto.ChatSessionListQuery, offset, limit int) ([]ChatSessionListItem, int64, error) {
 	base := func() *gorm.DB {
 		db := r.db.WithContext(ctx).
 			Model(&model.ChatSession{}).
 			Joins("JOIN knowledge_bases ON knowledge_bases.id = chat_sessions.knowledge_base_id").
 			Where("chat_sessions.user_id = ?", userID).
-			Where("knowledge_bases.owner_id = ?", userID).
+			Where(reachableKnowledgeBaseCondition(r.db, userID, memberRoles)).
 			Where("knowledge_bases.deleted_at IS NULL").
 			Where("chat_sessions.deleted_at IS NULL")
 		if query.Archived {
@@ -202,9 +208,9 @@ type RecycleChatSessionItem struct {
 // ListDeletedSessions mirrors the knowledge base and document recycle bins: the
 // owning knowledge base must still exist and belong to the caller, so a session
 // whose knowledge base was itself deleted is not offered for restore here.
-func (r *ChatRepository) ListDeletedSessions(ctx context.Context, userID uuid.UUID, offset, limit int) ([]RecycleChatSessionItem, int64, error) {
+func (r *ChatRepository) ListDeletedSessions(ctx context.Context, userID uuid.UUID, memberRoles []string, offset, limit int) ([]RecycleChatSessionItem, int64, error) {
 	base := func() *gorm.DB {
-		return deletedChatSessionsScope(r.db.WithContext(ctx), userID)
+		return deletedChatSessionsScope(r.db.WithContext(ctx), userID, memberRoles)
 	}
 
 	var total int64
@@ -240,10 +246,10 @@ func (r *ChatRepository) PermanentDeleteSession(ctx context.Context, sessionID u
 
 // EmptyDeletedSessions clears the caller's chat recycle bin in one transaction,
 // keeping the all-or-nothing semantics of the other empty endpoints.
-func (r *ChatRepository) EmptyDeletedSessions(ctx context.Context, userID uuid.UUID) error {
+func (r *ChatRepository) EmptyDeletedSessions(ctx context.Context, userID uuid.UUID, memberRoles []string) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var ids []uuid.UUID
-		if err := deletedChatSessionsScope(tx, userID).
+		if err := deletedChatSessionsScope(tx, userID, memberRoles).
 			Clauses(clause.Locking{
 				Strength: "UPDATE",
 				Table:    clause.Table{Name: "chat_sessions"},
@@ -273,15 +279,15 @@ func lockDeletedChatSession(tx *gorm.DB, sessionID uuid.UUID) error {
 
 // deletedChatSessionsScope is the definition of the chat recycle bin. Listing
 // and destructive bulk operations must share it exactly: sessions under a
-// deleted or no-longer-owned knowledge base are intentionally hidden until that
-// knowledge base becomes visible to the owner again.
-func deletedChatSessionsScope(db *gorm.DB, userID uuid.UUID) *gorm.DB {
+// deleted or no-longer-reachable knowledge base are intentionally hidden until
+// that knowledge base becomes reachable again.
+func deletedChatSessionsScope(db *gorm.DB, userID uuid.UUID, memberRoles []string) *gorm.DB {
 	return db.
 		Unscoped().
 		Model(&model.ChatSession{}).
 		Joins("JOIN knowledge_bases ON knowledge_bases.id = chat_sessions.knowledge_base_id").
 		Where("chat_sessions.user_id = ?", userID).
-		Where("knowledge_bases.owner_id = ?", userID).
+		Where(reachableKnowledgeBaseCondition(db, userID, memberRoles)).
 		Where("knowledge_bases.deleted_at IS NULL").
 		Where("chat_sessions.deleted_at IS NOT NULL")
 }
@@ -307,7 +313,9 @@ func (r *ChatRepository) ListMessages(ctx context.Context, sessionID uuid.UUID) 
 
 // FindMessageByIDAndOwner applies the same visibility rule as the chat page:
 // the session and its knowledge base must both still be visible to their owner.
-func (r *ChatRepository) FindMessageByIDAndOwner(ctx context.Context, messageID, ownerID uuid.UUID) (*model.ChatMessage, error) {
+// FindMessageByIDAndOwner loads a message from one of the caller's own sessions,
+// provided its knowledge base is still reachable with the given member roles.
+func (r *ChatRepository) FindMessageByIDAndOwner(ctx context.Context, messageID, ownerID uuid.UUID, memberRoles []string) (*model.ChatMessage, error) {
 	var message model.ChatMessage
 	err := r.db.WithContext(ctx).
 		Model(&model.ChatMessage{}).
@@ -317,7 +325,7 @@ func (r *ChatRepository) FindMessageByIDAndOwner(ctx context.Context, messageID,
 		Where("chat_messages.id = ?", messageID).
 		Where("chat_sessions.user_id = ?", ownerID).
 		Where("chat_sessions.deleted_at IS NULL").
-		Where("knowledge_bases.owner_id = ?", ownerID).
+		Where(reachableKnowledgeBaseCondition(r.db, ownerID, memberRoles)).
 		Where("knowledge_bases.deleted_at IS NULL").
 		First(&message).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {

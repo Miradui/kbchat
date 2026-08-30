@@ -55,7 +55,7 @@ func TestEmptyDeletedSessionsLocksVisibleSessionsBeforeDeleting(t *testing.T) {
 	user, _, session := createDeletedChatRepositorySession(t, db)
 	lockTargets := recordChatRepositoryLockTargets(t, db)
 
-	if err := repository.EmptyDeletedSessions(context.Background(), user.ID); err != nil {
+	if err := repository.EmptyDeletedSessions(context.Background(), user.ID, []string{"viewer", "editor", "manager"}); err != nil {
 		t.Fatalf("empty deleted sessions: %v", err)
 	}
 
@@ -230,6 +230,9 @@ func newChatRepositoryTestDB(t *testing.T) *gorm.DB {
 		&model.KnowledgeBase{},
 		&model.ChatSession{},
 		&model.ChatMessage{},
+		// The reachability predicate reads the member table, so every query in this
+		// fixture needs it even when the test itself has no members.
+		&model.KnowledgeBaseMember{},
 	); err != nil {
 		t.Fatalf("migrate chat repository fixture: %v", err)
 	}
