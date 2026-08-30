@@ -47,7 +47,7 @@ func (h *DocumentHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	res, err := h.documents.Upload(c.Request.Context(), userID, kbID, file)
+	res, err := h.documents.UploadWithOptions(c.Request.Context(), userID, kbID, file, uploadOptions(c))
 	if err != nil {
 		RespondError(c, err)
 		return
@@ -72,7 +72,7 @@ func (h *DocumentHandler) UploadGlobal(c *gin.Context) {
 		RespondError(c, apperror.Validation(map[string]any{"knowledgeBaseId": "知识库 ID 不合法"}))
 		return
 	}
-	res, err := h.documents.Upload(c.Request.Context(), userID, kbID, file)
+	res, err := h.documents.UploadWithOptions(c.Request.Context(), userID, kbID, file, uploadOptions(c))
 	if err != nil {
 		RespondError(c, err)
 		return
@@ -82,6 +82,15 @@ func (h *DocumentHandler) UploadGlobal(c *gin.Context) {
 
 func (h *DocumentHandler) limitUploadBody(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, h.maxUploadRequestBytes)
+}
+
+// uploadOptions reads the duplicate override from the multipart form, because the
+// file and the decision arrive in the same request -- a query parameter would let
+// the two disagree. Anything other than "true" means the default: reject.
+func uploadOptions(c *gin.Context) service.DocumentUploadOptions {
+	return service.DocumentUploadOptions{
+		AllowDuplicate: c.PostForm("allowDuplicate") == "true",
+	}
 }
 
 func uploadFileError(err error) error {

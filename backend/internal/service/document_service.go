@@ -65,12 +65,45 @@ func NewDocumentService(
 	}
 }
 
+// DocumentUploadOptions carries the caller's decision about an already-known
+// file. It is a struct so a later option does not change every call site.
+type DocumentUploadOptions struct {
+	// AllowDuplicate records that the user saw the conflict and chose to keep
+	// both copies. Without it a matching content hash is rejected.
+	AllowDuplicate bool
+}
+
 func (s *DocumentService) Upload(ctx context.Context, ownerID, kbID uuid.UUID, file *multipart.FileHeader) (*dto.DocumentResponse, error) {
+	return s.UploadWithOptions(ctx, ownerID, kbID, file, DocumentUploadOptions{})
+}
+
+func (s *DocumentService) UploadWithOptions(
+	ctx context.Context,
+	ownerID, kbID uuid.UUID,
+	file *multipart.FileHeader,
+	options DocumentUploadOptions,
+) (*dto.DocumentResponse, error) {
 	if err := s.ensureKnowledgeBaseOwner(ctx, ownerID, kbID); err != nil {
 		return nil, err
 	}
 	if err := s.validateFile(file); err != nil {
 		return nil, err
+	}
+
+	// Hashed and checked before anything is written: a duplicate is then rejected
+	// without an object to clean up, and without a storage reservation to cancel.
+	contentHash, err := hashUploadedFile(file)
+	if err != nil {
+		return nil, apperror.Wrap(http.StatusInternalServerError, "DOCUMENT_UPLOAD_FAILED", "document upload failed", err)
+	}
+	if !options.AllowDuplicate {
+		existing, err := s.documents.FindByContentHash(ctx, kbID, contentHash)
+		if err != nil {
+			return nil, apperror.Internal(err)
+		}
+		if existing != nil {
+			return nil, newDuplicateDocumentError(existing)
+		}
 	}
 
 	storagePath := s.storage.NewKnowledgeBaseFileLocation(kbID, file.Filename)
@@ -94,6 +127,7 @@ func (s *DocumentService) Upload(ctx context.Context, ownerID, kbID uuid.UUID, f
 		FileSize:        file.Size,
 		StoragePath:     storagePath,
 		Status:          "uploaded",
+		ContentHash:     &contentHash,
 	}
 	job := &model.DocumentJob{
 		JobType: "process_document",
