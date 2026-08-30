@@ -1,7 +1,7 @@
-import { Download, FileText, Library, Search, TextQuote } from 'lucide-react';
+import { Download, FileText, Library, TextQuote } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { exportGlobalSearch, globalSearch } from '../../api/resources';
 import { EmptyState } from '../../components/feedback/EmptyState';
@@ -9,8 +9,8 @@ import { ErrorState } from '../../components/feedback/ErrorState';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { Button } from '../../components/ui/Button';
 import { Pagination } from '../../components/ui/Pagination';
-import { SearchInput } from '../../components/ui/Field';
 import { AppShell } from '../../layouts/AppShell';
+import { SearchCombobox, suggestionHref } from './SearchCombobox';
 import type { GlobalSearchResult, GlobalSearchResultType, SearchHighlight } from '../../types/api';
 import { downloadBlob } from '../../utils/download';
 import { getErrorMessage } from '../../utils/errors';
@@ -44,6 +44,7 @@ function readPositive(value: string | null, fallback: number, max?: number): num
 }
 
 export function SearchPage() {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const rawQuery = searchParams.get('q') ?? '';
   const submittedQuery = rawQuery.trim();
@@ -172,12 +173,10 @@ export function SearchPage() {
     <AppShell active="search" breadcrumbs={[{ label: '搜索' }]}>
       <div className="search-page">
         <form className="search-page__form" onSubmit={handleSubmit} role="search">
-          <SearchInput
-            aria-label="搜索关键词"
-            autoFocus
-            icon={<Search aria-hidden="true" />}
-            onChange={(event) => setDraft(event.target.value)}
-            placeholder="搜索知识库、文件名或内容"
+          <SearchCombobox
+            onChange={setDraft}
+            onPick={(item) => navigate(suggestionHref(item))}
+            onSubmit={() => writeParams(draft.trim(), selectedType, 1)}
             value={draft}
           />
           <Button type="submit">搜索</Button>

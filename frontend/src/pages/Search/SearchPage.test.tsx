@@ -14,6 +14,7 @@ vi.mock('../../api/resources', () => ({
   exportGlobalSearch: vi.fn(),
   globalSearch: vi.fn(),
   logout: vi.fn(),
+  searchSuggest: vi.fn().mockResolvedValue({ items: [] }),
 }));
 vi.mock('../../utils/download', () => ({ downloadBlob: vi.fn() }));
 
