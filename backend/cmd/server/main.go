@@ -15,6 +15,7 @@ import (
 	"kbchat/backend/internal/document/splitter"
 	"kbchat/backend/internal/job"
 	"kbchat/backend/internal/logger"
+	"kbchat/backend/internal/observability"
 	embeddingprovider "kbchat/backend/internal/provider/embedding"
 	"kbchat/backend/internal/repository"
 	"kbchat/backend/internal/router"
@@ -77,7 +78,12 @@ func main() {
 		OperationTimeout: cfg.StorageOperationTimeout,
 	}).Start(workerCtx)
 
-	r := router.NewWithStorage(cfg, db, log, fileStorage)
+	// The same Redis client the application uses is handed to the router so the
+	// diagnostics probe checks the real connection pool rather than a second one.
+	r := router.NewWithStorageAndDependencies(cfg, db, log, fileStorage, router.Dependencies{
+		Redis:   redisClient,
+		Metrics: observability.NewRecorder(),
+	})
 
 	server := &http.Server{
 		Addr:    ":" + cfg.ServerPort,

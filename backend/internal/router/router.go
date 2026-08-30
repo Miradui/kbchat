@@ -2,16 +2,17 @@ package router
 
 import (
 	"context"
-	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
 	"kbchat/backend/internal/config"
 	"kbchat/backend/internal/handler"
 	"kbchat/backend/internal/middleware"
+	"kbchat/backend/internal/observability"
 	chatprovider "kbchat/backend/internal/provider/chat"
 	embeddingprovider "kbchat/backend/internal/provider/embedding"
 	rerankprovider "kbchat/backend/internal/provider/rerank"
@@ -23,7 +24,31 @@ import (
 	"kbchat/backend/internal/storage"
 )
 
+// Dependencies carries collaborators the router cannot construct itself.
+//
+// It is a struct rather than extra parameters so adding one later does not break
+// the nine existing New/NewWithStorage call sites. Every field is optional: the
+// diagnostics surface reports a nil dependency as not configured rather than
+// failing.
+type Dependencies struct {
+	// Redis is injected rather than dialed here so the server keeps one client
+	// with one connection pool, and so the probe checks the client the
+	// application actually uses.
+	Redis redisPinger
+	// Metrics is shared with the retrieval and chat services, which is the whole
+	// point: the diagnostics page reads what request handling recorded.
+	Metrics *observability.Recorder
+}
+
+type redisPinger interface {
+	Ping(ctx context.Context) *redis.StatusCmd
+}
+
 func New(cfg config.Config, db *gorm.DB, logger *zap.Logger) *gin.Engine {
+	return NewWithDependencies(cfg, db, logger, Dependencies{})
+}
+
+func NewWithDependencies(cfg config.Config, db *gorm.DB, logger *zap.Logger, deps Dependencies) *gin.Engine {
 	fileStorage, err := storage.NewFromConfig(cfg)
 	if err != nil {
 		panic(err)
@@ -33,10 +58,14 @@ func New(cfg config.Config, db *gorm.DB, logger *zap.Logger) *gin.Engine {
 	if err := storage.EnsureReady(ctx, fileStorage); err != nil {
 		panic(err)
 	}
-	return NewWithStorage(cfg, db, logger, fileStorage)
+	return NewWithStorageAndDependencies(cfg, db, logger, fileStorage, deps)
 }
 
 func NewWithStorage(cfg config.Config, db *gorm.DB, logger *zap.Logger, fileStorage storage.Storage) *gin.Engine {
+	return NewWithStorageAndDependencies(cfg, db, logger, fileStorage, Dependencies{})
+}
+
+func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.Logger, fileStorage storage.Storage, deps Dependencies) *gin.Engine {
 	if cfg.AppEnv == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -78,7 +107,34 @@ func NewWithStorage(cfg config.Config, db *gorm.DB, logger *zap.Logger, fileStor
 	knowledgeBaseService.SetActivityRecorder(activityRecorder)
 	documentService.SetActivityRecorder(activityRecorder)
 	chatService.SetActivityRecorder(activityRecorder)
+	// Metrics are shared: retrieval and chat write, diagnostics reads. Without a
+	// recorder both sides degrade to no-ops rather than nil-panicking.
+	metrics := deps.Metrics
+	if metrics == nil {
+		metrics = observability.NewRecorder()
+	}
+	metrics = metrics.WithLogger(logger)
+	retrievalService.SetRecorder(metrics)
+	chatService.SetRecorder(metrics)
+
 	systemService := service.NewSystemService(cfg)
+	diagnosticsDeps := service.SystemDiagnosticsDeps{
+		Database: repository.NewSystemRepository(db),
+		Docs:     documentRepo,
+		Cleanup:  storageCleanupRepo,
+		Metrics:  metrics,
+		Logger:   logger,
+	}
+	// Assigned conditionally, not through a constructor that may return a nil
+	// pointer: a typed nil in an interface field is not nil, so the service's
+	// not-configured check would pass it through and the probe would panic.
+	if deps.Redis != nil {
+		diagnosticsDeps.Redis = &redisProbe{client: deps.Redis}
+	}
+	if fileStorage != nil {
+		diagnosticsDeps.Storage = &storageProbe{fileStorage: fileStorage}
+	}
+	systemService.SetDiagnosticsDeps(diagnosticsDeps)
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userService)
 	knowledgeBaseHandler := handler.NewKnowledgeBaseHandler(knowledgeBaseService)
@@ -97,20 +153,10 @@ func NewWithStorage(cfg config.Config, db *gorm.DB, logger *zap.Logger, fileStor
 	r.Use(middleware.RequestLogger(logger))
 	r.Use(middleware.CORS(cfg.CORSAllowedOrigins))
 
-	r.GET("/healthz", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status": "ok",
-			"env":    cfg.AppEnv,
-		})
-	})
+	r.GET("/healthz", systemHandler.Health)
 
 	v1 := r.Group("/api/v1")
-	v1.GET("/healthz", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status": "ok",
-			"env":    cfg.AppEnv,
-		})
-	})
+	v1.GET("/healthz", systemHandler.Health)
 
 	authRoutes := v1.Group("/auth")
 	authRoutes.POST("/login", authHandler.Login)
@@ -123,6 +169,11 @@ func NewWithStorage(cfg config.Config, db *gorm.DB, logger *zap.Logger, fileStor
 	protected.POST("/auth/logout", authHandler.Logout)
 	protected.GET("/users/search", userHandler.Search)
 	protected.GET("/system/capabilities", systemHandler.Capabilities)
+	// Authenticated but not admin-gated: the JWT carries no role claim and no role
+	// middleware exists, so gating on admin would lock every current deployment
+	// out of its own diagnostics. Tracked as a P2 follow-up; the payload is
+	// constrained accordingly and carries no secrets or endpoints.
+	protected.GET("/system/diagnostics", systemHandler.Diagnostics)
 	protected.GET("/home/summary", homeHandler.Summary)
 	protected.GET("/activities", activityHandler.List)
 	protected.GET("/knowledge-base-categories", knowledgeBaseCategoryHandler.List)
@@ -213,4 +264,23 @@ func newRerankProvider(cfg config.Config) rerank.Provider {
 		return rerank.NewDisabledProvider()
 	}
 	return rerankprovider.NewOpenAICompatibleProvider(cfg)
+}
+
+// redisProbe adapts the go-redis client to the service's plain pinger, keeping
+// the redis package out of the service layer.
+type redisProbe struct {
+	client redisPinger
+}
+
+func (p *redisProbe) Ping(ctx context.Context) error {
+	return p.client.Ping(ctx).Err()
+}
+
+// storageProbe adapts the optional storage.CheckHealth capability.
+type storageProbe struct {
+	fileStorage storage.Storage
+}
+
+func (p *storageProbe) CheckHealth(ctx context.Context) error {
+	return storage.CheckHealth(ctx, p.fileStorage)
 }
