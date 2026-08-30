@@ -572,7 +572,7 @@ func TestKnowledgeBaseMembersManageRolesAndPermissionsView(t *testing.T) {
 	services := newWorkspaceTestServices(t)
 	owner := createWorkspaceUser(t, services.db, "owner")
 	manager := createWorkspaceUser(t, services.db, "manager")
-	member := createWorkspaceUser(t, services.db, "member")
+	viewer := createWorkspaceUser(t, services.db, "viewer")
 	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "product-kb", "private", time.Now())
 
 	createdManager, err := services.kbs.AddMember(ctx, owner.ID, kb.ID, dto.KnowledgeBaseMemberRequest{
@@ -586,10 +586,19 @@ func TestKnowledgeBaseMembersManageRolesAndPermissionsView(t *testing.T) {
 		t.Fatalf("unexpected manager response: %#v", createdManager)
 	}
 	if _, err := services.kbs.AddMember(ctx, owner.ID, kb.ID, dto.KnowledgeBaseMemberRequest{
-		UserID: member.ID,
-		Role:   "member",
+		UserID: viewer.ID,
+		Role:   "viewer",
 	}); err != nil {
-		t.Fatalf("add member: %v", err)
+		t.Fatalf("add viewer: %v", err)
+	}
+	// The pre-020 role name is no longer assignable: those rows were rewritten to
+	// viewer, and accepting the old name would keep writing a value that resolves
+	// to no access at all.
+	if _, err := services.kbs.AddMember(ctx, owner.ID, kb.ID, dto.KnowledgeBaseMemberRequest{
+		UserID: viewer.ID,
+		Role:   "member",
+	}); err == nil {
+		t.Fatal("expected the legacy \"member\" role to be rejected")
 	}
 
 	permissions, err := services.kbs.GetPermissions(ctx, owner.ID, kb.ID)
@@ -605,8 +614,8 @@ func TestKnowledgeBaseMembersManageRolesAndPermissionsView(t *testing.T) {
 	if len(permissions.Managers) != 2 || permissions.Managers[0].Role != "owner" || permissions.Managers[1].ID != manager.ID.String() {
 		t.Fatalf("expected owner and manager in managers, got %#v", permissions.Managers)
 	}
-	if len(permissions.Members) != 1 || permissions.Members[0].ID != member.ID.String() || permissions.Members[0].Role != "member" {
-		t.Fatalf("expected real member in permission response, got %#v", permissions.Members)
+	if len(permissions.Members) != 1 || permissions.Members[0].ID != viewer.ID.String() || permissions.Members[0].Role != "viewer" {
+		t.Fatalf("expected viewer in permission response, got %#v", permissions.Members)
 	}
 
 	updated, err := services.kbs.UpdatePermissions(ctx, manager.ID, kb.ID, dto.KnowledgeBasePermissionUpdateRequest{
@@ -619,16 +628,16 @@ func TestKnowledgeBaseMembersManageRolesAndPermissionsView(t *testing.T) {
 		t.Fatalf("expected visibility update to persist, got %#v", updated)
 	}
 
-	if _, err := services.kbs.UpdateMember(ctx, member.ID, kb.ID, manager.ID, dto.KnowledgeBaseMemberRoleRequest{Role: "member"}); err == nil {
-		t.Fatalf("expected regular member to be rejected from member management")
+	if _, err := services.kbs.UpdateMember(ctx, viewer.ID, kb.ID, manager.ID, dto.KnowledgeBaseMemberRoleRequest{Role: "viewer"}); err == nil {
+		t.Fatalf("expected a viewer to be rejected from member management")
 	}
-	if _, err := services.kbs.UpdateMember(ctx, manager.ID, kb.ID, owner.ID, dto.KnowledgeBaseMemberRoleRequest{Role: "member"}); err == nil {
+	if _, err := services.kbs.UpdateMember(ctx, manager.ID, kb.ID, owner.ID, dto.KnowledgeBaseMemberRoleRequest{Role: "viewer"}); err == nil {
 		t.Fatalf("expected owner role update to be rejected")
 	}
 	if err := services.kbs.RemoveMember(ctx, owner.ID, kb.ID, owner.ID); err == nil {
 		t.Fatalf("expected owner deletion to be rejected")
 	}
-	if err := services.kbs.RemoveMember(ctx, manager.ID, kb.ID, member.ID); err != nil {
+	if err := services.kbs.RemoveMember(ctx, manager.ID, kb.ID, viewer.ID); err != nil {
 		t.Fatalf("manager remove member: %v", err)
 	}
 	afterRemove, err := services.kbs.GetPermissions(ctx, owner.ID, kb.ID)

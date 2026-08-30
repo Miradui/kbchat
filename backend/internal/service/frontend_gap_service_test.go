@@ -1770,7 +1770,7 @@ func TestActivityFeedRecordsLifecycleEvents(t *testing.T) {
 
 	if _, err := services.kbs.AddMember(ctx, owner.ID, kbID, dto.KnowledgeBaseMemberRequest{
 		UserID: other.ID,
-		Role:   "member",
+		Role:   "viewer",
 	}); err != nil {
 		t.Fatalf("add member: %v", err)
 	}

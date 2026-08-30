@@ -308,6 +308,30 @@ func (r *KnowledgeBaseRepository) FindByID(ctx context.Context, id uuid.UUID) (*
 	return &kb, err
 }
 
+// FindMemberRole returns the stored role of a user's member row, or "" when there
+// is no row.
+//
+// It lives on this repository rather than on KnowledgeBaseMemberRepository so that
+// every service holding a knowledge base repository can resolve access without
+// taking a second dependency. Membership is now consulted on nearly every
+// knowledge-base request, and threading one more constructor argument through
+// three services and twenty test construction sites would buy nothing.
+//
+// Returns the bare string. Interpreting it -- including deciding that an
+// unrecognised value means no access -- belongs to the access package.
+func (r *KnowledgeBaseRepository) FindMemberRole(ctx context.Context, kbID, userID uuid.UUID) (string, error) {
+	var role string
+	err := r.db.WithContext(ctx).
+		Model(&model.KnowledgeBaseMember{}).
+		Where("knowledge_base_id = ? AND user_id = ?", kbID, userID).
+		Limit(1).
+		Pluck("role", &role).Error
+	if err != nil {
+		return "", err
+	}
+	return role, nil
+}
+
 func (r *KnowledgeBaseRepository) FindDeletedByIDAndOwner(ctx context.Context, id, ownerID uuid.UUID) (*model.KnowledgeBase, error) {
 	var kb model.KnowledgeBase
 	err := r.db.WithContext(ctx).

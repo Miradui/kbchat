@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
 
+	"kbchat/backend/internal/access"
 	"kbchat/backend/internal/apperror"
 	"kbchat/backend/internal/dto"
 	"kbchat/backend/internal/model"
@@ -370,7 +371,7 @@ func (s *KnowledgeBaseService) Restore(ctx context.Context, ownerID, id uuid.UUI
 }
 
 func (s *KnowledgeBaseService) SetFavorite(ctx context.Context, ownerID, id uuid.UUID, favorite bool) error {
-	if _, err := s.findKnowledgeBase(ctx, ownerID, id); err != nil {
+	if _, err := s.findKnowledgeBaseForCapability(ctx, ownerID, id, access.CapKnowledgeBaseRead); err != nil {
 		return err
 	}
 	if err := s.favorites.Set(ctx, ownerID, id, favorite); err != nil {
@@ -495,7 +496,7 @@ func (s *KnowledgeBaseService) BatchRestore(ctx context.Context, ownerID uuid.UU
 }
 
 func (s *KnowledgeBaseService) RecordView(ctx context.Context, ownerID, id uuid.UUID) error {
-	if _, err := s.findKnowledgeBase(ctx, ownerID, id); err != nil {
+	if _, err := s.findKnowledgeBaseForCapability(ctx, ownerID, id, access.CapKnowledgeBaseRead); err != nil {
 		return err
 	}
 	if err := s.views.Record(ctx, ownerID, id); err != nil {
@@ -505,7 +506,7 @@ func (s *KnowledgeBaseService) RecordView(ctx context.Context, ownerID, id uuid.
 }
 
 func (s *KnowledgeBaseService) GetPermissions(ctx context.Context, ownerID, id uuid.UUID) (*dto.KnowledgeBasePermissionResponse, error) {
-	kb, err := s.findKnowledgeBaseForManagement(ctx, ownerID, id)
+	kb, err := s.findKnowledgeBaseForCapability(ctx, ownerID, id, access.CapMembersRead)
 	if err != nil {
 		return nil, err
 	}
@@ -519,7 +520,7 @@ func (s *KnowledgeBaseService) GetPermissions(ctx context.Context, ownerID, id u
 }
 
 func (s *KnowledgeBaseService) UpdatePermissions(ctx context.Context, ownerID, id uuid.UUID, req dto.KnowledgeBasePermissionUpdateRequest) (*dto.KnowledgeBasePermissionResponse, error) {
-	kb, err := s.findKnowledgeBaseForManagement(ctx, ownerID, id)
+	kb, err := s.findKnowledgeBaseForCapability(ctx, ownerID, id, access.CapMembersWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -552,7 +553,7 @@ func (s *KnowledgeBaseService) UpdatePermissions(ctx context.Context, ownerID, i
 }
 
 func (s *KnowledgeBaseService) AddMember(ctx context.Context, actorID, kbID uuid.UUID, req dto.KnowledgeBaseMemberRequest) (*dto.PermissionMember, error) {
-	kb, err := s.findKnowledgeBaseForManagement(ctx, actorID, kbID)
+	kb, err := s.findKnowledgeBaseForCapability(ctx, actorID, kbID, access.CapMembersWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -587,7 +588,7 @@ func (s *KnowledgeBaseService) AddMember(ctx context.Context, actorID, kbID uuid
 }
 
 func (s *KnowledgeBaseService) UpdateMember(ctx context.Context, actorID, kbID, userID uuid.UUID, req dto.KnowledgeBaseMemberRoleRequest) (*dto.PermissionMember, error) {
-	kb, err := s.findKnowledgeBaseForManagement(ctx, actorID, kbID)
+	kb, err := s.findKnowledgeBaseForCapability(ctx, actorID, kbID, access.CapMembersWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -622,7 +623,7 @@ func (s *KnowledgeBaseService) UpdateMember(ctx context.Context, actorID, kbID, 
 }
 
 func (s *KnowledgeBaseService) RemoveMember(ctx context.Context, actorID, kbID, userID uuid.UUID) error {
-	kb, err := s.findKnowledgeBaseForManagement(ctx, actorID, kbID)
+	kb, err := s.findKnowledgeBaseForCapability(ctx, actorID, kbID, access.CapMembersWrite)
 	if err != nil {
 		return err
 	}
@@ -720,7 +721,7 @@ func (s *KnowledgeBaseService) Stats(ctx context.Context, ownerID uuid.UUID, per
 // TestKnowledgeBaseMutationAndDetailResponsesOmitListOnlyDocumentReadinessCounts),
 // so trend data gets its own request rather than widening those payloads.
 func (s *KnowledgeBaseService) DetailStats(ctx context.Context, ownerID, id uuid.UUID, period string) (*dto.KnowledgeBaseDetailStatsResponse, error) {
-	kb, err := s.findKnowledgeBase(ctx, ownerID, id)
+	kb, err := s.findKnowledgeBaseForCapability(ctx, ownerID, id, access.CapKnowledgeBaseRead)
 	if err != nil {
 		return nil, err
 	}
@@ -743,36 +744,19 @@ func (s *KnowledgeBaseService) DetailStats(ctx context.Context, ownerID, id uuid
 	}, nil
 }
 
-func (s *KnowledgeBaseService) findKnowledgeBase(ctx context.Context, ownerID, id uuid.UUID) (*model.KnowledgeBase, error) {
-	kb, err := s.repo.FindByIDAndOwner(ctx, id, ownerID)
+// findKnowledgeBaseForCapability is the single authorization entry point for this
+// service. It replaces both the owner-only findKnowledgeBase and the
+// manager-only management helper.
+func (s *KnowledgeBaseService) findKnowledgeBaseForCapability(
+	ctx context.Context,
+	actorID, id uuid.UUID,
+	capability access.Capability,
+) (*model.KnowledgeBase, error) {
+	granted, err := authorizeKnowledgeBase(ctx, s.repo, actorID, id, capability)
 	if err != nil {
-		return nil, apperror.Internal(err)
+		return nil, err
 	}
-	if kb == nil {
-		return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
-	}
-	return kb, nil
-}
-
-func (s *KnowledgeBaseService) findKnowledgeBaseForManagement(ctx context.Context, actorID, id uuid.UUID) (*model.KnowledgeBase, error) {
-	kb, err := s.repo.FindByID(ctx, id)
-	if err != nil {
-		return nil, apperror.Internal(err)
-	}
-	if kb == nil {
-		return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
-	}
-	if kb.OwnerID == actorID {
-		return kb, nil
-	}
-	member, err := s.members.Find(ctx, id, actorID)
-	if err != nil {
-		return nil, apperror.Internal(err)
-	}
-	if member == nil || member.Role != "manager" {
-		return nil, apperror.Forbidden()
-	}
-	return kb, nil
+	return granted.knowledgeBase, nil
 }
 
 func (s *KnowledgeBaseService) ensureKnowledgeBasesOwner(ctx context.Context, ownerID uuid.UUID, ids []uuid.UUID, deleted bool) error {
@@ -961,12 +945,14 @@ func toKnowledgeBasePermissionResponse(kb *model.KnowledgeBase, members []model.
 			Username:    owner.Username,
 			DisplayName: owner.DisplayName,
 			AvatarURL:   owner.AvatarURL,
-			Role:        "owner",
+			Role:        string(access.RoleOwner),
 		})
 	}
 	for i := range members {
 		member := permissionMemberFromUser(&members[i].User, members[i].Role)
-		if member.Role == "manager" {
+		// Managers are grouped with the owner because both can administer the base;
+		// viewers and editors are the people it was shared with.
+		if member.Role == string(access.RoleManager) {
 			response.Managers = append(response.Managers, member)
 			continue
 		}
@@ -1105,15 +1091,20 @@ func normalizeMemberRole(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
+// validateAssignableMemberRole rejects anything the member table may not hold.
+//
+// The set comes from access.AssignableRoles rather than a literal list here, so
+// the API, the Go matrix and the CHECK constraint cannot drift apart. "member" is
+// no longer accepted: migration 020 rewrote those rows to "viewer", and continuing
+// to accept the old name would keep writing a value that resolves to no access.
 func validateAssignableMemberRole(value string) error {
-	switch value {
-	case "manager", "member":
+	if access.Valid(access.Role(value)) {
 		return nil
-	case "owner":
-		return apperror.New(http.StatusBadRequest, "OWNER_MEMBER_IMMUTABLE", "owner 权限来自知识库 owner_id，不能通过成员接口分配")
-	default:
-		return apperror.New(http.StatusBadRequest, "INVALID_MEMBER_ROLE", "成员角色不合法")
 	}
+	if value == string(access.RoleOwner) {
+		return apperror.New(http.StatusBadRequest, "OWNER_MEMBER_IMMUTABLE", "owner 权限来自知识库 owner_id，不能通过成员接口分配")
+	}
+	return apperror.New(http.StatusBadRequest, "INVALID_MEMBER_ROLE", "成员角色不合法")
 }
 
 func normalizeBatchTagMode(value string) string {
