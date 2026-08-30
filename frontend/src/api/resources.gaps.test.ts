@@ -6,6 +6,7 @@ import {
   exportGlobalSearch,
   getChatQualityOverview,
   getSystemCapabilities,
+  getSystemDiagnostics,
   listChatKnowledgeGaps,
   listChatSessions,
   listNegativeChatFeedback,
@@ -68,6 +69,14 @@ describe('frontend gap resources', () => {
     void getSystemCapabilities();
 
     expect(apiRequest).toHaveBeenCalledWith('/system/capabilities');
+  });
+
+  it('reads system diagnostics from a parameterless endpoint', () => {
+    vi.mocked(apiRequest).mockResolvedValue({});
+
+    void getSystemDiagnostics();
+
+    expect(apiRequest).toHaveBeenCalledWith('/system/diagnostics');
   });
 
   it('posts assistant feedback and exports chat/search downloads', () => {

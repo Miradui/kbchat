@@ -1,4 +1,5 @@
 import {
+  Activity,
   FileText,
   Home,
   Library,
@@ -14,6 +15,7 @@ export type AppSection =
   | 'home'
   | 'chat'
   | 'quality'
+  | 'diagnostics'
   | 'knowledge-bases'
   | 'documents'
   | 'tags'
@@ -35,6 +37,12 @@ const groups: Array<{ label: string; items: NavItem[] }> = [
       { to: '/home', label: '首页', section: 'home', icon: Home },
       { to: '/chat', label: 'AI 问答', section: 'chat', icon: MessageSquareText },
       { to: '/quality', label: '质量运营', section: 'quality', icon: ScanSearch },
+    ],
+  },
+  {
+    label: '系统',
+    items: [
+      { to: '/diagnostics', label: '系统诊断', section: 'diagnostics', icon: Activity },
     ],
   },
   {

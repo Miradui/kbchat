@@ -54,6 +54,7 @@ import type {
   EditChatMessageRequest,
   SearchSuggestResponse,
   SystemCapabilities,
+  SystemDiagnostics,
   UpdateProfileInput,
   User,
   UserSearchResponse,
@@ -805,4 +806,12 @@ function withQuery(path: string, params: Record<string, unknown>): string {
 
   const queryString = query.toString();
   return queryString ? `${path}?${queryString}` : path;
+}
+
+/**
+ * Deployment health. Always resolves for a reachable server: a failing
+ * dependency comes back as `status: 'down'` in the payload, not as an HTTP error.
+ */
+export function getSystemDiagnostics(): Promise<SystemDiagnostics> {
+  return apiRequest<SystemDiagnostics>('/system/diagnostics');
 }

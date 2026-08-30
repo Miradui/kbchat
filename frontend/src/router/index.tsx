@@ -16,6 +16,7 @@ const ChatPage = lazy(() => import('../pages/Chat/ChatPage').then((m) => ({ defa
 const SearchPage = lazy(() => import('../pages/Search/SearchPage').then((m) => ({ default: m.SearchPage })));
 const TagsPage = lazy(() => import('../pages/Tags/TagsPage').then((m) => ({ default: m.TagsPage })));
 const QualityPage = lazy(() => import('../pages/Quality/QualityPage').then((m) => ({ default: m.QualityPage })));
+const DiagnosticsPage = lazy(() => import('../pages/Diagnostics/DiagnosticsPage').then((m) => ({ default: m.DiagnosticsPage })));
 
 function RoutePage({ children }: { children: ReactNode }) {
   return (
@@ -85,6 +86,7 @@ export const router = createBrowserRouter([{
         { path: 'chat/new', element: <LegacyChatDraftRedirect /> },
         { path: 'chat/:sessionId', element: <RoutePage><ChatPage /></RoutePage> },
 		{ path: 'quality', element: <RoutePage><QualityPage /></RoutePage> },
+		{ path: 'diagnostics', element: <RoutePage><DiagnosticsPage /></RoutePage> },
 
         { path: 'search', element: <RoutePage><SearchPage /></RoutePage> },
         { path: 'tags', element: <RoutePage><TagsPage /></RoutePage> },

@@ -15,6 +15,10 @@ const expectedRouteChunks = [
   'ChatPage',
   'SearchPage',
   'TagsPage',
+  // QualityPage was lazily loaded but missing from this list, so the check
+  // silently stopped covering it.
+  'QualityPage',
+  'DiagnosticsPage',
 ];
 
 export function verifyRouteChunks(javascriptChunks) {
