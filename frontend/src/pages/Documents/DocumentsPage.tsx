@@ -1,6 +1,6 @@
-import { Ban, FileText, PencilLine, RotateCw, Search, Trash2, Upload } from 'lucide-react';
+import { Ban, FileText, MessageSquareText, PencilLine, RotateCw, Search, Trash2, Upload, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import {
   batchDeleteDocuments,
@@ -23,12 +23,13 @@ import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
 import { Checkbox, Field, Input, SearchInput, Select } from '../../components/ui/Field';
+import { IconButton } from '../../components/ui/IconButton';
 import { MetricStrip } from '../../components/ui/MetricStrip';
 import { OverflowMenu } from '../../components/ui/OverflowMenu';
 import { Pagination } from '../../components/ui/Pagination';
 import { useEntityMutation } from '../../hooks/useEntityMutation';
 import { AppShell } from '../../layouts/AppShell';
-import type { DocumentSort, DocumentStatus, KnowledgeBase } from '../../types/api';
+import type { DocumentItem, DocumentSort, DocumentStatus, KnowledgeBase } from '../../types/api';
 import { formatBytes, formatRelativeTime } from '../../utils/format';
 import { getDocumentProcessingErrorMessage, getErrorMessage } from '../../utils/errors';
 import { KnowledgeBaseLayout, KnowledgeBaseLoadFailure } from '../KnowledgeBase/KnowledgeBaseLayout';
@@ -45,6 +46,7 @@ import {
   documentStatusTone,
   isTerminalDocumentStatus,
 } from './documentDisplay';
+import { importGuidance, importGuidanceMessage } from './importGuidance';
 import { useDocumentList } from './useDocumentList';
 
 type DocumentsPageProps = {
@@ -113,6 +115,17 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
   const [renameError, setRenameError] = useState('');
   const [detailId, setDetailId] = useState<string | null>(null);
   const [searchDraft, setSearchDraft] = useState(filters.q);
+  // Ids from the most recent import, watched until they stop processing. Held here
+  // rather than derived from the list because "just imported" is not a property of
+  // a document -- a document that was already completed when the page loaded must
+  // not trigger the guidance.
+  const [watchedImportIds, setWatchedImportIds] = useState<string[]>([]);
+  // Where "开始提问" should go. Read off the imported documents rather than the page
+  // scope, so the workspace-wide page also gets a working entry point; a batch split
+  // across knowledge bases has no single destination and shows the notice only.
+  const [guidanceKnowledgeBaseId, setGuidanceKnowledgeBaseId] = useState('');
+  const [guidanceDismissed, setGuidanceDismissed] = useState(false);
+  const navigate = useNavigate();
   const mountedRef = useRef(true);
   const scopeRef = useRef(scopeKnowledgeBaseId);
   const previousScopeRef = useRef(scopeKnowledgeBaseId);
@@ -140,6 +153,9 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
     setDeleteError('');
     setRenameTarget(null);
     setRenameError('');
+    setWatchedImportIds([]);
+    setGuidanceKnowledgeBaseId('');
+    setGuidanceDismissed(false);
   }, [scopeKnowledgeBaseId]);
 
   useEffect(() => setSearchDraft(filters.q), [filters.q]);
@@ -159,7 +175,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
   // `?intent=upload` opens the import dialog once and consumes the parameter.
   useEffect(() => {
     if (searchParams.get('intent') !== 'upload') return;
-    setImportOpen(true);
+    openImport();
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
       next.delete('intent');
@@ -171,6 +187,11 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
     setSelectedIds((current) => current.filter((docId) => items.some((item) => item.id === docId)));
   }, [items]);
 
+  const guidance = useMemo(
+    () => (guidanceDismissed ? null : importGuidance(watchedImportIds, items)),
+    [guidanceDismissed, items, watchedImportIds],
+  );
+
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
   const allSelected = items.length > 0 && items.every((item) => selected.has(item.id));
   const fileTypes = useMemo(
@@ -180,6 +201,35 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
 
   function mutationKey(key: string) {
     return `${scopeKnowledgeBaseId ?? 'workspace'}:${key}`;
+  }
+
+  // Every import starts a fresh watch: carrying ids over would let a second batch
+  // report the first one's totals alongside its own.
+  function openImport() {
+    setWatchedImportIds([]);
+    setGuidanceKnowledgeBaseId('');
+    setGuidanceDismissed(false);
+    setImportOpen(true);
+  }
+
+  /**
+   * Start watching a finished upload batch so the guidance can fire when the
+   * documents stop processing. Called per batch, and again for each duplicate the
+   * user resolves afterwards, so ids accumulate instead of replacing.
+   */
+  function watchImport(documents: DocumentItem[]) {
+    if (documents.length === 0) return;
+    setWatchedImportIds((current) => {
+      const known = new Set(current);
+      return [...current, ...documents.map((document) => document.id).filter((id) => !known.has(id))];
+    });
+    setGuidanceKnowledgeBaseId((current) => {
+      const targets = new Set(documents.map((document) => document.knowledgeBaseId));
+      if (current) targets.add(current);
+      // Mixed targets: there is no single knowledge base to ask against.
+      return targets.size === 1 ? [...targets][0] : '';
+    });
+    setGuidanceDismissed(false);
   }
 
   function isCurrentOperation(operationScope: string | undefined) {
@@ -292,7 +342,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
           <Button
             disabled={uploadTargets.length === 0}
             leadingIcon={<Upload aria-hidden="true" />}
-            onClick={() => setImportOpen(true)}
+            onClick={openImport}
           >
             导入文档
           </Button>
@@ -361,6 +411,34 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
         )}
       </div>
 
+      {guidance && (
+        <div
+          aria-label="导入结果"
+          className={`doc-guidance${guidance.canAsk ? '' : ' doc-guidance--warn'}`}
+          // Polite: the user is watching the list, and an assertive interruption
+          // would cut across whatever they are reading in it.
+          role="status"
+        >
+          <div className="doc-guidance__text">
+            <strong>{importGuidanceMessage(guidance)}</strong>
+            {guidance.canAsk && (
+              <span className="ui-muted">回答只会引用这个知识库里的内容。</span>
+            )}
+          </div>
+          {guidance.canAsk && guidanceKnowledgeBaseId && (
+            <Button
+              leadingIcon={<MessageSquareText aria-hidden="true" />}
+              onClick={() => navigate(`/chat?knowledgeBaseId=${encodeURIComponent(guidanceKnowledgeBaseId)}`)}
+            >
+              开始提问
+            </Button>
+          )}
+          <IconButton label="关闭提示" onClick={() => setGuidanceDismissed(true)}>
+            <X aria-hidden="true" />
+          </IconButton>
+        </div>
+      )}
+
       {selectedIds.length > 0 && (
         <div className="ui-bulkbar">
           <span className="ui-bulkbar__count">已选择 {selectedIds.length} 个文档</span>
@@ -400,7 +478,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
             action={activeFilterCount > 0
               ? <Button variant="secondary" onClick={() => setFilter({ q: '', status: '', fileType: '' })}>清除筛选</Button>
               : uploadTargets.length > 0
-                ? <Button onClick={() => setImportOpen(true)}>导入文档</Button>
+                ? <Button onClick={openImport}>导入文档</Button>
                 : <Link className="ui-button ui-button--primary" to="/knowledge-bases?intent=create"><span>先新建知识库</span></Link>}
             description={activeFilterCount > 0
               ? '调整筛选条件后再试。'
@@ -627,9 +705,11 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
         fixedKnowledgeBaseId={scopeKnowledgeBaseId}
         fixedKnowledgeBaseName={uploadTargets[0]?.name}
         knowledgeBases={uploadTargets}
-        onBatchComplete={() => (
-          isCurrentOperation(scopeKnowledgeBaseId) ? refresh() : undefined
-        )}
+        onBatchComplete={(documents) => {
+          if (!isCurrentOperation(scopeKnowledgeBaseId)) return undefined;
+          watchImport(documents);
+          return refresh();
+        }}
         onClose={() => setImportOpen(false)}
         onReplace={replaceDocument}
         onUpload={scopeKnowledgeBaseId ? uploadDocument : uploadGlobalDocument}

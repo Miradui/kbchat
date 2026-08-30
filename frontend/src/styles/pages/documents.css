@@ -157,3 +157,23 @@
   .doc-status-cell { min-width: 0; }
   .doc-name { justify-content: flex-end; }
 }
+
+/*
+ * Import guidance. Success tone by default because the common case is "it worked,
+ * here is what to do next"; the warn variant is for a batch where nothing came out
+ * usable, where the next step is fixing the file rather than asking a question.
+ */
+.doc-guidance {
+  align-items: center;
+  background: var(--ok-wash);
+  border: 1px solid var(--ok-line);
+  border-radius: var(--r-sm);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  padding: var(--s-3);
+}
+.doc-guidance--warn { background: var(--warn-wash); border-color: var(--warn-line); }
+.doc-guidance__text { display: grid; flex: 1 1 240px; gap: 2px; }
+.doc-guidance__text strong { color: var(--text); font-size: var(--t-body); font-weight: 550; }
+.doc-guidance__text span { font-size: var(--t-small); }

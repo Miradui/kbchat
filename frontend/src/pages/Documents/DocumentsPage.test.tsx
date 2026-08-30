@@ -732,4 +732,55 @@ describe('DocumentsPage', () => {
     expect(within(dialog).queryByRole('button', { name: '重试失败项' })).not.toBeInTheDocument();
     await waitFor(() => expect(listDocuments).toHaveBeenCalledTimes(2));
   });
+  it('invites the user to ask only once the imported documents finish processing', async () => {
+    const completed = { ...uploadedDocument, status: 'completed' as const };
+    vi.mocked(uploadDocument).mockResolvedValue(uploadedDocument);
+    vi.mocked(listDocuments).mockResolvedValue({ items: [uploadedDocument] });
+    const user = userEvent.setup();
+    renderPage();
+
+    await uploadThroughDialog(user, new File(['content'], 'handbook.pdf', { type: 'application/pdf' }));
+    await waitFor(() => expect(uploadDocument).toHaveBeenCalledOnce());
+
+    // Still processing: prompting now would send the user to ask a question against
+    // chunks that do not exist yet.
+    expect(await screen.findByText('handbook.pdf')).toBeInTheDocument();
+    expect(screen.queryByText(/可以开始提问/)).not.toBeInTheDocument();
+
+    vi.mocked(listDocuments).mockResolvedValue({ items: [completed] });
+    await user.click(screen.getByRole('button', { name: '更多文档操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '刷新列表' }));
+
+    const banner = await screen.findByRole('status', { name: '导入结果' });
+    expect(banner).toHaveTextContent('1 个文档已处理完成，可以开始提问了。');
+    await user.click(within(banner).getByRole('button', { name: '开始提问' }));
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/chat?knowledgeBaseId=kb1');
+  });
+
+  it('does not invite questions about documents that were already complete on load', async () => {
+    // The guidance is about a batch the user just imported, not about the list
+    // happening to contain finished documents.
+    vi.mocked(listDocuments).mockResolvedValue({ items: [{ ...uploadedDocument, status: 'completed' }] });
+    renderPage();
+
+    expect(await screen.findByText('handbook.pdf')).toBeInTheDocument();
+    expect(screen.queryByText(/可以开始提问/)).not.toBeInTheDocument();
+  });
+
+  it('reports a failed import without offering to ask', async () => {
+    const failed = { ...uploadedDocument, status: 'failed' as const, errorMessage: 'boom' };
+    vi.mocked(uploadDocument).mockResolvedValue(uploadedDocument);
+    vi.mocked(listDocuments).mockResolvedValue({ items: [failed] });
+    const user = userEvent.setup();
+    renderPage();
+
+    await uploadThroughDialog(user, new File(['content'], 'handbook.pdf', { type: 'application/pdf' }));
+
+    const banner = await screen.findByRole('status', { name: '导入结果' });
+    expect(banner).toHaveTextContent('文档处理失败，暂时还不能基于它提问。');
+    expect(within(banner).queryByRole('button', { name: '开始提问' })).not.toBeInTheDocument();
+
+    await user.click(within(banner).getByRole('button', { name: '关闭提示' }));
+    expect(screen.queryByRole('status', { name: '导入结果' })).not.toBeInTheDocument();
+  });
 });
