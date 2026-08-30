@@ -230,6 +230,7 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	protected.POST("/documents/:id/cancel", documentHandler.Cancel)
 	protected.POST("/documents/:id/restore", documentHandler.Restore)
 	protected.POST("/documents/:id/reprocess", documentHandler.Reprocess)
+	protected.POST("/documents/:id/replace", documentHandler.Replace)
 	protected.GET("/documents/:id/chunks", documentHandler.Chunks)
 	protected.POST("/chat/sessions", chatHandler.CreateSession)
 	protected.GET("/chat/sessions", chatHandler.ListSessions)

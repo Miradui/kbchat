@@ -23,6 +23,15 @@ type DocumentResponse struct {
 	NextRetryAt     *time.Time `json:"nextRetryAt"`
 	CreatedAt       time.Time  `json:"createdAt"`
 	UpdatedAt       time.Time  `json:"updatedAt"`
+
+	// ErrorCode is a closed set (see model.DocumentErrorCode*) so the client can
+	// give specific advice per failure. ErrorMessage stays the human sentence; the
+	// raw parser or provider error is never either of them.
+	ErrorCode string `json:"errorCode,omitempty"`
+	// SupersededByID names the revision that replaced this document, and is what
+	// tells the client this row is history rather than a live document.
+	SupersededByID *string    `json:"supersededById"`
+	SupersededAt   *time.Time `json:"supersededAt"`
 }
 
 type GlobalDocumentListQuery struct {

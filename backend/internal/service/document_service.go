@@ -123,7 +123,7 @@ func (s *DocumentService) UploadWithOptions(
 		KnowledgeBaseID: kbID,
 		UploaderID:      ownerID,
 		Filename:        file.Filename,
-		FileType:        strings.TrimPrefix(strings.ToLower(filepath.Ext(file.Filename)), "."),
+		FileType:        fileTypeOf(file.Filename),
 		FileSize:        file.Size,
 		StoragePath:     storagePath,
 		Status:          "uploaded",
@@ -725,7 +725,18 @@ func toDocumentResponse(document *model.Document, job *model.DocumentJob, maxRet
 		NextRetryAt:     progress.NextRetryAt,
 		CreatedAt:       document.CreatedAt,
 		UpdatedAt:       document.UpdatedAt,
+		ErrorCode:       document.ErrorCode,
+		SupersededByID:  supersededByID(document.SupersededByID),
+		SupersededAt:    document.SupersededAt,
 	}
+}
+
+func supersededByID(id *uuid.UUID) *string {
+	if id == nil {
+		return nil
+	}
+	value := id.String()
+	return &value
 }
 
 func toGlobalDocumentRepoQuery(query dto.GlobalDocumentListQuery) (repository.GlobalDocumentQuery, error) {

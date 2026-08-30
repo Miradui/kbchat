@@ -80,6 +80,31 @@ func (h *DocumentHandler) UploadGlobal(c *gin.Context) {
 	c.JSON(http.StatusCreated, res)
 }
 
+func (h *DocumentHandler) Replace(c *gin.Context) {
+	h.limitUploadBody(c)
+	userID, ok := currentUserIDOrError(c)
+	if !ok {
+		return
+	}
+	documentID, ok := parseUUIDParam(c, "id", "文档 ID 不合法")
+	if !ok {
+		return
+	}
+	file, err := c.FormFile("file")
+	if err != nil {
+		RespondError(c, uploadFileError(err))
+		return
+	}
+	res, err := h.documents.Replace(c.Request.Context(), userID, documentID, file)
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	// 201 rather than 200: the replacement is a new document with its own id, and
+	// the client has to follow that id to watch processing.
+	c.JSON(http.StatusCreated, res)
+}
+
 func (h *DocumentHandler) limitUploadBody(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, h.maxUploadRequestBytes)
 }
