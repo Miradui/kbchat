@@ -29,6 +29,20 @@ function documentFor(file: File, index = 0): DocumentItem {
   };
 }
 
+function duplicateError(overrides: Record<string, unknown> = {}) {
+  return new ApiError(409, {
+    code: 'DOCUMENT_DUPLICATE_CONTENT',
+    message: '知识库中已存在内容相同的文档',
+    details: {
+      existingDocumentId: 'doc-existing',
+      existingFilename: 'policy-v1.md',
+      existingStatus: 'completed',
+      existingUploadedAt: '2026-06-01T00:00:00Z',
+      ...overrides,
+    },
+  });
+}
+
 function renderDialog(props: Partial<React.ComponentProps<typeof DocumentImportDialog>> = {}) {
   const defaults: React.ComponentProps<typeof DocumentImportDialog> = {
     open: true,
@@ -307,5 +321,170 @@ describe('DocumentImportDialog', () => {
       screen.getByRole('dialog', { name: '放弃待导入文件' }),
     ).getByRole('button', { name: '放弃文件' }));
     expect(onClose).toHaveBeenCalledOnce();
+  });
+  it('turns a duplicate into a choice without stopping the rest of the batch', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const dupe = new File(['policy'], 'policy.md', { type: 'text/markdown' });
+    const other = new File(['manual'], 'manual.pdf', { type: 'application/pdf' });
+    const onUpload = vi.fn()
+      .mockRejectedValueOnce(duplicateError())
+      .mockResolvedValueOnce(documentFor(other));
+    renderDialog({ onClose, onReplace: vi.fn(), onUpload });
+
+    await user.upload(screen.getByLabelText('选择文档文件'), [dupe, other]);
+    await user.click(screen.getByRole('button', { name: '开始导入' }));
+
+    // The second file went through even though the first raised a conflict.
+    await waitFor(() => expect(onUpload).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('已上传')).toBeInTheDocument();
+
+    const row = (await screen.findByText('policy.md')).closest('article') as HTMLElement;
+    expect(row).toHaveTextContent('policy-v1.md');
+    expect(within(row).getByRole('button', { name: '替换原文档' })).toBeEnabled();
+    expect(within(row).getByRole('button', { name: '保留两份' })).toBeEnabled();
+    // A conflict is not a failure, so the row must not be labelled as one.
+    expect(row).not.toHaveTextContent('上传失败');
+    expect(row).toHaveTextContent('内容重复');
+
+    // The dialog has to stay open or the decision the server asked for is lost.
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('请选择替换或保留两份');
+  });
+
+  it('keeps both copies by re-uploading with the duplicate override', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const onBatchComplete = vi.fn();
+    const file = new File(['policy'], 'policy.md', { type: 'text/markdown' });
+    const onReplace = vi.fn();
+    const onUpload = vi.fn()
+      .mockRejectedValueOnce(duplicateError())
+      .mockResolvedValueOnce(documentFor(file));
+    renderDialog({ onBatchComplete, onClose, onReplace, onUpload });
+
+    await user.upload(screen.getByLabelText('选择文档文件'), file);
+    await user.click(screen.getByRole('button', { name: '开始导入' }));
+    await user.click(await screen.findByRole('button', { name: '保留两份' }));
+
+    await waitFor(() => expect(onUpload).toHaveBeenCalledTimes(2));
+    expect(onUpload.mock.calls[1]).toEqual([
+      'kb1',
+      expect.objectContaining({ name: 'policy.md' }),
+      expect.any(Function),
+      expect.any(AbortSignal),
+      { allowDuplicate: true },
+    ]);
+    expect(onReplace).not.toHaveBeenCalled();
+    expect(onBatchComplete).toHaveBeenCalledWith([expect.objectContaining({ filename: 'policy.md' })]);
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+  });
+
+  it('replaces the existing document by id rather than re-uploading', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const file = new File(['policy'], 'policy.md', { type: 'text/markdown' });
+    const onReplace = vi.fn(async () => documentFor(file));
+    const onUpload = vi.fn().mockRejectedValueOnce(duplicateError());
+    renderDialog({ onClose, onReplace, onUpload });
+
+    await user.upload(screen.getByLabelText('选择文档文件'), file);
+    await user.click(screen.getByRole('button', { name: '开始导入' }));
+    await user.click(await screen.findByRole('button', { name: '替换原文档' }));
+
+    await waitFor(() => expect(onReplace).toHaveBeenCalledOnce());
+    expect(onReplace).toHaveBeenCalledWith(
+      'doc-existing',
+      expect.objectContaining({ name: 'policy.md' }),
+      expect.any(Function),
+      expect.any(AbortSignal),
+    );
+    // Replacement must not also create a second copy.
+    expect(onUpload).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('已替换原文档，正在处理中。')).toBeInTheDocument();
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+  });
+
+  it('offers only the keep option when replacement is not wired up', async () => {
+    const user = userEvent.setup();
+    const file = new File(['policy'], 'policy.md', { type: 'text/markdown' });
+    renderDialog({ onReplace: undefined, onUpload: vi.fn().mockRejectedValueOnce(duplicateError()) });
+
+    await user.upload(screen.getByLabelText('选择文档文件'), file);
+    await user.click(screen.getByRole('button', { name: '开始导入' }));
+
+    expect(await screen.findByRole('button', { name: '保留两份' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: '替换原文档' })).not.toBeInTheDocument();
+  });
+
+  it('lets the user choose again when resolving the duplicate fails', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const file = new File(['policy'], 'policy.md', { type: 'text/markdown' });
+    const onReplace = vi.fn().mockRejectedValueOnce(new ApiError(500, {
+      code: 'INTERNAL_ERROR',
+      message: 'boom',
+      details: {},
+    }));
+    renderDialog({ onClose, onReplace, onUpload: vi.fn().mockRejectedValueOnce(duplicateError()) });
+
+    await user.upload(screen.getByLabelText('选择文档文件'), file);
+    await user.click(screen.getByRole('button', { name: '开始导入' }));
+    await user.click(await screen.findByRole('button', { name: '替换原文档' }));
+
+    await waitFor(() => expect(onReplace).toHaveBeenCalledOnce());
+    const row = (await screen.findByText('policy.md')).closest('article') as HTMLElement;
+    expect(within(row).getByRole('button', { name: '替换原文档' })).toBeEnabled();
+    expect(within(row).getByRole('button', { name: '保留两份' })).toBeEnabled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('waits for every duplicate before closing', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const first = new File(['policy'], 'policy.md', { type: 'text/markdown' });
+    const second = new File(['manual'], 'manual.pdf', { type: 'application/pdf' });
+    const onUpload = vi.fn()
+      .mockRejectedValueOnce(duplicateError())
+      .mockRejectedValueOnce(duplicateError({ existingFilename: 'manual-v1.pdf' }))
+      .mockResolvedValueOnce(documentFor(first))
+      .mockResolvedValueOnce(documentFor(second, 1));
+    renderDialog({ onClose, onUpload });
+
+    await user.upload(screen.getByLabelText('选择文档文件'), [first, second]);
+    await user.click(screen.getByRole('button', { name: '开始导入' }));
+
+    const firstRow = (await screen.findByText('policy.md')).closest('article') as HTMLElement;
+    await user.click(within(firstRow).getByRole('button', { name: '保留两份' }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('还有文件与知识库中已有内容重复'));
+    expect(onClose).not.toHaveBeenCalled();
+
+    const secondRow = (await screen.findByText('manual.pdf')).closest('article') as HTMLElement;
+    await user.click(within(secondRow).getByRole('button', { name: '保留两份' }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+  });
+
+  it('treats a malformed conflict payload as a plain failure', async () => {
+    const user = userEvent.setup();
+    const file = new File(['policy'], 'policy.md', { type: 'text/markdown' });
+    renderDialog({
+      onReplace: vi.fn(),
+      // No existingDocumentId: there is nothing to replace, so offering the choice
+      // would produce a request that cannot succeed.
+      onUpload: vi.fn().mockRejectedValueOnce(new ApiError(409, {
+        code: 'DOCUMENT_DUPLICATE_CONTENT',
+        message: '知识库中已存在内容相同的文档',
+        details: {},
+      })),
+    });
+
+    await user.upload(screen.getByLabelText('选择文档文件'), file);
+    await user.click(screen.getByRole('button', { name: '开始导入' }));
+
+    const row = (await screen.findByText('policy.md')).closest('article') as HTMLElement;
+    expect(row).toHaveTextContent('上传失败');
+    expect(within(row).queryByRole('button', { name: '替换原文档' })).not.toBeInTheDocument();
   });
 });

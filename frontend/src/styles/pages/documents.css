@@ -118,6 +118,27 @@
 .doc-import__status.is-succeeded { color: var(--ok); }
 .doc-import__status.is-failed { color: var(--danger); }
 .doc-import__status.is-unconfirmed { color: var(--warn); }
+.doc-import__status.is-duplicate { color: var(--info); }
+
+/*
+ * The choice block sits inside the row and widens it, so the row switches to
+ * top-aligned when one is present -- otherwise the status column floats to the
+ * vertical middle of a tall row, away from the filename it describes.
+ */
+.doc-import__item:has(.doc-import__duplicate) { align-items: flex-start; }
+.doc-import__duplicate {
+  background: var(--info-wash);
+  border: 1px solid var(--info-line);
+  border-radius: var(--r-sm);
+  display: grid;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+}
+.doc-import__duplicate-text { color: var(--text); font-size: var(--t-small); margin: 0; }
+.doc-import__duplicate-text strong { font-weight: 550; margin: 0 0.25em; }
+.doc-import__duplicate-actions { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.doc-import__duplicate-note { font-size: var(--t-small); margin: 0; }
 .doc-import__upload-progress {
   align-items: center;
   display: grid;

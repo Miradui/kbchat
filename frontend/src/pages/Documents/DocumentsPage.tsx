@@ -8,6 +8,7 @@ import {
   cancelDocumentJob,
   deleteDocument,
   listKnowledgeBases,
+  replaceDocument,
   reprocessDocument,
   updateDocument,
   uploadDocument,
@@ -630,6 +631,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
           isCurrentOperation(scopeKnowledgeBaseId) ? refresh() : undefined
         )}
         onClose={() => setImportOpen(false)}
+        onReplace={replaceDocument}
         onUpload={scopeKnowledgeBaseId ? uploadDocument : uploadGlobalDocument}
         open={importOpen}
       />

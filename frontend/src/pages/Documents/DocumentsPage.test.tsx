@@ -68,6 +68,7 @@ vi.mock('../../api/resources', () => ({
   listKnowledgeBases: vi.fn(),
   logout: vi.fn(),
   recordKnowledgeBaseView: vi.fn().mockResolvedValue(undefined),
+  replaceDocument: vi.fn(),
   reprocessDocument: vi.fn(),
   updateKnowledgeBase: vi.fn(),
   uploadDocument: vi.fn(),

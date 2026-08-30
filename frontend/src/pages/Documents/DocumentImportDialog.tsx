@@ -9,8 +9,9 @@ import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
 import { IconButton } from '../../components/ui/IconButton';
 import { useSystemCapabilities } from '../../hooks/useSystemCapabilities';
-import type { DocumentItem, SystemCapabilities } from '../../types/api';
+import type { DocumentDuplicateDetails, DocumentItem, SystemCapabilities } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
+import { formatRelativeTime } from '../../utils/format';
 import { formatDocumentBytes } from './documentDisplay';
 
 /**
@@ -35,7 +36,13 @@ function extensionSummary(extensions: string[]): string {
   return extensions.map((extension) => extension.toUpperCase()).join('、');
 }
 
-type ImportStatus = 'pending' | 'uploading' | 'succeeded' | 'failed' | 'unconfirmed';
+/**
+ * `duplicate` is not a failure: the request was well formed and the server is
+ * asking the user to choose. It is kept out of the failed count for that reason —
+ * telling someone "部分文档导入失败" when they simply have a decision to make would
+ * misdescribe what happened.
+ */
+type ImportStatus = 'pending' | 'uploading' | 'succeeded' | 'failed' | 'unconfirmed' | 'duplicate';
 
 type ImportItem = {
   error: string;
@@ -43,6 +50,8 @@ type ImportItem = {
   key: string;
   progress: number;
   status: ImportStatus;
+  /** Present only while status is `duplicate`: what the new file collides with. */
+  duplicate?: DocumentDuplicateDetails;
 };
 
 type KnowledgeBaseOption = {
@@ -63,6 +72,17 @@ type DocumentImportDialogProps = {
     file: File,
     onProgress?: (progress: number) => void,
     signal?: AbortSignal,
+    options?: { allowDuplicate?: boolean },
+  ) => Promise<DocumentItem>;
+  /**
+   * Replace the colliding document instead of adding a second copy. Injected so the
+   * dialog stays testable without the network, same as `onUpload`.
+   */
+  onReplace?: (
+    documentId: string,
+    file: File,
+    onProgress?: (progress: number) => void,
+    signal?: AbortSignal,
   ) => Promise<DocumentItem>;
   onUploaded?: (document: DocumentItem) => void;
   open: boolean;
@@ -77,6 +97,7 @@ export function DocumentImportDialog({
   onClose,
   onKnowledgeBaseChange,
   onUpload,
+  onReplace,
   onUploaded,
   open,
 }: DocumentImportDialogProps) {
@@ -214,6 +235,7 @@ export function DocumentImportDialog({
     const uploadedDocuments: DocumentItem[] = [];
     let batchCompleteError: unknown;
     let hasFailure = false;
+    let hasDuplicate = false;
     let cancelled = false;
 
     for (const item of uploadCandidates) {
@@ -251,8 +273,8 @@ export function DocumentImportDialog({
         if (operationRef.current !== operation) {
           return;
         }
-        hasFailure = true;
         if (controller.signal.aborted) {
+          hasFailure = true;
           cancelled = true;
           setItems((current) => updateImportItem(current, item.key, {
             error: '上传结果未知，请先在文档列表确认。',
@@ -260,6 +282,20 @@ export function DocumentImportDialog({
           }));
           break;
         }
+        // A duplicate is a question, not a failure, so the batch keeps going and the
+        // rest of the files are not held up behind one decision. The choice is made
+        // per file after the batch settles.
+        const duplicate = duplicateDetails(error);
+        if (duplicate) {
+          hasDuplicate = true;
+          setItems((current) => updateImportItem(current, item.key, {
+            duplicate,
+            error: '',
+            status: 'duplicate',
+          }));
+          continue;
+        }
+        hasFailure = true;
         setItems((current) => updateImportItem(current, item.key, {
           error: documentUploadErrorMessage(error),
           status: 'failed',
@@ -297,6 +333,15 @@ export function DocumentImportDialog({
       toast.error('部分文档导入失败，请检查后重试。');
       return;
     }
+    // Held open on a duplicate: closing would discard the decision the server just
+    // asked for, and the file would silently not be imported.
+    if (hasDuplicate) {
+      if (batchCompleteError) {
+        toast.error(getErrorMessage(batchCompleteError, '部分文档已上传，但列表刷新失败'));
+      }
+      setValidationError('有文件与知识库中已有内容重复，请选择替换或保留两份。');
+      return;
+    }
     if (batchCompleteError) {
       onClose();
       toast.error(getErrorMessage(batchCompleteError, '文档已上传，但列表刷新失败'));
@@ -305,6 +350,84 @@ export function DocumentImportDialog({
 
     toast.success(`已导入 ${uploadedDocuments.length} 个文档，正在处理中。`);
     onClose();
+  }
+
+  /**
+   * Resolve one duplicate. Both choices go through the same path because both end in
+   * a new document row and a list refresh; only the request differs.
+   *
+   * `keep` re-uploads with the override, `replace` posts to the replace endpoint so
+   * the old document is archived with a version trail rather than left as a second
+   * copy. Replace needs `onReplace` wired up; without it only `keep` is offered.
+   */
+  async function resolveDuplicate(item: ImportItem, choice: 'keep' | 'replace') {
+    if (uploading || !item.duplicate) return;
+    const existingId = item.duplicate.existingDocumentId;
+
+    const operation = Symbol('duplicate-resolution');
+    const controller = new AbortController();
+    operationRef.current = operation;
+    uploadAbortRef.current = controller;
+    setUploading(true);
+    setValidationError('');
+    setItems((current) => updateImportItem(current, item.key, {
+      error: '',
+      progress: 0,
+      status: 'uploading',
+    }));
+
+    const onProgress = (progress: number) => {
+      if (operationRef.current !== operation) return;
+      setItems((current) => updateImportItem(current, item.key, {
+        progress: clampProgress(progress),
+        status: 'uploading',
+      }));
+    };
+
+    try {
+      const document = choice === 'replace' && onReplace
+        ? await onReplace(existingId, item.file, onProgress, controller.signal)
+        : await onUpload(knowledgeBaseId, item.file, onProgress, controller.signal, { allowDuplicate: true });
+      if (operationRef.current !== operation) return;
+      setItems((current) => updateImportItem(current, item.key, {
+        duplicate: undefined,
+        error: '',
+        progress: 100,
+        status: 'succeeded',
+      }));
+      onUploaded?.(document);
+      await onBatchComplete?.([document]);
+      if (operationRef.current !== operation) return;
+      toast.success(choice === 'replace' ? '已替换原文档，正在处理中。' : '已保留两份，正在处理中。');
+      // Only the last outstanding row closes the dialog. `items` is the list as of the
+      // click, which is accurate here: resolutions are serialised by `uploading`, so
+      // no other row can have changed state in the meantime.
+      const pendingDuplicate = items.some(
+        (other) => other.key !== item.key && other.status === 'duplicate',
+      );
+      if (pendingDuplicate) {
+        setValidationError('还有文件与知识库中已有内容重复，请继续选择。');
+        return;
+      }
+      if (items.some((other) => other.key !== item.key && other.status === 'failed')) {
+        return;
+      }
+      onClose();
+    } catch (error) {
+      if (operationRef.current !== operation) return;
+      setItems((current) => updateImportItem(current, item.key, {
+        // The conflict details are kept so the row can offer the choice again
+        // rather than dropping the user back to a bare failure.
+        error: documentUploadErrorMessage(error),
+        status: 'duplicate',
+      }));
+    } finally {
+      if (operationRef.current === operation) {
+        operationRef.current = null;
+        if (uploadAbortRef.current === controller) uploadAbortRef.current = null;
+        setUploading(false);
+      }
+    }
   }
 
   return (
@@ -379,6 +502,15 @@ export function DocumentImportDialog({
                 <div className="ui-cell-stack">
                   <strong>{item.file.name}</strong>
                   <small>{formatDocumentBytes(item.file.size)}{item.error ? ` · ${item.error}` : ''}</small>
+                  {item.status === 'duplicate' && item.duplicate && (
+                    <DuplicateChoice
+                      busy={uploading}
+                      canReplace={Boolean(onReplace)}
+                      details={item.duplicate}
+                      filename={item.file.name}
+                      onChoose={(choice) => void resolveDuplicate(item, choice)}
+                    />
+                  )}
                 </div>
                 <div className={`doc-import__status is-${item.status}`}>
                   {item.status === 'uploading' ? (
@@ -474,7 +606,7 @@ function fileKey(file: File): string {
 function updateImportItem(
   items: ImportItem[],
   key: string,
-  update: Partial<Pick<ImportItem, 'error' | 'progress' | 'status'>>,
+  update: Partial<Pick<ImportItem, 'error' | 'progress' | 'status' | 'duplicate'>>,
 ): ImportItem[] {
   return items.map((item) => item.key === key ? { ...item, ...update } : item);
 }
@@ -489,8 +621,83 @@ function importStatusLabel(status: ImportStatus): string {
     case 'succeeded': return '已上传';
     case 'failed': return '上传失败';
     case 'unconfirmed': return '结果待确认';
+    case 'duplicate': return '内容重复';
     default: return '待上传';
   }
+}
+
+/**
+ * The 409 payload the duplicate check returns, or null for any other error. Read
+ * defensively: this comes off the wire, and a partially shaped payload must fall
+ * through to the generic failure path rather than render a dialog with blanks in it.
+ */
+function duplicateDetails(error: unknown): DocumentDuplicateDetails | null {
+  if (!(error instanceof ApiError) || error.code !== 'DOCUMENT_DUPLICATE_CONTENT') {
+    return null;
+  }
+  const details = error.details as Partial<DocumentDuplicateDetails> | undefined;
+  if (!details || typeof details.existingDocumentId !== 'string' || !details.existingDocumentId) {
+    return null;
+  }
+  return {
+    existingDocumentId: details.existingDocumentId,
+    // The filename is what the user recognises the existing copy by, so a missing
+    // one gets a placeholder rather than being left blank.
+    existingFilename: typeof details.existingFilename === 'string' && details.existingFilename
+      ? details.existingFilename
+      : '已有文档',
+    existingStatus: details.existingStatus ?? 'completed',
+    existingUploadedAt: typeof details.existingUploadedAt === 'string' ? details.existingUploadedAt : '',
+  };
+}
+
+type DuplicateChoiceProps = {
+  busy: boolean;
+  canReplace: boolean;
+  details: DocumentDuplicateDetails;
+  filename: string;
+  onChoose: (choice: 'keep' | 'replace') => void;
+};
+
+/**
+ * Inline rather than a modal: a batch can raise several conflicts, and a modal per
+ * file would make the user answer them one at a time in an order they did not pick.
+ *
+ * Both options are spelled out in terms of the outcome. "替换" archives the old
+ * document with a version trail rather than deleting it, which is worth saying --
+ * otherwise the choice reads as destructive and people default to keeping two copies
+ * they do not want.
+ */
+function DuplicateChoice({ busy, canReplace, details, filename, onChoose }: DuplicateChoiceProps) {
+  return (
+    <div className="doc-import__duplicate">
+      <p className="doc-import__duplicate-text">
+        与已有文档
+        <strong>{details.existingFilename}</strong>
+        内容相同
+        {details.existingUploadedAt ? `（${formatRelativeTime(details.existingUploadedAt)}上传）` : ''}
+        。
+      </p>
+      <div className="doc-import__duplicate-actions">
+        {canReplace && (
+          <Button
+            disabled={busy}
+            onClick={() => onChoose('replace')}
+            variant="primary"
+          >
+            替换原文档
+          </Button>
+        )}
+        <Button disabled={busy} onClick={() => onChoose('keep')} variant="ghost">
+          保留两份
+        </Button>
+      </div>
+      <p className="doc-import__duplicate-note ui-muted">
+        替换后原文档会保留为历史版本，仍可在回答的引用中追溯；
+        <span aria-label={`${filename} 保留两份说明`}>保留两份会让同样的内容被检索到两次。</span>
+      </p>
+    </div>
+  );
 }
 
 function documentUploadErrorMessage(error: unknown): string {
