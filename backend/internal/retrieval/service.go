@@ -8,7 +8,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"kbchat/backend/internal/access"
 	"kbchat/backend/internal/apperror"
+	"kbchat/backend/internal/authz"
 	"kbchat/backend/internal/config"
 	"kbchat/backend/internal/dto"
 	"kbchat/backend/internal/embedding"
@@ -44,8 +46,12 @@ type chunkSearcher interface {
 	SearchByVector(ctx context.Context, kbID uuid.UUID, vector []float32, limit int) ([]repository.SearchResult, error)
 }
 
+// knowledgeBaseFinder is what the authorization decision needs. It matches
+// authz.KnowledgeBaseFinder; the interface is redeclared here so this package keeps
+// stating its own dependency rather than inheriting one.
 type knowledgeBaseFinder interface {
-	FindByIDAndOwner(ctx context.Context, id, ownerID uuid.UUID) (*model.KnowledgeBase, error)
+	FindByID(ctx context.Context, id uuid.UUID) (*model.KnowledgeBase, error)
+	FindMemberRole(ctx context.Context, kbID, userID uuid.UUID) (string, error)
 }
 
 type Service struct {
@@ -82,19 +88,20 @@ func NewService(
 }
 
 func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.SearchRequest) (*dto.SearchResponse, error) {
-	kb, err := s.knowledgeBases.FindByIDAndOwner(ctx, kbID, ownerID)
+	// Search is kb.search, not kb.read: a viewer may retrieve, and this is the same
+	// check the chat path makes before answering, so a member cannot reach through
+	// retrieval what they could not reach through chat.
+	decision, err := authz.KnowledgeBase(ctx, s.knowledgeBases, ownerID, kbID, access.CapKnowledgeBaseSearch)
 	if err != nil {
-		return nil, apperror.Internal(err)
+		return nil, err
 	}
-	if kb == nil {
-		return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "knowledge base not found")
-	}
+	kb := decision.KnowledgeBase
 
 	options := s.resolveSearchOptions(kb, req)
 
-	// Timed from here rather than from function entry: the ownership lookup above
-	// is an authorization check, not retrieval work, and including it would make
-	// the metric partly a measure of how often callers pass bad IDs.
+	// Timed from here rather than from function entry: the authorization lookup
+	// above is not retrieval work, and including it would make the metric partly a
+	// measure of how often callers pass bad IDs.
 	retrievalStart := time.Now()
 
 	embeddingStart := time.Now()

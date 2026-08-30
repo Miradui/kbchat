@@ -27,7 +27,16 @@ type GlobalSearchResult struct {
 	Snippet           string
 }
 
-const globalSearchMatchesSQL = `
+// globalSearchMatchesSQL is the match CTE, parameterized by one reachability
+// predicate per result type.
+//
+// Three separate predicates rather than one, because the three row types are not
+// governed by the same capability: a knowledge base row is kb.read, a document row
+// is document.read, a chunk row is kb.search. They resolve to the same role today,
+// and writing them separately is what keeps that a fact about the matrix rather than
+// an assumption baked into this query.
+func globalSearchMatchesSQL(kbPredicate, documentPredicate, chunkPredicate string) string {
+	return `
 WITH matches AS (
     SELECT 'knowledgeBase' AS result_type,
         knowledge_bases.id AS id,
@@ -40,7 +49,7 @@ WITH matches AS (
         knowledge_bases.updated_at AS sort_at,
         1 AS type_rank
     FROM knowledge_bases
-    WHERE knowledge_bases.owner_id = ?
+    WHERE ` + kbPredicate + `
       AND knowledge_bases.deleted_at IS NULL
       AND (LOWER(knowledge_bases.name) LIKE ? OR LOWER(knowledge_bases.description) LIKE ?)
 
@@ -58,7 +67,7 @@ WITH matches AS (
         2 AS type_rank
     FROM documents
     JOIN knowledge_bases ON knowledge_bases.id = documents.knowledge_base_id
-    WHERE knowledge_bases.owner_id = ?
+    WHERE ` + documentPredicate + `
       AND knowledge_bases.deleted_at IS NULL
       AND documents.deleted_at IS NULL
       AND LOWER(documents.filename) LIKE ?
@@ -78,28 +87,51 @@ WITH matches AS (
     FROM document_chunks
     JOIN knowledge_bases ON knowledge_bases.id = document_chunks.knowledge_base_id
     JOIN documents ON documents.id = document_chunks.document_id
-    WHERE knowledge_bases.owner_id = ?
+    WHERE ` + chunkPredicate + `
       AND knowledge_bases.deleted_at IS NULL
       AND documents.deleted_at IS NULL
       AND LOWER(document_chunks.content) LIKE ?
 )
 `
+}
+
+// GlobalSearchScope is the set of member roles that may see each row type, one entry
+// per capability the search spans. The service builds it from the matrix.
+type GlobalSearchScope struct {
+	KnowledgeBaseRoles []string
+	DocumentRoles      []string
+	ChunkRoles         []string
+}
 
 func (r *GlobalSearchRepository) Search(
 	ctx context.Context,
-	ownerID uuid.UUID,
+	actorID uuid.UUID,
+	scope GlobalSearchScope,
 	query string,
 	resultType string,
 	offset int,
 	limit int,
 ) ([]GlobalSearchResult, int64, error) {
 	like := "%" + strings.ToLower(query) + "%"
-	baseArgs := []any{ownerID, like, like, ownerID, like, ownerID, like}
+	kbPredicate, kbArgs := reachableKnowledgeBaseSQL(actorID, scope.KnowledgeBaseRoles)
+	documentPredicate, documentArgs := reachableKnowledgeBaseSQL(actorID, scope.DocumentRoles)
+	chunkPredicate, chunkArgs := reachableKnowledgeBaseSQL(actorID, scope.ChunkRoles)
+	matchesSQL := globalSearchMatchesSQL(kbPredicate, documentPredicate, chunkPredicate)
+
+	// Argument order follows the statement: each block's predicate arguments come
+	// before its own LIKE arguments.
+	baseArgs := make([]any, 0, len(kbArgs)+len(documentArgs)+len(chunkArgs)+4)
+	baseArgs = append(baseArgs, kbArgs...)
+	baseArgs = append(baseArgs, like, like)
+	baseArgs = append(baseArgs, documentArgs...)
+	baseArgs = append(baseArgs, like)
+	baseArgs = append(baseArgs, chunkArgs...)
+	baseArgs = append(baseArgs, like)
 
 	var total int64
 	countArgs := append(append([]any{}, baseArgs...), resultType, resultType)
 	if err := r.db.WithContext(ctx).Raw(
-		globalSearchMatchesSQL+`SELECT COUNT(*) FROM matches WHERE (? = 'all' OR result_type = ?)`,
+		matchesSQL+`SELECT COUNT(*) FROM matches WHERE (? = 'all' OR result_type = ?)`,
 		countArgs...,
 	).Scan(&total).Error; err != nil {
 		return nil, 0, err
@@ -107,7 +139,7 @@ func (r *GlobalSearchRepository) Search(
 
 	queryArgs := append(append([]any{}, baseArgs...), resultType, resultType, limit, offset)
 	var results []GlobalSearchResult
-	err := r.db.WithContext(ctx).Raw(globalSearchMatchesSQL+`
+	err := r.db.WithContext(ctx).Raw(matchesSQL+`
 , ranked AS (
     SELECT matches.*,
         ROW_NUMBER() OVER (
@@ -148,11 +180,20 @@ type SearchSuggestion struct {
 // the command palette cheaper than a results page.
 func (r *GlobalSearchRepository) Suggest(
 	ctx context.Context,
-	ownerID uuid.UUID,
+	actorID uuid.UUID,
+	scope GlobalSearchScope,
 	query string,
 	limit int,
 ) ([]SearchSuggestion, error) {
 	like := "%" + strings.ToLower(query) + "%"
+	kbPredicate, kbArgs := reachableKnowledgeBaseSQL(actorID, scope.KnowledgeBaseRoles)
+	documentPredicate, documentArgs := reachableKnowledgeBaseSQL(actorID, scope.DocumentRoles)
+	args := make([]any, 0, len(kbArgs)+len(documentArgs)+3)
+	args = append(args, kbArgs...)
+	args = append(args, like)
+	args = append(args, documentArgs...)
+	args = append(args, like, limit)
+
 	var results []SearchSuggestion
 	err := r.db.WithContext(ctx).Raw(`
 WITH matches AS (
@@ -165,7 +206,7 @@ WITH matches AS (
         knowledge_bases.updated_at AS sort_at,
         1 AS type_rank
     FROM knowledge_bases
-    WHERE knowledge_bases.owner_id = ?
+    WHERE `+kbPredicate+`
       AND knowledge_bases.deleted_at IS NULL
       AND LOWER(knowledge_bases.name) LIKE ?
 
@@ -181,7 +222,7 @@ WITH matches AS (
         2 AS type_rank
     FROM documents
     JOIN knowledge_bases ON knowledge_bases.id = documents.knowledge_base_id
-    WHERE knowledge_bases.owner_id = ?
+    WHERE `+documentPredicate+`
       AND knowledge_bases.deleted_at IS NULL
       AND documents.deleted_at IS NULL
       AND LOWER(documents.filename) LIKE ?
@@ -194,7 +235,7 @@ SELECT result_type AS type,
     title
 FROM matches
 ORDER BY type_rank ASC, sort_at DESC, id ASC
-LIMIT ?`, ownerID, like, ownerID, like, limit).Scan(&results).Error
+LIMIT ?`, args...).Scan(&results).Error
 	if err != nil {
 		return nil, err
 	}

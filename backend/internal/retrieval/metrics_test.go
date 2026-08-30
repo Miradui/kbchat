@@ -100,7 +100,7 @@ func TestSearchRecordsRerankFallbackAndClassifiesTheProviderFailure(t *testing.T
 
 func TestSearchRecordsEmbeddingFailureAndSkipsLaterMetrics(t *testing.T) {
 	chunks := &fakeChunkStore{candidates: recordedSearchResults()}
-	kbs := &fakeKnowledgeBaseStore{kb: &model.KnowledgeBase{ID: uuid.New(), OwnerID: uuid.New()}}
+	kbs := &fakeKnowledgeBaseStore{memberRole: "viewer", kb: &model.KnowledgeBase{ID: uuid.New(), OwnerID: uuid.New()}}
 	reranker := &fakeReranker{}
 	service := NewService(
 		config.Config{VectorTopN: 30, RerankTopK: 5, RerankEnabled: true},

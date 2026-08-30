@@ -382,6 +382,22 @@ func (s *ChatService) SetMessageFeedback(
 	}, nil
 }
 
+// qualityFilter is the scope for every quality and knowledge-gap read.
+//
+// The role set is quality.read, which is manager and above. That is what widens
+// these views beyond the caller's own sessions: an operator sees the questions asked
+// in the knowledge bases they run, which is the only reading under which "answers
+// without citations" is an operational figure rather than a diary.
+func qualityFilter(actorID uuid.UUID, knowledgeBaseID *uuid.UUID, startAt, endAt time.Time) repository.ChatQualityFilter {
+	return repository.ChatQualityFilter{
+		ActorID:         actorID,
+		MemberRoles:     access.MemberRolesWith(access.CapQualityRead),
+		KnowledgeBaseID: knowledgeBaseID,
+		StartAt:         startAt,
+		EndAt:           endAt,
+	}
+}
+
 func (s *ChatService) GetQualityOverview(
 	ctx context.Context,
 	userID uuid.UUID,
@@ -393,7 +409,7 @@ func (s *ChatService) GetQualityOverview(
 	}
 	endAt := time.Now().UTC()
 	startAt := periodStart(endAt, period)
-	overview, err := s.chats.GetQualityOverview(ctx, userID, query.KnowledgeBaseID, startAt, endAt)
+	overview, err := s.chats.GetQualityOverview(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt))
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -487,19 +503,19 @@ func (s *ChatService) ListKnowledgeGaps(
 	endAt := time.Now().UTC()
 	startAt := periodStart(endAt, period)
 
-	noCitationsTotal, err := s.chats.CountNoCitationGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt)
+	noCitationsTotal, err := s.chats.CountNoCitationGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt))
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
-	retrievalFailedTotal, err := s.chats.CountRetrievalFailedGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt)
+	retrievalFailedTotal, err := s.chats.CountRetrievalFailedGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt))
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
-	modelRefusedTotal, err := s.chats.CountModelRefusedGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt)
+	modelRefusedTotal, err := s.chats.CountModelRefusedGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt))
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
-	repeatedRewriteTotal, err := s.chats.CountRepeatedRewriteGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt)
+	repeatedRewriteTotal, err := s.chats.CountRepeatedRewriteGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt))
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -519,20 +535,20 @@ func (s *ChatService) ListKnowledgeGaps(
 	switch category {
 	case repository.ChatKnowledgeGapNoCitations:
 		response.Total = noCitationsTotal
-		items, err = s.chats.ListNoCitationGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt, offset, pageSize)
+		items, err = s.chats.ListNoCitationGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt), offset, pageSize)
 	case repository.ChatKnowledgeGapRetrievalFailed:
 		response.Total = retrievalFailedTotal
-		items, err = s.chats.ListRetrievalFailedGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt, offset, pageSize)
+		items, err = s.chats.ListRetrievalFailedGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt), offset, pageSize)
 	case repository.ChatKnowledgeGapModelRefused:
 		response.Total = modelRefusedTotal
-		items, err = s.chats.ListModelRefusedGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt, offset, pageSize)
+		items, err = s.chats.ListModelRefusedGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt), offset, pageSize)
 	case repository.ChatKnowledgeGapRepeatedRewrite:
 		response.Total = repeatedRewriteTotal
-		items, err = s.chats.ListRepeatedRewriteGaps(ctx, userID, query.KnowledgeBaseID, startAt, endAt, offset, pageSize)
+		items, err = s.chats.ListRepeatedRewriteGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt), offset, pageSize)
 	default:
 		response.Total = noCitationsTotal + retrievalFailedTotal + modelRefusedTotal + repeatedRewriteTotal
 		items, err = s.listCombinedKnowledgeGaps(
-			ctx, userID, query.KnowledgeBaseID, startAt, endAt, offset, pageSize,
+			ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt), offset, pageSize,
 			combinedGapTotals{
 				noCitations:     noCitationsTotal,
 				retrievalFailed: retrievalFailedTotal,
@@ -596,9 +612,7 @@ type gapSegment struct {
 // fetched, so no full result set is ever loaded.
 func (s *ChatService) listCombinedKnowledgeGaps(
 	ctx context.Context,
-	userID uuid.UUID,
-	knowledgeBaseID *uuid.UUID,
-	startAt, endAt time.Time,
+	filter repository.ChatQualityFilter,
 	offset, pageSize int,
 	totals combinedGapTotals,
 ) ([]repository.ChatKnowledgeGapItem, error) {
@@ -606,19 +620,19 @@ func (s *ChatService) listCombinedKnowledgeGaps(
 		{
 			total: totals.noCitations,
 			list: func(ctx context.Context, offset, limit int) ([]repository.ChatKnowledgeGapItem, error) {
-				return s.chats.ListNoCitationGaps(ctx, userID, knowledgeBaseID, startAt, endAt, offset, limit)
+				return s.chats.ListNoCitationGaps(ctx, filter, offset, limit)
 			},
 		},
 		{
 			total: totals.retrievalFailed,
 			list: func(ctx context.Context, offset, limit int) ([]repository.ChatKnowledgeGapItem, error) {
-				return s.chats.ListRetrievalFailedGaps(ctx, userID, knowledgeBaseID, startAt, endAt, offset, limit)
+				return s.chats.ListRetrievalFailedGaps(ctx, filter, offset, limit)
 			},
 		},
 		{
 			total: totals.modelRefused,
 			list: func(ctx context.Context, offset, limit int) ([]repository.ChatKnowledgeGapItem, error) {
-				return s.chats.ListModelRefusedGaps(ctx, userID, knowledgeBaseID, startAt, endAt, offset, limit)
+				return s.chats.ListModelRefusedGaps(ctx, filter, offset, limit)
 			},
 		},
 	}
@@ -650,7 +664,7 @@ func (s *ChatService) listCombinedKnowledgeGaps(
 	}
 
 	tail, err := s.chats.ListRepeatedRewriteGaps(
-		ctx, userID, knowledgeBaseID, startAt, endAt, remainingOffset, pageSize-len(items),
+		ctx, filter, remainingOffset, pageSize-len(items),
 	)
 	if err != nil {
 		return nil, err
@@ -680,7 +694,7 @@ func (s *ChatService) ListNegativeFeedback(
 	endAt := time.Now().UTC()
 	startAt := periodStart(endAt, period)
 	items, total, err := s.chats.ListNegativeFeedback(
-		ctx, userID, query.KnowledgeBaseID, query.HasCitations, startAt, endAt, (page-1)*pageSize, pageSize,
+		ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt), query.HasCitations, (page-1)*pageSize, pageSize,
 	)
 	if err != nil {
 		return nil, apperror.Internal(err)

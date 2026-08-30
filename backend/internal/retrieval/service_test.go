@@ -20,10 +20,21 @@ import (
 type fakeKnowledgeBaseStore struct {
 	kb  *model.KnowledgeBase
 	err error
+	// memberRole is what the actor's membership resolves to. The retrieval tests
+	// use a random actor id, so without a role every one of them would be answered
+	// by the authorization check instead of reaching retrieval; "viewer" is the
+	// weakest standing that holds kb.search, which is what these tests want to
+	// exercise. The tests that are about the check itself set this to "".
+	memberRole string
+	roleErr    error
 }
 
-func (f *fakeKnowledgeBaseStore) FindByIDAndOwner(context.Context, uuid.UUID, uuid.UUID) (*model.KnowledgeBase, error) {
+func (f *fakeKnowledgeBaseStore) FindByID(context.Context, uuid.UUID) (*model.KnowledgeBase, error) {
 	return f.kb, f.err
+}
+
+func (f *fakeKnowledgeBaseStore) FindMemberRole(context.Context, uuid.UUID, uuid.UUID) (string, error) {
+	return f.memberRole, f.roleErr
 }
 
 type fakeChunkStore struct {
@@ -562,7 +573,7 @@ func newTestService(cfg config.Config, candidates []repository.SearchResult, rer
 
 func newTestServiceWithKB(cfg config.Config, kb *model.KnowledgeBase, candidates []repository.SearchResult, rerankResults []rerank.Result, rerankErr error) (*Service, *fakeReranker, *fakeChunkStore) {
 	chunks := &fakeChunkStore{candidates: candidates}
-	kbs := &fakeKnowledgeBaseStore{kb: kb}
+	kbs := &fakeKnowledgeBaseStore{memberRole: "viewer", kb: kb}
 	reranker := &fakeReranker{results: rerankResults, err: rerankErr}
 	return NewService(cfg, chunks, kbs, fakeEmbedder{}, reranker), reranker, chunks
 }

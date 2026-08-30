@@ -25,6 +25,7 @@ import (
 	"kbchat/backend/internal/dto"
 	"kbchat/backend/internal/model"
 	"kbchat/backend/internal/repository"
+	"kbchat/backend/internal/retrieval"
 	"kbchat/backend/internal/storage"
 )
 
@@ -39,6 +40,7 @@ type workspaceTestServices struct {
 	tags       *KnowledgeBaseTagService
 	documents  *DocumentService
 	search     *GlobalSearchService
+	retrieval  *retrieval.Service
 }
 
 func newWorkspaceTestServices(t *testing.T) workspaceTestServices {
@@ -97,6 +99,13 @@ func newWorkspaceTestServices(t *testing.T) workspaceTestServices {
 
 	kbService := NewKnowledgeBaseService(kbRepo, categoryRepo, favoriteRepo, viewRepo, preferenceRepo, tagRepo, tagBindingRepo, memberRepo, userRepo)
 	return workspaceTestServices{
+		retrieval: retrieval.NewService(
+			config.Config{VectorTopN: 30, RerankTopK: 5},
+			chunkRepo,
+			kbRepo,
+			unavailableEmbedder{},
+			nil,
+		),
 		db:         db,
 		uploadRoot: uploadRoot,
 		auth:       NewAuthService(config.Config{JWTSecret: strings.Repeat("test-secret-", 4), JWTExpiresIn: "24h"}, userRepo),
@@ -108,6 +117,18 @@ func newWorkspaceTestServices(t *testing.T) workspaceTestServices {
 		documents:  NewDocumentService(config.Config{MaxUploadSizeMB: 50}, documentRepo, chunkRepo, kbRepo, storageCleanupRepo, storage.NewLocalStorage(uploadRoot)),
 		search:     NewGlobalSearchService(searchRepo),
 	}
+}
+
+// unavailableEmbedder makes every retrieval attempt fail after authorization.
+//
+// The access tests need to know whether the authorization check let a call through,
+// not what retrieval returned; a provider that always fails means reaching the
+// provider is itself the evidence. Wiring a working embedder would mean stubbing
+// vector search too, for a result no test asserts on.
+type unavailableEmbedder struct{}
+
+func (unavailableEmbedder) EmbedTexts(context.Context, []string) ([][]float32, error) {
+	return nil, errors.New("embedding provider not configured in tests")
 }
 
 func TestKnowledgeBaseWorkspacePreferenceDefaultsAndPersistedUpdate(t *testing.T) {

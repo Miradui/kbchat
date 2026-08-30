@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"kbchat/backend/internal/access"
 	"kbchat/backend/internal/apperror"
 	"kbchat/backend/internal/dto"
 	"kbchat/backend/internal/repository"
@@ -20,6 +21,17 @@ type GlobalSearchService struct {
 
 func NewGlobalSearchService(search *repository.GlobalSearchRepository) *GlobalSearchService {
 	return &GlobalSearchService{search: search}
+}
+
+// globalSearchScope translates the capability matrix into the role sets the query
+// needs. Global search spans knowledge bases the caller does not own, so the scope
+// has to be derived here rather than assumed by the repository.
+func globalSearchScope() repository.GlobalSearchScope {
+	return repository.GlobalSearchScope{
+		KnowledgeBaseRoles: access.MemberRolesWith(access.CapKnowledgeBaseRead),
+		DocumentRoles:      access.MemberRolesWith(access.CapDocumentRead),
+		ChunkRoles:         access.MemberRolesWith(access.CapKnowledgeBaseSearch),
+	}
 }
 
 func (s *GlobalSearchService) Search(ctx context.Context, ownerID uuid.UUID, req dto.GlobalSearchRequest) (*dto.GlobalSearchResponse, error) {
@@ -45,7 +57,7 @@ func (s *GlobalSearchService) Search(ctx context.Context, ownerID uuid.UUID, req
 	if pageSize > 100 {
 		pageSize = 100
 	}
-	items, total, err := s.search.Search(ctx, ownerID, query, resultType, (page-1)*pageSize, pageSize)
+	items, total, err := s.search.Search(ctx, ownerID, globalSearchScope(), query, resultType, (page-1)*pageSize, pageSize)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -132,7 +144,7 @@ func (s *GlobalSearchService) Suggest(ctx context.Context, ownerID uuid.UUID, re
 		limit = MaxSearchSuggestLimit
 	}
 
-	items, err := s.search.Suggest(ctx, ownerID, query, limit)
+	items, err := s.search.Suggest(ctx, ownerID, globalSearchScope(), query, limit)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}

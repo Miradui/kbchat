@@ -392,12 +392,10 @@ type ChatQualityFeedbackItem struct {
 
 func (r *ChatRepository) GetQualityOverview(
 	ctx context.Context,
-	ownerID uuid.UUID,
-	knowledgeBaseID *uuid.UUID,
-	startAt, endAt time.Time,
+	filter ChatQualityFilter,
 ) (ChatQualityOverview, error) {
 	var overview ChatQualityOverview
-	err := chatQualityScope(r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt).
+	err := chatQualityScope(r.db.WithContext(ctx), filter).
 		Select(`
 			COUNT(*) AS answer_count,
 			COALESCE(SUM(CASE WHEN chat_messages.feedback_rating IS NOT NULL THEN 1 ELSE 0 END), 0) AS feedback_count,
@@ -481,13 +479,8 @@ const chatQuestionForAnswerSQL = `COALESCE(
 // condition, so both are excluded. NULL answer_status is kept: those rows predate
 // migration 019 and an empty citation set is the only evidence available for them,
 // which is exactly what this category meant before the status existed.
-func noCitationGapScope(
-	db *gorm.DB,
-	ownerID uuid.UUID,
-	knowledgeBaseID *uuid.UUID,
-	startAt, endAt time.Time,
-) *gorm.DB {
-	return chatQualityScope(db, ownerID, knowledgeBaseID, startAt, endAt).
+func noCitationGapScope(db *gorm.DB, filter ChatQualityFilter) *gorm.DB {
+	return chatQualityScope(db, filter).
 		Where("chat_messages.intent = ?", "knowledge_base").
 		Where(chatEmptyCitationsSQL).
 		Where(
@@ -501,14 +494,8 @@ func noCitationGapScope(
 // Unlike noCitationGapScope this does not filter on citations: a model refusal has
 // content in hand and may well have citations attached, and that is precisely what
 // makes it a different problem from an empty knowledge base.
-func answerStatusGapScope(
-	db *gorm.DB,
-	ownerID uuid.UUID,
-	knowledgeBaseID *uuid.UUID,
-	startAt, endAt time.Time,
-	answerStatus string,
-) *gorm.DB {
-	return chatQualityScope(db, ownerID, knowledgeBaseID, startAt, endAt).
+func answerStatusGapScope(db *gorm.DB, filter ChatQualityFilter, answerStatus string) *gorm.DB {
+	return chatQualityScope(db, filter).
 		Where("chat_messages.intent = ?", "knowledge_base").
 		Where("chat_messages.answer_status = ?", answerStatus)
 }
@@ -520,13 +507,8 @@ func answerStatusGapScope(
 // attempt at the same question rather than from a user rephrasing it. Counting
 // regenerations here would turn "I want a better answer" into "the knowledge base
 // cannot answer this", which are different problems.
-func repeatedRewriteGapScope(
-	db *gorm.DB,
-	ownerID uuid.UUID,
-	knowledgeBaseID *uuid.UUID,
-	startAt, endAt time.Time,
-) *gorm.DB {
-	return chatQualityScope(db, ownerID, knowledgeBaseID, startAt, endAt).
+func repeatedRewriteGapScope(db *gorm.DB, filter ChatQualityFilter) *gorm.DB {
+	return chatQualityScope(db, filter).
 		Where("chat_messages.intent = ?", "knowledge_base").
 		Where("chat_messages.retrieval_query_norm IS NOT NULL").
 		Where("chat_messages.client_request_id IS NOT NULL")
@@ -534,12 +516,10 @@ func repeatedRewriteGapScope(
 
 func (r *ChatRepository) CountNoCitationGaps(
 	ctx context.Context,
-	ownerID uuid.UUID,
-	knowledgeBaseID *uuid.UUID,
-	startAt, endAt time.Time,
+	filter ChatQualityFilter,
 ) (int64, error) {
 	var total int64
-	err := noCitationGapScope(r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt).
+	err := noCitationGapScope(r.db.WithContext(ctx), filter).
 		Count(&total).Error
 	return total, err
 }
@@ -549,13 +529,11 @@ func (r *ChatRepository) CountNoCitationGaps(
 // was failing during this period".
 func (r *ChatRepository) CountRetrievalFailedGaps(
 	ctx context.Context,
-	ownerID uuid.UUID,
-	knowledgeBaseID *uuid.UUID,
-	startAt, endAt time.Time,
+	filter ChatQualityFilter,
 ) (int64, error) {
 	var total int64
 	err := answerStatusGapScope(
-		r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt,
+		r.db.WithContext(ctx), filter,
 		ChatKnowledgeGapRetrievalFailed,
 	).Count(&total).Error
 	return total, err
@@ -565,13 +543,11 @@ func (r *ChatRepository) CountRetrievalFailedGaps(
 // will not fix these, which is why they are counted separately.
 func (r *ChatRepository) CountModelRefusedGaps(
 	ctx context.Context,
-	ownerID uuid.UUID,
-	knowledgeBaseID *uuid.UUID,
-	startAt, endAt time.Time,
+	filter ChatQualityFilter,
 ) (int64, error) {
 	var total int64
 	err := answerStatusGapScope(
-		r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt,
+		r.db.WithContext(ctx), filter,
 		ChatKnowledgeGapModelRefused,
 	).Count(&total).Error
 	return total, err
@@ -579,15 +555,13 @@ func (r *ChatRepository) CountModelRefusedGaps(
 
 func (r *ChatRepository) ListRetrievalFailedGaps(
 	ctx context.Context,
-	ownerID uuid.UUID,
-	knowledgeBaseID *uuid.UUID,
-	startAt, endAt time.Time,
+	filter ChatQualityFilter,
 	offset, limit int,
 ) ([]ChatKnowledgeGapItem, error) {
 	return r.listSingleAnswerGaps(
 		ctx,
 		answerStatusGapScope(
-			r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt,
+			r.db.WithContext(ctx), filter,
 			ChatKnowledgeGapRetrievalFailed,
 		),
 		ChatKnowledgeGapRetrievalFailed,
@@ -597,15 +571,13 @@ func (r *ChatRepository) ListRetrievalFailedGaps(
 
 func (r *ChatRepository) ListModelRefusedGaps(
 	ctx context.Context,
-	ownerID uuid.UUID,
-	knowledgeBaseID *uuid.UUID,
-	startAt, endAt time.Time,
+	filter ChatQualityFilter,
 	offset, limit int,
 ) ([]ChatKnowledgeGapItem, error) {
 	return r.listSingleAnswerGaps(
 		ctx,
 		answerStatusGapScope(
-			r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt,
+			r.db.WithContext(ctx), filter,
 			ChatKnowledgeGapModelRefused,
 		),
 		ChatKnowledgeGapModelRefused,
@@ -615,14 +587,12 @@ func (r *ChatRepository) ListModelRefusedGaps(
 
 func (r *ChatRepository) ListNoCitationGaps(
 	ctx context.Context,
-	ownerID uuid.UUID,
-	knowledgeBaseID *uuid.UUID,
-	startAt, endAt time.Time,
+	filter ChatQualityFilter,
 	offset, limit int,
 ) ([]ChatKnowledgeGapItem, error) {
 	return r.listSingleAnswerGaps(
 		ctx,
-		noCitationGapScope(r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt),
+		noCitationGapScope(r.db.WithContext(ctx), filter),
 		ChatKnowledgeGapNoCitations,
 		offset, limit,
 	)
@@ -721,13 +691,8 @@ func parseAggregatedTime(value string) time.Time {
 
 // repeatedRewriteGroups is the grouped query shared by the count and the page so
 // the HAVING threshold cannot drift between them.
-func repeatedRewriteGroups(
-	db *gorm.DB,
-	ownerID uuid.UUID,
-	knowledgeBaseID *uuid.UUID,
-	startAt, endAt time.Time,
-) *gorm.DB {
-	return repeatedRewriteGapScope(db, ownerID, knowledgeBaseID, startAt, endAt).
+func repeatedRewriteGroups(db *gorm.DB, filter ChatQualityFilter) *gorm.DB {
+	return repeatedRewriteGapScope(db, filter).
 		Select(`
 			chat_messages.session_id AS session_id,
 			chat_messages.retrieval_query_norm AS retrieval_query_norm,
@@ -746,13 +711,11 @@ func repeatedRewriteGroups(
 
 func (r *ChatRepository) CountRepeatedRewriteGaps(
 	ctx context.Context,
-	ownerID uuid.UUID,
-	knowledgeBaseID *uuid.UUID,
-	startAt, endAt time.Time,
+	filter ChatQualityFilter,
 ) (int64, error) {
 	// Counting groups needs the grouped query as a subquery: COUNT(*) applied to
 	// it directly would count rows inside each group instead of the groups.
-	groups := repeatedRewriteGroups(r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt)
+	groups := repeatedRewriteGroups(r.db.WithContext(ctx), filter)
 	var total int64
 	err := r.db.WithContext(ctx).Table("(?) AS clusters", groups).Count(&total).Error
 	return total, err
@@ -760,9 +723,7 @@ func (r *ChatRepository) CountRepeatedRewriteGaps(
 
 func (r *ChatRepository) ListRepeatedRewriteGaps(
 	ctx context.Context,
-	ownerID uuid.UUID,
-	knowledgeBaseID *uuid.UUID,
-	startAt, endAt time.Time,
+	filter ChatQualityFilter,
 	offset, limit int,
 ) ([]ChatKnowledgeGapItem, error) {
 	type row struct {
@@ -778,7 +739,7 @@ func (r *ChatRepository) ListRepeatedRewriteGaps(
 		LastSeenAt         string
 	}
 	var rows []row
-	err := repeatedRewriteGroups(r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt).
+	err := repeatedRewriteGroups(r.db.WithContext(ctx), filter).
 		// session_id and the normalized query are the group key, so ordering by
 		// them after last_seen_at makes the sequence total and pagination stable.
 		Order("last_seen_at DESC, session_id DESC, retrieval_query_norm ASC").
@@ -812,14 +773,12 @@ func (r *ChatRepository) ListRepeatedRewriteGaps(
 
 func (r *ChatRepository) ListNegativeFeedback(
 	ctx context.Context,
-	ownerID uuid.UUID,
-	knowledgeBaseID *uuid.UUID,
+	filter ChatQualityFilter,
 	hasCitations *bool,
-	startAt, endAt time.Time,
 	offset, limit int,
 ) ([]ChatQualityFeedbackItem, int64, error) {
 	base := func() *gorm.DB {
-		db := chatQualityScope(r.db.WithContext(ctx), ownerID, knowledgeBaseID, startAt, endAt).
+		db := chatQualityScope(r.db.WithContext(ctx), filter).
 			Where("chat_messages.feedback_rating = ?", "negative")
 		if hasCitations != nil {
 			predicate := "NOT (" + chatEmptyCitationsSQL + ")"
@@ -871,25 +830,46 @@ func (r *ChatRepository) ListNegativeFeedback(
 	return items, total, err
 }
 
-func chatQualityScope(
-	db *gorm.DB,
-	ownerID uuid.UUID,
-	knowledgeBaseID *uuid.UUID,
-	startAt, endAt time.Time,
-) *gorm.DB {
-	db = db.Model(&model.ChatMessage{}).
+// ChatQualityFilter is the scope every quality and knowledge-gap query shares.
+//
+// A struct rather than positional parameters: the member roles had to reach ten
+// repository methods, and adding another uuid-and-slice pair to each signature is
+// how a caller ends up passing the wrong actor to the wrong argument.
+type ChatQualityFilter struct {
+	// ActorID is who is asking. Not the session owner: quality data is about what
+	// other people asked.
+	ActorID uuid.UUID
+	// MemberRoles comes from access.MemberRolesWith(access.CapQualityRead).
+	MemberRoles []string
+	// KnowledgeBaseID narrows to one knowledge base. The service has already
+	// authorized that one specifically when it is set.
+	KnowledgeBaseID *uuid.UUID
+	StartAt         time.Time
+	EndAt           time.Time
+}
+
+// chatQualityScope is the row set behind every quality figure: assistant answers in
+// live sessions, in knowledge bases the actor may read quality data for.
+//
+// There is deliberately no chat_sessions.user_id predicate. Quality data exists to
+// show a manager what *other people* asked and where the knowledge base failed
+// them; filtering to the actor's own sessions would have made every figure a report
+// on their own questions, which is not a use anybody has. Reachability is by
+// knowledge base instead, so an operator sees the questions asked in the bases they
+// run and nothing from bases they do not.
+func chatQualityScope(db *gorm.DB, filter ChatQualityFilter) *gorm.DB {
+	scope := db.Model(&model.ChatMessage{}).
 		Joins("JOIN chat_sessions ON chat_sessions.id = chat_messages.session_id").
 		Joins("JOIN knowledge_bases ON knowledge_bases.id = chat_sessions.knowledge_base_id").
 		Where("chat_messages.role = ?", "assistant").
-		Where("chat_sessions.user_id = ?", ownerID).
 		Where("chat_sessions.deleted_at IS NULL").
-		Where("knowledge_bases.owner_id = ?", ownerID).
+		Where(reachableKnowledgeBaseCondition(db, filter.ActorID, filter.MemberRoles)).
 		Where("knowledge_bases.deleted_at IS NULL").
-		Where("chat_messages.created_at >= ? AND chat_messages.created_at < ?", startAt, endAt)
-	if knowledgeBaseID != nil {
-		db = db.Where("chat_sessions.knowledge_base_id = ?", *knowledgeBaseID)
+		Where("chat_messages.created_at >= ? AND chat_messages.created_at < ?", filter.StartAt, filter.EndAt)
+	if filter.KnowledgeBaseID != nil {
+		scope = scope.Where("chat_sessions.knowledge_base_id = ?", *filter.KnowledgeBaseID)
 	}
-	return db
+	return scope
 }
 
 func (r *ChatRepository) FindMessagesByClientRequestID(ctx context.Context, sessionID, clientRequestID uuid.UUID) ([]model.ChatMessage, error) {

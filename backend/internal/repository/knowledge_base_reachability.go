@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"strings"
+
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -30,4 +32,31 @@ func reachableKnowledgeBaseCondition(db *gorm.DB, actorID uuid.UUID, memberRoles
 		"EXISTS (SELECT 1 FROM knowledge_base_members WHERE knowledge_base_members.knowledge_base_id = knowledge_bases.id AND knowledge_base_members.user_id = ? AND knowledge_base_members.role IN ?)",
 		actorID, memberRoles,
 	)
+}
+
+// reachableKnowledgeBaseSQL is reachableKnowledgeBaseCondition for the raw-SQL
+// queries, which cannot take a *gorm.DB condition. It returns the predicate and its
+// positional arguments, in order, so a caller splices both into one statement.
+//
+// The role list is expanded into explicit placeholders rather than an `IN ?`: these
+// statements go through Raw, where GORM does not expand a slice argument, and
+// interpolating the values would put strings into SQL text. The placeholders keep
+// them parameters.
+func reachableKnowledgeBaseSQL(actorID uuid.UUID, memberRoles []string) (string, []any) {
+	if len(memberRoles) == 0 {
+		return "knowledge_bases.owner_id = ?", []any{actorID}
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?, ", len(memberRoles)), ", ")
+	args := make([]any, 0, len(memberRoles)+2)
+	args = append(args, actorID, actorID)
+	for _, role := range memberRoles {
+		args = append(args, role)
+	}
+	return `(knowledge_bases.owner_id = ?
+       OR EXISTS (
+           SELECT 1 FROM knowledge_base_members
+           WHERE knowledge_base_members.knowledge_base_id = knowledge_bases.id
+             AND knowledge_base_members.user_id = ?
+             AND knowledge_base_members.role IN (` + placeholders + `)
+       ))`, args
 }
