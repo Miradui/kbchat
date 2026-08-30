@@ -590,3 +590,96 @@ OpenAI-compatible Provider 同样把上游 `data: [DONE]` 作为唯一协议完�
 - 新增 `docs/15-product-improvement-roadmap.md`，明确文档可观测性、RAG 质量运营、部署健康、首次使用、权限协作和移动端的分阶段目标与验收标准。
 - migration 016 为 `document_jobs` 增加持久化 `progress`（0-100）。解析为 10、切分为 30、Embedding 按真实批次从 50 推进到 95、chunks 原子发布后为 100；重试从 0 重新处理，服务重启不会把已提交进度退回阶段默认值。
 - 取消任务继续保持 `documents.status=failed`、`jobStatus=cancelled` 的兼容契约，但列表和详情现在显示“已取消”与中性状态，不再把取消误报为失败。
+
+## RAG Knowledge Gap List (2026-08-30)
+
+本轮在 `dev` 分支完成 `docs/15-product-improvement-roadmap.md` 中「P1 RAG 质量运营闭环」
+的最后一项交付：知识缺口列表。至此该阶段三项（质量概览、负反馈列表、知识缺口列表）
+全部完成，下一项是「P1 部署健康与诊断」。
+
+### 新增数据库字段
+
+- `backend/migrations/018_chat_message_intent_and_retrieval_query.sql` 为
+  `chat_messages` 新增 `intent`、`retrieval_query`、`retrieval_query_norm`，
+  以 CHECK 约束限制 `intent` 为 `conversation|knowledge_base|null`，并新增部分索引
+  `idx_chat_messages_retrieval_query_norm (session_id, retrieval_query_norm)
+  WHERE role = 'assistant' AND retrieval_query_norm IS NOT NULL`。
+- **刻意不回填历史数据。** 迁移前的回答无法判断当时的意图分类结果，写入任何值都是编造。
+  历史行 `intent` 保持 `NULL`，被所有按意图口径统计的指标排除，并通过概览新字段
+  `unclassifiedAnswerCount` 显式披露，前端在该值非零时提示这些回答未纳入占比。
+
+意图和 `standaloneQuery` 本来每轮都会算出来但从不落库，这正是路线图里那条指标
+（「citations 为空的知识型回答占比」）此前无法表达的原因。
+
+### 单一写入点
+
+三个新列只在 `chat_service.go` 的 `applyGeneratedProvenance` 里写入，阻塞发送、流式
+发送、编辑重发和 `RegenerateMessage` 都调用它。分散写入迟早会漂移出「有 intent 但没有
+检索式」这类不自洽的行，而这类行会静默地改变统计口径而不是报错。
+
+`normalizeRetrievalQuery` 会小写化、去掉标点符号并**删除所有空白**。中文分词的空格不
+稳定，保留空白会把「退货 政策」和「退货政策」拆成两个聚类。归一化后为空时存 `NULL`。
+
+### 为什么排除 regenerate
+
+`repeated_rewrite` 只统计 `client_request_id IS NOT NULL` 的回答。只有发送路径写
+`client_request_id`，`RegenerateMessage` 保持为 `nil`，所以这个条件恰好把重新生成排除
+在聚类之外——用户在同一个问题上要求重试，和用户换个说法再问，是两种不同的问题。把前者
+算成改写，会把「我想要更好的回答」误报成「知识库答不上来」。
+
+### 指标口径修正（兼容性变更）
+
+`withoutCitationsCount` 之前统计所有 citations 为空的 assistant 回答。会话类回答按设计
+就没有引用（`docs/04-api-design.md` 多轮上下文规则第 5 条），因此旧值被会话类回答虚高。
+该字段现在要求 `intent = 'knowledge_base'`。
+
+对既有数据的影响：迁移后新回答才有 `intent`，历史回答一律 `NULL`，所以刚上线时
+`withoutCitationsCount` 会明显下降甚至为 0，`unclassifiedAnswerCount` 接近全量回答数。
+这不是数据丢失，是口径从「不可比」变成「只统计可判定的部分」。运营应以上线后的数据
+为基线。
+
+同时新增 `knowledgeAnswerCount`、`unclassifiedAnswerCount` 和
+`withoutCitationsRate`（分母是 `knowledgeAnswerCount`，不是 `answerCount`）。
+
+「citations 为空」的判定 SQL 统一为 `chatEmptyCitationsSQL` 一处常量，概览、负反馈列表
+和缺口查询共用，避免三处各自枚举 `''`/`null`/`[]` 而漂移。
+
+### 两个类别，不是三个
+
+路线图写的是「聚合无引用、依据不足和连续改写问题」，实际交付两个类别。对知识型提问，
+「检索不到内容」和「依据不足所以拒答」可证明是同一个条件：citations 由 `searchRes.Items`
+推导，固定拒答话术恰好在该切片为空时使用。真正独立的第三种情况是「有引用但模型仍拒答」，
+需要判定回答文本，属于 P2 的回答质量评估，本轮不做。
+
+聚类用归一化后的检索式**精确匹配**，没有用 trigram 相似度：`pg_trgm` 在本仓库未启用且
+只有 PostgreSQL 有，用了会让聚类逻辑在 SQLite 测试套件里完全无法覆盖。代价是同义改写
+（「怎么退货」/「退货流程」）不会归到一组，这是已知限制。
+
+### 分页全序
+
+`no_citations` 按 `created_at DESC, id DESC`，`repeated_rewrite` 按
+`last_seen_at DESC, session_id DESC, retrieval_query_norm ASC`。一次请求写入的
+user/assistant 消息可能共享时间戳，只按时间排序不是全序，相邻两页会重复或漏行。
+不传 `category` 时响应是两个列表的拼接，分页在拼接序列上进行，只取每个类别实际贡献的
+那一段，不会把整个结果集读进内存。
+
+`CountRepeatedRewriteGaps` 把分组查询套成子查询再 `COUNT`，直接 `COUNT(*)` 会数组内行数
+而不是组数。
+
+### 测试库需要显式建部分索引
+
+`newChatServiceTestDB` 现在除 migration 010 的幂等唯一索引外，还显式创建 018 的
+`idx_chat_messages_retrieval_query_norm`——`AutoMigrate` 不还原 `WHERE` 子句，而这个
+`WHERE` 正是把聚类查询挡在会话类和未分类行之外的东西。
+
+### 驱动可移植性
+
+`MIN()`/`MAX()` 在 PostgreSQL 保留列类型并返回 `time.Time`，在 SQLite 丢掉类型亲和性
+返回文本，直接扫进 `time.Time` 会在生产可用而在测试套件里报错。聚类时间戳改为扫成文本
+再由 `parseAggregatedTime` 解析，与工作区列表处理 `MAX(viewed_at)` 的既有做法一致。
+
+### 未验证项
+
+migration 018 未在本环境对真实 PostgreSQL 执行过，其 CHECK 约束和部分索引只经过 SQLite
+测试套件的等价重建，未经真实库验证。`cmd/doctor`、`cmd/migrate`、`cmd/seed` 都需要根
+`.env` 里的远端 PostgreSQL/Redis，本轮未连接。
