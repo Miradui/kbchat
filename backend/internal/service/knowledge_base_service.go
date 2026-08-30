@@ -227,12 +227,9 @@ func (s *KnowledgeBaseService) ListWorkspace(ctx context.Context, ownerID uuid.U
 }
 
 func (s *KnowledgeBaseService) Get(ctx context.Context, ownerID, id uuid.UUID) (*dto.KnowledgeBaseResponse, error) {
-	kb, err := s.repo.FindByIDAndOwner(ctx, id, ownerID)
+	kb, err := s.findKnowledgeBaseForCapability(ctx, ownerID, id, access.CapKnowledgeBaseRead)
 	if err != nil {
-		return nil, apperror.Internal(err)
-	}
-	if kb == nil {
-		return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
+		return nil, err
 	}
 
 	tags, err := s.repo.ListTags(ctx, kb.ID)
@@ -244,12 +241,9 @@ func (s *KnowledgeBaseService) Get(ctx context.Context, ownerID, id uuid.UUID) (
 }
 
 func (s *KnowledgeBaseService) Update(ctx context.Context, ownerID, id uuid.UUID, req dto.KnowledgeBaseRequest) (*dto.KnowledgeBaseResponse, error) {
-	kb, err := s.repo.FindByIDAndOwner(ctx, id, ownerID)
+	kb, err := s.findKnowledgeBaseForCapability(ctx, ownerID, id, access.CapKnowledgeBaseWrite)
 	if err != nil {
-		return nil, apperror.Internal(err)
-	}
-	if kb == nil {
-		return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
+		return nil, err
 	}
 
 	config := defaultConfig(req.RetrievalConfig)
@@ -300,12 +294,9 @@ func (s *KnowledgeBaseService) Update(ctx context.Context, ownerID, id uuid.UUID
 }
 
 func (s *KnowledgeBaseService) Delete(ctx context.Context, ownerID, id uuid.UUID) error {
-	kb, err := s.repo.FindByIDAndOwner(ctx, id, ownerID)
+	kb, err := s.findKnowledgeBaseForCapability(ctx, ownerID, id, access.CapKnowledgeBaseDelete)
 	if err != nil {
-		return apperror.Internal(err)
-	}
-	if kb == nil {
-		return apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
+		return err
 	}
 
 	if err := s.repo.Delete(ctx, kb); err != nil {
@@ -345,6 +336,11 @@ func (s *KnowledgeBaseService) ListRecycleBin(ctx context.Context, ownerID uuid.
 	return res, nil
 }
 
+// Restore keeps the owner-filtered lookup rather than going through the capability
+// matrix. CapKnowledgeBaseDelete is owner-only anyway, so the outcome is identical,
+// and the recycle bin is the owner's private space: a manager should get 404 for a
+// knowledge base sitting in it, not a 403 that confirms it is there. The same
+// reasoning covers PermanentDelete and the batch equivalents.
 func (s *KnowledgeBaseService) Restore(ctx context.Context, ownerID, id uuid.UUID) error {
 	kb, err := s.repo.FindDeletedByIDAndOwner(ctx, id, ownerID)
 	if err != nil {
@@ -385,7 +381,7 @@ func (s *KnowledgeBaseService) BatchSetFavorite(ctx context.Context, ownerID uui
 	if len(ids) == 0 {
 		return nil, apperror.Validation(map[string]any{"knowledgeBaseIds": "知识库 ID 不能为空"})
 	}
-	if err := s.ensureKnowledgeBasesOwner(ctx, ownerID, ids, false); err != nil {
+	if err := s.ensureKnowledgeBasesCapability(ctx, ownerID, ids, access.CapKnowledgeBaseRead); err != nil {
 		return nil, err
 	}
 	for _, id := range ids {
@@ -401,19 +397,16 @@ func (s *KnowledgeBaseService) BatchMoveCategory(ctx context.Context, ownerID uu
 	if len(ids) == 0 {
 		return nil, apperror.Validation(map[string]any{"knowledgeBaseIds": "知识库 ID 不能为空"})
 	}
-	if err := s.ensureKnowledgeBasesOwner(ctx, ownerID, ids, false); err != nil {
+	if err := s.ensureKnowledgeBasesCapability(ctx, ownerID, ids, access.CapKnowledgeBaseWrite); err != nil {
 		return nil, err
 	}
 	if err := s.ensureCategoryOwner(ctx, ownerID, req.CategoryID); err != nil {
 		return nil, err
 	}
 	for _, id := range ids {
-		kb, err := s.repo.FindByIDAndOwner(ctx, id, ownerID)
+		kb, err := s.findKnowledgeBaseForCapability(ctx, ownerID, id, access.CapKnowledgeBaseWrite)
 		if err != nil {
-			return nil, apperror.Internal(err)
-		}
-		if kb == nil {
-			return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
+			return nil, err
 		}
 		kb.CategoryID = req.CategoryID
 		kb.UpdatedByID = &ownerID
@@ -443,7 +436,7 @@ func (s *KnowledgeBaseService) BatchTag(ctx context.Context, ownerID uuid.UUID, 
 	if len(tagIDs) == 0 && mode != dto.KnowledgeBaseBatchTagModeReplace {
 		return nil, apperror.Validation(map[string]any{"tagIds": "标签 ID 不能为空"})
 	}
-	if err := s.ensureKnowledgeBasesOwner(ctx, ownerID, ids, false); err != nil {
+	if err := s.ensureKnowledgeBasesCapability(ctx, ownerID, ids, access.CapKnowledgeBaseWrite); err != nil {
 		return nil, err
 	}
 	if err := s.ensureTagsOwner(ctx, ownerID, tagIDs); err != nil {
@@ -460,16 +453,13 @@ func (s *KnowledgeBaseService) BatchDelete(ctx context.Context, ownerID uuid.UUI
 	if len(ids) == 0 {
 		return nil, apperror.Validation(map[string]any{"knowledgeBaseIds": "知识库 ID 不能为空"})
 	}
-	if err := s.ensureKnowledgeBasesOwner(ctx, ownerID, ids, false); err != nil {
+	if err := s.ensureKnowledgeBasesCapability(ctx, ownerID, ids, access.CapKnowledgeBaseDelete); err != nil {
 		return nil, err
 	}
 	for _, id := range ids {
-		kb, err := s.repo.FindByIDAndOwner(ctx, id, ownerID)
+		kb, err := s.findKnowledgeBaseForCapability(ctx, ownerID, id, access.CapKnowledgeBaseDelete)
 		if err != nil {
-			return nil, apperror.Internal(err)
-		}
-		if kb == nil {
-			return nil, apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在")
+			return nil, err
 		}
 		if err := s.repo.Delete(ctx, kb); err != nil {
 			return nil, apperror.Internal(err)
@@ -483,7 +473,7 @@ func (s *KnowledgeBaseService) BatchRestore(ctx context.Context, ownerID uuid.UU
 	if len(ids) == 0 {
 		return nil, apperror.Validation(map[string]any{"knowledgeBaseIds": "知识库 ID 不能为空"})
 	}
-	if err := s.ensureKnowledgeBasesOwner(ctx, ownerID, ids, true); err != nil {
+	if err := s.ensureDeletedKnowledgeBasesOwner(ctx, ownerID, ids); err != nil {
 		return nil, err
 	}
 	if err := s.repo.BatchRestore(ctx, ids); err != nil {
@@ -759,17 +749,33 @@ func (s *KnowledgeBaseService) findKnowledgeBaseForCapability(
 	return granted.knowledgeBase, nil
 }
 
-func (s *KnowledgeBaseService) ensureKnowledgeBasesOwner(ctx context.Context, ownerID uuid.UUID, ids []uuid.UUID, deleted bool) error {
+// ensureKnowledgeBasesCapability authorizes every id in a batch before any of them
+// is touched.
+//
+// All-or-nothing on purpose: a batch that stops halfway would leave the user with
+// a partial result and no way to tell which ids went through. The pre-pass costs
+// one extra query per id, which a batch endpoint can afford.
+func (s *KnowledgeBaseService) ensureKnowledgeBasesCapability(
+	ctx context.Context,
+	actorID uuid.UUID,
+	ids []uuid.UUID,
+	capability access.Capability,
+) error {
 	for _, id := range ids {
-		var (
-			kb  *model.KnowledgeBase
-			err error
-		)
-		if deleted {
-			kb, err = s.repo.FindDeletedByIDAndOwner(ctx, id, ownerID)
-		} else {
-			kb, err = s.repo.FindByIDAndOwner(ctx, id, ownerID)
+		if _, err := s.findKnowledgeBaseForCapability(ctx, actorID, id, capability); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// ensureDeletedKnowledgeBasesOwner is the recycle-bin counterpart. It stays
+// owner-filtered rather than capability-based for the reason recorded on Restore:
+// a knowledge base in the recycle bin should read as absent to everyone but its
+// owner.
+func (s *KnowledgeBaseService) ensureDeletedKnowledgeBasesOwner(ctx context.Context, ownerID uuid.UUID, ids []uuid.UUID) error {
+	for _, id := range ids {
+		kb, err := s.repo.FindDeletedByIDAndOwner(ctx, id, ownerID)
 		if err != nil {
 			return apperror.Internal(err)
 		}
