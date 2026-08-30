@@ -1530,6 +1530,178 @@ MVP 语义：
 4. citations 只返回本轮 chunks，不返回历史消息来源。
 5. 会话类问题的 `citations` 必须为空，不能附带无关知识库片段。
 
+## Chat 质量运营
+
+三个接口共用同一套范围规则：只统计当前用户自己的会话，会话和知识库都必须未软删除，
+且只统计 `role = 'assistant'` 的消息。`period` 只接受 `day` 或 `month`（默认
+`month`），`day` 指今天零点至现在，`month` 指本月一号零点至现在。可选
+`knowledgeBaseId` 必须属于当前用户，否则返回 `KNOWLEDGE_BASE_NOT_FOUND`。
+
+### 意图与检索式落库
+
+从 migration 018 起，assistant 消息保存三个新列：
+
+- `intent`：`conversation` 或 `knowledge_base`，即本轮意图分类结果。
+- `retrieval_query`：知识型提问实际使用的检索式（改写后的独立问题）。会话类回答不写。
+- `retrieval_query_norm`：`retrieval_query` 归一化后的聚类键（小写、去标点、去空白）。
+
+018 不回填历史数据：迁移前的回答无法判断当时的意图，写入任何值都是编造。因此历史行
+`intent` 为 `NULL`，被所有按意图口径统计的指标排除，并单独通过
+`unclassifiedAnswerCount` 披露。
+
+### GET /chat/quality/overview
+
+```json
+{
+  "period": "month",
+  "startAt": "2026-08-01T00:00:00Z",
+  "endAt": "2026-08-30T10:00:00Z",
+  "answerCount": 120,
+  "feedbackCount": 40,
+  "positiveFeedbackCount": 30,
+  "negativeFeedbackCount": 10,
+  "knowledgeAnswerCount": 90,
+  "withoutCitationsCount": 12,
+  "unclassifiedAnswerCount": 8,
+  "feedbackCoverage": 0.33,
+  "positiveRate": 0.75,
+  "withoutCitationsRate": 0.13
+}
+```
+
+口径：
+
+- `answerCount`：范围内全部 assistant 回答，不区分意图。
+- `feedbackCoverage` = `feedbackCount / answerCount`，`positiveRate` =
+  `positiveFeedbackCount / feedbackCount`，分母为 0 时返回 0。
+- `knowledgeAnswerCount`：`intent = 'knowledge_base'` 的回答数。
+- `withoutCitationsCount`：`intent = 'knowledge_base'` 且 citations 为空
+  （`''`、`null`、`[]` 三种落库形态都算空）的回答数。
+- `withoutCitationsRate` = `withoutCitationsCount / knowledgeAnswerCount`，分母为 0 时返回 0。
+- `unclassifiedAnswerCount`：`intent IS NULL` 的回答数。这些行不计入
+  `knowledgeAnswerCount`、`withoutCitationsCount` 和 `withoutCitationsRate`。
+
+**兼容性变更**：`withoutCitationsCount` 之前统计所有 citations 为空的回答，包含会话类
+回答。会话类回答按设计就没有引用（见上文多轮上下文规则第 5 条），把它们算成引用缺口是
+错的，所以该字段现在要求 `intent = 'knowledge_base'`。对同一批数据，新值通常低于旧值。
+
+### GET /chat/quality/negative-feedback
+
+按最近评价时间倒序返回负反馈回答，保留原问题、回答、引用和 rerank 降级证据。
+
+查询参数：`period`、`knowledgeBaseId`、`hasCitations`、`page`（默认 1）、
+`pageSize`（默认 20，上限 100）。`hasCitations` 只接受 `true` 或 `false`，其他值返回
+`VALIDATION_ERROR`；不传表示不按引用过滤。这里的 `hasCitations=false` 不看 `intent`，
+它筛的是「这条负反馈有没有证据可查」，与概览的引用缺口口径无关。
+
+```json
+{
+  "items": [
+    {
+      "messageId": "assistant_message_uuid",
+      "sessionId": "session_uuid",
+      "sessionTitle": "退货政策",
+      "knowledgeBaseId": "kb_uuid",
+      "knowledgeBaseName": "产品知识库",
+      "question": "如何退货？",
+      "answer": "请在三十天内申请。",
+      "citations": [],
+      "rerankFallback": { "used": true, "reason": "provider timeout" },
+      "createdAt": "2026-08-10T00:00:00Z",
+      "feedbackUpdatedAt": "2026-08-11T00:00:00Z"
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "pageSize": 20
+}
+```
+
+`question` 优先按 `clientRequestId` 配对同一轮的 user 消息，配不上时回退到时间上最近的
+前一条 user 消息，都找不到时返回空字符串。
+
+### GET /chat/quality/knowledge-gaps
+
+返回知识库回答不好的问题，供运营决定补哪些资料。
+
+查询参数：`period`、`knowledgeBaseId`、`category`、`page`（默认 1）、`pageSize`
+（默认 20，上限 100）。`category` 只接受 `no_citations`、`repeated_rewrite`，或不传
+（等于两类合并）。传入其他值返回 `VALIDATION_ERROR`，不会退化成「全部」——把未知筛选
+条件当成全部，会让调用方看到一个并非自己请求的列表。
+
+两个类别：
+
+1. `no_citations`：`intent = 'knowledge_base'` 且 citations 为空的单条回答。对知识型
+   提问，「检索不到内容」和「依据不足所以拒答」是同一件事：citations 由 rerank 结果推导，
+   固定拒答话术恰好在结果为空时使用，所以这里不重复拆成两类。
+2. `repeated_rewrite`：同一会话内 `retrieval_query_norm` 相同的回答被分到一组，组内
+   条数 >= 2 才算一个缺口。归一化会去掉大小写、标点和空白，所以「退货 政策」和
+   「退货政策」属于同一组（中文分词空格不稳定，保留空白会把同一个问题拆成两组）。
+
+`repeated_rewrite` 只统计 `client_request_id IS NOT NULL` 的回答，即排除 regenerate：
+只有发送路径会写 `client_request_id`，为空说明用户是在同一个问题上要求重新生成，而不是
+换了说法再问。把重新生成算成改写，会把「我想要更好的回答」误报成「知识库答不上来」。
+
+```json
+{
+  "items": [
+    {
+      "category": "no_citations",
+      "messageId": "assistant_message_uuid",
+      "sessionId": "session_uuid",
+      "sessionTitle": "退货政策",
+      "knowledgeBaseId": "kb_uuid",
+      "knowledgeBaseName": "产品知识库",
+      "question": "支持跨境退货吗？",
+      "retrievalQuery": "跨境退货",
+      "occurrenceCount": 1,
+      "ungroundedCount": 1,
+      "firstSeenAt": "2026-08-12T00:00:00Z",
+      "lastSeenAt": "2026-08-12T00:00:00Z"
+    },
+    {
+      "category": "repeated_rewrite",
+      "messageId": null,
+      "sessionId": "session_uuid",
+      "sessionTitle": "发票问题",
+      "knowledgeBaseId": "kb_uuid",
+      "knowledgeBaseName": "产品知识库",
+      "question": "发票要求",
+      "retrievalQuery": "发票要求",
+      "occurrenceCount": 3,
+      "ungroundedCount": 2,
+      "firstSeenAt": "2026-08-13T00:00:00Z",
+      "lastSeenAt": "2026-08-14T00:00:00Z"
+    }
+  ],
+  "total": 2,
+  "page": 1,
+  "pageSize": 20,
+  "noCitationsTotal": 1,
+  "repeatedRewriteTotal": 1
+}
+```
+
+字段说明：
+
+- `messageId`：`no_citations` 为具体回答 ID；`repeated_rewrite` 是聚类，跨多条回答，
+  固定为 `null`。前端需要用「会话 + 归一化问题」而不是 `messageId` 作为列表 key。
+- `question`：`no_citations` 用同一轮的用户原问题（解析规则同负反馈接口）；
+  `repeated_rewrite` 用组内 `MIN(retrieval_query)`。组内成员归一化后相同，彼此只差
+  大小写、标点和空白，取任意一条都能代表，`MIN` 只是让结果确定。
+- `occurrenceCount`：`no_citations` 恒为 1；`repeated_rewrite` 为组内回答条数。
+- `ungroundedCount`：其中 citations 为空的条数。
+- `noCitationsTotal` / `repeatedRewriteTotal`：无论请求哪个 `category` 都返回，方便调用
+  方标注筛选器而不必再发一次请求。
+
+排序与分页：`no_citations` 按 `created_at DESC, id DESC`；`repeated_rewrite` 按
+`last_seen_at DESC, session_id DESC, retrieval_query_norm ASC`。两者都以完整的组键或
+主键收尾，保证是全序——同一次请求写入的多条回答可能共享时间戳，只按时间排序会让相邻
+两页重复或漏掉数据。不传 `category` 时，响应是两个列表的拼接（先 `no_citations`），
+分页在拼接后的序列上进行。
+
+未分类（`intent IS NULL`）的历史回答不会出现在任何类别中。
+
 ## AI 开发约束
 
 1. API 字段使用 camelCase。
