@@ -42,7 +42,7 @@
    Enter 直达结果、Escape 收起。请求用 `AbortController` 取消，避免慢响应覆盖新输入。
    *Affected*：`frontend/src/pages/Search/SearchPage.tsx`、`styles/pages/search.css`。
 
-2. [ ] **无结果建议按查询给**：区分「查询过长」「有引号或符号」「切到某类型后为空但全部
+2. [x] **无结果建议按查询给**：区分「查询过长」「有引号或符号」「切到某类型后为空但全部
    类型有结果」三种情况，给出对应的下一步；只在能确定时给，拿不准就沿用通用文案。
    *Affected*：`frontend/src/pages/Search/SearchPage.tsx`、新增 `searchGuidance.ts` 与测试。
 
