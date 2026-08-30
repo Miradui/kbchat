@@ -135,3 +135,21 @@ func AllowedCapabilities(role Role) []Capability {
 	}
 	return allowed
 }
+
+// MemberRolesWith lists the stored member roles that hold a capability, as the
+// strings the role column contains.
+//
+// Cross-knowledge-base lists cannot authorize row by row: they have to express
+// reachability inside the query. This turns a capability into the role values such
+// a query filters on, so those queries stay derived from the matrix instead of
+// carrying a second, drifting copy of it. RoleOwner is excluded because an owner has
+// no member row; queries pair this with their own owner_id predicate.
+func MemberRolesWith(capability Capability) []string {
+	roles := make([]string, 0, len(AssignableRoles))
+	for _, role := range AssignableRoles {
+		if Allows(role, capability) {
+			roles = append(roles, string(role))
+		}
+	}
+	return roles
+}

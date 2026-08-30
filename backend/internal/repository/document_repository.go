@@ -100,12 +100,19 @@ func (r *DocumentRepository) createWithJob(ctx context.Context, document *model.
 	})
 }
 
-func (r *DocumentRepository) ListByOwner(ctx context.Context, ownerID uuid.UUID, query GlobalDocumentQuery) ([]GlobalDocumentListItem, int64, error) {
+// ListForActor lists documents across every knowledge base the actor can reach.
+//
+// memberRoles are the stored member roles that hold the capability this list needs,
+// supplied by the service from the capability matrix. A cross-knowledge-base list
+// cannot authorize row by row without a query per row, so reachability is expressed
+// here instead -- but the role set is still derived from the matrix rather than
+// spelled out in SQL.
+func (r *DocumentRepository) ListForActor(ctx context.Context, actorID uuid.UUID, memberRoles []string, query GlobalDocumentQuery) ([]GlobalDocumentListItem, int64, error) {
 	page, pageSize := normalizePage(query.Page, query.PageSize)
 	base := r.db.WithContext(ctx).
 		Model(&model.Document{}).
 		Joins("JOIN knowledge_bases ON knowledge_bases.id = documents.knowledge_base_id").
-		Where("knowledge_bases.owner_id = ?", ownerID).
+		Where(reachableKnowledgeBaseCondition(r.db, actorID, memberRoles)).
 		Where("knowledge_bases.deleted_at IS NULL").
 		Where("documents.deleted_at IS NULL")
 	if query.Q != "" {
@@ -527,6 +534,21 @@ func (r *DocumentRepository) FindByID(ctx context.Context, id uuid.UUID) (*model
 	return &document, err
 }
 
+// FindDeletedByID loads a soft-deleted document without an ownership predicate.
+// Access is decided from its knowledge base by the service layer.
+func (r *DocumentRepository) FindDeletedByID(ctx context.Context, id uuid.UUID) (*model.Document, error) {
+	var document model.Document
+	err := r.db.WithContext(ctx).
+		Unscoped().
+		Where("id = ?", id).
+		Where("deleted_at IS NOT NULL").
+		First(&document).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &document, err
+}
+
 func (r *DocumentRepository) Restore(ctx context.Context, id uuid.UUID) error {
 	result := r.db.WithContext(ctx).
 		Unscoped().
@@ -578,7 +600,10 @@ func (r *DocumentRepository) PermanentDelete(ctx context.Context, documentID uui
 	})
 }
 
-func (r *DocumentRepository) EmptyDeletedByOwner(ctx context.Context, ownerID uuid.UUID) error {
+// EmptyDeletedForActor purges every deleted document the actor may purge. It is
+// deliberately narrower than ListDeletedForActor: an editor sees the bin and can
+// restore from it, but emptying it is a purge.
+func (r *DocumentRepository) EmptyDeletedForActor(ctx context.Context, actorID uuid.UUID, memberRoles []string) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var documents []struct {
 			ID          uuid.UUID
@@ -587,7 +612,7 @@ func (r *DocumentRepository) EmptyDeletedByOwner(ctx context.Context, ownerID uu
 		if err := tx.Unscoped().
 			Model(&model.Document{}).
 			Joins("JOIN knowledge_bases ON knowledge_bases.id = documents.knowledge_base_id").
-			Where("knowledge_bases.owner_id = ?", ownerID).
+			Where(reachableKnowledgeBaseCondition(tx, actorID, memberRoles)).
 			Where("documents.deleted_at IS NOT NULL").
 			Order("documents.id asc").
 			Clauses(clause.Locking{Strength: "UPDATE", Table: clause.Table{Name: "documents"}}).
@@ -640,13 +665,16 @@ type RecycleDocumentItem struct {
 	DeletedAt         time.Time
 }
 
-func (r *DocumentRepository) ListDeletedByOwner(ctx context.Context, ownerID uuid.UUID, page, pageSize int) ([]RecycleDocumentItem, int64, error) {
+// ListDeletedForActor lists the recycle bin across every knowledge base where the
+// actor holds the capability that can act on a deleted document. A viewer sees an
+// empty bin rather than a list of items they could not restore.
+func (r *DocumentRepository) ListDeletedForActor(ctx context.Context, actorID uuid.UUID, memberRoles []string, page, pageSize int) ([]RecycleDocumentItem, int64, error) {
 	page, pageSize = normalizePage(page, pageSize)
 	base := r.db.WithContext(ctx).
 		Unscoped().
 		Model(&model.Document{}).
 		Joins("JOIN knowledge_bases ON knowledge_bases.id = documents.knowledge_base_id").
-		Where("knowledge_bases.owner_id = ?", ownerID).
+		Where(reachableKnowledgeBaseCondition(r.db, actorID, memberRoles)).
 		Where("documents.deleted_at IS NOT NULL")
 
 	var total int64

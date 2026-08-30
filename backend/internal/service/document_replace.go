@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"kbchat/backend/internal/access"
 	"kbchat/backend/internal/apperror"
 	"kbchat/backend/internal/dto"
 	"kbchat/backend/internal/model"
@@ -35,7 +36,7 @@ func (s *DocumentService) Replace(
 	ownerID, documentID uuid.UUID,
 	file *multipart.FileHeader,
 ) (*dto.DocumentResponse, error) {
-	old, err := s.findDocument(ctx, ownerID, documentID)
+	old, err := s.authorizeDocument(ctx, ownerID, documentID, access.CapContentWrite)
 	if err != nil {
 		return nil, err
 	}

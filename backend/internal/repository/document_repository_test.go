@@ -136,7 +136,7 @@ func TestPermanentDeleteLocksDocumentBeforeDeletingJobs(t *testing.T) {
 	assertStorageCleanupQueued(t, db, document.StoragePath)
 }
 
-func TestEmptyDeletedByOwnerLocksDocumentsBeforeDeletingJobs(t *testing.T) {
+func TestEmptyDeletedForActorLocksDocumentsBeforeDeletingJobs(t *testing.T) {
 	db := newDocumentRepositoryTestDB(t)
 	repository := NewDocumentRepository(db)
 	document := createDocumentRepositoryTestDocument(t, db)
@@ -149,7 +149,7 @@ func TestEmptyDeletedByOwnerLocksDocumentsBeforeDeletingJobs(t *testing.T) {
 	}
 	lockTargets := recordDocumentRepositoryLockTargets(t, db)
 
-	if err := repository.EmptyDeletedByOwner(context.Background(), document.UploaderID); err != nil {
+	if err := repository.EmptyDeletedForActor(context.Background(), document.UploaderID, []string{"manager"}); err != nil {
 		t.Fatalf("empty document recycle bin: %v", err)
 	}
 
@@ -446,6 +446,9 @@ func newDocumentRepositoryTestDB(t *testing.T) *gorm.DB {
 		&model.DocumentJob{},
 		&model.StorageCleanupJob{},
 		&model.DocumentChunk{},
+		// The reachability predicate reads the member table, so every query in this
+		// fixture needs it even when the test itself has no members.
+		&model.KnowledgeBaseMember{},
 	); err != nil {
 		t.Fatalf("auto migrate document repository fixture: %v", err)
 	}

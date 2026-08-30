@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"kbchat/backend/internal/access"
 	"kbchat/backend/internal/apperror"
 	"kbchat/backend/internal/config"
 	"kbchat/backend/internal/dto"
@@ -83,7 +84,7 @@ func (s *DocumentService) UploadWithOptions(
 	file *multipart.FileHeader,
 	options DocumentUploadOptions,
 ) (*dto.DocumentResponse, error) {
-	if err := s.ensureKnowledgeBaseOwner(ctx, ownerID, kbID); err != nil {
+	if _, err := s.authorizeKnowledgeBase(ctx, ownerID, kbID, access.CapContentWrite); err != nil {
 		return nil, err
 	}
 	if err := s.validateFile(file); err != nil {
@@ -172,9 +173,9 @@ func (s *DocumentService) cancelStorageReservation(ctx context.Context, storageP
 // returns exactly what the global endpoint does, so the two cannot drift.
 // See docs/14-frontend-api-gaps.md G20.
 func (s *DocumentService) List(ctx context.Context, ownerID, kbID uuid.UUID, query dto.GlobalDocumentListQuery) (*dto.GlobalDocumentListResponse, error) {
-	// Checked up front so a knowledge base the caller does not own answers
+	// Checked up front so a knowledge base the caller cannot reach answers
 	// KNOWLEDGE_BASE_NOT_FOUND instead of an empty page.
-	if err := s.ensureKnowledgeBaseOwner(ctx, ownerID, kbID); err != nil {
+	if _, err := s.authorizeKnowledgeBase(ctx, ownerID, kbID, access.CapDocumentRead); err != nil {
 		return nil, err
 	}
 
@@ -188,7 +189,7 @@ func (s *DocumentService) ListGlobal(ctx context.Context, ownerID uuid.UUID, que
 	if err != nil {
 		return nil, err
 	}
-	items, total, err := s.documents.ListByOwner(ctx, ownerID, repoQuery)
+	items, total, err := s.documents.ListForActor(ctx, ownerID, access.MemberRolesWith(access.CapDocumentRead), repoQuery)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -220,7 +221,7 @@ func (s *DocumentService) ListGlobal(ctx context.Context, ownerID uuid.UUID, que
 }
 
 func (s *DocumentService) Get(ctx context.Context, ownerID, documentID uuid.UUID) (*dto.DocumentResponse, error) {
-	document, err := s.findDocument(ctx, ownerID, documentID)
+	document, err := s.authorizeDocument(ctx, ownerID, documentID, access.CapDocumentRead)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +234,7 @@ func (s *DocumentService) Get(ctx context.Context, ownerID, documentID uuid.UUID
 }
 
 func (s *DocumentService) Delete(ctx context.Context, ownerID, documentID uuid.UUID) error {
-	document, err := s.findDocument(ctx, ownerID, documentID)
+	document, err := s.authorizeDocument(ctx, ownerID, documentID, access.CapContentWrite)
 	if err != nil {
 		return err
 	}
@@ -249,7 +250,7 @@ func (s *DocumentService) BatchDelete(ctx context.Context, ownerID uuid.UUID, re
 	if len(ids) == 0 {
 		return nil, apperror.Validation(map[string]any{"documentIds": documentIDsRequiredMessage})
 	}
-	if err := s.ensureDocumentsOwner(ctx, ownerID, ids, false); err != nil {
+	if err := s.ensureDocumentsCapability(ctx, ownerID, ids, access.CapContentWrite, false); err != nil {
 		return nil, err
 	}
 	if err := s.documents.BatchDelete(ctx, ids); err != nil {
@@ -259,7 +260,9 @@ func (s *DocumentService) BatchDelete(ctx context.Context, ownerID uuid.UUID, re
 }
 
 func (s *DocumentService) ListRecycleBin(ctx context.Context, ownerID uuid.UUID, page, pageSize int) (*dto.RecycleBinListResponse, error) {
-	items, total, err := s.documents.ListDeletedByOwner(ctx, ownerID, page, pageSize)
+	// Scoped to content.write, not document.read: the bin only offers restore and
+	// purge, so listing it for a viewer would show items they cannot act on.
+	items, total, err := s.documents.ListDeletedForActor(ctx, ownerID, access.MemberRolesWith(access.CapContentWrite), page, pageSize)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -284,12 +287,9 @@ func (s *DocumentService) ListRecycleBin(ctx context.Context, ownerID uuid.UUID,
 }
 
 func (s *DocumentService) Restore(ctx context.Context, ownerID, documentID uuid.UUID) error {
-	document, err := s.documents.FindDeletedByIDAndOwner(ctx, documentID, ownerID)
+	document, err := s.authorizeDeletedDocument(ctx, ownerID, documentID, access.CapContentWrite)
 	if err != nil {
-		return apperror.Internal(err)
-	}
-	if document == nil {
-		return apperror.NotFound("DOCUMENT_NOT_FOUND", "document not found")
+		return err
 	}
 	if err := s.documents.Restore(ctx, documentID); err != nil {
 		if errors.Is(err, repository.ErrDocumentNotDeleted) {
@@ -306,7 +306,7 @@ func (s *DocumentService) BatchRestore(ctx context.Context, ownerID uuid.UUID, r
 	if len(ids) == 0 {
 		return nil, apperror.Validation(map[string]any{"documentIds": documentIDsRequiredMessage})
 	}
-	if err := s.ensureDocumentsOwner(ctx, ownerID, ids, true); err != nil {
+	if err := s.ensureDocumentsCapability(ctx, ownerID, ids, access.CapContentWrite, true); err != nil {
 		return nil, err
 	}
 	if err := s.documents.BatchRestore(ctx, ids); err != nil {
@@ -319,7 +319,7 @@ func (s *DocumentService) BatchRestore(ctx context.Context, ownerID uuid.UUID, r
 }
 
 func (s *DocumentService) Reprocess(ctx context.Context, ownerID, documentID uuid.UUID) (*dto.DocumentResponse, error) {
-	document, err := s.findDocument(ctx, ownerID, documentID)
+	document, err := s.authorizeDocument(ctx, ownerID, documentID, access.CapContentWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -340,7 +340,7 @@ func (s *DocumentService) BatchReprocess(ctx context.Context, ownerID uuid.UUID,
 	if len(ids) == 0 {
 		return nil, apperror.Validation(map[string]any{"documentIds": documentIDsRequiredMessage})
 	}
-	if err := s.ensureDocumentsOwner(ctx, ownerID, ids, false); err != nil {
+	if err := s.ensureDocumentsCapability(ctx, ownerID, ids, access.CapContentWrite, false); err != nil {
 		return nil, err
 	}
 	if err := s.documents.QueueBatchReprocess(ctx, ids, ownerID); err != nil {
@@ -350,7 +350,7 @@ func (s *DocumentService) BatchReprocess(ctx context.Context, ownerID uuid.UUID,
 }
 
 func (s *DocumentService) Download(ctx context.Context, ownerID, documentID uuid.UUID) (*dto.DocumentDownloadResponse, error) {
-	document, err := s.findDocument(ctx, ownerID, documentID)
+	document, err := s.authorizeDocument(ctx, ownerID, documentID, access.CapDocumentDownload)
 	if err != nil {
 		return nil, err
 	}
@@ -369,7 +369,7 @@ func (s *DocumentService) Download(ctx context.Context, ownerID, documentID uuid
 }
 
 func (s *DocumentService) Preview(ctx context.Context, ownerID, documentID uuid.UUID) (*dto.DocumentPreviewResponse, error) {
-	document, err := s.findDocument(ctx, ownerID, documentID)
+	document, err := s.authorizeDocument(ctx, ownerID, documentID, access.CapDocumentRead)
 	if err != nil {
 		return nil, err
 	}
@@ -401,7 +401,7 @@ func (s *DocumentService) Preview(ctx context.Context, ownerID, documentID uuid.
 }
 
 func (s *DocumentService) Chunks(ctx context.Context, ownerID, documentID uuid.UUID, query dto.ChunkListQuery) (*dto.ChunkListResponse, error) {
-	if _, err := s.findDocument(ctx, ownerID, documentID); err != nil {
+	if _, err := s.authorizeDocument(ctx, ownerID, documentID, access.CapDocumentRead); err != nil {
 		return nil, err
 	}
 
@@ -424,12 +424,8 @@ func (s *DocumentService) Chunks(ctx context.Context, ownerID, documentID uuid.U
 }
 
 func (s *DocumentService) PermanentDelete(ctx context.Context, ownerID, documentID uuid.UUID) error {
-	document, err := s.documents.FindDeletedByIDAndOwner(ctx, documentID, ownerID)
-	if err != nil {
-		return apperror.Internal(err)
-	}
-	if document == nil {
-		return apperror.NotFound("DOCUMENT_NOT_FOUND", "document not found")
+	if _, err := s.authorizeDeletedDocument(ctx, ownerID, documentID, access.CapContentPurge); err != nil {
+		return err
 	}
 	if err := s.documents.PermanentDelete(ctx, documentID); err != nil {
 		if errors.Is(err, repository.ErrDocumentNotDeleted) {
@@ -448,19 +444,8 @@ func documentStorageError(err error) error {
 }
 
 func (s *DocumentService) EmptyRecycleBin(ctx context.Context, ownerID uuid.UUID) error {
-	if err := s.documents.EmptyDeletedByOwner(ctx, ownerID); err != nil {
+	if err := s.documents.EmptyDeletedForActor(ctx, ownerID, access.MemberRolesWith(access.CapContentPurge)); err != nil {
 		return apperror.Internal(err)
-	}
-	return nil
-}
-
-func (s *DocumentService) ensureKnowledgeBaseOwner(ctx context.Context, ownerID, kbID uuid.UUID) error {
-	kb, err := s.knowledgeBases.FindByIDAndOwner(ctx, kbID, ownerID)
-	if err != nil {
-		return apperror.Internal(err)
-	}
-	if kb == nil {
-		return apperror.NotFound("KNOWLEDGE_BASE_NOT_FOUND", "knowledge base not found")
 	}
 	return nil
 }
@@ -491,7 +476,7 @@ const MaxDocumentFilenameLength = 255
 // drives parser selection, so letting a rename change ".pdf" to ".txt" would
 // point the parser at a file it cannot read on the next reprocess.
 func (s *DocumentService) Update(ctx context.Context, ownerID, documentID uuid.UUID, req dto.DocumentUpdateRequest) (*dto.DocumentResponse, error) {
-	document, err := s.findDocument(ctx, ownerID, documentID)
+	document, err := s.authorizeDocument(ctx, ownerID, documentID, access.CapContentWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -511,7 +496,9 @@ func (s *DocumentService) Update(ctx context.Context, ownerID, documentID uuid.U
 
 	var target *uuid.UUID
 	if req.KnowledgeBaseID != nil && *req.KnowledgeBaseID != document.KnowledgeBaseID {
-		if err := s.ensureKnowledgeBaseOwner(ctx, ownerID, *req.KnowledgeBaseID); err != nil {
+		// The destination is checked separately: moving a document into a knowledge
+		// base is writing content there, and the source role says nothing about it.
+		if _, err := s.authorizeKnowledgeBase(ctx, ownerID, *req.KnowledgeBaseID, access.CapContentWrite); err != nil {
 			return nil, err
 		}
 		target = req.KnowledgeBaseID
@@ -533,7 +520,7 @@ func (s *DocumentService) Update(ctx context.Context, ownerID, documentID uuid.U
 		return nil, apperror.Internal(err)
 	}
 
-	updated, err := s.findDocument(ctx, ownerID, document.ID)
+	updated, err := s.authorizeDocument(ctx, ownerID, document.ID, access.CapDocumentRead)
 	if err != nil {
 		return nil, err
 	}
@@ -553,7 +540,7 @@ func (s *DocumentService) Update(ctx context.Context, ownerID, documentID uuid.U
 // not rolled back, and the processor only swaps chunks in after every batch
 // succeeded, so a cancel never leaves half an index behind.
 func (s *DocumentService) CancelJob(ctx context.Context, ownerID, documentID uuid.UUID) (*dto.DocumentResponse, error) {
-	document, err := s.findDocument(ctx, ownerID, documentID)
+	document, err := s.authorizeDocument(ctx, ownerID, documentID, access.CapContentWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -566,7 +553,7 @@ func (s *DocumentService) CancelJob(ctx context.Context, ownerID, documentID uui
 		return nil, apperror.Internal(err)
 	}
 
-	updated, err := s.findDocument(ctx, ownerID, document.ID)
+	updated, err := s.authorizeDocument(ctx, ownerID, document.ID, access.CapDocumentRead)
 	if err != nil {
 		return nil, err
 	}
@@ -582,7 +569,7 @@ func (s *DocumentService) recordDocumentActivity(ctx context.Context, userID uui
 		return
 	}
 	knowledgeBaseName := ""
-	if kb, err := s.knowledgeBases.FindByIDAndOwner(ctx, document.KnowledgeBaseID, userID); err == nil && kb != nil {
+	if kb, err := s.knowledgeBases.FindByID(ctx, document.KnowledgeBaseID); err == nil && kb != nil {
 		knowledgeBaseName = kb.Name
 	}
 	knowledgeBaseID := document.KnowledgeBaseID
@@ -594,38 +581,6 @@ func (s *DocumentService) recordDocumentActivity(ctx context.Context, userID uui
 		KnowledgeBaseID:   &knowledgeBaseID,
 		KnowledgeBaseName: knowledgeBaseName,
 	})
-}
-
-func (s *DocumentService) findDocument(ctx context.Context, ownerID, documentID uuid.UUID) (*model.Document, error) {
-	document, err := s.documents.FindByIDAndOwner(ctx, documentID, ownerID)
-	if err != nil {
-		return nil, apperror.Internal(err)
-	}
-	if document == nil {
-		return nil, apperror.NotFound("DOCUMENT_NOT_FOUND", "document not found")
-	}
-	return document, nil
-}
-
-func (s *DocumentService) ensureDocumentsOwner(ctx context.Context, ownerID uuid.UUID, ids []uuid.UUID, deleted bool) error {
-	for _, id := range ids {
-		var (
-			document *model.Document
-			err      error
-		)
-		if deleted {
-			document, err = s.documents.FindDeletedByIDAndOwner(ctx, id, ownerID)
-		} else {
-			document, err = s.documents.FindByIDAndOwner(ctx, id, ownerID)
-		}
-		if err != nil {
-			return apperror.Internal(err)
-		}
-		if document == nil {
-			return apperror.NotFound("DOCUMENT_NOT_FOUND", "document not found")
-		}
-	}
-	return nil
 }
 
 // AllowedDocumentExtensions is the upload allow list enforced by validateFile.
