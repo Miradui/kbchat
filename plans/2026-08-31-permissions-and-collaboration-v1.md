@@ -128,45 +128,45 @@ roadmap），不改 `users.role`。
 
 ## Implementation Plan
 
-1. [ ] **`internal/access` 包**：角色与能力常量、等级序、`Rank`、`Allows`、
+1. [x] **`internal/access` 包**：角色与能力常量、等级序、`Rank`、`Allows`、
    `CapabilityMinRole` 矩阵，以及一个断言矩阵覆盖全部能力常量的测试。
    *Rationale*：矩阵是这一阶段的真相来源，先让它可测且独立于服务层。
    *Affected*：`backend/internal/access/`。
 
-2. [ ] **migration 020**：重建 `knowledge_base_members_role_check` 为
+2. [x] **migration 020**：重建 `knowledge_base_members_role_check` 为
    `('viewer','editor','manager')`，把历史 `member` UPDATE 成 `viewer`。
    *Rationale*：值域是 schema 的一部分；Go 常量与 CHECK 必须同时存在，测试解析迁移防漂移。
    *Affected*：`backend/migrations/020_*.sql`。
 
-3. [ ] **解析器接进服务层**：`KnowledgeBaseService` 上新增
+3. [x] **解析器接进服务层**：`KnowledgeBaseService` 上新增
    `resolveKnowledgeBaseAccess(ctx, actorID, kbID, capability)`，返回 kb + 实际角色；
    404/403 按上面的口径。用它重写 `findKnowledgeBaseForManagement`。
    *Rationale*：先建立单一决策点，再逐个端点迁移，避免一次大改。
    *Affected*：`internal/service/knowledge_base_service.go`。
 
-4. [ ] **知识库读路径迁移**：详情、统计、收藏、浏览、permissions 读写、成员增删改按矩阵
+4. [x] **知识库读路径迁移**：详情、统计、收藏、浏览、permissions 读写、成员增删改按矩阵
    走新 helper；`kb.write` 与 `kb.delete` 分开。
    *Affected*：`knowledge_base_service.go`、`handler/knowledge_base_handler.go`。
 
-5. [ ] **列表可见性**：`workspaceBaseQuery` 从 `owner_id = ?` 改为「owner 或成员」，
+5. [x] **列表可见性**：`workspaceBaseQuery` 从 `owner_id = ?` 改为「owner 或成员」，
    `managed` scope 变成真的过滤 manager 成员身份；响应带 `effectiveRole`。
    *Rationale*：成员看不见知识库时角色矩阵没有任何可观察效果，这是用户第一眼会发现的缺陷。
    *Affected*：`repository/knowledge_base_repository.go`、`dto/knowledge_base.go`。
 
-6. [ ] **文档路径迁移**：`document.read` / `document.download` / `content.write` /
+6. [x] **文档路径迁移**：`document.read` / `document.download` / `content.write` /
    `content.purge` 分别校验；`findDocument` 改为先取文档再解析知识库访问。
    *Affected*：`internal/service/document_service.go`、`repository/document_repository.go`。
 
-7. [ ] **会话与反馈路径迁移**：`findSession` 不再要求 KB owner，改为 `chat.use`；
+7. [x] **会话与反馈路径迁移**：`findSession` 不再要求 KB owner，改为 `chat.use`；
    导出走 `chat.export`；反馈走 `feedback.write`；硬删除走 `content.purge`。
    *Affected*：`internal/service/chat_service.go`、`repository/chat_repository.go`。
 
-8. [ ] **质量与检索路径迁移**：`/chat/quality/*` 走 `quality.read`（含
+8. [x] **质量与检索路径迁移**：`/chat/quality/*` 走 `quality.read`（含
    `knowledgeBaseId` 为 nil 时的作用域收敛）；检索与全局搜索走 `kb.search`。
    *Affected*：`chat_service.go`、`internal/retrieval/service.go`、
    `repository/global_search_repository.go`。
 
-9. [ ] **契约测试**：跨用户、已删除知识库、成员撤销后，对每个资源 id 断言状态码；
+9. [x] **契约测试**：跨用户、已删除知识库、成员撤销后，对每个资源 id 断言状态码；
    一个遍历能力矩阵的表驱动测试覆盖全部端点。
    *Rationale*：鉴权护栏从 repository 谓词移到服务层后，遗漏不再有编译期信号。
    *Affected*：`internal/service/*_test.go`、`internal/router/router_test.go`。
