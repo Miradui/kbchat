@@ -78,6 +78,12 @@ type ChatMessageResponse struct {
 	Citations       []CitationResponse           `json:"citations"`
 	Feedback        *ChatMessageFeedbackResponse `json:"feedback"`
 	CreatedAt       time.Time                    `json:"createdAt"`
+	// AnswerStatus distinguishes an answer from the three ways a question can go
+	// unanswered: no_basis, retrieval_failed, model_refused. Null on user messages
+	// and on assistant messages written before this was tracked -- the client must
+	// treat null as "unknown" rather than as answered, or it will silently relabel
+	// history.
+	AnswerStatus *string `json:"answerStatus"`
 }
 
 type SetChatMessageFeedbackRequest struct {

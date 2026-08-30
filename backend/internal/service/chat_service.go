@@ -786,6 +786,11 @@ func (s *ChatService) SendMessage(ctx context.Context, userID, sessionID uuid.UU
 
 	generated, err := s.generateAnswer(ctx, userID, session, content, history)
 	if err != nil {
+		// The turn is recorded before the error is returned, so a refresh still shows
+		// the question. The error is unchanged: the request did fail.
+		if isRetrievalInfrastructureFailure(err) {
+			s.recordRetrievalFailure(ctx, session.ID, clientRequestID, content, history)
+		}
 		return nil, err
 	}
 
@@ -890,6 +895,13 @@ func (s *ChatService) SendMessageStream(
 		onDelta:     sink.Delta,
 	})
 	if err != nil {
+		// Same reasoning as the non-streaming path, and isRetrievalInfrastructureFailure
+		// already excludes client disconnects: nothing is recorded when the reader
+		// went away, matching this path's existing rule of persisting nothing on
+		// interruption.
+		if isRetrievalInfrastructureFailure(err) {
+			s.recordRetrievalFailure(ctx, session.ID, clientRequestID, content, history)
+		}
 		return err
 	}
 	// The provider may finish at the same moment the client disconnects. Check
@@ -976,8 +988,8 @@ func buildChatMessagePair(
 	return userMessage, assistantMessage, nil
 }
 
-// applyGeneratedProvenance records which intent produced an answer and, for
-// knowledge answers, the canonical query retrieval actually ran.
+// applyGeneratedProvenance records which intent produced an answer, whether the
+// answer succeeded, and for knowledge answers the canonical query retrieval ran.
 //
 // Shared by the send paths and by regenerate so an answer's intent is recorded
 // the same way regardless of how it was produced. Every field stays nil when
@@ -988,6 +1000,10 @@ func applyGeneratedProvenance(message *model.ChatMessage, generated generatedCha
 	if generated.intent != "" {
 		intent := generated.intent
 		message.Intent = &intent
+	}
+	if generated.answerStatus != "" {
+		answerStatus := generated.answerStatus
+		message.AnswerStatus = &answerStatus
 	}
 	retrievalQuery := strings.TrimSpace(generated.retrievalQuery)
 	if retrievalQuery == "" {
@@ -1215,6 +1231,10 @@ type generatedChatAnswer struct {
 	// correctly has none.
 	intent         string
 	retrievalQuery string
+	// answerStatus tells the three "could not answer" outcomes apart. See
+	// chat_answer_status.go: they look identical to the user but need different
+	// responses, and only the server knows which one happened.
+	answerStatus string
 }
 
 // answerHooks lets the streaming path observe generation without forking it.
@@ -1325,6 +1345,10 @@ func (s *ChatService) generateAnswerWithHooks(
 			citations:    citations,
 			citationJSON: datatypes.JSON(citationJSON),
 			intent:       chatIntentConversation,
+			// Answered, not no_basis: a conversational turn correctly has no
+			// sources, and counting it as a knowledge gap would fill the gap list
+			// with greetings.
+			answerStatus: AnswerStatusAnswered,
 			// No retrievalQuery: this branch never reaches retrieval, and an empty
 			// one keeps conversation answers out of rewrite clustering entirely.
 		}, nil
@@ -1360,12 +1384,36 @@ func (s *ChatService) generateAnswerWithHooks(
 	}
 
 	answer := "当前知识库中未找到足够依据回答该问题。"
+	// no_basis by default: retrieval succeeded and returned nothing usable, which
+	// is a real statement about the knowledge base rather than a failure.
+	answerStatus := AnswerStatusNoBasis
 	if len(searchRes.Items) > 0 {
 		var firstToken time.Duration
-		answer, firstToken, err = s.complete(ctx, buildAnswerMessages(question, searchRes.Items, history, s.cfg.ChatHistoryLimit), hooks.onDelta)
+		// Streamed through the gate so the marker is never shown to the user. The
+		// gate holds back at most the marker's own length before deciding.
+		gate := newRefusalGate(hooks.onDelta)
+		var streamHook func(string) error
+		if hooks.onDelta != nil {
+			streamHook = gate.write
+		}
+		answer, firstToken, err = s.complete(ctx, buildAnswerMessages(question, searchRes.Items, history, s.cfg.ChatHistoryLimit), streamHook)
 		timing.FirstToken = firstToken
 		if err != nil {
 			return generatedChatAnswer{}, chatCompletionError(err)
+		}
+		if hooks.onDelta != nil {
+			if err := gate.flush(); err != nil {
+				return generatedChatAnswer{}, err
+			}
+		}
+		// The marker is stripped from the stored answer too, so history and a
+		// re-read of the session show the same text the user saw streamed.
+		var refused bool
+		answer, refused = stripRefusalMarker(answer)
+		if refused {
+			answerStatus = AnswerStatusModelRefused
+		} else {
+			answerStatus = AnswerStatusAnswered
 		}
 	} else if hooks.onDelta != nil {
 		// The refusal below never reaches the provider, so no first-token latency is
@@ -1390,6 +1438,7 @@ func (s *ChatService) generateAnswerWithHooks(
 		rerankFallback: searchRes.RerankFallback,
 		intent:         chatIntentKnowledgeBase,
 		retrievalQuery: retrievalQuery,
+		answerStatus:   answerStatus,
 	}, nil
 }
 
@@ -1534,6 +1583,7 @@ func toChatMessageResponse(message *model.ChatMessage) dto.ChatMessageResponse {
 		Citations:       citations,
 		Feedback:        feedback,
 		CreatedAt:       message.CreatedAt,
+		AnswerStatus:    message.AnswerStatus,
 	}
 }
 
@@ -1554,7 +1604,7 @@ func citationsFromSearch(items []dto.SearchResultResponse) []dto.CitationRespons
 }
 
 func systemPrompt() string {
-	return strings.Join([]string{
+	rules := []string{
 		"你是企业知识库问答助手。",
 		"只能基于提供的知识片段回答问题。",
 		"可以参考历史对话理解用户当前问题中的代词、省略和上下文。",
@@ -1562,7 +1612,8 @@ func systemPrompt() string {
 		"引用来源只能来自本轮提供的知识片段。",
 		"如果知识片段不足以回答，请明确说明无法从当前知识库确认。",
 		"不要编造事实，不要编造引用来源。",
-	}, "\n")
+	}
+	return strings.Join(append(rules, refusalPromptRules()...), "\n")
 }
 
 func classifyChatIntent(ctx context.Context, provider chatcore.Provider, question string, history []model.ChatMessage, historyLimit int) (chatIntentDecision, error) {
