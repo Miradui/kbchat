@@ -29,7 +29,8 @@ import { OverflowMenu } from '../../components/ui/OverflowMenu';
 import { Pagination } from '../../components/ui/Pagination';
 import { useEntityMutation } from '../../hooks/useEntityMutation';
 import { AppShell } from '../../layouts/AppShell';
-import type { DocumentItem, DocumentSort, DocumentStatus, KnowledgeBase } from '../../types/api';
+import type { Capability, DocumentItem, DocumentSort, DocumentStatus, KnowledgeBase } from '../../types/api';
+import { canUnlessUnknown, hasCapability } from '../../utils/access';
 import { formatBytes, formatRelativeTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
 import { KnowledgeBaseLayout, KnowledgeBaseLoadFailure } from '../KnowledgeBase/KnowledgeBaseLayout';
@@ -194,7 +195,6 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
   );
 
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
-  const allSelected = items.length > 0 && items.every((item) => selected.has(item.id));
   const fileTypes = useMemo(
     () => Array.from(new Set(items.map((item) => item.fileType).filter(Boolean))).sort(),
     [items],
@@ -279,9 +279,38 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
     });
   }
 
-  const uploadTargets = scopeKnowledgeBaseId
+  // Per-row capability comes from the knowledge base list this page already loads,
+  // rather than from the document rows: the document endpoints do not carry a
+  // capability list, and asking per row would be one request per row.
+  const knowledgeBaseById = useMemo(
+    () => new Map(knowledgeBases.map((item) => [item.id, item])),
+    [knowledgeBases],
+  );
+
+  /**
+   * Whether the caller may do `capability` to this document's knowledge base.
+   *
+   * Absent from the map means unknown, not denied: the lookup is capped at 100
+   * knowledge bases and can also fail outright, and hiding every action because a
+   * list request failed would look like the document page broke.
+   */
+  function canOnDocument(document: DocumentItem, capability: Capability) {
+    const knowledgeBase = knowledgeBaseById.get(document.knowledgeBaseId);
+    if (!knowledgeBase) return true;
+    return canUnlessUnknown(knowledgeBase, capability);
+  }
+
+  // Only bases the caller can write to are offered as upload targets. A base they
+  // can read but not write is not a destination, and listing it would turn every
+  // selection into a 403 after the file was already chosen.
+  const uploadTargets = (scopeKnowledgeBaseId
     ? knowledgeBases.filter((item) => item.id === scopeKnowledgeBaseId)
-    : knowledgeBases;
+    : knowledgeBases
+  ).filter((item) => canUnlessUnknown(item, 'content.write'));
+  const writableItems = items.filter((document) => canOnDocument(document, 'content.write'));
+  // Selection exists to drive the bulk bar, and every bulk action writes. Selecting a
+  // read-only row would put it in a batch the server refuses as a whole.
+  const allSelected = writableItems.length > 0 && writableItems.every((item) => selected.has(item.id));
 
   return (
     <div className="doc-page">
@@ -495,7 +524,8 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
                     <Checkbox
                       aria-label="选择当前页全部文档"
                       checked={allSelected}
-                      onChange={() => setSelectedIds(allSelected ? [] : items.map((item) => item.id))}
+                      disabled={writableItems.length === 0}
+                      onChange={() => setSelectedIds(allSelected ? [] : writableItems.map((item) => item.id))}
                     />
                   </th>
                   <th>文件名</th>
@@ -510,12 +540,14 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
                 {items.map((document) => {
                   const pending = mutation.isPending(mutationKey(document.id));
                   const stalenessHint = documentStalenessHint(document);
+                  const writable = canOnDocument(document, 'content.write');
                   return (
                     <tr data-busy={pending || undefined} data-selected={selected.has(document.id) || undefined} key={document.id}>
                       <td className="ui-table__select" data-label="选择">
                         <Checkbox
                           aria-label={`选择 ${document.filename}`}
                           checked={selected.has(document.id)}
+                          disabled={!writable}
                           onChange={() => setSelectedIds((current) => (
                             current.includes(document.id)
                               ? current.filter((value) => value !== document.id)
@@ -569,6 +601,10 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
                       <td className="ui-table__actions" data-label="操作">
                         <div>
                           <Button disabled={pending} variant="ghost" onClick={() => openDetail(document.id)}>查看</Button>
+                          {/* Every entry in this menu writes, so a viewer gets no menu
+                              at all rather than an empty one. Viewing stays available:
+                              document.read is what put the row on screen. */}
+                          {writable && (
                           <OverflowMenu
                             disabled={pending}
                             label={`${document.filename} 的更多操作`}
@@ -616,6 +652,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
                               },
                             ]}
                           />
+                          )}
                         </div>
                       </td>
                     </tr>

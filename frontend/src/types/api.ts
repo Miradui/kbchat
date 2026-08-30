@@ -43,6 +43,18 @@ export type KnowledgeBase = {
   lastViewedAt?: string | null;
   updatedBy?: UserSummary;
   tags?: KnowledgeBaseTag[];
+  /**
+   * The caller's own standing in this knowledge base. The server always sends it,
+   * but it stays optional here so a response from an older build reads as unknown
+   * rather than as `viewer` — see `roleAtLeast`, which treats unknown as no access.
+   */
+  effectiveRole?: EffectiveRole;
+  /**
+   * What `effectiveRole` permits. Present so the UI can hide actions the server
+   * would only answer with 403. It is a convenience, never the boundary: the
+   * server checks every request regardless of what it told the client.
+   */
+  capabilities?: Capability[];
 };
 
 export type KnowledgeBaseListResponse = {
@@ -236,7 +248,7 @@ export type RecycleBinListResponse = {
 };
 
 export type PermissionMember = UserSummary & {
-  role: 'owner' | 'manager' | 'member';
+  role: EffectiveRole;
 };
 
 export type KnowledgeBasePermissionResponse = {
@@ -247,7 +259,36 @@ export type KnowledgeBasePermissionResponse = {
   members: PermissionMember[];
 };
 
-export type MemberRole = 'manager' | 'member';
+/**
+ * The roles that can be granted to a member. `owner` is absent on purpose:
+ * ownership comes from the knowledge base row, so a grantable owner role would be
+ * a second source of truth and the server rejects it.
+ */
+export type MemberRole = 'viewer' | 'editor' | 'manager';
+
+/** A member role, or ownership, which outranks all of them. */
+export type EffectiveRole = MemberRole | 'owner';
+
+/**
+ * The capability names the server sends in `capabilities`. Kept as a union rather
+ * than `string` so a typo in a gating check fails the build instead of silently
+ * hiding a button forever.
+ */
+export type Capability =
+  | 'kb.read'
+  | 'kb.write'
+  | 'kb.delete'
+  | 'kb.search'
+  | 'members.read'
+  | 'members.write'
+  | 'document.read'
+  | 'document.download'
+  | 'content.write'
+  | 'content.purge'
+  | 'chat.use'
+  | 'chat.export'
+  | 'feedback.write'
+  | 'quality.read';
 
 export type UserSearchResponse = {
   items: UserSummary[];

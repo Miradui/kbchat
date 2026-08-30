@@ -11,7 +11,9 @@ import {
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { useToast } from '../../components/feedback/ToastProvider';
 import { OverflowMenu } from '../../components/ui/OverflowMenu';
+import type { OverflowMenuItem } from '../../components/ui/OverflowMenu';
 import type { KnowledgeBase, KnowledgeBaseCategory, KnowledgeBaseTag } from '../../types/api';
+import { canUnlessUnknown } from '../../utils/access';
 import { getErrorMessage } from '../../utils/errors';
 import { KnowledgeBaseFormDialog } from './KnowledgeBaseFormDialog';
 import type { KnowledgeBaseFormState } from './KnowledgeBaseFormDialog';
@@ -145,25 +147,36 @@ export function KnowledgeBaseEntityActions({
     }
   }
 
+  // Editing and deleting are separate capabilities on purpose: a manager renames and
+  // retags, but only the owner can delete. Absent entirely rather than disabled --
+  // a greyed item invites the user to hunt for the toggle that would enable it, and
+  // there is none.
+  const items: OverflowMenuItem[] = [];
+  if (canUnlessUnknown(knowledgeBase, 'kb.write')) {
+    items.push({ label: '编辑知识库', icon: <Pencil aria-hidden="true" />, onSelect: openForm });
+  }
+  if (canUnlessUnknown(knowledgeBase, 'kb.delete')) {
+    items.push({
+      label: '删除知识库',
+      icon: <Trash2 aria-hidden="true" />,
+      tone: 'danger',
+      onSelect: () => {
+        if (disabled || working) return;
+        setDeleteError('');
+        setDeleteOpen(true);
+      },
+    });
+  }
+
   return (
     <>
-      <OverflowMenu
-        disabled={disabled || working !== null}
-        label={`${knowledgeBase.name} 的更多操作`}
-        items={[
-          { label: '编辑知识库', icon: <Pencil aria-hidden="true" />, onSelect: openForm },
-          {
-            label: '删除知识库',
-            icon: <Trash2 aria-hidden="true" />,
-            tone: 'danger',
-            onSelect: () => {
-              if (disabled || working) return;
-              setDeleteError('');
-              setDeleteOpen(true);
-            },
-          },
-        ]}
-      />
+      {items.length > 0 && (
+        <OverflowMenu
+          disabled={disabled || working !== null}
+          items={items}
+          label={`${knowledgeBase.name} 的更多操作`}
+        />
+      )}
 
       {form && (
         <KnowledgeBaseFormDialog

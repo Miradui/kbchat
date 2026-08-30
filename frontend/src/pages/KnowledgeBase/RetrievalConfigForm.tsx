@@ -8,6 +8,7 @@ import { Button } from '../../components/ui/Button';
 import { Checkbox, Field, Input } from '../../components/ui/Field';
 import { useSystemCapabilities } from '../../hooks/useSystemCapabilities';
 import type { KnowledgeBase, RetrievalConfig } from '../../types/api';
+import { canUnlessUnknown } from '../../utils/access';
 import { getErrorMessage } from '../../utils/errors';
 
 type RetrievalConfigFormProps = {
@@ -29,6 +30,10 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
   const [config, setConfig] = useState<RetrievalConfig>(knowledgeBase.retrievalConfig);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // Read-only rather than hidden for a caller without kb.write. These four numbers
+  // explain why an answer cited what it cited, which is worth as much to someone
+  // debugging a bad answer as to whoever tunes them.
+  const editable = canUnlessUnknown(knowledgeBase, 'kb.write');
 
   useEffect(() => setConfig(knowledgeBase.retrievalConfig), [knowledgeBase.retrievalConfig]);
 
@@ -82,6 +87,7 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
               label="向量召回数量"
             >
               <Input
+                disabled={!editable}
                 id={vectorId}
                 max={retrieval.maxVectorTopN}
                 min={1}
@@ -97,6 +103,7 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
               label="精排保留数量"
             >
               <Input
+                disabled={!editable}
                 id={rerankId}
                 max={Math.min(retrieval.maxRerankTopK, vectorTopN)}
                 min={1}
@@ -113,6 +120,7 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
             label="最低相关度"
           >
             <Input
+              disabled={!editable}
               id={thresholdId}
               max={1}
               min={0}
@@ -126,6 +134,7 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
           <label className="ui-switch-row">
             <Checkbox
               checked={config.enableRerank}
+              disabled={!editable}
               onChange={(event) => setConfig({ ...config, enableRerank: event.target.checked })}
             />
             <span>启用精排。关闭后直接使用向量召回的前 N 条。</span>
@@ -145,16 +154,20 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
 
           {error && <p className="ui-inline-error" role="alert">{error}</p>}
 
-          <div className="kb-config-form__actions">
-            <Button
-              disabled={!dirty || saving}
-              variant="secondary"
-              onClick={() => setConfig(knowledgeBase.retrievalConfig)}
-            >
-              重置
-            </Button>
-            <Button disabled={!dirty} loading={saving} loadingLabel="保存中" type="submit">保存配置</Button>
-          </div>
+          {editable ? (
+            <div className="kb-config-form__actions">
+              <Button
+                disabled={!dirty || saving}
+                variant="secondary"
+                onClick={() => setConfig(knowledgeBase.retrievalConfig)}
+              >
+                重置
+              </Button>
+              <Button disabled={!dirty} loading={saving} loadingLabel="保存中" type="submit">保存配置</Button>
+            </div>
+          ) : (
+            <p className="ui-field__hint">当前配置为只读，需要管理员权限才能调整。</p>
+          )}
         </form>
       </div>
     </section>

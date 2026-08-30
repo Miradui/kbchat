@@ -5,7 +5,9 @@ import { Badge } from '../../components/ui/Badge';
 import { Checkbox } from '../../components/ui/Field';
 import { IconButton } from '../../components/ui/IconButton';
 import { OverflowMenu } from '../../components/ui/OverflowMenu';
+import type { OverflowMenuItem } from '../../components/ui/OverflowMenu';
 import type { KnowledgeBase } from '../../types/api';
+import { canUnlessUnknown } from '../../utils/access';
 import { formatCount, formatRelativeTime } from '../../utils/format';
 import { getKnowledgeBaseReadiness } from './knowledgeBaseReadiness';
 
@@ -38,6 +40,16 @@ export function KnowledgeBaseGlyph({ visibility, large = false }: { visibility?:
 /** Star plus an overflow menu. Only this row's controls are disabled while it mutates. */
 function RowActions({ item, handlers }: { item: KnowledgeBase; handlers: RowHandlers }) {
   const pending = handlers.isPending(item.id);
+  // Favouriting is deliberately never gated: it writes the caller's own bookmark,
+  // not the knowledge base, so a viewer keeps it.
+  const items: OverflowMenuItem[] = [];
+  if (canUnlessUnknown(item, 'kb.write')) {
+    items.push({ label: '编辑', icon: <Pencil aria-hidden="true" />, onSelect: () => handlers.onEdit(item) });
+    items.push({ label: '移动到分类', icon: <FolderInput aria-hidden="true" />, onSelect: () => handlers.onMove(item) });
+  }
+  if (canUnlessUnknown(item, 'kb.delete')) {
+    items.push({ label: '删除', icon: <Trash2 aria-hidden="true" />, tone: 'danger', onSelect: () => handlers.onDelete(item) });
+  }
   return (
     <div className="kb-row-actions">
       <IconButton
@@ -48,15 +60,9 @@ function RowActions({ item, handlers }: { item: KnowledgeBase; handlers: RowHand
       >
         <Star aria-hidden="true" fill={item.isFavorite ? 'currentColor' : 'none'} />
       </IconButton>
-      <OverflowMenu
-        disabled={pending}
-        label={`${item.name} 的更多操作`}
-        items={[
-          { label: '编辑', icon: <Pencil aria-hidden="true" />, onSelect: () => handlers.onEdit(item) },
-          { label: '移动到分类', icon: <FolderInput aria-hidden="true" />, onSelect: () => handlers.onMove(item) },
-          { label: '删除', icon: <Trash2 aria-hidden="true" />, tone: 'danger', onSelect: () => handlers.onDelete(item) },
-        ]}
-      />
+      {items.length > 0 && (
+        <OverflowMenu disabled={pending} items={items} label={`${item.name} 的更多操作`} />
+      )}
     </div>
   );
 }

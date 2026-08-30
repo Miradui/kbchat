@@ -33,6 +33,7 @@ import type {
   KnowledgeBaseTag,
   RetrievalConfig,
 } from '../../types/api';
+import { canUnlessUnknown } from '../../utils/access';
 import { getErrorMessage } from '../../utils/errors';
 import { CategoryPanel } from './CategoryPanel';
 import { KnowledgeBaseCards, KnowledgeBaseTable } from './KnowledgeBaseList';
@@ -96,6 +97,17 @@ export function KnowledgeBaseListPage() {
 
   const { items, total, loading, error, filters, activeFilterCount, viewMode, reload, setFilter } = list;
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
+  // The batch endpoints are all-or-nothing: one id the caller cannot touch fails the
+  // whole call. So a bulk control appears only when every selected base permits it,
+  // and the notice below says why the rest are missing.
+  const selectedItems = useMemo(
+    () => items.filter((item) => selected.has(item.id)),
+    [items, selected],
+  );
+  const canBulkWrite = selectedItems.length > 0
+    && selectedItems.every((item) => canUnlessUnknown(item, 'kb.write'));
+  const canBulkDelete = selectedItems.length > 0
+    && selectedItems.every((item) => canUnlessUnknown(item, 'kb.delete'));
   const categoryOptions = useMemo(() => flattenCategories(categories.categories), [categories.categories]);
 
   const refreshRecycleCount = useCallback(() => {
@@ -350,6 +362,8 @@ export function KnowledgeBaseListPage() {
               >
                 取消收藏
               </Button>
+              {canBulkWrite && (
+              <>
               <Select
                 aria-label="批量移动到分类"
                 onChange={(event) => setBulkCategoryId(event.target.value)}
@@ -409,16 +423,23 @@ export function KnowledgeBaseListPage() {
               >
                 应用标签
               </Button>
+              </>
+              )}
               <span className="ui-toolbar__spacer" />
-              <Button
-                variant="danger"
-                onClick={() => {
-                  setDeleteError('');
-                  setDeleteTarget({ kind: 'batch', ids: selectedIds });
-                }}
-              >
-                删除
-              </Button>
+              {!canBulkWrite && (
+                <span className="ui-muted">所选知识库中有你无权修改的，批量整理不可用。</span>
+              )}
+              {canBulkDelete && (
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    setDeleteError('');
+                    setDeleteTarget({ kind: 'batch', ids: selectedIds });
+                  }}
+                >
+                  删除
+                </Button>
+              )}
             </div>
           )}
 

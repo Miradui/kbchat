@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { AppShell } from '../../layouts/AppShell';
+import { canUnlessUnknown } from '../../utils/access';
 import { KnowledgeBaseLayout, KnowledgeBaseLoadFailure } from './KnowledgeBaseLayout';
 import { MembersPanel } from './MembersPanel';
 import { RetrievalConfigForm } from './RetrievalConfigForm';
@@ -32,12 +33,17 @@ export function KnowledgeBaseSettingsPage() {
     return <KnowledgeBaseLoadFailure message={error || '知识库不存在或无权访问。'} onRetry={() => void reload()} />;
   }
 
+  // The members panel is dropped rather than shown read-only: without members.read
+  // its first request answers 403, so it could only ever render an error. Retrieval
+  // config and the test panel stay, the former read-only for a non-manager.
+  const showMembers = canUnlessUnknown(knowledgeBase, 'members.read');
+
   return (
     <KnowledgeBaseLayout active="settings" knowledgeBase={knowledgeBase} onUpdated={setKnowledgeBase}>
       <div className="kb-settings">
         <div className="kb-settings__grid">
           <RetrievalConfigForm knowledgeBase={knowledgeBase} onUpdated={setKnowledgeBase} />
-          <MembersPanel knowledgeBase={knowledgeBase} onVisibilityChange={handleVisibility} />
+          {showMembers && <MembersPanel knowledgeBase={knowledgeBase} onVisibilityChange={handleVisibility} />}
         </div>
         <RetrievalTestPanel knowledgeBase={knowledgeBase} />
       </div>

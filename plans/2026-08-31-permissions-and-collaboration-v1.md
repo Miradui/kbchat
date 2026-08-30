@@ -171,7 +171,7 @@ roadmap），不改 `users.role`。
    *Rationale*：鉴权护栏从 repository 谓词移到服务层后，遗漏不再有编译期信号。
    *Affected*：`internal/service/*_test.go`、`internal/router/router_test.go`。
 
-10. [ ] **前端角色与能力**：`MemberRole` 改为三值，角色文案与选择器更新，
+10. [x] **前端角色与能力**：`MemberRole` 改为三值，角色文案与选择器更新，
     `effectiveRole` 驱动按钮与入口的可见性。
     *Affected*：`frontend/src/types/api.ts`、`pages/KnowledgeBase/MembersPanel.tsx`、
     文档与会话页面的操作入口。

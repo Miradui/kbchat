@@ -23,9 +23,8 @@ import type {
   PermissionMember,
   UserSummary,
 } from '../../types/api';
+import { hasCapability, memberRoles, roleHints, roleLabels } from '../../utils/access';
 import { getErrorMessage } from '../../utils/errors';
-
-const roleLabels = { owner: '所有者', manager: '管理员', member: '成员' } as const;
 
 type MembersPanelProps = {
   knowledgeBase: KnowledgeBase;
@@ -39,7 +38,9 @@ export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanel
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [memberQuery, setMemberQuery] = useState('');
-  const [memberRole, setMemberRole] = useState<MemberRole>('member');
+  // Viewer by default: the least access is the safe default for someone being added,
+  // and raising a role afterwards is one click.
+  const [memberRole, setMemberRole] = useState<MemberRole>('viewer');
   const [userResults, setUserResults] = useState<UserSummary[]>([]);
   const [searchingUsers, setSearchingUsers] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<PermissionMember | null>(null);
@@ -121,6 +122,12 @@ export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanel
 
   const visibility = permissions?.visibility ?? knowledgeBase.visibility ?? 'private';
   const managers = (permissions?.managers ?? []).filter((member) => member.role !== 'owner');
+  // This panel is only reachable with members.read, so a caller who lacks
+  // members.write is a manager reading a base they cannot administer -- rare, but the
+  // read and the write are separate capabilities and the UI should not imply
+  // otherwise. Every control below is rendered read-only in that case rather than
+  // hidden, because the member list is the point of the panel.
+  const canManageMembers = hasCapability(knowledgeBase, 'members.write');
 
   return (
     <>
@@ -144,7 +151,7 @@ export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanel
                 label="可见性"
               >
                 <Select
-                  disabled={mutation.anyPending}
+                  disabled={mutation.anyPending || !canManageMembers}
                   onChange={(event) => {
                     const next = event.target.value as 'private' | 'public';
                     if (next === visibility) return;
@@ -164,6 +171,13 @@ export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanel
                 <MemberRow member={{ ...permissions.owner, role: 'owner' }} />
               </div>
 
+              {!canManageMembers && (
+                <p className="ui-field__hint" role="note">
+                  你可以查看成员，但没有变更成员和可见性的权限。
+                </p>
+              )}
+
+              {canManageMembers && (
               <form className="member-search" onSubmit={(event) => void handleUserSearch(event)} role="search">
                 <SearchInput
                   aria-label="搜索用户"
@@ -174,11 +188,13 @@ export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanel
                 />
                 <Select
                   aria-label="新增成员角色"
+                  disabled={!canManageMembers}
                   onChange={(event) => setMemberRole(event.target.value as MemberRole)}
                   value={memberRole}
                 >
-                  <option value="member">成员</option>
-                  <option value="manager">管理员</option>
+                  {memberRoles.map((role) => (
+                    <option key={role} value={role}>{roleLabels[role]}</option>
+                  ))}
                 </Select>
                 <Button
                   disabled={!memberQuery.trim()}
@@ -190,6 +206,9 @@ export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanel
                   搜索
                 </Button>
               </form>
+              )}
+
+              {canManageMembers && <p className="ui-field__hint">{roleHints[memberRole]}</p>}
 
               {userResults.length > 0 && (
                 <div className="member-list">
@@ -215,6 +234,7 @@ export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanel
               )}
 
               <MemberGroup
+                editable={canManageMembers}
                 emptyText="暂无管理员。"
                 isPending={mutation.isPending}
                 members={managers}
@@ -230,6 +250,7 @@ export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanel
               />
 
               <MemberGroup
+                editable={canManageMembers}
                 emptyText="暂无成员。"
                 isPending={mutation.isPending}
                 members={permissions.members}
@@ -241,7 +262,7 @@ export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanel
                   await updateKnowledgeBaseMember(knowledgeBase.id, member.id, role);
                   toast.success('成员角色已更新');
                 }, '成员角色更新失败')}
-                title="成员"
+                title="成员及协作者"
               />
             </>
           ) : null}
@@ -282,6 +303,7 @@ function MemberGroup({
   title,
   members,
   emptyText,
+  editable,
   isPending,
   onDelete,
   onRoleChange,
@@ -289,6 +311,7 @@ function MemberGroup({
   title: string;
   members: PermissionMember[];
   emptyText: string;
+  editable: boolean;
   isPending: (key: string) => boolean;
   onDelete: (member: PermissionMember) => void;
   onRoleChange: (member: PermissionMember, role: MemberRole) => void;
@@ -301,6 +324,7 @@ function MemberGroup({
       ) : (
         members.map((member) => (
           <MemberRow
+            editable={editable}
             isPending={isPending(member.id)}
             key={member.id}
             member={member}
@@ -315,16 +339,20 @@ function MemberGroup({
 
 function MemberRow({
   member,
+  editable = false,
   isPending = false,
   onDelete,
   onRoleChange,
 }: {
   member: PermissionMember;
+  editable?: boolean;
   isPending?: boolean;
   onDelete?: (member: PermissionMember) => void;
   onRoleChange?: (member: PermissionMember, role: MemberRole) => void;
 }) {
-  const mutable = member.role !== 'owner';
+  // The owner row is never editable regardless of the caller: ownership lives on the
+  // knowledge base, and the member endpoints reject it outright.
+  const mutable = editable && member.role !== 'owner';
   return (
     <div className="member-row">
       <UserInline user={member} />
@@ -336,13 +364,16 @@ function MemberRow({
             onChange={(event) => onRoleChange?.(member, event.target.value as MemberRole)}
             value={member.role}
           >
-            <option value="manager">管理员</option>
-            <option value="member">成员</option>
+            {memberRoles.map((role) => (
+              <option key={role} value={role}>{roleLabels[role]}</option>
+            ))}
           </Select>
           <Button disabled={isPending} variant="ghost" onClick={() => onDelete?.(member)}>移除</Button>
         </div>
       ) : (
-        <span className="ui-badge ui-badge--neutral ui-badge--plain">{roleLabels.owner}</span>
+        <span className="ui-badge ui-badge--neutral ui-badge--plain">
+          {roleLabels[member.role] ?? member.role}
+        </span>
       )}
     </div>
   );

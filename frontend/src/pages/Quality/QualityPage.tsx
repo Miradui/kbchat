@@ -20,6 +20,7 @@ import type {
   ChatQualityPeriod,
   KnowledgeBase,
 } from '../../types/api';
+import { canUnlessUnknown } from '../../utils/access';
 import { getErrorMessage } from '../../utils/errors';
 import { formatRelativeTime } from '../../utils/format';
 import { EmptyState } from '../../components/feedback/EmptyState';
@@ -216,9 +217,18 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
   useEffect(() => { reloadFeedback(); }, [reloadFeedback]);
   useEffect(() => { reloadGaps(); }, [reloadGaps]);
 
+  // Only bases the caller can read quality data for. The unfiltered view already
+  // aggregates exactly these, so offering the others would turn the filter into the
+  // one control on this page that answers 403 -- and it is a filter on data the user
+  // is already looking at.
+  const qualityKnowledgeBases = useMemo(
+    () => knowledgeBases.filter((item) => canUnlessUnknown(item, 'quality.read')),
+    [knowledgeBases],
+  );
+
   const selectedKnowledgeBase = useMemo(
-    () => knowledgeBases.find((item) => item.id === knowledgeBaseId),
-    [knowledgeBaseId, knowledgeBases],
+    () => qualityKnowledgeBases.find((item) => item.id === knowledgeBaseId),
+    [knowledgeBaseId, qualityKnowledgeBases],
   );
 
   function updatePeriod(value: ChatQualityPeriod) {
@@ -273,7 +283,7 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
           <Field label="知识库">
             <Select aria-label="质量知识库" onChange={(event) => updateKnowledgeBase(event.target.value)} value={knowledgeBaseId}>
               <option value="">全部知识库</option>
-              {knowledgeBases.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              {qualityKnowledgeBases.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </Select>
           </Field>
           <Field label="引用筛选">

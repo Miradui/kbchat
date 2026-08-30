@@ -817,3 +817,128 @@ describe('DocumentsPage', () => {
     expect(within(staleRow).getByLabelText('超过 180 天没有更新，内容可能已过期。')).toHaveTextContent('可能过期');
   });
 });
+
+/**
+ * The rest of this file omits `capabilities`, which is the unknown case: the page
+ * shows every control and lets the server refuse. These cover the other branch,
+ * where the server did report a capability list and it excludes writing.
+ */
+describe('DocumentsPage capability gating', () => {
+  const viewerKnowledgeBase = {
+    ...knowledgeBase,
+    effectiveRole: 'viewer',
+    capabilities: ['kb.read', 'kb.search', 'document.read', 'chat.use'],
+  } satisfies KnowledgeBase;
+
+  function renderAsViewer() {
+    vi.mocked(getKnowledgeBase).mockResolvedValue(viewerKnowledgeBase);
+    vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [viewerKnowledgeBase] });
+    vi.mocked(listDocuments).mockResolvedValue({ items: [uploadedDocument] });
+    return renderPage();
+  }
+
+  /**
+   * The workspace-wide route, which the rest of this file never renders. Upload
+   * targets come from the knowledge-base list request, and on the scoped route
+   * nothing on screen changes when it resolves -- so an assertion there passes
+   * against the empty initial state whether the filter works or not. Here the
+   * picker lists the base, which is the signal to wait for.
+   */
+  async function renderWorkspaceWide(bases: KnowledgeBase[], documents: DocumentItem[] = []) {
+    vi.mocked(listKnowledgeBases).mockResolvedValue({ items: bases });
+    vi.mocked(listDocuments).mockResolvedValue({ items: documents });
+    renderWithRouter(
+      <Routes>
+        <Route path="/documents" element={<DocumentsPage />} />
+        <Route path="/knowledge-bases" element={<div>知识库列表</div>} />
+      </Routes>,
+      ['/documents'],
+    );
+    const picker = await screen.findByRole('combobox', { name: '知识库筛选' });
+    await waitFor(() => {
+      expect(within(picker).getAllByRole('option')).toHaveLength(bases.length + 1);
+    });
+  }
+
+  it('offers no upload target when every readable base is read-only', async () => {
+    await renderWorkspaceWide([viewerKnowledgeBase]);
+
+    // The base is readable and listed in the filter, yet not a destination.
+    expect(within(screen.getByRole('combobox', { name: '知识库筛选' })).getByRole('option', { name: '制度库' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '导入文档' })).toBeDisabled();
+    // With no writable base the empty state points at creating one instead.
+    expect(await screen.findByRole('link', { name: '先新建知识库' })).toBeInTheDocument();
+  });
+
+  it('offers upload once one readable base is writable', async () => {
+    const writable = {
+      ...knowledgeBase,
+      id: 'kb2',
+      name: '产品库',
+      effectiveRole: 'editor',
+      capabilities: ['kb.read', 'document.read', 'content.write'],
+    } satisfies KnowledgeBase;
+    // A document on screen, so the empty state does not add a second import button.
+    await renderWorkspaceWide([viewerKnowledgeBase, writable], [uploadedDocument]);
+
+    expect(screen.getByRole('button', { name: '导入文档' })).toBeEnabled();
+  });
+
+  it('leaves a viewer the document list without any way to change it', async () => {
+    renderAsViewer();
+
+    // The row is present: document.read is what put it there.
+    expect(await screen.findByText(uploadedDocument.filename)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: `${uploadedDocument.filename} 的更多操作` })).not.toBeInTheDocument();
+    expect(screen.getByLabelText(`选择 ${uploadedDocument.filename}`)).toBeDisabled();
+    expect(screen.getByLabelText('选择当前页全部文档')).toBeDisabled();
+  });
+
+  it('hides the knowledge-base menu when the caller can neither edit nor delete it', async () => {
+    renderAsViewer();
+
+    await screen.findByText(uploadedDocument.filename);
+    expect(screen.queryByRole('button', { name: '制度库 的更多操作' })).not.toBeInTheDocument();
+  });
+
+  it('keeps write controls for an editor, who holds content.write but not kb.delete', async () => {
+    const editorKnowledgeBase = {
+      ...knowledgeBase,
+      effectiveRole: 'editor',
+      capabilities: ['kb.read', 'kb.search', 'document.read', 'document.download', 'content.write'],
+    } satisfies KnowledgeBase;
+    vi.mocked(getKnowledgeBase).mockResolvedValue(editorKnowledgeBase);
+    vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [editorKnowledgeBase] });
+    vi.mocked(listDocuments).mockResolvedValue({ items: [uploadedDocument] });
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText(uploadedDocument.filename);
+    expect(screen.getByLabelText(`选择 ${uploadedDocument.filename}`)).toBeEnabled();
+    expect(screen.getByRole('button', { name: `${uploadedDocument.filename} 的更多操作` })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '导入文档' })).toBeEnabled();
+    // Documents yes, the knowledge base itself no: both entries in that menu are
+    // above an editor, so it disappears the same way it does for a viewer.
+    expect(screen.queryByRole('button', { name: '制度库 的更多操作' })).not.toBeInTheDocument();
+  });
+
+  it('offers a manager the edit entry but not the delete entry', async () => {
+    const managerKnowledgeBase = {
+      ...knowledgeBase,
+      effectiveRole: 'manager',
+      capabilities: ['kb.read', 'kb.write', 'kb.search', 'document.read', 'content.write', 'content.purge'],
+    } satisfies KnowledgeBase;
+    vi.mocked(getKnowledgeBase).mockResolvedValue(managerKnowledgeBase);
+    vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [managerKnowledgeBase] });
+    vi.mocked(listDocuments).mockResolvedValue({ items: [uploadedDocument] });
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText(uploadedDocument.filename);
+    await user.click(screen.getByRole('button', { name: '制度库 的更多操作' }));
+    const menu = screen.getByRole('menu', { name: '制度库 的更多操作' });
+    expect(within(menu).getByRole('menuitem', { name: '编辑知识库' })).toBeInTheDocument();
+    // Deleting is the owner's alone, so the item is absent rather than disabled.
+    expect(within(menu).queryByRole('menuitem', { name: '删除知识库' })).not.toBeInTheDocument();
+  });
+});
