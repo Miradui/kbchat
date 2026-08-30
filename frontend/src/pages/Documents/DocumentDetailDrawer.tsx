@@ -22,9 +22,10 @@ import { SearchInput } from '../../components/ui/Field';
 import { Pagination } from '../../components/ui/Pagination';
 import type { DocumentChunk, DocumentItem, DocumentPreviewResponse } from '../../types/api';
 import { formatBytes, formatDateTime } from '../../utils/format';
-import { getDocumentProcessingErrorMessage, getErrorMessage } from '../../utils/errors';
+import { getErrorMessage } from '../../utils/errors';
 import { DocumentProgress } from './DocumentProgress';
 import { documentDisplayStatusLabel, documentDisplayStatusTone } from './documentDisplay';
+import { documentFailureCopy, documentStalenessHint } from './documentFailure';
 
 const CHUNK_PAGE_SIZE = 20;
 
@@ -269,6 +270,9 @@ export function DocumentDetailDrawer({
     }
   }
 
+  const failure = document ? documentFailureCopy(document) : null;
+  const stalenessHint = document ? documentStalenessHint(document) : null;
+
   function handleChunkSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setChunkPage(1);
@@ -305,9 +309,22 @@ export function DocumentDetailDrawer({
 
                 <DocumentProgress document={document} />
 
-                {document.status === 'failed' && (
-                  <p className={document.jobStatus === 'cancelled' ? 'ui-muted' : 'ui-inline-error'} role={document.jobStatus === 'cancelled' ? undefined : 'alert'}>
-                    {getDocumentProcessingErrorMessage(document.errorMessage)}
+                {document.status === 'failed' && failure && (
+                  <div
+                    className={document.jobStatus === 'cancelled' ? 'ui-muted' : 'ui-inline-error'}
+                    role={document.jobStatus === 'cancelled' ? undefined : 'alert'}
+                  >
+                    <p>{failure.reason}</p>
+                    {/* The drawer is where the advice belongs: it has the room the list
+                        row does not, and it is where the retry button already is. */}
+                    <p>{failure.advice}</p>
+                  </div>
+                )}
+
+                {stalenessHint && (
+                  <p className="ui-inline-notice" role="note">
+                    <span>{stalenessHint}</span>
+                    <span className="ui-muted">检索和引用不受影响。</span>
                   </p>
                 )}
 

@@ -783,4 +783,37 @@ describe('DocumentsPage', () => {
     await user.click(within(banner).getByRole('button', { name: '关闭提示' }));
     expect(screen.queryByRole('status', { name: '导入结果' })).not.toBeInTheDocument();
   });
+  it('shows the classified reason in the list and flags stale documents', async () => {
+    vi.mocked(listDocuments).mockResolvedValue({
+      items: [
+        {
+          ...uploadedDocument,
+          status: 'failed',
+          errorCode: 'encoding_invalid',
+          errorMessage: 'content is not valid UTF-8',
+        },
+        {
+          ...uploadedDocument,
+          id: 'doc2',
+          filename: 'old-policy.md',
+          status: 'completed',
+          isStale: true,
+          staleAfterDays: 180,
+        },
+      ],
+    });
+    renderPage();
+
+    const failedRow = (await screen.findByText('handbook.pdf')).closest('tr') as HTMLElement;
+    expect(failedRow).toHaveTextContent('文本编码无法识别。');
+    // The raw parser sentence stays server-side.
+    expect(failedRow).not.toHaveTextContent('UTF-8');
+    // Advice belongs in the drawer; the row has to stay one line tall.
+    expect(failedRow).not.toHaveTextContent('另存');
+
+    const staleRow = (await screen.findByText('old-policy.md')).closest('tr') as HTMLElement;
+    // The status badge survives: a stale document is still completed.
+    expect(staleRow).toHaveTextContent('已完成');
+    expect(within(staleRow).getByLabelText('超过 180 天没有更新，内容可能已过期。')).toHaveTextContent('可能过期');
+  });
 });

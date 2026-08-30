@@ -31,7 +31,7 @@ import { useEntityMutation } from '../../hooks/useEntityMutation';
 import { AppShell } from '../../layouts/AppShell';
 import type { DocumentItem, DocumentSort, DocumentStatus, KnowledgeBase } from '../../types/api';
 import { formatBytes, formatRelativeTime } from '../../utils/format';
-import { getDocumentProcessingErrorMessage, getErrorMessage } from '../../utils/errors';
+import { getErrorMessage } from '../../utils/errors';
 import { KnowledgeBaseLayout, KnowledgeBaseLoadFailure } from '../KnowledgeBase/KnowledgeBaseLayout';
 import { useKnowledgeBase } from '../KnowledgeBase/useKnowledgeBase';
 import { DocumentDetailDrawer } from './DocumentDetailDrawer';
@@ -46,6 +46,7 @@ import {
   documentStatusTone,
   isTerminalDocumentStatus,
 } from './documentDisplay';
+import { documentFailureCopy, documentStalenessHint } from './documentFailure';
 import { importGuidance, importGuidanceMessage } from './importGuidance';
 import { useDocumentList } from './useDocumentList';
 
@@ -508,6 +509,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
               <tbody>
                 {items.map((document) => {
                   const pending = mutation.isPending(mutationKey(document.id));
+                  const stalenessHint = documentStalenessHint(document);
                   return (
                     <tr data-busy={pending || undefined} data-selected={selected.has(document.id) || undefined} key={document.id}>
                       <td className="ui-table__select" data-label="选择">
@@ -543,11 +545,22 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
                             <DocumentProgress compact document={document} />
                           )}
                           {/* The failure reason replaces the old always-present column that
-                              showed "-" on every healthy row. */}
+                              showed "-" on every healthy row. The advice is left to the
+                              drawer: the row has to stay one line tall to stay scannable. */}
                           {document.status === 'failed' && (
                             <small className="doc-status-cell__error">
-                              {getDocumentProcessingErrorMessage(document.errorMessage)}
+                              {documentFailureCopy(document).reason}
                             </small>
+                          )}
+                          {/* Advisory only -- a stale document is still retrieved and still
+                              cited, so this is a Badge and not a warning banner. */}
+                          {stalenessHint && (
+                            // aria-label carries the full sentence: a title attribute
+                            // alone is not announced reliably and is invisible on touch,
+                            // so "可能过期" would be the only thing some users ever get.
+                            <Badge aria-label={stalenessHint} tone="warn" title={stalenessHint}>
+                              可能过期
+                            </Badge>
                           )}
                         </div>
                       </td>

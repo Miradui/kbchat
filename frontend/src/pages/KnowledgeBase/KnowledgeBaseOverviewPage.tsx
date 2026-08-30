@@ -16,6 +16,7 @@ import type {
 import { formatBytes, formatCount, formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
 import { documentStatusLabel, documentStatusTone } from '../Documents/documentDisplay';
+import { documentStalenessHint } from '../Documents/documentFailure';
 import { KnowledgeBaseLayout, KnowledgeBaseLoadFailure } from './KnowledgeBaseLayout';
 import { findCategoryName } from './categoryTreeUtils';
 import { formatMetricComparison } from './statsFormatting';
@@ -161,7 +162,9 @@ export function KnowledgeBaseOverviewPage() {
               />
             ) : (
               <div className="kb-doc-list">
-                {documents.map((document) => (
+                {documents.map((document) => {
+                  const stalenessHint = documentStalenessHint(document);
+                  return (
                   <Link
                     className="kb-doc-row"
                     key={document.id}
@@ -171,11 +174,17 @@ export function KnowledgeBaseOverviewPage() {
                       <strong>{document.filename}</strong>
                       <small>{formatBytes(document.fileSize)} · {document.fileType}</small>
                     </span>
+                    {/* Staleness sits beside the status rather than replacing it: a stale
+                        document is still completed, and hiding that would read as broken. */}
+                    {stalenessHint && (
+                      <Badge aria-label={stalenessHint} title={stalenessHint} tone="warn">可能过期</Badge>
+                    )}
                     <Badge tone={documentStatusTone(document.status)}>
                       {documentStatusLabel(document.status)}
                     </Badge>
                   </Link>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>

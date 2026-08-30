@@ -431,4 +431,57 @@ describe('DocumentDetailDrawer', () => {
     expect(await within(confirmation).findByRole('alert')).toHaveTextContent('文档删除失败');
     expect(confirmation).toBeInTheDocument();
   });
+  it('turns a parsing failure into a reason and a next step', async () => {
+    vi.mocked(getDocument).mockResolvedValue({
+      ...document,
+      status: 'failed',
+      errorCode: 'empty_content',
+      // The raw parser text is kept server-side for debugging and must not surface.
+      errorMessage: 'document contains no extractable text',
+    });
+    vi.mocked(listDocumentChunks).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
+    renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('没有可提取的文字');
+    expect(alert).toHaveTextContent('OCR');
+    expect(alert).not.toHaveTextContent('extractable');
+  });
+
+  it('falls back to neutral wording for an error code it does not know', async () => {
+    vi.mocked(getDocument).mockResolvedValue({
+      ...document,
+      status: 'failed',
+      errorCode: 'from_a_newer_server',
+      errorMessage: null,
+    });
+    vi.mocked(listDocumentChunks).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
+    renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('文档处理失败');
+    expect(alert).toHaveTextContent('联系管理员');
+  });
+
+  it('flags a stale document without claiming it is wrong', async () => {
+    vi.mocked(getDocument).mockResolvedValue({ ...document, isStale: true, staleAfterDays: 180 });
+    vi.mocked(listDocumentChunks).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
+    renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
+
+    const note = await screen.findByRole('note');
+    expect(note).toHaveTextContent('超过 180 天没有更新，内容可能已过期。');
+    // Staleness never changes retrieval, and saying so stops the user from deleting
+    // a document that is still being cited correctly.
+    expect(note).toHaveTextContent('检索和引用不受影响');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('does not flag a document that is inside the threshold', async () => {
+    vi.mocked(getDocument).mockResolvedValue({ ...document, isStale: false, staleAfterDays: 180 });
+    vi.mocked(listDocumentChunks).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
+    renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
+
+    expect(await screen.findByText('制度.pdf')).toBeInTheDocument();
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
+  });
 });

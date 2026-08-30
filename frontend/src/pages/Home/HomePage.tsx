@@ -15,8 +15,9 @@ import type {
   KnowledgeBaseStatsResponse,
 } from '../../types/api';
 import { formatCount, formatRelativeTime } from '../../utils/format';
-import { getDocumentProcessingErrorMessage, getErrorMessage } from '../../utils/errors';
+import { getErrorMessage } from '../../utils/errors';
 import { isTerminalDocumentStatus } from '../Documents/documentDisplay';
+import { documentFailureCopy } from '../Documents/documentFailure';
 import { activityToItem } from './activityDisplay';
 import { createHomeLoaders } from './homeData';
 import type { HomeSources } from './homeData';
@@ -95,7 +96,7 @@ export function HomePage({ sources }: { sources?: HomeSources }) {
                     {failedDocuments.data[0].filename}
                     {failedDocuments.data.length > 1 ? ` 等 ${failedDocuments.data.length} 个` : ''}
                     {' · '}
-                    {getDocumentProcessingErrorMessage(failedDocuments.data[0].errorMessage)}
+                    {documentFailureCopy(failedDocuments.data[0]).reason}
                   </small>
                 </span>
                 <ArrowRight aria-hidden="true" />
