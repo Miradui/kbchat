@@ -123,7 +123,7 @@ func (s *KnowledgeBaseService) Create(ctx context.Context, ownerID uuid.UUID, re
 		KnowledgeBaseID:   &created.ID,
 		KnowledgeBaseName: created.Name,
 	})
-	res := toKnowledgeBaseResponse(created, tags)
+	res := toKnowledgeBaseResponse(created, tags, access.RoleOwner)
 	return &res, nil
 }
 
@@ -221,30 +221,31 @@ func (s *KnowledgeBaseService) ListWorkspace(ctx context.Context, ownerID uuid.U
 		PageSize: query.PageSize,
 	}
 	for i := range items {
-		res.Items = append(res.Items, toWorkspaceKnowledgeBaseResponse(&items[i], tagMap[items[i].ID]))
+		res.Items = append(res.Items, toWorkspaceKnowledgeBaseResponse(&items[i], tagMap[items[i].ID], ownerID))
 	}
 	return &res, nil
 }
 
 func (s *KnowledgeBaseService) Get(ctx context.Context, ownerID, id uuid.UUID) (*dto.KnowledgeBaseResponse, error) {
-	kb, err := s.findKnowledgeBaseForCapability(ctx, ownerID, id, access.CapKnowledgeBaseRead)
+	granted, err := s.authorize(ctx, ownerID, id, access.CapKnowledgeBaseRead)
 	if err != nil {
 		return nil, err
 	}
 
-	tags, err := s.repo.ListTags(ctx, kb.ID)
+	tags, err := s.repo.ListTags(ctx, granted.knowledgeBase.ID)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
-	res := toKnowledgeBaseResponse(kb, tags)
+	res := toKnowledgeBaseResponse(granted.knowledgeBase, tags, granted.role)
 	return &res, nil
 }
 
 func (s *KnowledgeBaseService) Update(ctx context.Context, ownerID, id uuid.UUID, req dto.KnowledgeBaseRequest) (*dto.KnowledgeBaseResponse, error) {
-	kb, err := s.findKnowledgeBaseForCapability(ctx, ownerID, id, access.CapKnowledgeBaseWrite)
+	granted, err := s.authorize(ctx, ownerID, id, access.CapKnowledgeBaseWrite)
 	if err != nil {
 		return nil, err
 	}
+	kb := granted.knowledgeBase
 
 	config := defaultConfig(req.RetrievalConfig)
 	configJSON, err := json.Marshal(config)
@@ -289,7 +290,7 @@ func (s *KnowledgeBaseService) Update(ctx context.Context, ownerID, id uuid.UUID
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
-	res := toKnowledgeBaseResponse(updated, tags)
+	res := toKnowledgeBaseResponse(updated, tags, granted.role)
 	return &res, nil
 }
 
@@ -742,11 +743,21 @@ func (s *KnowledgeBaseService) findKnowledgeBaseForCapability(
 	actorID, id uuid.UUID,
 	capability access.Capability,
 ) (*model.KnowledgeBase, error) {
-	granted, err := authorizeKnowledgeBase(ctx, s.repo, actorID, id, capability)
+	granted, err := s.authorize(ctx, actorID, id, capability)
 	if err != nil {
 		return nil, err
 	}
 	return granted.knowledgeBase, nil
+}
+
+// authorize is findKnowledgeBaseForCapability for callers that also need the
+// resolved role -- the ones that render it back to the client.
+func (s *KnowledgeBaseService) authorize(
+	ctx context.Context,
+	actorID, id uuid.UUID,
+	capability access.Capability,
+) (knowledgeBaseAccess, error) {
+	return authorizeKnowledgeBase(ctx, s.repo, actorID, id, capability)
 }
 
 // ensureKnowledgeBasesCapability authorizes every id in a batch before any of them
@@ -830,7 +841,20 @@ func defaultConfig(config *dto.RetrievalConfig) dto.RetrievalConfig {
 	return *config
 }
 
-func toKnowledgeBaseResponse(kb *model.KnowledgeBase, tags []model.KnowledgeBaseTag) dto.KnowledgeBaseResponse {
+// capabilityStrings renders a role's capabilities for the wire.
+//
+// Returns an empty slice rather than nil so the JSON field is `[]`; a client
+// reading `null` would have to special-case it as "unknown".
+func capabilityStrings(role access.Role) []string {
+	capabilities := access.AllowedCapabilities(role)
+	out := make([]string, 0, len(capabilities))
+	for _, capability := range capabilities {
+		out = append(out, string(capability))
+	}
+	return out
+}
+
+func toKnowledgeBaseResponse(kb *model.KnowledgeBase, tags []model.KnowledgeBaseTag, role access.Role) dto.KnowledgeBaseResponse {
 	config := defaultRetrievalConfig
 	if len(kb.RetrievalConfig) > 0 {
 		_ = json.Unmarshal(kb.RetrievalConfig, &config)
@@ -856,10 +880,12 @@ func toKnowledgeBaseResponse(kb *model.KnowledgeBase, tags []model.KnowledgeBase
 		UpdatedAt:       kb.UpdatedAt,
 		UpdatedBy:       toKnowledgeBaseUserSummary(kb.UpdatedBy, &kb.Owner),
 		Tags:            toTagResponses(tags),
+		EffectiveRole:   string(role),
+		Capabilities:    capabilityStrings(role),
 	}
 }
 
-func toWorkspaceKnowledgeBaseResponse(item *repository.KnowledgeBaseListItem, tags []model.KnowledgeBaseTag) dto.KnowledgeBaseResponse {
+func toWorkspaceKnowledgeBaseResponse(item *repository.KnowledgeBaseListItem, tags []model.KnowledgeBaseTag, actorID uuid.UUID) dto.KnowledgeBaseResponse {
 	config := defaultRetrievalConfig
 	if len(item.RetrievalConfig) > 0 {
 		_ = json.Unmarshal(item.RetrievalConfig, &config)
@@ -874,6 +900,10 @@ func toWorkspaceKnowledgeBaseResponse(item *repository.KnowledgeBaseListItem, ta
 		visibility = "private"
 	}
 	lastViewedAt := parseOptionalTime(item.LastViewedAt)
+	// Resolved from the row rather than queried again: the list join already carried
+	// the member role, and a per-item lookup would put one query per row on a paged
+	// endpoint.
+	role := access.Resolve(item.OwnerID, actorID, access.Role(item.MemberRole))
 	return dto.KnowledgeBaseResponse{
 		ID:                      item.ID.String(),
 		Name:                    item.Name,
@@ -893,6 +923,8 @@ func toWorkspaceKnowledgeBaseResponse(item *repository.KnowledgeBaseListItem, ta
 		LastViewedAt:            lastViewedAt,
 		UpdatedBy:               workspaceUserSummary(item),
 		Tags:                    toTagResponses(tags),
+		EffectiveRole:           string(role),
+		Capabilities:            capabilityStrings(role),
 	}
 }
 

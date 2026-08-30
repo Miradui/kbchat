@@ -65,6 +65,10 @@ type KnowledgeBaseListItem struct {
 	QuestionCount           int64
 	IsFavorite              bool
 	LastViewedAt            *string
+	// MemberRole is the actor's stored member row, empty when there is none. The
+	// service turns it into the effective role; an owner has no member row and so
+	// reads as empty here.
+	MemberRole string
 }
 
 func (r *KnowledgeBaseRepository) ListWorkspace(ctx context.Context, ownerID uuid.UUID, query dto.KnowledgeBaseListQuery) ([]KnowledgeBaseListItem, int64, error) {
@@ -102,7 +106,8 @@ func (r *KnowledgeBaseRepository) ListWorkspace(ctx context.Context, ownerID uui
 			COUNT(DISTINCT knowledge_base_view_events.id) AS view_count,
 			COUNT(DISTINCT chat_messages.id) AS question_count,
 			CASE WHEN knowledge_base_favorites.user_id IS NULL THEN false ELSE true END AS is_favorite,
-			MAX(knowledge_base_view_events.viewed_at) AS last_viewed_at
+			MAX(knowledge_base_view_events.viewed_at) AS last_viewed_at,
+			actor_members.role AS member_role
 		`).
 		Joins("JOIN users ON users.id = knowledge_bases.owner_id").
 		Joins("LEFT JOIN users AS updated_users ON updated_users.id = knowledge_bases.updated_by_id").
@@ -111,7 +116,7 @@ func (r *KnowledgeBaseRepository) ListWorkspace(ctx context.Context, ownerID uui
 		Joins("LEFT JOIN chat_sessions ON chat_sessions.knowledge_base_id = knowledge_bases.id AND chat_sessions.user_id = ? AND chat_sessions.deleted_at IS NULL", ownerID).
 		Joins("LEFT JOIN chat_messages ON chat_messages.session_id = chat_sessions.id AND chat_messages.role = ?", "user").
 		Joins("LEFT JOIN knowledge_base_favorites ON knowledge_base_favorites.knowledge_base_id = knowledge_bases.id AND knowledge_base_favorites.user_id = ?", ownerID).
-		Group("knowledge_bases.id, users.id, updated_users.id, knowledge_base_favorites.user_id").
+		Group("knowledge_bases.id, users.id, updated_users.id, knowledge_base_favorites.user_id, actor_members.role").
 		Order(workspaceOrder(query.Sort, query.Scope)).
 		Limit(pageSize).
 		Offset((page - 1) * pageSize).
@@ -119,10 +124,30 @@ func (r *KnowledgeBaseRepository) ListWorkspace(ctx context.Context, ownerID uui
 	return items, total, err
 }
 
-func (r *KnowledgeBaseRepository) workspaceBaseQuery(ctx context.Context, ownerID uuid.UUID, query dto.KnowledgeBaseListQuery) *gorm.DB {
+// workspaceBaseQuery scopes the workspace list to what the actor may reach.
+//
+// The membership join is a LEFT JOIN on the member table's own primary key, so it
+// can add at most one row per knowledge base and cannot inflate the aggregate
+// counts this query computes. It is joined unconditionally rather than only for
+// the scopes that filter on it, because the select list exposes the actor's role
+// and `managed` needs to read it.
+func (r *KnowledgeBaseRepository) workspaceBaseQuery(ctx context.Context, actorID uuid.UUID, query dto.KnowledgeBaseListQuery) *gorm.DB {
 	db := r.db.WithContext(ctx).Model(&model.KnowledgeBase{}).
-		Where("knowledge_bases.owner_id = ?", ownerID).
+		Joins("LEFT JOIN knowledge_base_members AS actor_members ON actor_members.knowledge_base_id = knowledge_bases.id AND actor_members.user_id = ?", actorID).
 		Where("knowledge_bases.deleted_at IS NULL")
+
+	switch query.Scope {
+	case "created":
+		// "created" means authored by me, so membership is irrelevant here.
+		db = db.Where("knowledge_bases.owner_id = ?", actorID)
+	case "managed":
+		// Owners are included: an owner administers their own knowledge base by
+		// definition, and a "managed" list that excluded the person who created it
+		// would read as a bug rather than as a filter.
+		db = db.Where("knowledge_bases.owner_id = ? OR actor_members.role = ?", actorID, "manager")
+	default:
+		db = db.Where("knowledge_bases.owner_id = ? OR actor_members.user_id IS NOT NULL", actorID)
+	}
 	if query.Q != "" {
 		like := "%" + strings.ToLower(query.Q) + "%"
 		db = db.Where("LOWER(knowledge_bases.name) LIKE ? OR LOWER(knowledge_bases.description) LIKE ?", like, like)
@@ -139,9 +164,9 @@ func (r *KnowledgeBaseRepository) workspaceBaseQuery(ctx context.Context, ownerI
 	}
 	switch query.Scope {
 	case "favorite":
-		db = db.Joins("JOIN knowledge_base_favorites AS scope_favorites ON scope_favorites.knowledge_base_id = knowledge_bases.id AND scope_favorites.user_id = ?", ownerID)
+		db = db.Joins("JOIN knowledge_base_favorites AS scope_favorites ON scope_favorites.knowledge_base_id = knowledge_bases.id AND scope_favorites.user_id = ?", actorID)
 	case "recent":
-		db = db.Joins("JOIN knowledge_base_view_events AS scope_views ON scope_views.knowledge_base_id = knowledge_bases.id AND scope_views.user_id = ?", ownerID)
+		db = db.Joins("JOIN knowledge_base_view_events AS scope_views ON scope_views.knowledge_base_id = knowledge_bases.id AND scope_views.user_id = ?", actorID)
 	}
 	return db
 }

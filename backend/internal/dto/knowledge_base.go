@@ -41,6 +41,14 @@ type KnowledgeBaseResponse struct {
 	LastViewedAt            *time.Time                 `json:"lastViewedAt,omitempty"`
 	UpdatedBy               *UserSummary               `json:"updatedBy,omitempty"`
 	Tags                    []KnowledgeBaseTagResponse `json:"tags,omitempty"`
+	// EffectiveRole is the caller's own standing: viewer, editor, manager or owner.
+	// Always present, so a client never has to infer permission from the absence of
+	// a field.
+	EffectiveRole string `json:"effectiveRole"`
+	// Capabilities is what EffectiveRole permits, sent so the UI can hide actions it
+	// would only get a 403 for. It is a convenience, not the boundary -- the server
+	// checks every request regardless of what the client was told.
+	Capabilities []string `json:"capabilities"`
 }
 
 type KnowledgeBaseListResponse struct {
