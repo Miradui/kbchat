@@ -38,7 +38,7 @@
 
 ## 任务
 
-1. [ ] **搜索页建议**：输入时调 `searchSuggest`，作为 combobox 下拉呈现，键盘上下选择、
+1. [x] **搜索页建议**：输入时调 `searchSuggest`，作为 combobox 下拉呈现，键盘上下选择、
    Enter 直达结果、Escape 收起。请求用 `AbortController` 取消，避免慢响应覆盖新输入。
    *Affected*：`frontend/src/pages/Search/SearchPage.tsx`、`styles/pages/search.css`。
 
