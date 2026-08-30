@@ -46,7 +46,7 @@
    类型有结果」三种情况，给出对应的下一步；只在能确定时给，拿不准就沿用通用文案。
    *Affected*：`frontend/src/pages/Search/SearchPage.tsx`、新增 `searchGuidance.ts` 与测试。
 
-3. [ ] **结果定位**：chunk 深链打开抽屉后滚动到命中片段并把焦点放在它上面。
+3. [x] **结果定位**：chunk 深链打开抽屉后滚动到命中片段并把焦点放在它上面。
    `prefers-reduced-motion` 时不做平滑滚动。
    *Affected*：`frontend/src/pages/Documents/DocumentDetailDrawer.tsx`。
 
