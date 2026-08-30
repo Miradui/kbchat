@@ -162,6 +162,14 @@
 
 .chat-msg__foot { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-2); }
 .chat-msg__no-sources { color: var(--text-muted); font-size: var(--t-small); }
+/* The answer-status notice sits above the footer row, since a refusal can carry
+   citations and would otherwise have nowhere to appear. Colour is never the only
+   signal: the sentence itself says what happened. */
+.chat-msg__status { border-left: 2px solid var(--line); border-radius: var(--r-xs); font-size: var(--t-small); line-height: 1.6; margin: var(--s-2) 0 0; padding: var(--s-2) var(--s-3); }
+.chat-msg__status--warn { background: var(--warn-wash); border-left-color: var(--warn-line); color: var(--text-secondary); }
+.chat-msg__status--danger { background: var(--danger-wash); border-left-color: var(--danger-line); color: var(--text-secondary); }
+.chat-msg__status--info { background: var(--info-wash); border-left-color: var(--info-line); color: var(--text-secondary); }
+.chat-msg__status--neutral { color: var(--text-muted); }
 .chat-msg__feedback { display: inline-flex; gap: var(--s-1); margin-left: auto; }
 .chat-msg__feedback-button[aria-pressed="true"] {
   background: var(--accent-wash);

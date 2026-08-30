@@ -11,6 +11,7 @@ import type {
   Citation,
 } from '../../types/api';
 import { formatNullableScore, formatScore } from '../../utils/format';
+import { answerStatusNotice } from './answerStatus';
 
 const PREVIEW_LENGTH = 220;
 /** Guard against a pathological marker like `[source:1,1,1,...]`. */
@@ -64,6 +65,7 @@ export function MessageBubble({
   const [copyError, setCopyError] = useState(false);
   const copiedTimerRef = useRef<number | null>(null);
   const isAssistant = message.role === 'assistant';
+  const notice = answerStatusNotice(message);
 
   useEffect(() => () => {
     if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current);
@@ -151,6 +153,21 @@ export function MessageBubble({
           </div>
         ) : null}
 
+        {/*
+          On its own line rather than as the "no citations" branch below, because a
+          refusal can arrive with citations attached: retrieval succeeded and the
+          model declined anyway. Tying the notice to an empty citation list would
+          hide exactly that case.
+        */}
+        {isAssistant && notice.message && (
+          <p
+            className={`chat-msg__status chat-msg__status--${notice.tone}`}
+            role={notice.assertive ? 'alert' : undefined}
+          >
+            {notice.message}
+          </p>
+        )}
+
         {isAssistant && (
           <div className="chat-msg__foot">
             {message.citations.length > 0 ? (
@@ -166,9 +183,7 @@ export function MessageBubble({
                 <ChevronDown aria-hidden="true" className={sourcesOpen ? 'is-open' : undefined} />
                 <span>{message.citations.length} 条来源</span>
               </button>
-            ) : (
-              <span className="chat-msg__no-sources">当前知识库中未找到足够依据。</span>
-            )}
+            ) : null}
 
             <IconButton
               className="chat-msg__copy-button"
