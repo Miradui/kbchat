@@ -683,3 +683,103 @@ user/assistant 消息可能共享时间戳，只按时间排序不是全序，�
 migration 018 未在本环境对真实 PostgreSQL 执行过，其 CHECK 约束和部分索引只经过 SQLite
 测试套件的等价重建，未经真实库验证。`cmd/doctor`、`cmd/migrate`、`cmd/seed` 都需要根
 `.env` 里的远端 PostgreSQL/Redis，本轮未连接。
+
+## Deployment Health and Diagnostics (2026-08-30)
+
+本轮在 `dev` 分支完成 `docs/15-product-improvement-roadmap.md` 中「P1 部署健康与诊断」
+的四项交付。下一项是「P2 首次使用与知识库质量」。
+
+新增：`GET /api/v1/system/diagnostics`（需认证）、依赖感知的 `GET /healthz`、前端
+`/diagnostics` 页面。完整字段口径见 `docs/04-api-design.md` 的「系统诊断」。
+
+### 指标存在进程内存里，不落库
+
+`backend/internal/observability/recorder.go` 是一个固定容量的进程内记录器：每个指标一个
+512 样本的环形缓冲，分位数用 nearest-rank。
+
+后果必须被知道，而不是被发现：**服务重启后归零，多实例部署下每个实例只报自己的数据。**
+前端在页面上明确写出这一点。
+
+取舍原因：把每次检索和生成都写库会给热路径加一次写入，并需要一张随流量无限增长的表。
+持久化交给 zap 日志。DTO 里的 `metricsSinceRestart` 恒为 `true`，留作未来接入持久化存储
+时不破坏契约的开关。
+
+### Provider 为什么不探测
+
+DB、Redis、存储有真实探针；对话、向量化、重排没有。OpenAI 兼容接口里没有免费的 ping，
+为检查而发一次 completion 等于每次打开诊断页都让运维付一次钱，而且测出的延迟不是真实
+请求的延迟。Provider 面板因此报告两件事：配置完整性（同时有 key 和模型名），以及真实
+业务流量观察到的健康度。
+
+`recentFailures > 0` 只标 `degraded` 不标 `down`：记录器只能看见流量，既有近期失败又有
+近期成功的是不稳定，完全没有流量的是未知，两者都不足以断言已经挂了。
+
+### EnsureReady 与 CheckHealth 是两个东西
+
+`storage.CheckHealth` 是新增的只读探针，刻意不复用 `EnsureReady`。MinIO 的
+`EnsureReady` 会创建 bucket 并写策略，这在启动时是对的，放在 HTTP 处理器后面是错的——
+它会让一次带认证的 GET 重建运维故意删掉的 bucket。`health_test.go` 里有一个
+`TestCheckHealthDoesNotCallEnsureReady` 用带标记的假后端守住这一点。
+
+### /healthz 保持 200
+
+即使依赖挂掉也返回 200，真实状态放在响应体。这是存活探针不是就绪探针：503 会让
+Kubernetes livenessProbe 重启容器，而重启 API 不会让 Redis 恢复，只会在故障上再叠一层
+故障。若之后要加就绪探针，应新开一个端点，不要改这个的语义。
+
+因为它无需认证，响应体只有依赖名和状态，没有 reason、没有耗时、没有计数。
+
+### 泄漏防线在哪
+
+约束「健康检查不得返回密钥、连接串或 Provider 原始敏感错误」由三处共同保证：
+
+1. `observability.Classify` 只按 sentinel 身份和类型匹配，从不看错误文本，返回封闭集合
+   里的 `Reason`。`classify_test.go` 里 `TestClassifyNeverReturnsErrorContent` 用嵌了
+   DSN、API key 和主机名的错误验证。
+2. DTO 里没有任何字段可以放 URL、endpoint、DSN、key 或原始错误。
+3. `TestDiagnosticsResponseNeverSerializesSecrets` 序列化整个响应，断言配置里的假密钥、
+   假 DSN 和假 Provider 错误文本都不出现。路由层还有一个同类断言。
+
+原始错误以 `WARN` 完整写进服务端日志，这是刻意的：约束限制的是 HTTP 响应，不是运维自己
+的日志。
+
+### 认证但未按角色限制
+
+接口只要求登录。JWT 只带 `UserID`，没有角色声明，没有角色中间件，唯一种子用户是
+`role: "user"`——加管理员校验会把现有部署全部锁在自己的诊断之外。已作为 P2 待办写进路线
+图，含补齐顺序。**在角色迁移路径落地之前不要直接把路由移到管理员组。**
+
+### 路由注入方式
+
+`router.Dependencies{Redis, Metrics}` 是新增的可选依赖结构体，`New` / `NewWithStorage`
+委托到 `NewWithDependencies` / `NewWithStorageAndDependencies`，九个现有调用点未改。
+Redis 客户端由 `cmd/server/main.go` 注入而不是在路由里重开，这样探针检查的是应用真正在
+用的连接池。
+
+有一个坑值得记下：`newRedisProbe(nil)` 返回类型化的 nil 指针，赋给接口字段后接口本身不
+是 nil，服务端的「未配置」判断会放过它然后在探针里 panic。现在改成条件赋值，注释写在
+`router.go` 里。
+
+### 顺带修掉的：路由 chunk 校验漏了 QualityPage
+
+`frontend/scripts/verify-route-chunks.mjs` 的 `expectedRouteChunks` 里没有
+`QualityPage`，尽管它在 `src/router/index.tsx` 里是懒加载的，校验因此静默地停止覆盖它。
+本轮补上 `QualityPage` 和 `DiagnosticsPage`，现在覆盖 11 个路由级 chunk。**新增懒加载
+页面时必须同步这个列表**，否则校验会继续静默通过。
+
+### 已知的测试保真度问题（本轮刻意不改）
+
+`backend/internal/service/knowledge_base_service.go:700` 和 `:728` 把本地时区的
+`time.Now()` 绑进时间比较。PostgreSQL 的 timestamptz 按时刻比较，所以生产无影响；但
+SQLite 把时间存成 RFC3339 文本，驱动绑定的是带本地偏移量的值，与 `Z` 值做字典序比较会
+静默地匹配不到任何行——本轮 `queue_stats.go` 就踩过这个坑（现在用 `.UTC()`）。这意味着
+那两处的 SQLite 测试可能在验证一个恒为空的结果集。改动它需要连带复核相关测试断言，超出
+本阶段范围。
+
+### 本环境未能验证的部分
+
+- 全部三个探针（PostgreSQL、Redis、MinIO）只在假实现和内存 SQLite 下验证过，**没有对真
+  实依赖跑过**。真实环境下首次访问诊断页时应确认：数据库 `ok`、Redis `ok`、存储 `ok`，
+  以及断开某一项后对应行变成 `down` 且 reason 合理。
+- migration 018（上一阶段）仍未对真实 PostgreSQL 执行过。
+- `dev` 分支尚未推送到 origin，也未获授权推送。

@@ -1702,6 +1702,135 @@ MVP 语义：
 
 未分类（`intent IS NULL`）的历史回答不会出现在任何类别中。
 
+## 系统诊断
+
+两个接口：`GET /healthz`（含 `/api/v1/healthz`，无需认证）与
+`GET /api/v1/system/diagnostics`（需要认证）。
+
+### 不返回什么
+
+这是接口契约的一部分，不是实现细节：
+
+- 不返回任何密钥、连接串、DSN、Base URL、主机名、端口或 bucket 名。
+- 不返回驱动或 Provider 的原始错误文本。所有失败都被压缩成下面的封闭原因集合。
+- Provider 只返回模型名，不返回 Base URL：模型名能帮运维定位配置错误，Base URL 属于
+  部署拓扑。
+
+原始错误会以 `WARN` 完整写入服务端日志。约束限制的是 HTTP 响应，不是运维自己的日志，
+而日志才是真正能读到根因的地方。
+
+封闭原因集合（`reason`、`lastFailureReason`）：
+
+```text
+timeout | unreachable | auth_rejected | not_configured | not_found | unavailable
+```
+
+前端按代码映射中文文案，未识别的代码回落到中性文案，不回显原始代码。
+
+### GET /healthz
+
+始终返回 `200`，即使依赖不可用。这是存活探针而不是就绪探针：`503` 会让
+Kubernetes livenessProbe 重启容器，而重启 API 不会让 Redis 恢复，只会在故障上再叠一层
+故障。真实状态放在响应体里。
+
+因为该接口无需认证，响应体只有依赖名和状态，没有 `reason`、没有耗时、没有计数。未配置
+的依赖直接省略。
+
+```json
+{
+  "status": "ok",
+  "env": "production",
+  "dependencies": { "database": "ok", "redis": "ok", "storage": "ok" }
+}
+```
+
+### GET /api/v1/system/diagnostics
+
+始终返回 `200`。依赖挂掉是答案本身，不是错误：这里返回 `500` 只会让调用方显示一个通用
+错误页，正是运维来这里想绕开的东西。调用方通过 `status` 判断。
+
+`status` 取所有依赖状态里最差的一个。`not_configured` 不会拉低 `status`——刻意不部署
+Redis 的环境是健康的，把它算成降级会让这个字段无法用于告警。
+
+```json
+{
+  "status": "degraded",
+  "checkedAt": "2026-08-30T10:00:00Z",
+  "env": "production",
+  "dependencies": [
+    { "name": "database", "status": "ok", "reason": "", "latencyMs": 3 },
+    { "name": "redis", "status": "down", "reason": "unreachable", "latencyMs": 2001 },
+    { "name": "storage", "status": "not_configured", "reason": "not_configured", "latencyMs": null }
+  ],
+  "queues": {
+    "documents": {
+      "pending": 2, "running": 1, "failed": 4, "completed": 30, "cancelled": 0,
+      "oldestPendingSeconds": 125, "oldestRunningSeconds": 8,
+      "failureWindowHours": 24, "finishedInWindow": 10, "failedInWindow": 2,
+      "recentFailureRate": 0.2
+    },
+    "cleanup": { "backlog": 3, "retrying": 1, "locked": 0, "oldestPendingSeconds": 3600 }
+  },
+  "providers": [
+    {
+      "name": "chat", "configured": true, "model": "gpt-4.1-mini", "status": "ok",
+      "lastSuccessAt": "2026-08-30T09:59:00Z", "lastFailureAt": null,
+      "lastFailureReason": "", "successCount": 128, "failureCount": 0, "recentFailures": 0
+    }
+  ],
+  "latency": [
+    { "metric": "retrieval", "count": 128, "sampleCount": 128, "p50Ms": 120, "p95Ms": 300, "maxMs": 800 }
+  ],
+  "rerankFallbacks": { "provider_unavailable": 4 },
+  "metricsSinceRestart": true
+}
+```
+
+字段口径：
+
+- `dependencies` 只有三项：`database`、`redis`、`storage`。每个探针独立超时 2 秒并并发
+  执行。诊断页最有用的时刻恰好是依赖卡住的时刻，所以探针必须快速失败。
+- `latencyMs` 是本次探针耗时；未探测的依赖为 `null`。
+- 存储探针是只读的，与启动时的 `EnsureReady` 分开：`EnsureReady` 会创建 bucket 并写
+  策略，放在 HTTP 处理器后面会让一次带认证的 GET 重建运维故意删掉的 bucket。
+- `oldestRunningSeconds` 从 `locked_at` 起算，不从 `created_at` 起算：排队一小时、一秒
+  前才开始执行的任务不是卡住的任务。
+- `recentFailureRate` 在窗口内没有已完成任务时为 `null`。`null` 与 `0` 是不同的答案，
+  前端显示"暂无数据"而不是 0%。
+- `failureWindowHours` 固定为 24，按 `updated_at` 统计 `completed` 与 `failed`。
+
+### Provider 为什么不做探测
+
+`configured` 表示同时配置了 key 和模型名，`status` 与计数来自真实业务流量，而不是探测
+请求。
+
+OpenAI 兼容接口里没有免费的 ping。为了检查而发一次 completion，等于每次打开诊断页都
+让运维付一次钱，而且测出来的延迟不是真实请求的延迟。所以这里报告的是配置完整性加上真
+实调用观察到的健康度。
+
+`recentFailures > 0` 只把 Provider 标成 `degraded` 而不是 `down`：记录器只能看见流量，
+既有近期失败又有近期成功的 Provider 是不稳定，完全没有流量的 Provider 是未知，两者都不
+足以断言它已经挂了。
+
+`rerank` 即使被关闭也会返回一行（`status: not_configured`）：运维要区分的正是"重排坏
+了"和"重排没开"，省掉这一行等于两个问题都不回答。
+
+### 指标是进程内的
+
+`latency` 与 `rerankFallbacks` 存在固定容量的进程内环形缓冲里（每个指标 512 个样本），
+服务重启后归零，多实例部署下每个实例各报自己的数据。分位数用 nearest-rank，
+`sampleCount` 是实际参与计算的样本数，会小于 `count`。
+
+这是刻意的取舍：把每次检索和生成都写库会给热路径加一次写入，并需要一张随流量无限增长
+的表。持久化留给日志。`metricsSinceRestart` 恒为 `true`，留作未来接入持久化存储时不破
+坏契约的开关。前端明确写出这一点，而不是暗示它是历史全量数据。
+
+### 认证但未按角色限制
+
+`/api/v1/system/diagnostics` 只要求登录，没有管理员校验。JWT 里没有角色声明，代码里也
+没有角色中间件，唯一的种子用户是 `role: "user"`，加管理员校验会把现有部署全部锁在自己
+的诊断之外。作为 P2 待办记录在改进路线图里。这也是响应体口径如此保守的原因之一。
+
 ## AI 开发约束
 
 1. API 字段使用 camelCase。
