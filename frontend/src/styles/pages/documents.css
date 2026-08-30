@@ -75,6 +75,17 @@
   padding: var(--s-3);
 }
 .doc-chunk.is-source { border-color: var(--accent-line); background: var(--accent-wash); }
+/*
+  `:focus`, not `:focus-visible`. The global reset drops the ring on plain `:focus`
+  because a mouse click should not leave one, but this focus is moved for the user
+  rather than by them -- arriving from a citation link is a click, so `:focus-visible`
+  would not match and the ring would be missing exactly when it is needed to explain
+  where the drawer just jumped to.
+*/
+.doc-chunk.is-source:focus {
+  outline: 2px solid var(--line-focus);
+  outline-offset: 2px;
+}
 .doc-chunk header { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-2); }
 .doc-chunk header strong { color: var(--text); font-variant-numeric: tabular-nums; }
 .doc-chunk header > span:last-child { margin-left: auto; font-size: var(--t-micro); }

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   deleteDocument,
@@ -483,5 +483,184 @@ describe('DocumentDetailDrawer', () => {
 
     expect(await screen.findByText('制度.pdf')).toBeInTheDocument();
     expect(screen.queryByRole('note')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Landing on the cited chunk. The drawer's own `useModalFocus` focuses the panel when
+ * it opens, which is before the chunk request answers -- so this is a second, later
+ * focus move, and these tests pin down that it happens exactly once and only for a
+ * deep link.
+ */
+describe('DocumentDetailDrawer citation landing', () => {
+  // Both stubs below reach outside the test, so they are put back afterwards rather
+  // than left for whatever runs next in this file.
+  const originalScrollIntoView = Element.prototype.scrollIntoView;
+
+  afterEach(() => {
+    Element.prototype.scrollIntoView = originalScrollIntoView;
+    vi.unstubAllGlobals();
+  });
+
+  const otherChunk = {
+    id: 'chunk9',
+    chunkIndex: 1,
+    content: '另一个片段。',
+    tokenCount: 10,
+    pageNumber: 1,
+    metadata: {},
+  };
+
+  function mockMatchMedia(reduceMotion: boolean) {
+    const matchMedia = vi.fn((query: string) => ({
+      matches: reduceMotion && query.includes('prefers-reduced-motion'),
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    vi.stubGlobal('matchMedia', matchMedia);
+    return matchMedia;
+  }
+
+  // jsdom has no scrollIntoView, so it has to be supplied to be observed at all.
+  function stubScrollIntoView() {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    return scrollIntoView;
+  }
+
+  it('scrolls the cited chunk into view and focuses it', async () => {
+    const scrollIntoView = stubScrollIntoView();
+    mockMatchMedia(false);
+    vi.mocked(listDocumentChunks).mockResolvedValue({
+      items: [otherChunk, sourceChunk],
+      total: 2,
+      page: 1,
+      pageSize: 20,
+    });
+
+    renderWithRouter(<DocumentDetailDrawer chunkId="chunk1" documentId="doc1" onClose={vi.fn()} />);
+
+    const source = (await screen.findByText('这是回答使用的原始片段。')).closest('article');
+    await waitFor(() => expect(source).toHaveFocus());
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+    // preventScroll, so the focus call does not fight the smooth scroll it just started.
+    expect(source).toHaveAttribute('tabindex', '-1');
+    expect(source).toHaveAccessibleName('引用来源片段 #3');
+  });
+
+  it('skips the smooth scroll when reduced motion is preferred', async () => {
+    const scrollIntoView = stubScrollIntoView();
+    mockMatchMedia(true);
+    vi.mocked(listDocumentChunks).mockResolvedValue({
+      items: [sourceChunk],
+      total: 1,
+      page: 1,
+      pageSize: 20,
+    });
+
+    renderWithRouter(<DocumentDetailDrawer chunkId="chunk1" documentId="doc1" onClose={vi.fn()} />);
+
+    const source = (await screen.findByText('这是回答使用的原始片段。')).closest('article');
+    // Still scrolls and still focuses -- reduced motion removes the animation, not the
+    // navigation.
+    await waitFor(() => expect(source).toHaveFocus());
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'center' });
+  });
+
+  it('leaves focus alone when there is no citation deep link', async () => {
+    const scrollIntoView = stubScrollIntoView();
+    mockMatchMedia(false);
+    vi.mocked(listDocumentChunks).mockResolvedValue({
+      items: [otherChunk, sourceChunk],
+      total: 2,
+      page: 1,
+      pageSize: 20,
+    });
+
+    renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
+
+    await screen.findByText('另一个片段。');
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    // Browsing the chunk list must not put any of them in the tab order.
+    expect(screen.queryByText('另一个片段。')?.closest('article')).not.toHaveAttribute('tabindex');
+  });
+
+  it('does not pull focus back when the chunks reload underneath the user', async () => {
+    const scrollIntoView = stubScrollIntoView();
+    mockMatchMedia(false);
+    vi.mocked(listDocumentChunks).mockResolvedValue({
+      items: [sourceChunk],
+      total: 1,
+      page: 1,
+      pageSize: 20,
+    });
+    // Reprocessing replaces `document`, which refetches the chunks and hands the
+    // effect a new array -- a real path where it runs again after focus has landed.
+    vi.mocked(reprocessDocument).mockResolvedValue({ ...document, status: 'processing' });
+
+    const user = userEvent.setup();
+    renderWithRouter(<DocumentDetailDrawer chunkId="chunk1" documentId="doc1" onClose={vi.fn()} />);
+
+    const source = (await screen.findByText('这是回答使用的原始片段。')).closest('article');
+    await waitFor(() => expect(source).toHaveFocus());
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+
+    const reprocess = screen.getByRole('button', { name: '重新处理' });
+    await user.click(reprocess);
+    await waitFor(() => expect(listDocumentChunks).toHaveBeenCalledTimes(2));
+    await screen.findByText('这是回答使用的原始片段。');
+
+    // Focus is on the button the user just pressed. Jumping back to the chunk would
+    // lose their place for a change they made deliberately.
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+    expect(reprocess).toHaveFocus();
+  });
+
+  it('does not let the focus call cancel the smooth scroll it just started', async () => {
+    stubScrollIntoView();
+    mockMatchMedia(false);
+    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus');
+    vi.mocked(listDocumentChunks).mockResolvedValue({
+      items: [sourceChunk],
+      total: 1,
+      page: 1,
+      pageSize: 20,
+    });
+
+    renderWithRouter(<DocumentDetailDrawer chunkId="chunk1" documentId="doc1" onClose={vi.fn()} />);
+
+    const source = (await screen.findByText('这是回答使用的原始片段。')).closest('article');
+    await waitFor(() => expect(source).toHaveFocus());
+
+    // jsdom ignores focus options, so the argument has to be asserted directly:
+    // without preventScroll the browser jumps to the element instantly and the smooth
+    // scroll never runs.
+    const call = focusSpy.mock.calls.find((_, index) => focusSpy.mock.instances[index] === source);
+    expect(call).toEqual([{ preventScroll: true }]);
+    focusSpy.mockRestore();
+  });
+
+  it('does not throw when the browser has no scrollIntoView', async () => {
+    // @ts-expect-error deliberately removing it to prove focus still happens
+    Element.prototype.scrollIntoView = undefined;
+    mockMatchMedia(false);
+    vi.mocked(listDocumentChunks).mockResolvedValue({
+      items: [sourceChunk],
+      total: 1,
+      page: 1,
+      pageSize: 20,
+    });
+
+    renderWithRouter(<DocumentDetailDrawer chunkId="chunk1" documentId="doc1" onClose={vi.fn()} />);
+
+    const source = (await screen.findByText('这是回答使用的原始片段。')).closest('article');
+    // The focus move is the part that matters for keyboard and screen-reader users, so
+    // it must not be taken out by a missing scroll API.
+    await waitFor(() => expect(source).toHaveFocus());
   });
 });

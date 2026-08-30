@@ -52,6 +52,9 @@ export function DocumentDetailDrawer({
   const activeDocumentIdRef = useRef(documentId);
   const mountedRef = useRef(false);
   const mutationRef = useRef<symbol | null>(null);
+  const sourceChunkRef = useRef<HTMLElement | null>(null);
+  /** Which chunk has already been scrolled to, so focus moves once and not again. */
+  const focusedChunkRef = useRef('');
   const [document, setDocument] = useState<DocumentItem | null>(null);
   const [documentScope, setDocumentScope] = useState<string | null>(null);
   const [preview, setPreview] = useState<DocumentPreviewResponse | null>(null);
@@ -176,6 +179,38 @@ export function DocumentDetailDrawer({
       mounted = false;
     };
   }, [chunkId, chunkPage, chunkQuery, document, documentId, documentScope, knowledgeBaseId]);
+
+  /**
+   * Bring the cited chunk into view and put focus on it.
+   *
+   * The drawer's own focus handling cannot do this: `useModalFocus` focuses the panel
+   * the moment it opens, which is before the chunk request has answered, so there is
+   * nothing to focus yet. Hence a second, later focus move -- justified here because
+   * the whole point of the deep link is that one chunk, and landing at the top of a
+   * long drawer leaves the user to hunt for it.
+   *
+   * Only ever runs for a deep link (`chunkId` set), and only once per chunk, so it
+   * cannot yank focus back after the user has moved on.
+   */
+  useEffect(() => {
+    // The ref check is the one doing the work. `!chunkId` and `chunksLoading` are both
+    // already covered by `sourceChunkRef` being null in those states -- kept because
+    // they state the precondition, not because removing them changes behaviour.
+    if (!chunkId || chunksLoading || focusedChunkRef.current === chunkId) return;
+    const target = sourceChunkRef.current;
+    if (!target) return;
+
+    focusedChunkRef.current = chunkId;
+    const reduceMotion = typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // Optional call: jsdom has no scrollIntoView, and a missing scroll must not stop
+    // the focus move, which is the part that matters for keyboard and screen readers.
+    target.scrollIntoView?.({
+      behavior: reduceMotion ? 'auto' : 'smooth',
+      block: 'center',
+    });
+    target.focus({ preventScroll: true });
+  }, [chunkId, chunks, chunksLoading]);
 
   useEffect(() => () => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -437,21 +472,31 @@ export function DocumentDetailDrawer({
                     ) : (
                       <>
                         <div className="doc-chunks">
-                          {chunks.map((chunk) => (
+                          {chunks.map((chunk) => {
+                            const isSource = Boolean(chunkId) && chunk.id === chunkId;
+                            return (
                             <article
-                              className={chunkId && chunk.id === chunkId ? 'doc-chunk is-source' : 'doc-chunk'}
+                              // Named, because focus lands here programmatically: without
+                              // a label a screen reader would announce a bare group.
+                              aria-label={isSource ? `引用来源片段 #${chunk.chunkIndex}` : undefined}
+                              className={isSource ? 'doc-chunk is-source' : 'doc-chunk'}
                               key={chunk.id}
+                              ref={isSource ? sourceChunkRef : undefined}
+                              // -1, not 0: reachable for the focus move below but kept out
+                              // of the tab order, so tabbing through the drawer is unchanged.
+                              tabIndex={isSource ? -1 : undefined}
                             >
                               <header>
                                 <strong>#{chunk.chunkIndex}</strong>
-                                {chunkId && chunk.id === chunkId && <Badge tone="accent">引用来源</Badge>}
+                                {isSource && <Badge tone="accent">引用来源</Badge>}
                                 <span className="ui-muted">
                                   {chunk.tokenCount} 词元{chunk.pageNumber ? ` · p.${chunk.pageNumber}` : ''}
                                 </span>
                               </header>
                               <p>{chunk.content}</p>
                             </article>
-                          ))}
+                            );
+                          })}
                         </div>
                         {!chunkId && (
                           <Pagination
