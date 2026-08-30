@@ -1,13 +1,17 @@
-import { ExternalLink, RefreshCw, ThumbsDown } from 'lucide-react';
+import { ExternalLink, RefreshCw, Repeat, SearchX, ThumbsDown } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import {
   getChatQualityOverview,
+  listChatKnowledgeGaps,
   listKnowledgeBases,
   listNegativeChatFeedback,
 } from '../../api/resources';
 import type {
+  ChatKnowledgeGapItem,
+  ChatKnowledgeGapListResponse,
+  ChatKnowledgeGapParams,
   ChatQualityFeedbackItem,
   ChatQualityFeedbackParams,
   ChatQualityFeedbackListResponse,
@@ -34,13 +38,20 @@ const PAGE_SIZE = 10;
 type QualitySources = {
   loadOverview: (params: ChatQualityOverviewParams) => Promise<ChatQualityOverview>;
   loadFeedback: (params: ChatQualityFeedbackParams) => Promise<ChatQualityFeedbackListResponse>;
+  loadKnowledgeGaps: (params: ChatKnowledgeGapParams) => Promise<ChatKnowledgeGapListResponse>;
   loadKnowledgeBases: () => Promise<KnowledgeBase[]>;
 };
 
 const defaultSources: QualitySources = {
   loadOverview: getChatQualityOverview,
   loadFeedback: async (params) => listNegativeChatFeedback(params),
+  loadKnowledgeGaps: async (params) => listChatKnowledgeGaps(params),
   loadKnowledgeBases: async () => (await listKnowledgeBases({ page: 1, pageSize: 100, sort: 'updatedAt_desc' })).items,
+};
+
+const GAP_CATEGORY_LABELS: Record<ChatKnowledgeGapItem['category'], string> = {
+  no_citations: '检索无结果',
+  repeated_rewrite: '反复改写',
 };
 
 export function QualityPage({ sources = defaultSources }: { sources?: QualitySources }) {
@@ -48,14 +59,19 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
   const [knowledgeBaseId, setKnowledgeBaseId] = useState('');
   const [hasCitations, setHasCitations] = useState('all');
   const [page, setPage] = useState(1);
+  const [gapCategory, setGapCategory] = useState<NonNullable<ChatKnowledgeGapParams['category']>>('all');
+  const [gapPage, setGapPage] = useState(1);
   const [overview, setOverview] = useState<ChatQualityOverview | null>(null);
   const [feedback, setFeedback] = useState<ChatQualityFeedbackListResponse | null>(null);
+  const [gaps, setGaps] = useState<ChatKnowledgeGapListResponse | null>(null);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [overviewState, setOverviewState] = useState<LoadState>({ loading: true, error: '' });
   const [feedbackState, setFeedbackState] = useState<LoadState>({ loading: true, error: '' });
+  const [gapState, setGapState] = useState<LoadState>({ loading: true, error: '' });
   const [kbError, setKbError] = useState('');
   const overviewRequest = useRef(0);
   const feedbackRequest = useRef(0);
+  const gapRequest = useRef(0);
   const mounted = useRef(true);
 
   useEffect(() => () => { mounted.current = false; }, []);
@@ -108,9 +124,34 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
       });
   }, [hasCitations, knowledgeBaseId, page, period, sources]);
 
+  const reloadGaps = useCallback(() => {
+    const request = ++gapRequest.current;
+    setGapState({ loading: true, error: '' });
+    const params: ChatKnowledgeGapParams = {
+      period,
+      page: gapPage,
+      pageSize: PAGE_SIZE,
+      ...(knowledgeBaseId ? { knowledgeBaseId } : {}),
+      ...(gapCategory !== 'all' ? { category: gapCategory } : {}),
+    };
+    void sources.loadKnowledgeGaps(params)
+      .then((result) => {
+        if (mounted.current && request === gapRequest.current) {
+          setGaps(result);
+          setGapState({ loading: false, error: '' });
+        }
+      })
+      .catch((error: unknown) => {
+        if (mounted.current && request === gapRequest.current) {
+          setGapState({ loading: false, error: getErrorMessage(error, '知识缺口加载失败') });
+        }
+      });
+  }, [gapCategory, gapPage, knowledgeBaseId, period, sources]);
+
   useEffect(() => { reloadKnowledgeBases(); }, [reloadKnowledgeBases]);
   useEffect(() => { reloadOverview(); }, [reloadOverview]);
   useEffect(() => { reloadFeedback(); }, [reloadFeedback]);
+  useEffect(() => { reloadGaps(); }, [reloadGaps]);
 
   const selectedKnowledgeBase = useMemo(
     () => knowledgeBases.find((item) => item.id === knowledgeBaseId),
@@ -120,16 +161,25 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
   function updatePeriod(value: ChatQualityPeriod) {
     setPeriod(value);
     setPage(1);
+    setGapPage(1);
   }
 
   function updateKnowledgeBase(value: string) {
     setKnowledgeBaseId(value);
     setPage(1);
+    setGapPage(1);
   }
 
   function updateCitationFilter(value: string) {
     setHasCitations(value);
     setPage(1);
+  }
+
+  function updateGapCategory(value: string) {
+    setGapCategory(value as NonNullable<ChatKnowledgeGapParams['category']>);
+    // The two categories have independent lengths, so a page number from the
+    // previous filter would usually land past the end of the new one.
+    setGapPage(1);
   }
 
   return (
@@ -143,7 +193,7 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
           <Button
             aria-label="刷新质量数据"
             leadingIcon={<RefreshCw aria-hidden="true" />}
-            onClick={() => { reloadOverview(); reloadFeedback(); reloadKnowledgeBases(); }}
+            onClick={() => { reloadOverview(); reloadFeedback(); reloadGaps(); reloadKnowledgeBases(); }}
             variant="secondary"
           >
             刷新
@@ -177,13 +227,25 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
         <section aria-label="质量概览" className="ui-panel quality-overview">
           {overviewState.loading && !overview ? <LoadingSkeleton announce columns={5} compact rows={1} />
             : overviewState.error ? <ErrorState description={overviewState.error} onRetry={reloadOverview} title="质量概览加载失败" />
-              : overview && <MetricStrip label="质量概览指标" metrics={[
-                { key: 'answers', label: '条回答', value: overview.answerCount },
-                { key: 'coverage', label: '反馈覆盖率', value: formatPercent(overview.feedbackCoverage) },
-                { key: 'positive', label: '好评率', value: formatPercent(overview.positiveRate), tone: overview.positiveRate < 0.5 ? 'warn' : 'default' },
-                { key: 'negative', label: '负反馈', value: overview.negativeFeedbackCount, tone: overview.negativeFeedbackCount > 0 ? 'danger' : 'default' },
-                { key: 'without', label: '无引用回答', value: overview.withoutCitationsCount, tone: overview.withoutCitationsCount > 0 ? 'warn' : 'default' },
-              ]} />}
+              : overview && <>
+                <MetricStrip label="质量概览指标" metrics={[
+                  { key: 'answers', label: '条回答', value: overview.answerCount },
+                  { key: 'coverage', label: '反馈覆盖率', value: formatPercent(overview.feedbackCoverage) },
+                  { key: 'positive', label: '好评率', value: formatPercent(overview.positiveRate), tone: overview.positiveRate < 0.5 ? 'warn' : 'default' },
+                  { key: 'negative', label: '负反馈', value: overview.negativeFeedbackCount, tone: overview.negativeFeedbackCount > 0 ? 'danger' : 'default' },
+                  {
+                    key: 'without',
+                    label: '无引用知识型回答',
+                    value: `${overview.withoutCitationsCount} · ${formatPercent(overview.withoutCitationsRate)}`,
+                    tone: overview.withoutCitationsCount > 0 ? 'warn' : 'default',
+                  },
+                ]} />
+                {overview.unclassifiedAnswerCount > 0 && (
+                  <p className="ui-muted quality-overview__note">
+                    其中 {overview.unclassifiedAnswerCount} 条回答早于意图记录，无法判断是否属于知识型提问，已从「无引用知识型回答」及其占比中排除。
+                  </p>
+                )}
+              </>}
         </section>
 
         <section aria-label="负反馈列表" className="ui-panel quality-feedback">
@@ -204,9 +266,54 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
                   <Pagination onPageChange={setPage} page={feedback.page} pageSize={feedback.pageSize} total={feedback.total} />
                 </>}
         </section>
+
+        <section aria-label="知识缺口列表" className="ui-panel quality-gaps">
+          <div className="ui-panel__head">
+            <div>
+              <h2>知识缺口</h2>
+              <span className="ui-panel__head-note">
+                检索不到内容的知识型提问，以及同一会话内被反复改写的问题（不含重新生成）
+              </span>
+            </div>
+            <Field label="缺口类型">
+              <Select aria-label="知识缺口类型" onChange={(event) => updateGapCategory(event.target.value)} value={gapCategory}>
+                <option value="all">全部类型{gaps ? ` (${gaps.total})` : ''}</option>
+                <option value="no_citations">检索无结果{gaps ? ` (${gaps.noCitationsTotal})` : ''}</option>
+                <option value="repeated_rewrite">反复改写{gaps ? ` (${gaps.repeatedRewriteTotal})` : ''}</option>
+              </Select>
+            </Field>
+          </div>
+          {gapState.loading && !gaps ? <LoadingSkeleton announce columns={1} rows={4} />
+            : gapState.error ? <ErrorState description={gapState.error} onRetry={reloadGaps} title="知识缺口加载失败" />
+              : !gaps || gaps.items.length === 0 ? <EmptyState description={gapEmptyDescription(gapCategory)} title="没有发现知识缺口" />
+                : <>
+                  <div className="quality-gaps__list">
+                    {gaps.items.map((item) => <KnowledgeGapItem item={item} key={gapKey(item)} />)}
+                  </div>
+                  <Pagination onPageChange={setGapPage} page={gaps.page} pageSize={gaps.pageSize} total={gaps.total} />
+                </>}
+        </section>
       </div>
     </AppShell>
   );
+}
+
+/**
+ * A cluster has no message id, so identity is its group key: the session plus the
+ * question it normalizes to.
+ */
+function gapKey(item: ChatKnowledgeGapItem): string {
+  return item.messageId ?? `${item.category}:${item.sessionId}:${item.retrievalQuery}`;
+}
+
+function gapEmptyDescription(category: NonNullable<ChatKnowledgeGapParams['category']>): string {
+  if (category === 'no_citations') {
+    return '当前周期内的知识型提问都检索到了内容。';
+  }
+  if (category === 'repeated_rewrite') {
+    return '当前周期内没有被反复改写的问题。';
+  }
+  return '当前周期内没有检索失败或被反复改写的问题。';
 }
 
 type LoadState = { loading: boolean; error: string };
@@ -251,6 +358,48 @@ function FeedbackItem({ item }: { item: ChatQualityFeedbackItem }) {
           ))}
         </div>}
         {item.rerankFallback?.used && <p className="ui-muted quality-feedback__fallback">精排未完成：{item.rerankFallback.reason || '使用了降级结果'}</p>}
+      </div>
+    </article>
+  );
+}
+
+function KnowledgeGapItem({ item }: { item: ChatKnowledgeGapItem }) {
+  const isCluster = item.category === 'repeated_rewrite';
+  return (
+    <article className="quality-gaps__item">
+      <div className="quality-gaps__item-head">
+        <span className="quality-gaps__icon" aria-hidden="true">{isCluster ? <Repeat /> : <SearchX />}</span>
+        <div className="ui-cell-stack">
+          <strong>{item.knowledgeBaseName}</strong>
+          <small>{item.sessionTitle} · 最近 {formatRelativeTime(item.lastSeenAt)}</small>
+        </div>
+        <Badge tone={isCluster ? 'info' : 'warn'}>{GAP_CATEGORY_LABELS[item.category]}</Badge>
+        <Link className="ui-button ui-button--link" to={`/chat/${encodeURIComponent(item.sessionId)}`}>
+          查看会话 <ExternalLink aria-hidden="true" />
+        </Link>
+      </div>
+      <dl className="quality-gaps__content">
+        <div><dt>问题</dt><dd>{item.question || '未找到对应问题'}</dd></div>
+        {item.retrievalQuery && item.retrievalQuery !== item.question && (
+          <div><dt>检索式</dt><dd>{item.retrievalQuery}</dd></div>
+        )}
+      </dl>
+      <div className="quality-gaps__meta">
+        {isCluster
+          ? <>
+            <Badge tone="info">改写 {item.occurrenceCount} 次</Badge>
+            {item.ungroundedCount > 0 && <Badge tone="warn">其中 {item.ungroundedCount} 次无引用</Badge>}
+          </>
+          : <Badge tone="warn">检索无结果</Badge>}
+        <span className="ui-muted">
+          首次 {formatRelativeTime(item.firstSeenAt)}
+        </span>
+        <Link
+          className="ui-button ui-button--link"
+          to={`/knowledge-bases/${encodeURIComponent(item.knowledgeBaseId)}/documents`}
+        >
+          补充资料 <ExternalLink aria-hidden="true" />
+        </Link>
       </div>
     </article>
   );

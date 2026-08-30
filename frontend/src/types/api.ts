@@ -562,9 +562,23 @@ export type ChatQualityOverview = {
 	feedbackCount: number;
 	positiveFeedbackCount: number;
 	negativeFeedbackCount: number;
+	/** Answers classified as knowledge_base; the denominator of withoutCitationsRate. */
+	knowledgeAnswerCount: number;
+	/**
+	 * Answers with an empty citation list *and* knowledge_base intent. Conversation
+	 * answers are given no citations on purpose and are excluded.
+	 */
 	withoutCitationsCount: number;
+	/**
+	 * Answers written before intent was recorded. They are excluded from
+	 * withoutCitationsCount and withoutCitationsRate rather than assumed grounded,
+	 * so a non-zero value means those rates cover only part of the period.
+	 */
+	unclassifiedAnswerCount: number;
 	feedbackCoverage: number;
 	positiveRate: number;
+	/** withoutCitationsCount / knowledgeAnswerCount, or 0 when there are none. */
+	withoutCitationsRate: number;
 };
 
 export type ChatQualityFeedbackParams = ChatQualityOverviewParams & {
@@ -592,6 +606,48 @@ export type ChatQualityFeedbackListResponse = {
 	total: number;
 	page: number;
 	pageSize: number;
+};
+
+/**
+ * `no_citations` is one knowledge answer that retrieved nothing.
+ * `repeated_rewrite` is a cluster: one question rephrased at least twice inside a
+ * session. Regenerations are excluded, since asking for another attempt at the
+ * same question is a different problem from rephrasing it.
+ */
+export type ChatKnowledgeGapCategory = 'no_citations' | 'repeated_rewrite';
+
+export type ChatKnowledgeGapParams = ChatQualityOverviewParams & {
+	category?: ChatKnowledgeGapCategory | 'all';
+	page?: number;
+	pageSize?: number;
+};
+
+export type ChatKnowledgeGapItem = {
+	category: ChatKnowledgeGapCategory;
+	/** Null for a repeated_rewrite cluster, which spans several answers. */
+	messageId: string | null;
+	sessionId: string;
+	sessionTitle: string;
+	knowledgeBaseId: string;
+	knowledgeBaseName: string;
+	question: string;
+	retrievalQuery: string;
+	/** Always 1 for no_citations; the cluster size for repeated_rewrite. */
+	occurrenceCount: number;
+	/** How many answers in the row retrieved nothing. */
+	ungroundedCount: number;
+	firstSeenAt: string;
+	lastSeenAt: string;
+};
+
+export type ChatKnowledgeGapListResponse = {
+	items: ChatKnowledgeGapItem[];
+	total: number;
+	page: number;
+	pageSize: number;
+	/** Reported regardless of the requested category so a filter can be labelled. */
+	noCitationsTotal: number;
+	repeatedRewriteTotal: number;
 };
 
 export type ChatMessageListResponse = {

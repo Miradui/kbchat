@@ -6,6 +6,7 @@ import {
   exportGlobalSearch,
   getChatQualityOverview,
   getSystemCapabilities,
+  listChatKnowledgeGaps,
   listChatSessions,
   listNegativeChatFeedback,
   listDocuments,
@@ -101,6 +102,30 @@ describe('frontend gap resources', () => {
     expect(apiRequest).toHaveBeenCalledWith(
       '/chat/quality/negative-feedback?period=month&knowledgeBaseId=kb-1&hasCitations=false&page=2&pageSize=10',
     );
+  });
+
+  it('loads knowledge gaps with a category filter', () => {
+    vi.mocked(apiRequest).mockResolvedValue({});
+
+    void listChatKnowledgeGaps({
+      period: 'month',
+      knowledgeBaseId: 'kb-1',
+      category: 'repeated_rewrite',
+      page: 2,
+      pageSize: 10,
+    });
+
+    expect(apiRequest).toHaveBeenCalledWith(
+      '/chat/quality/knowledge-gaps?period=month&knowledgeBaseId=kb-1&category=repeated_rewrite&page=2&pageSize=10',
+    );
+  });
+
+  it('omits the category when both are wanted, since the API defaults to both', () => {
+    vi.mocked(apiRequest).mockResolvedValue({});
+
+    void listChatKnowledgeGaps({ period: 'month', category: 'all' });
+
+    expect(apiRequest).toHaveBeenCalledWith('/chat/quality/knowledge-gaps?period=month');
   });
 
   it('uses the progress-aware upload transport', () => {

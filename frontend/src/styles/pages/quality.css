@@ -27,6 +27,24 @@
 .quality-feedback__citation span { color: var(--accent); font-size: var(--t-small); }
 .quality-feedback__citation small { color: var(--text-muted); line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .quality-feedback__fallback { margin: 0; }
+.quality-overview__note { margin: var(--s-2) 0 0; }
+.quality-gaps .ui-panel__head .ui-field { margin: 0; min-width: 170px; }
+.quality-gaps__list { display: grid; }
+.quality-gaps__item { border-bottom: 1px solid var(--line); display: grid; gap: var(--s-3); padding: var(--s-4); }
+.quality-gaps__item:last-child { border-bottom: 0; }
+.quality-gaps__item-head { align-items: center; display: flex; gap: var(--s-3); min-width: 0; }
+.quality-gaps__item-head .ui-cell-stack { flex: 1 1 auto; min-width: 0; }
+.quality-gaps__item-head .ui-button { align-items: center; display: inline-flex; flex: 0 0 auto; gap: var(--s-1); }
+.quality-gaps__item-head .ui-button svg { height: 14px; width: 14px; }
+.quality-gaps__icon { align-items: center; background: var(--warn-wash); border-radius: var(--r-sm); color: var(--warn); display: inline-flex; flex: 0 0 auto; height: 30px; justify-content: center; width: 30px; }
+.quality-gaps__icon svg { height: 15px; width: 15px; }
+.quality-gaps__content { display: grid; gap: var(--s-2); margin: 0; }
+.quality-gaps__content > div { display: grid; gap: var(--s-2); grid-template-columns: 56px minmax(0, 1fr); }
+.quality-gaps__content dt { color: var(--text-faint); font-size: var(--t-small); }
+.quality-gaps__content dd { color: var(--text-secondary); line-height: 1.6; margin: 0; word-break: break-word; }
+.quality-gaps__meta { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.quality-gaps__meta .ui-button { align-items: center; display: inline-flex; gap: var(--s-1); margin-left: auto; }
+.quality-gaps__meta .ui-button svg { height: 14px; width: 14px; }
 
 @media (max-width: 680px) {
   .quality-page__header { align-items: stretch; flex-direction: column; }
@@ -36,4 +54,9 @@
   .quality-filters .ui-muted { margin-left: 0; }
   .quality-feedback__item-head { align-items: flex-start; flex-wrap: wrap; }
   .quality-feedback__item-head .ui-button { margin-left: 42px; }
+  .quality-gaps .ui-panel__head { align-items: stretch; flex-direction: column; }
+  .quality-gaps .ui-panel__head .ui-field, .quality-gaps .ui-panel__head .ui-select { width: 100%; }
+  .quality-gaps__item-head { align-items: flex-start; flex-wrap: wrap; }
+  .quality-gaps__item-head .ui-button { margin-left: 42px; }
+  .quality-gaps__meta .ui-button { margin-left: 0; }
 }

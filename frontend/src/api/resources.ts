@@ -5,6 +5,8 @@ import type {
   ChangePasswordInput,
   ChatFeedbackRating,
   ChatMessageFeedback,
+  ChatKnowledgeGapListResponse,
+  ChatKnowledgeGapParams,
   ChatMessageListResponse,
   ChatQualityFeedbackListResponse,
   ChatQualityFeedbackParams,
@@ -650,6 +652,16 @@ export function listNegativeChatFeedback(
   params: ChatQualityFeedbackParams = {},
 ): Promise<ChatQualityFeedbackListResponse> {
   return apiRequest<ChatQualityFeedbackListResponse>(withQuery('/chat/quality/negative-feedback', params));
+}
+
+/**
+ * Questions the knowledge base answered poorly. `category` defaults to both
+ * categories concatenated, with `no_citations` first.
+ */
+export function listChatKnowledgeGaps(
+  params: ChatKnowledgeGapParams = {},
+): Promise<ChatKnowledgeGapListResponse> {
+  return apiRequest<ChatKnowledgeGapListResponse>(withQuery('/chat/quality/knowledge-gaps', params));
 }
 
 export function sendChatMessage(
