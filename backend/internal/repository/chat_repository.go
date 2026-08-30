@@ -396,7 +396,7 @@ func (r *ChatRepository) GetQualityOverview(
 			COALESCE(SUM(CASE WHEN chat_messages.feedback_rating = 'positive' THEN 1 ELSE 0 END), 0) AS positive_feedback_count,
 			COALESCE(SUM(CASE WHEN chat_messages.feedback_rating = 'negative' THEN 1 ELSE 0 END), 0) AS negative_feedback_count,
 			COALESCE(SUM(CASE WHEN chat_messages.intent = 'knowledge_base' THEN 1 ELSE 0 END), 0) AS knowledge_answer_count,
-			COALESCE(SUM(CASE WHEN chat_messages.intent = 'knowledge_base' AND `+chatEmptyCitationsSQL+` THEN 1 ELSE 0 END), 0) AS without_citations_count,
+			COALESCE(SUM(CASE WHEN chat_messages.intent = 'knowledge_base' AND ` + chatEmptyCitationsSQL + ` THEN 1 ELSE 0 END), 0) AS without_citations_count,
 			COALESCE(SUM(CASE WHEN chat_messages.intent IS NULL THEN 1 ELSE 0 END), 0) AS unclassified_answer_count
 		`).
 		Scan(&overview).Error
@@ -605,7 +605,7 @@ func repeatedRewriteGroups(
 			chat_sessions.knowledge_base_id AS knowledge_base_id,
 			knowledge_bases.name AS knowledge_base_name,
 			COUNT(*) AS occurrence_count,
-			COALESCE(SUM(CASE WHEN ` + chatEmptyCitationsSQL + ` THEN 1 ELSE 0 END), 0) AS ungrounded_count,
+			COALESCE(SUM(CASE WHEN `+chatEmptyCitationsSQL+` THEN 1 ELSE 0 END), 0) AS ungrounded_count,
 			MIN(chat_messages.retrieval_query) AS retrieval_query,
 			MIN(chat_messages.created_at) AS first_seen_at,
 			MAX(chat_messages.created_at) AS last_seen_at

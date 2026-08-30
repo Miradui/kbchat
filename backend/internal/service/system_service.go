@@ -8,7 +8,8 @@ import (
 )
 
 type SystemService struct {
-	cfg config.Config
+	cfg  config.Config
+	diag SystemDiagnosticsDeps
 }
 
 func NewSystemService(cfg config.Config) *SystemService {

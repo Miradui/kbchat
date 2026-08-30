@@ -119,7 +119,7 @@ func (r *DocumentRepository) oldestJobTimestamp(ctx context.Context, status, col
 	var raw *string
 	if err := r.db.WithContext(ctx).
 		Model(&model.DocumentJob{}).
-		Select("MIN(" + column + ")").
+		Select("MIN("+column+")").
 		Where("job_type = ? AND status = ? AND "+column+" IS NOT NULL", "process_document", status).
 		Scan(&raw).Error; err != nil {
 		return time.Time{}, err
