@@ -263,6 +263,24 @@ export type DocumentStatus =
 
 export type DocumentJobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
+/**
+ * The closed set written to `documents.error_code`. `unsupported_type` never
+ * arrives from processing — upload validation rejects those with a 400 before a
+ * document exists — but it is part of the column's constraint.
+ *
+ * Treat an unrecognised value as a generic failure rather than assuming: the set
+ * can grow server-side before the client knows the new member.
+ */
+export type DocumentErrorCode =
+  | 'unsupported_type'
+  | 'corrupt_file'
+  | 'encoding_invalid'
+  | 'empty_content'
+  | 'embedding_failed'
+  | 'storage_failed'
+  | 'cancelled'
+  | 'internal';
+
 export type DocumentItem = {
   id: string;
   knowledgeBaseId: string;
@@ -271,6 +289,25 @@ export type DocumentItem = {
   fileSize: number;
   status: DocumentStatus;
   errorMessage: string | null;
+  /**
+   * Absent on documents that have not failed, and on failures recorded before
+   * migration 019. `errorMessage` stays the human sentence; this is what selects
+   * the specific advice to show.
+   */
+  errorCode?: DocumentErrorCode | string;
+  /**
+   * Set when this document has been replaced by a newer revision, which makes it
+   * history rather than a live document. Null on every current document.
+   */
+  supersededById?: string | null;
+  supersededAt?: string | null;
+  /**
+   * Whether the document is old enough to be worth re-checking. Advisory only —
+   * a stale document is still retrieved and still cited.
+   */
+  isStale?: boolean;
+  /** The configured threshold in days; 0 means staleness reporting is off. */
+  staleAfterDays?: number;
   jobStatus?: DocumentJobStatus;
   progress?: number;
   stage?: DocumentStatus;
@@ -279,6 +316,14 @@ export type DocumentItem = {
   nextRetryAt?: string | null;
   createdAt: string;
   updatedAt?: string;
+};
+
+/** Details on a 409 DOCUMENT_DUPLICATE_CONTENT, enough to describe the conflict. */
+export type DocumentDuplicateDetails = {
+  existingDocumentId: string;
+  existingFilename: string;
+  existingStatus: DocumentStatus;
+  existingUploadedAt: string;
 };
 
 /**
@@ -528,6 +573,13 @@ export type Citation = {
   rerankScore: number | null;
 };
 
+/**
+ * Why an answer came out the way it did. The three failure modes need different
+ * responses from the user: `no_basis` means upload something, `retrieval_failed`
+ * means retry because the system broke, `model_refused` means neither will help.
+ */
+export type ChatAnswerStatus = 'answered' | 'no_basis' | 'retrieval_failed' | 'model_refused';
+
 export type ChatMessage = {
   id: string;
   sessionId: string;
@@ -536,6 +588,11 @@ export type ChatMessage = {
   content: string;
   citations: Citation[];
   feedback?: ChatMessageFeedback | null;
+  /**
+   * Null on user messages and on answers recorded before migration 019. Null means
+   * *unknown*, not `answered` — treating it as answered would relabel history.
+   */
+  answerStatus?: ChatAnswerStatus | null;
   createdAt: string;
 };
 
@@ -614,7 +671,15 @@ export type ChatQualityFeedbackListResponse = {
  * session. Regenerations are excluded, since asking for another attempt at the
  * same question is a different problem from rephrasing it.
  */
-export type ChatKnowledgeGapCategory = 'no_citations' | 'repeated_rewrite';
+/**
+ * `retrieval_failed` and `model_refused` were carved out of `no_citations`: all
+ * three have no citations, but only the first is fixed by uploading documents.
+ */
+export type ChatKnowledgeGapCategory =
+  | 'no_citations'
+  | 'retrieval_failed'
+  | 'model_refused'
+  | 'repeated_rewrite';
 
 export type ChatKnowledgeGapParams = ChatQualityOverviewParams & {
 	category?: ChatKnowledgeGapCategory | 'all';
@@ -647,6 +712,12 @@ export type ChatKnowledgeGapListResponse = {
 	pageSize: number;
 	/** Reported regardless of the requested category so a filter can be labelled. */
 	noCitationsTotal: number;
+	/**
+	 * Only counts turns recorded after migration 019 added `answer_status`. A zero
+	 * means "not observed yet", not "never happens".
+	 */
+	retrievalFailedTotal: number;
+	modelRefusedTotal: number;
 	repeatedRewriteTotal: number;
 };
 

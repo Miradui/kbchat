@@ -1,4 +1,4 @@
-import { ExternalLink, RefreshCw, Repeat, SearchX, ThumbsDown } from 'lucide-react';
+import { ExternalLink, RefreshCw, Repeat, SearchX, ServerCrash, ShieldAlert, ThumbsDown } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -49,10 +49,73 @@ const defaultSources: QualitySources = {
   loadKnowledgeBases: async () => (await listKnowledgeBases({ page: 1, pageSize: 100, sort: 'updatedAt_desc' })).items,
 };
 
-const GAP_CATEGORY_LABELS: Record<ChatKnowledgeGapItem['category'], string> = {
-  no_citations: '检索无结果',
-  repeated_rewrite: '反复改写',
+/**
+ * Each category gets its own label, tone and remedy because the fix differs, and
+ * that difference is the whole point of splitting them. Sending someone to upload
+ * documents for a retrieval outage or a model refusal wastes their time on work
+ * that cannot resolve the problem.
+ */
+type GapPresentation = {
+  label: string;
+  tone: 'warn' | 'danger' | 'info';
+  icon: typeof SearchX;
+  /** Omitted where no navigation would help; the row then shows advice only. */
+  action?: { label: string; to: (item: ChatKnowledgeGapItem) => string };
+  advice: string;
 };
+
+const GAP_PRESENTATION: Record<ChatKnowledgeGapItem['category'], GapPresentation> = {
+  no_citations: {
+    label: '检索无结果',
+    tone: 'warn',
+    icon: SearchX,
+    action: {
+      label: '补充资料',
+      to: (item) => `/knowledge-bases/${encodeURIComponent(item.knowledgeBaseId)}/documents`,
+    },
+    advice: '知识库里没有能回答这个问题的内容，补充资料后可以再试。',
+  },
+  retrieval_failed: {
+    label: '检索失败',
+    tone: 'danger',
+    icon: ServerCrash,
+    // Deliberately points at diagnostics, not at documents: the knowledge base may
+    // be perfectly well stocked and uploading more would change nothing.
+    action: { label: '查看系统状态', to: () => '/diagnostics' },
+    advice: '检索或向量服务当时不可用，与知识库内容无关。确认服务恢复后重试即可。',
+  },
+  model_refused: {
+    label: '模型拒答',
+    tone: 'info',
+    icon: ShieldAlert,
+    advice: '模型判断该问题本身不适合回答。补充资料不会改变结果，通常无需处理。',
+  },
+  repeated_rewrite: {
+    label: '反复改写',
+    tone: 'info',
+    icon: Repeat,
+    action: {
+      label: '补充资料',
+      to: (item) => `/knowledge-bases/${encodeURIComponent(item.knowledgeBaseId)}/documents`,
+    },
+    advice: '同一问题被反复改写，通常说明回答没有命中用户真正想问的内容。',
+  },
+};
+
+/**
+ * An unrecognised category still has to render. The server's set can grow before
+ * this client knows the new member, and dropping the row would hide a real gap.
+ */
+const UNKNOWN_GAP_PRESENTATION: GapPresentation = {
+  label: '其他',
+  tone: 'warn',
+  icon: SearchX,
+  advice: '这是当前版本界面还不认识的缺口类型。',
+};
+
+function gapPresentation(category: string): GapPresentation {
+  return GAP_PRESENTATION[category as ChatKnowledgeGapItem['category']] ?? UNKNOWN_GAP_PRESENTATION;
+}
 
 export function QualityPage({ sources = defaultSources }: { sources?: QualitySources }) {
   const [period, setPeriod] = useState<ChatQualityPeriod>('month');
@@ -272,13 +335,15 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
             <div>
               <h2>知识缺口</h2>
               <span className="ui-panel__head-note">
-                检索不到内容的知识型提问，以及同一会话内被反复改写的问题（不含重新生成）
+按原因区分：知识库没有依据、检索失败、模型拒答，以及同一会话内被反复改写的问题（不含重新生成）
               </span>
             </div>
             <Field label="缺口类型">
               <Select aria-label="知识缺口类型" onChange={(event) => updateGapCategory(event.target.value)} value={gapCategory}>
                 <option value="all">全部类型{gaps ? ` (${gaps.total})` : ''}</option>
                 <option value="no_citations">检索无结果{gaps ? ` (${gaps.noCitationsTotal})` : ''}</option>
+                <option value="retrieval_failed">检索失败{gaps ? ` (${gaps.retrievalFailedTotal})` : ''}</option>
+                <option value="model_refused">模型拒答{gaps ? ` (${gaps.modelRefusedTotal})` : ''}</option>
                 <option value="repeated_rewrite">反复改写{gaps ? ` (${gaps.repeatedRewriteTotal})` : ''}</option>
               </Select>
             </Field>
@@ -310,10 +375,16 @@ function gapEmptyDescription(category: NonNullable<ChatKnowledgeGapParams['categ
   if (category === 'no_citations') {
     return '当前周期内的知识型提问都检索到了内容。';
   }
+  if (category === 'retrieval_failed') {
+    return '当前周期内没有检索失败的提问。';
+  }
+  if (category === 'model_refused') {
+    return '当前周期内没有被模型拒答的提问。';
+  }
   if (category === 'repeated_rewrite') {
     return '当前周期内没有被反复改写的问题。';
   }
-  return '当前周期内没有检索失败或被反复改写的问题。';
+  return '当前周期内没有发现知识缺口。';
 }
 
 type LoadState = { loading: boolean; error: string };
@@ -365,15 +436,19 @@ function FeedbackItem({ item }: { item: ChatQualityFeedbackItem }) {
 
 function KnowledgeGapItem({ item }: { item: ChatKnowledgeGapItem }) {
   const isCluster = item.category === 'repeated_rewrite';
+  const presentation = gapPresentation(item.category);
+  const Icon = presentation.icon;
   return (
     <article className="quality-gaps__item">
       <div className="quality-gaps__item-head">
-        <span className="quality-gaps__icon" aria-hidden="true">{isCluster ? <Repeat /> : <SearchX />}</span>
+        <span className={`quality-gaps__icon quality-gaps__icon--${presentation.tone}`} aria-hidden="true">
+          <Icon />
+        </span>
         <div className="ui-cell-stack">
           <strong>{item.knowledgeBaseName}</strong>
           <small>{item.sessionTitle} · 最近 {formatRelativeTime(item.lastSeenAt)}</small>
         </div>
-        <Badge tone={isCluster ? 'info' : 'warn'}>{GAP_CATEGORY_LABELS[item.category]}</Badge>
+        <Badge tone={presentation.tone}>{presentation.label}</Badge>
         <Link className="ui-button ui-button--link" to={`/chat/${encodeURIComponent(item.sessionId)}`}>
           查看会话 <ExternalLink aria-hidden="true" />
         </Link>
@@ -384,22 +459,22 @@ function KnowledgeGapItem({ item }: { item: ChatKnowledgeGapItem }) {
           <div><dt>检索式</dt><dd>{item.retrievalQuery}</dd></div>
         )}
       </dl>
+      <p className="ui-muted quality-gaps__advice">{presentation.advice}</p>
       <div className="quality-gaps__meta">
         {isCluster
           ? <>
             <Badge tone="info">改写 {item.occurrenceCount} 次</Badge>
             {item.ungroundedCount > 0 && <Badge tone="warn">其中 {item.ungroundedCount} 次无引用</Badge>}
           </>
-          : <Badge tone="warn">检索无结果</Badge>}
+          : <Badge tone={presentation.tone}>{presentation.label}</Badge>}
         <span className="ui-muted">
           首次 {formatRelativeTime(item.firstSeenAt)}
         </span>
-        <Link
-          className="ui-button ui-button--link"
-          to={`/knowledge-bases/${encodeURIComponent(item.knowledgeBaseId)}/documents`}
-        >
-          补充资料 <ExternalLink aria-hidden="true" />
-        </Link>
+        {presentation.action && (
+          <Link className="ui-button ui-button--link" to={presentation.action.to(item)}>
+            {presentation.action.label} <ExternalLink aria-hidden="true" />
+          </Link>
+        )}
       </div>
     </article>
   );

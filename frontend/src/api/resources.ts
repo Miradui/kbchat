@@ -413,14 +413,26 @@ export function listDocumentChunks(
   );
 }
 
+/**
+ * Carried in the multipart body rather than the query string because the file and
+ * the decision about it belong to the same request — a query parameter would let
+ * the two disagree. Omitting it means the default: a duplicate is rejected with a
+ * 409 so the user can choose.
+ */
+export type UploadDocumentOptions = {
+  allowDuplicate?: boolean;
+};
+
 export function uploadDocument(
   knowledgeBaseId: string,
   file: File,
   onProgress?: (progress: number) => void,
   signal?: AbortSignal,
+  options: UploadDocumentOptions = {},
 ): Promise<DocumentItem> {
   const body = new FormData();
   body.append('file', file);
+  appendUploadOptions(body, options);
 
   return apiUploadRequest<DocumentItem>(`/knowledge-bases/${knowledgeBaseId}/documents`, body, {
     onProgress,
@@ -433,12 +445,49 @@ export function uploadGlobalDocument(
   file: File,
   onProgress?: (progress: number) => void,
   signal?: AbortSignal,
+  options: UploadDocumentOptions = {},
 ): Promise<DocumentItem> {
   const body = new FormData();
   body.append('knowledgeBaseId', knowledgeBaseId);
   body.append('file', file);
+  appendUploadOptions(body, options);
 
   return apiUploadRequest<DocumentItem>('/documents', body, { onProgress, signal });
+}
+
+/**
+ * The field is only sent when the override is on. The server reads anything other
+ * than "true" as the default, so sending "false" would be equivalent, but omitting
+ * it keeps a normal upload's body identical to what it was before this existed.
+ */
+function appendUploadOptions(body: FormData, options: UploadDocumentOptions): void {
+  if (options.allowDuplicate) {
+    body.append('allowDuplicate', 'true');
+  }
+}
+
+/**
+ * Replace a document with a new revision. The response is the *new* document: the
+ * old one is kept and marked superseded rather than overwritten, so its chunks stay
+ * answerable until the replacement finishes processing and the citation trail from
+ * older answers does not break.
+ *
+ * Duplicate detection does not apply here — re-uploading the same content as a
+ * deliberate replacement is not a conflict.
+ */
+export function replaceDocument(
+  id: string,
+  file: File,
+  onProgress?: (progress: number) => void,
+  signal?: AbortSignal,
+): Promise<DocumentItem> {
+  const body = new FormData();
+  body.append('file', file);
+
+  return apiUploadRequest<DocumentItem>(`/documents/${id}/replace`, body, {
+    onProgress,
+    signal,
+  });
 }
 
 export function deleteDocument(id: string): Promise<void> {

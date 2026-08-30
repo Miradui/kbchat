@@ -37,11 +37,17 @@
 .quality-gaps__item-head .ui-button { align-items: center; display: inline-flex; flex: 0 0 auto; gap: var(--s-1); }
 .quality-gaps__item-head .ui-button svg { height: 14px; width: 14px; }
 .quality-gaps__icon { align-items: center; background: var(--warn-wash); border-radius: var(--r-sm); color: var(--warn); display: inline-flex; flex: 0 0 auto; height: 30px; justify-content: center; width: 30px; }
+/* Tinted per category so the three failure modes are distinguishable before the
+   badge text is read. Colour is never the only signal: each row also carries the
+   badge and its own advice line. */
+.quality-gaps__icon--danger { background: var(--danger-wash); color: var(--danger); }
+.quality-gaps__icon--info { background: var(--info-wash); color: var(--info); }
 .quality-gaps__icon svg { height: 15px; width: 15px; }
 .quality-gaps__content { display: grid; gap: var(--s-2); margin: 0; }
 .quality-gaps__content > div { display: grid; gap: var(--s-2); grid-template-columns: 56px minmax(0, 1fr); }
 .quality-gaps__content dt { color: var(--text-faint); font-size: var(--t-small); }
 .quality-gaps__content dd { color: var(--text-secondary); line-height: 1.6; margin: 0; word-break: break-word; }
+.quality-gaps__advice { font-size: var(--t-small); line-height: 1.6; margin: 0; }
 .quality-gaps__meta { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-2); }
 .quality-gaps__meta .ui-button { align-items: center; display: inline-flex; gap: var(--s-1); margin-left: auto; }
 .quality-gaps__meta .ui-button svg { height: 14px; width: 14px; }

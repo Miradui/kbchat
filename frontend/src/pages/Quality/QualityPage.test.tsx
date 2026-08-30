@@ -46,12 +46,26 @@ const feedback: ChatQualityFeedbackListResponse = {
 };
 
 const gaps: ChatKnowledgeGapListResponse = {
-  total: 2, page: 1, pageSize: 10, noCitationsTotal: 1, repeatedRewriteTotal: 1, items: [
+  total: 4, page: 1, pageSize: 10,
+  noCitationsTotal: 1, retrievalFailedTotal: 1, modelRefusedTotal: 1, repeatedRewriteTotal: 1,
+  items: [
     {
       category: 'no_citations', messageId: 'message-2', sessionId: 'session-1', sessionTitle: '退货政策',
       knowledgeBaseId: 'kb-1', knowledgeBaseName: '产品知识库', question: '支持跨境退货吗？',
       retrievalQuery: '跨境退货', occurrenceCount: 1, ungroundedCount: 1,
       firstSeenAt: '2026-08-12T00:00:00Z', lastSeenAt: '2026-08-12T00:00:00Z',
+    },
+    {
+      category: 'retrieval_failed', messageId: 'message-3', sessionId: 'session-3', sessionTitle: '运费问题',
+      knowledgeBaseId: 'kb-1', knowledgeBaseName: '产品知识库', question: '运费怎么算？',
+      retrievalQuery: '运费怎么算', occurrenceCount: 1, ungroundedCount: 1,
+      firstSeenAt: '2026-08-15T00:00:00Z', lastSeenAt: '2026-08-15T00:00:00Z',
+    },
+    {
+      category: 'model_refused', messageId: 'message-4', sessionId: 'session-4', sessionTitle: '合同问题',
+      knowledgeBaseId: 'kb-1', knowledgeBaseName: '产品知识库', question: '帮我伪造一份合同',
+      retrievalQuery: '伪造合同', occurrenceCount: 1, ungroundedCount: 0,
+      firstSeenAt: '2026-08-16T00:00:00Z', lastSeenAt: '2026-08-16T00:00:00Z',
     },
     {
       category: 'repeated_rewrite', messageId: null, sessionId: 'session-2', sessionTitle: '发票问题',
@@ -145,15 +159,87 @@ describe('QualityPage', () => {
     expect(await screen.findByText(/4 条回答早于意图记录/)).toBeInTheDocument();
   });
 
+  it('gives each failure mode its own label and remedy', async () => {
+    // The point of splitting the categories is that the fix differs. A retrieval
+    // outage sent to "补充资料" would have the user uploading documents to fix a
+    // service that was down, and a refusal cannot be fixed by uploading at all.
+    const sources = createSources();
+    renderWithRouter(<QualityPage sources={sources} />, ['/quality']);
+
+    const gapList = await screen.findByLabelText('知识缺口列表');
+
+    const retrievalFailed = within(gapList).getByText('运费怎么算？').closest('article');
+    expect(retrievalFailed).not.toBeNull();
+    expect(within(retrievalFailed as HTMLElement).getAllByText('检索失败').length).toBeGreaterThan(0);
+    expect(within(retrievalFailed as HTMLElement).getByText(/与知识库内容无关/)).toBeInTheDocument();
+    expect(within(retrievalFailed as HTMLElement).getByRole('link', { name: /查看系统状态/ }))
+      .toHaveAttribute('href', '/diagnostics');
+    expect(within(retrievalFailed as HTMLElement).queryByRole('link', { name: /补充资料/ })).toBeNull();
+
+    const refused = within(gapList).getByText('帮我伪造一份合同').closest('article');
+    expect(refused).not.toBeNull();
+    expect(within(refused as HTMLElement).getAllByText('模型拒答').length).toBeGreaterThan(0);
+    expect(within(refused as HTMLElement).getByText(/补充资料不会改变结果/)).toBeInTheDocument();
+    // No action at all: neither uploading nor retrying helps, so offering either
+    // would be advice the user cannot act on.
+    expect(within(refused as HTMLElement).queryByRole('link', { name: /补充资料/ })).toBeNull();
+    expect(within(refused as HTMLElement).queryByRole('link', { name: /查看系统状态/ })).toBeNull();
+
+    const noBasis = within(gapList).getByText('支持跨境退货吗？').closest('article');
+    expect(within(noBasis as HTMLElement).getByRole('link', { name: /补充资料/ }))
+      .toHaveAttribute('href', '/knowledge-bases/kb-1/documents');
+  });
+
+  it('filters by each new category and labels the counts', async () => {
+    const user = userEvent.setup();
+    const sources = createSources();
+    renderWithRouter(<QualityPage sources={sources} />, ['/quality']);
+
+    const filter = await screen.findByRole('combobox', { name: '知识缺口类型' });
+    expect(within(filter).getByRole('option', { name: '检索失败 (1)' })).toBeInTheDocument();
+    expect(within(filter).getByRole('option', { name: '模型拒答 (1)' })).toBeInTheDocument();
+
+    await user.selectOptions(filter, 'retrieval_failed');
+    await waitFor(() => expect(sources.loadKnowledgeGaps).toHaveBeenCalledWith(
+      expect.objectContaining({ category: 'retrieval_failed' }),
+    ));
+
+    await user.selectOptions(filter, 'model_refused');
+    await waitFor(() => expect(sources.loadKnowledgeGaps).toHaveBeenCalledWith(
+      expect.objectContaining({ category: 'model_refused' }),
+    ));
+  });
+
+  it('still renders a category this version does not know', async () => {
+    // The server's set can grow before the client does. Dropping the row would
+    // hide a real gap, which is worse than an unspecific label.
+    const sources = createSources();
+    sources.loadKnowledgeGaps.mockResolvedValue({
+      ...gaps,
+      total: 1,
+      items: [{ ...gaps.items[0], category: 'something_new' as never, question: '未来的问题' }],
+    });
+    renderWithRouter(<QualityPage sources={sources} />, ['/quality']);
+
+    expect(await screen.findByText('未来的问题')).toBeInTheDocument();
+    expect(screen.getAllByText('其他').length).toBeGreaterThan(0);
+  });
+
   it('explains an empty gap list per category', async () => {
     const user = userEvent.setup();
     const sources = createSources();
     sources.loadKnowledgeGaps.mockResolvedValue({
-      ...gaps, total: 0, items: [], noCitationsTotal: 0, repeatedRewriteTotal: 0,
+      ...gaps,
+      total: 0,
+      items: [],
+      noCitationsTotal: 0,
+      retrievalFailedTotal: 0,
+      modelRefusedTotal: 0,
+      repeatedRewriteTotal: 0,
     });
     renderWithRouter(<QualityPage sources={sources} />, ['/quality']);
 
-    expect(await screen.findByText('当前周期内没有检索失败或被反复改写的问题。')).toBeInTheDocument();
+    expect(await screen.findByText('当前周期内没有发现知识缺口。')).toBeInTheDocument();
 
     await user.selectOptions(screen.getByRole('combobox', { name: '知识缺口类型' }), 'no_citations');
 
