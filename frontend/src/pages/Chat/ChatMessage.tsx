@@ -333,15 +333,21 @@ export function CitationCard({ citation, focused, index, knowledgeBaseId }: Cita
     >
       <header>
         <span className="chat-source__index">{index}</span>
+        {/*
+          `title` on the truncating span, so a clipped filename can still be read on
+          hover. Screen readers already get the full name from this card's own
+          aria-label and from the link's, so this is purely for sighted pointer users --
+          and it is why the name is allowed to clip rather than wrap.
+        */}
         {href ? (
           <Link aria-label={`打开来源：${citation.filename}，${pageLabel}`} className="chat-source__link" to={href}>
             <FileText aria-hidden="true" />
-            <span className="ui-truncate">{citation.filename}</span>
+            <span className="ui-truncate" title={citation.filename}>{citation.filename}</span>
           </Link>
         ) : (
           <span className="chat-source__link">
             <FileText aria-hidden="true" />
-            <span className="ui-truncate">{citation.filename}</span>
+            <span className="ui-truncate" title={citation.filename}>{citation.filename}</span>
           </span>
         )}
         <span className="chat-source__page">{pageLabel}</span>
