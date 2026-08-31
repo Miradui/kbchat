@@ -50,10 +50,22 @@
    `prefers-reduced-motion` 时不做平滑滚动。
    *Affected*：`frontend/src/pages/Documents/DocumentDetailDrawer.tsx`。
 
-4. [ ] **触摸目标**：移动端断点下把可点击控件抬到 `--touch`（44px），覆盖按钮、图标按钮、
+4. [x] **触摸目标**：移动端断点下把可点击控件抬到 `--touch`（44px），覆盖按钮、图标按钮、
    分段控件、复选框、分页、菜单项。桌面端保持 34px 不变——指针精度不同，一律 44px 会让
    桌面界面变松散。
-   *Affected*：`frontend/src/styles/primitives.css`、`styles/tokens.css`（如需新增断点变量）。
+   *Affected*：新增 `frontend/src/styles/touch.css`（最后导入）、`styles/touch.test.ts`、
+   `styles/index.css`、`styles/pages/library.css`。没有改 `primitives.css`：把移动端专属
+   规则单独放一个文件，桌面基线就仍是一处可读的定义；`tokens.css:101` 已有 `--touch: 44px`，
+   不需要新变量。
+   顺带修掉一个断点漏洞：分类树行内操作按钮 24px 且靠 hover 才显形，library.css 只在自己的
+   680px 断点下还原，于是 681–980px 的触屏上又小又看不见——这几条规则一并搬到 `touch.css`。
+   表格复选框只抬到 22px：原生复选框的对勾会填满给定尺寸，`accent-color` 也没法让对勾在大
+   方框里保持小巧，要做到真正 44px 得给 input 套一层带尺寸的 label，那是四张表格的结构改动，
+   不在这一轮范围内。
+   `touch.css` 不自带任何新 class，所以拼错的选择器就是一条静默失效的规则（初稿写了根本不
+   存在的 `.ui-field--inline`）。`touch.test.ts` 守住这点：每个 class 必须在别处有定义或被
+   组件用到、任何声明都不许逃出媒体查询、导入必须留在最后。
+   未验证：真机与真实触摸输入——尺寸靠样式表审查断言，没有在硬件上量过。
 
 5. [ ] **移动端输入**：搜索框加 `enterKeyHint="search"`、`autoComplete="off"`、
    `autoCapitalize="off"`、`autoCorrect="off"`；聊天输入框 `enterKeyHint="send"`。
