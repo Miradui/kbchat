@@ -32,6 +32,7 @@ import { ChatSessionRail } from './ChatSessionRail';
 import type { ChatSessionScope } from './ChatSessionRail';
 import { useChatSessions } from './useChatSessions';
 import { useChatThread } from './useChatThread';
+import { useStreamAnnouncement } from './useStreamAnnouncement';
 
 /**
  * `/chat` is the draft state and `/chat/:sessionId` is a thread.
@@ -180,6 +181,14 @@ export function ChatPage() {
     () => [...thread.messages].reverse().find((message) => message.role === 'assistant')?.id ?? null,
     [thread.messages],
   );
+
+  const streamAnnouncement = useStreamAnnouncement({
+    sending: thread.sending,
+    streamingAnswer: thread.streamingAnswer,
+    streamingCitationCount: thread.streamingCitations.length,
+    stopped: Boolean(thread.stoppedStream),
+    failed: Boolean(thread.failedSend),
+  });
 
   const archived = Boolean(currentSession?.archivedAt);
   const threadInteractionPending = thread.sending
@@ -427,6 +436,14 @@ export function ChatPage() {
             )}
           </header>
 
+          {/*
+            The one polite region for answer progress. Permanently mounted and outside
+            every conditional below, because a live region that appears together with
+            its text is announced unreliably -- what has to change is the contents, not
+            the region. See useStreamAnnouncement for what it is allowed to say.
+          */}
+          <p aria-live="polite" className="sr-only" role="status">{streamAnnouncement}</p>
+
           {sessionActionError && <p className="ui-inline-error" role="alert">{sessionActionError}</p>}
           <RerankFallbackNotice fallback={thread.rerankFallback} />
           {thread.loadError && (
@@ -547,7 +564,10 @@ export function ChatPage() {
                           </p>
                         ) : (
                           <>
-                            <p className="chat-msg__content" role="status">
+                            {/* Visible text only. This element unmounts as soon as the
+                                first token lands, so it cannot be the live region -- the
+                                permanent one near the top of the page announces phases. */}
+                            <p className="chat-msg__content">
                               {thread.streamingCitations.length > 0
                                 ? '正在生成回答…'
                                 : '正在检索知识库并生成回答…'}
@@ -583,7 +603,10 @@ export function ChatPage() {
                         <p className="chat-msg__content">
                           {thread.stoppedStream.answer || '已停止生成。'}
                         </p>
-                        <div className="chat-recovery chat-recovery--stopped" role="status">
+                        {/* No `role="status"`: the permanent region already announces
+                            the stop. Two polite regions racing over one event is how a
+                            reader ends up hearing it twice, or neither. */}
+                        <div className="chat-recovery chat-recovery--stopped">
                           <strong>{thread.stoppedStream.checking ? '已停止，正在确认结果…' : '已停止生成'}</strong>
                           <p>{thread.stoppedStream.resumable ? '这段内容尚未写入历史，你可以继续提问。' : '确认完成后即可继续提问。'}</p>
                         </div>
