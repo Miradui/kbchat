@@ -135,10 +135,14 @@
    顺手修掉一个和本任务无关的 ChatPage 脆弱断言（它要求后面不能再有别的刷新落地）。
    未验证：真实读屏和真实键盘设备上的焦点顺序，只在 jsdom 里断言过。
 
-9. [ ] **文档**：`10-frontend-spec.md` 记录搜索建议契约、触摸目标口径、live region 约束、
+9. [x] **文档**：`10-frontend-spec.md` 记录搜索建议契约、触摸目标口径、live region 约束、
    焦点归还规则；路线图收尾；handoff 记录刻意偏离与未验证项。
    *Affected*：`docs/10-frontend-spec.md`、`docs/15-product-improvement-roadmap.md`、
    `docs/12-handoff.md`。
+   写的时候逐条回源核对，抓到自己三处写错：建议以为是 localStorage 最近查询，其实是
+   `GET /search/suggest`；「只写 min-height 不写 height」漏了方形图标按钮那个例外——而
+   `touch.css` 自己的头注释也这么写，所以是源码注释先错了，一并改掉；`useModalFocus`
+   的「12 个测试」查无此数（测试在 `Dialog.test.tsx`，9 个），改成指位置不报数。
 
 ## 边界
 
