@@ -86,8 +86,19 @@
    表现成一个看起来无关的页面失败。
    未验证：真机——软键盘实际画出哪个按键、以及键盘是否真的没挡住输入框，都得上硬件看。
 
-6. [ ] **长引用布局**：文件名单行截断加 `title`，页码不被挤掉，移动端引用卡片改为纵向排列。
-   *Affected*：`frontend/src/styles/pages/chat.css`、`pages/Chat/ChatMessage.tsx`。
+6. [x] **长引用布局**：文件名单行截断加 `title`，页码不被挤掉，移动端引用卡片改为纵向排列。
+   *Affected*：`frontend/src/styles/pages/chat.css`、`pages/Chat/ChatMessage.tsx`、
+   新增 `pages/Chat/CitationCard.test.tsx`。
+   截断本来就有（`.ui-truncate`），缺的是 `title`：指针用户看不到被省略号吃掉的部分。读屏本来
+   就没问题——卡片自己的 `aria-label` 和链接的 `aria-label` 都带完整文件名，所以这个缺口一直
+   看不出来。两个分支都补了 `title`，包括没有链接的那个分支（那里连链接的 `aria-label` 也没
+   有，`title` 是唯一还带着完整名字的东西）。
+   移动端：表头原本把序号+文件名+页码挤在一行，手机上文件名只剩几十像素就开始截断。现在整行
+   `flex-wrap`，页码换到自己一行、文件名拿满宽度，并缩进对齐到文件名而不是与它无关的序号下面。
+   用 `flex-wrap` 而不是纵向排列，是为了让序号留在文件名旁边——编号引用要能扫读。序号宽度抽成
+   `--source-index-size`，因为移动端缩进必须和它完全一致，两处写死的字面量早晚会各自漂走。
+   页码本来就是 `flex: 0 0 auto`，从没被挤掉过；现在由测试钉住，不再只是个巧合。
+   未验证：换行后的实际排版要真机看——jsdom 不做布局也不解析媒体查询，这里是从 CSS 推的。
 
 7. [ ] **流式播报**：一个常驻 live region，只播报阶段变化（正在检索 → 正在生成 → 完成 /
    已停止 / 失败），不播报 token。错误用 `role="alert"`，进度用 `role="status"`。
