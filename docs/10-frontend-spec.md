@@ -184,7 +184,7 @@ failed
 
 1. 页面为两栏：左栏是知识库选择器与会话列表，右栏是消息线程与输入框。会话列表按今天 / 昨天 / 最近 7 天 / 更早分组，并使用服务端分页；仍有下一页时提供「加载更多会话」，追加结果不得替换已加载分组，加载失败只在该控件局部提示并可重试。直接打开归档会话深链时，侧栏范围同步为「已归档」。`<= 1080px` 时左栏变为可唤出的抽屉。
 2. `/chat` 无消息时展示知识库启动器，承担原独立落地页的职责。首次提交问题时才创建会话，不得仅因浏览入口就创建空会话。
-3. 输入框自动增高，`Enter` 发送、`Shift+Enter` 换行，输入法组合期间不触发发送。禁用时必须说明原因。
+3. 输入框自动增高，`Enter` 发送、`Shift+Enter` 换行，输入法组合期间不触发发送。禁用时必须说明原因。既然 Enter 就是发送，手机键盘也要这么显示：`enterKeyHint="send"`。`Shift+Enter` 是硬件键盘的动作，旁边那行提示在 680px 以下本来就是隐藏的。
 4. 会话标题就地编辑，不在标题栏常驻输入框和保存按钮。归档、导出和删除收纳在顶栏的会话操作菜单中；导出下载 Markdown。删除是软删除，会话和消息进入聊天回收站并可在永久删除前恢复，确认文案不得暗示消息已立即清除。
 5. assistant 回答必须展示真实 citations；无引用时展示「当前知识库中未找到足够依据。」
 6. citations 至少展示 `filename`、`pageNumber`、`content`、`vectorScore` 和 `rerankScore`。来源以每条回答下方的可展开列表呈现，不作为需要单独打开的第三栏。来源卡默认展示短摘录，长原文按需展开；向量分和精排分收纳在「检索详情」中，`rerankScore=null` 明确展示为「无精排分」。
@@ -220,6 +220,8 @@ failed
 6. 关键词高亮只渲染服务端返回的 `highlights`，偏移量按 UTF-16 code unit 解释；不得再由前端自行做子串匹配。
 7. 明确展示加载、空结果、错误和局部重试状态，并通过 `role="status"` 播报搜索状态。
 8. 存在有效查询时提供「导出 CSV」，参数必须复用当前 `q` 和 `type`，不受当前分页限制；导出期间只禁用导出按钮，失败不得清空搜索结果。超过 5000 条时展示后端 `EXPORT_TOO_LARGE` 的用户消息。
+9. 搜索建议来自 `GET /search/suggest`，只给标题级结果（知识库、文档），是「已经知道要找哪一个」时越过结果页的快捷方式，不是结果页的替代：内容片段只在结果页出现，否则两个视图互相抢。按 ARIA 1.2 combobox 实现——listbox 是 input 的兄弟节点，焦点全程留在输入框，当前项由 `aria-activedescendant` 指示；方向键不得移动焦点，否则用户无法继续输入。打开列表不预选任何项，刚输入完按 Enter 表示「搜我输入的内容」。建议请求失败静默处理，下面的完整搜索会报告真正的错误。建议列表刻意不加 live region：combobox 模式下读屏已经在念当前项，再播报数量会和结果页的 `role="status"` 互相打断。
+10. 无结果时的建议必须与后端的匹配方式一致。`GlobalSearchRepository` 走 `LOWER(column) LIKE '%query%'`——单次小写子串匹配，不分词。因此空格、引号和 `+ - | * ~` 都是字面字符，最有用的建议是拆短或去掉符号；「换一种大小写」是错的（查询本来就不区分大小写）。建议按证据强弱排序，只有「其他类型下确实有结果」是被观察到的事实，其余都是推断；无法确定时退回通用文案，不给自信的错建议。刻意不为空结果再发一次请求做「猜你想搜」。
 
 ## 标签管理页
 
@@ -234,14 +236,23 @@ failed
 
 1. Button、IconButton、Field、Badge、Table、Pagination、Drawer、Popover、EmptyState、ErrorState、LoadingSkeleton、Dialog 和 Toast 使用统一语义样式，全部定义在 `src/styles/primitives.css`。
 2. 图标按钮必须同时提供 `aria-label` 与 tooltip，不使用字符或英文占位图标。
-3. 表单字段的提示和错误必须通过 `aria-describedby` 关联到控件；错误同时设置 `aria-invalid` 并使用 `role="alert"` 播报。
-4. Dialog 与 Drawer 支持 Escape、焦点约束、背景滚动锁定和焦点恢复，并支持嵌套。
-5. 所有交互控件保留明显 `:focus-visible`；关键移动端触控目标不低于 44px。
-6. 危险操作统一使用 `ConfirmDialog`；失败保留在确认框内，成功通过全局 Toast 通知，不使用原生 `window.confirm`。
-7. 支持 `prefers-reduced-motion`；成功、警告和危险状态不能只依赖颜色表达。
-8. 知识库、分类、标签等编辑表单以及待导入文件清单存在未保存内容时，取消、Escape 或遮罩关闭必须先确认；刷新或关闭标签页时使用 `beforeunload` 保护。
-9. 全局 Toast 在 Dialog 或 Drawer 打开期间仍须可见并可被辅助技术播报，但不得成为可交互的焦点目标。
-10. 整个应用只有一个 `<main>` landmark，由 `AppShell` 拥有。
+3. 搜索类输入框的移动键盘提示由 `SearchInput` 统一给默认值，不在每个调用点重复：`enterKeyHint="search"`（手机上显示搜索键而不是换行键），以及 `autoCapitalize` / `autoCorrect` / `autoComplete` 全关——自动大写和纠错会和标识符、文件名打架，浏览器的自动填充下拉还会盖住建议列表。默认值写在展开之前，调用点仍可覆盖。
+4. 表单字段的提示和错误必须通过 `aria-describedby` 关联到控件；错误同时设置 `aria-invalid` 并使用 `role="alert"` 播报。
+5. Dialog 与 Drawer 支持 Escape、焦点约束、背景滚动锁定和焦点恢复，并支持嵌套。
+6. 所有交互控件保留明显 `:focus-visible`；关键移动端触控目标不低于 44px。触控尺寸只有一个归口：`styles/touch.css`，断点是 `@media (max-width: 980px)`，用宽度而不是 `(pointer: coarse)`——二合一笔记本接触控屏时也报 coarse，但用户手上是触摸板。装文字的控件只写 `min-height`，不写 `height`，内容本来就更高的控件不能被压小；方形图标按钮是例外，两个方向都写，点击区域要和看得见的圆形一致。页面样式表不得再自行定义触控尺寸；`touch.css` 必须最后引入，靠顺序而不是 `!important` 取胜。悬停才显示的行内操作在这个断点必须常驻可见，没有指针就没有悬停。
+7. 危险操作统一使用 `ConfirmDialog`；失败保留在确认框内，成功通过全局 Toast 通知，不使用原生 `window.confirm`。
+8. 支持 `prefers-reduced-motion`；成功、警告和危险状态不能只依赖颜色表达。
+9. 知识库、分类、标签等编辑表单以及待导入文件清单存在未保存内容时，取消、Escape 或遮罩关闭必须先确认；刷新或关闭标签页时使用 `beforeunload` 保护。
+10. 全局 Toast 在 Dialog 或 Drawer 打开期间仍须可见并可被辅助技术播报，但不得成为可交互的焦点目标。
+11. 整个应用只有一个 `<main>` landmark，由 `AppShell` 拥有。
+12. 一个页面同时只能有一个 polite live region 在描述同一件事。多个 polite 区域会互相打断，这正是「克制的播报」要排除的情况；测试里 `getByRole('status')` 在存在多个时直接抛错，这个抛错本身就是断言。live region 必须常驻在 DOM 里、只改内容：和文字一起挂载的区域播报不可靠。流式回答的阶段播报见 `useStreamAnnouncement`——检索、生成、已停止、完成各说一次，失败不说，因为线程里的失败提示是 `role="alert"`（assertive，自己会播报），再说一遍就是重复。
+13. 焦点归还是每一条关闭路径的义务，不是可选项。视觉上看不出焦点丢失，所以每条路径都要有测试锁住：
+    - Dialog、Drawer 统一走 `useModalFocus`（堆叠、焦点约束、背景 `inert` / `aria-hidden`、Escape、Tab 循环）。触发元素已经不存在时退到 `[data-modal-focus-fallback]`，该标记必须至少有一个在桌面端也渲染的控件上。
+    - portal 浮层（Popover、OverflowMenu）用 Tab 关闭时必须 `preventDefault` 再手动把焦点放回触发器。不能放默认行为走：浏览器计算 Tab 目标时 React 还没卸载面板，焦点会进入即将消失的面板，最后落到 `body`。代价是多按一次 Tab，换来的是永不丢焦点。
+    - 浮层打开时必须主动把焦点移进面板。portal 挂在 `body` 末尾，Tab 会跳过它，不移进去等于键盘用户根本到不了，Escape 也收不到 keydown。
+    - 点击外部关闭属于「用户已经去了别处」，不得把焦点抢回触发器；只有键盘关闭才归还。
+    - 就地编辑（InlineEdit）进入编辑要显式 `focus()`，不能只靠 `select()`；保存、取消、Escape 三条退出路径都要回到触发按钮。
+    - 列表行删除后焦点落到相邻行的同一个控件（末行则落到前一行），用 `useRowFocusAfterRemoval`：相邻行在删除**开始**时选定（那时行还在），焦点在 effect 里移动（对话框在自己的 cleanup 里归还焦点，React 先跑完 cleanup 再跑 effect）。只剩一行时交给上面的 fallback。
 
 ## 样式约束
 
@@ -252,6 +263,7 @@ src/styles/
   primitives.css    跨页复用的组件样式
   app-shell.css     导航、顶栏、命令面板
   pages/*.css       每个页面一个文件
+  touch.css         移动端触控尺寸，必须最后引入
 ~~~
 
 1. `pages/*.css` 之间不得互相引用选择器；任何跨页复用必须提升到 `primitives.css`。
@@ -259,6 +271,7 @@ src/styles/
 3. 层级由 1px 边框表达，投影只用于浮层（Dialog、Drawer、Popover、Toast、命令面板）。
 4. 强调色只有一个，状态色只用于表达状态，不用于装饰。
 5. 字号只使用 tokens 中的六级尺度。
+6. 竖向视口尺寸一律用 `dvh`，不用裸 `vh`：移动端地址栏和软键盘会压缩可视高度，`vh` 不跟着变，结果是内容被挤而留白不动。横向的 `vw` 不受这两者影响，不在此列。`styles/viewport-units.test.ts` 守住这条。
 
 ## API 与代码约束
 

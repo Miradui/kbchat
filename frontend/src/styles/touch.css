@@ -16,8 +16,10 @@
    by a trackpad, which would enlarge everything on a desktop-sized screen. Width is
    the coarser signal but it fails in the direction that leaves the desktop alone.
 
-   Sizes go on `min-height`/`min-width` rather than `height`/`width` so a control that
-   is already taller than 44px is never shrunk to fit.
+   Controls that hold text get `min-height`, not `height`, so one whose content already
+   makes it taller than 44px is never shrunk to fit. The square ones are the exception
+   and set both: their tap area should match the circle you can see, so growing in one
+   direction only would be wrong.
    ============================================================ */
 
 @media (max-width: 980px) {

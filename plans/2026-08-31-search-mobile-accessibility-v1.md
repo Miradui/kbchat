@@ -125,7 +125,7 @@
 8. [x] **焦点复核与补齐**：逐个走查 Dialog、Drawer、Popover、OverflowMenu、InlineEdit
    的关闭路径；已经正确的写测试锁住，缺的补上。列表行删除后焦点落到相邻行而不是 body。
    *Affected*：`frontend/src/components/ui/`、相关页面。
-   Dialog 和 Drawer 都走 `useModalFocus`，本来就是对的（已有 12 个测试）；Popover 和
+   Dialog 和 Drawer 都走 `useModalFocus`，本来就是对的（焦点约束、Escape、嵌套隐藏都在 `Dialog.test.tsx` 里锁着）；Popover 和
    InlineEdit 一个测试都没有，四个问题全在这两个加 OverflowMenu 上。
    Tab 关闭必须 `preventDefault` 再手动归还：浏览器算 Tab 目标时 React 还没卸载
    portal 面板，放默认走焦点会进入正在消失的面板，最后落到 body——第一版让默认继续，
