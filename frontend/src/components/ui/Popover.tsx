@@ -49,6 +49,20 @@ export function Popover({ trigger, label, align = 'end', width = 220, children }
     if (open) place();
   }, [open, place]);
 
+  /*
+    Move focus into the panel when it opens. The panel is portaled to the end of `body`,
+    so Tab from the trigger goes to whatever follows the trigger in the document rather
+    than into the panel -- without this, the menu items cannot be reached by keyboard at
+    all, and Escape does nothing because the keydown never reaches the panel's handler.
+  */
+  useEffect(() => {
+    if (!open) return;
+    const first = panelRef.current?.querySelector<HTMLElement>(
+      'button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex="-1"])',
+    );
+    (first ?? panelRef.current)?.focus();
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
 
@@ -80,7 +94,16 @@ export function Popover({ trigger, label, align = 'end', width = 220, children }
       return;
     }
     if (event.key === 'Tab') {
+      /*
+        `preventDefault`, then close and return to the trigger. Letting the default run
+        does not work: React has not unmounted the panel by the time the browser computes
+        Tab's destination, so Tab moves into the panel that is about to disappear and
+        focus ends up on `body`. Returning to the trigger costs one extra Tab press to
+        continue through the page, which is the price of never losing focus.
+      */
+      event.preventDefault();
       setOpen(false);
+      triggerRef.current?.focus();
     }
   }
 

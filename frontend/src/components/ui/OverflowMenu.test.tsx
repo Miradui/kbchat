@@ -60,4 +60,24 @@ describe('OverflowMenu', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
   });
+
+  it('does not lose focus when tabbing out of the menu', async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <OverflowMenu label="更多操作" items={[{ label: '编辑', onSelect: vi.fn() }]} />
+        <button type="button">后一个</button>
+      </>,
+    );
+
+    const trigger = screen.getByRole('button', { name: '更多操作' });
+    await user.click(trigger);
+    await user.keyboard('{Tab}');
+
+    // Tab closed the menu and left focus on the trigger, so the next Tab continues from
+    // there. Allowing the default instead moves focus into the panel React is about to
+    // unmount, and it ends up on `body` -- from where the user must tab the page again.
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
 });

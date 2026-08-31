@@ -347,7 +347,20 @@ export function AppShell({
             ))}
           </nav>
 
-          <button className="topbar__search" onClick={() => setPaletteOpen(true)} type="button">
+          {/*
+            Last-resort focus target when a modal closes and the element that opened it
+            is gone -- deleting a row is the usual way that happens, since the confirm
+            dialog was opened from a button inside the row being deleted. The mobile menu
+            button above carries the same marker and wins on mobile by document order;
+            this one is what makes the fallback exist on desktop at all, where that
+            button is not rendered and focus was falling to `body`.
+          */}
+          <button
+            className="topbar__search"
+            data-modal-focus-fallback
+            onClick={() => setPaletteOpen(true)}
+            type="button"
+          >
             <Search aria-hidden="true" />
             <span className="topbar__search-label">搜索</span>
             <kbd className="topbar__kbd">⌘K</kbd>

@@ -15,6 +15,7 @@ import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { Button } from '../../components/ui/Button';
 import { IconButton } from '../../components/ui/IconButton';
 import { SearchInput } from '../../components/ui/Field';
+import { useRowFocusAfterRemoval } from '../../hooks/useRowFocusAfterRemoval';
 import { AppShell } from '../../layouts/AppShell';
 import type { KnowledgeBaseTag } from '../../types/api';
 import { formatCount, formatRelativeTime } from '../../utils/format';
@@ -34,6 +35,8 @@ export function TagsPage() {
   const [loadError, setLoadError] = useState('');
   const [deleteError, setDeleteError] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
+  const [removedId, setRemovedId] = useState<string | null>(null);
+  const { rowRef, rememberNeighbour } = useRowFocusAfterRemoval(removedId);
 
   useEffect(() => {
     let active = true;
@@ -81,6 +84,9 @@ export function TagsPage() {
       await deleteKnowledgeBaseTag(deleteTarget.id);
       setTags((items) => items.filter((item) => item.id !== deleteTarget.id));
       setDeleteTarget(null);
+      // Focus moves in an effect keyed on this, not here: the dialog closing on the same
+      // render restores focus in its own cleanup and would override anything set now.
+      setRemovedId(deleteTarget.id);
       toast.success('标签删除成功');
     } catch (caught) {
       setDeleteError(getErrorMessage(caught, '标签删除失败'));
@@ -156,10 +162,14 @@ export function TagsPage() {
                           </IconButton>
                           <IconButton
                             label={`删除 ${tag.name}`}
+                            ref={rowRef(tag.id)}
                             tone="danger"
                             onClick={() => {
                               setDeleteError('');
                               setDeleteTarget(tag);
+                              // Chosen now, while every row is still mounted. After the
+                              // delete the row has deregistered and its position is gone.
+                              rememberNeighbour(tag.id);
                             }}
                           >
                             <Trash2 aria-hidden="true" />

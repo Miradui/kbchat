@@ -92,7 +92,15 @@ export function OverflowMenu({ label, items, disabled = false }: OverflowMenuPro
       return;
     }
     if (event.key === 'Tab') {
+      /*
+        Same contract as Popover: prevent the default, close, return to the trigger. The
+        menu is portaled to the end of `body` and React has not unmounted it when the
+        browser computes Tab's destination, so allowing the default moves focus into the
+        panel that is about to vanish and focus is lost to `body`.
+      */
+      event.preventDefault();
       setOpen(false);
+      triggerRef.current?.focus();
       return;
     }
     const controls = Array.from(
