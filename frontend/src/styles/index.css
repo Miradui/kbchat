@@ -11,3 +11,6 @@
 @import './pages/tags.css';
 @import './pages/quality.css';
 @import './pages/diagnostics.css';
+
+/* Last, so the mobile touch sizes win over same-specificity page rules. */
+@import './touch.css';

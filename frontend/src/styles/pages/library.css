@@ -295,9 +295,4 @@
 @media (max-width: 680px) {
   .kb-status-tiles { grid-template-columns: minmax(0, 1fr); }
   .kb-info-grid { grid-template-columns: minmax(0, 1fr); }
-  .cat-tree__actions { opacity: 1; }
-  .cat-tree__actions .ui-icon-button,
-  .cat-tree__toggle { height: var(--touch); min-height: var(--touch); width: var(--touch); }
-  .cat-panel__all,
-  .cat-tree__name { min-height: var(--touch); }
 }

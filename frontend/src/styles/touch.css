@@ -1,0 +1,114 @@
+/* ============================================================
+   Touch targets
+   ============================================================
+
+   Controls are 34px (`--control-h`) everywhere, which is right for a mouse and too
+   small for a thumb. This raises the interactive ones to 44px (`--touch`) at the
+   mobile breakpoint only.
+
+   Not applied everywhere: pointer precision is what makes 44px necessary, and a
+   desktop UI built out of 44px rows reads as loose and fits noticeably less on
+   screen. 980px is the existing breakpoint where the rail turns into a drawer, so
+   the layout is already in its mobile form here -- reusing it keeps one boundary
+   instead of introducing a second one.
+
+   Width, not `(pointer: coarse)`: a hybrid laptop reports coarse while being driven
+   by a trackpad, which would enlarge everything on a desktop-sized screen. Width is
+   the coarser signal but it fails in the direction that leaves the desktop alone.
+
+   Sizes go on `min-height`/`min-width` rather than `height`/`width` so a control that
+   is already taller than 44px is never shrunk to fit.
+   ============================================================ */
+
+@media (max-width: 980px) {
+  .ui-button,
+  .ui-select,
+  .ui-input,
+  .ui-tabs a,
+  .ui-tabs button {
+    min-height: var(--touch);
+  }
+
+  /* Square, so the tap area matches the visual circle rather than being wider. */
+  .ui-icon-button {
+    height: var(--touch);
+    min-width: var(--touch);
+    width: var(--touch);
+  }
+
+  /*
+    The button is 40px, not 44: `.ui-segmented` adds 2px of padding on each side, so
+    a 44px button would make the control 48px tall and taller than every button
+    beside it.
+  */
+  .ui-segmented button {
+    height: 40px;
+    min-width: 40px;
+  }
+
+  .ui-pagination__page {
+    height: var(--touch);
+    min-width: var(--touch);
+  }
+
+  .ui-overflow-menu__item,
+  .ui-menu-item {
+    min-height: var(--touch);
+  }
+
+  /*
+    A switch row is a `<label>` wrapping the checkbox, so the whole row already toggles
+    it -- growing the row is enough here and the box itself needs no change.
+  */
+  .ui-switch-row {
+    min-height: var(--touch);
+  }
+
+  /*
+    Table checkboxes have no label wrapping them, so unlike a switch row there is no
+    row to grow -- the box itself is the whole target. 22px rather than 44px: a native
+    checkbox draws its tick to fill whatever size it is given, so 44px is a very large
+    square on a phone, and `accent-color` offers no way to keep the tick small inside a
+    bigger box. Padding does not help either; a native checkbox paints over it.
+
+    Getting a real 44px target here needs the input wrapped in a label that carries the
+    size, which is a markup change across four tables and is not part of this pass.
+  */
+  .ui-checkbox {
+    height: 22px;
+    width: 22px;
+  }
+
+  /*
+    In card layout the select cell is a full-width row, so give it the touch height --
+    the checkbox sits at its right edge and the extra height makes it easier to hit
+    even though the row itself is not clickable.
+  */
+  .ui-table tbody td.ui-table__select {
+    align-items: center;
+    min-height: var(--touch);
+  }
+
+  /*
+    The category tree shrinks its row actions to 24px and hides them behind hover, which
+    is unreachable without a pointer. These lived in library.css at its own 680px
+    breakpoint, which left 681-980px both tiny and invisible on a touch screen; they are
+    here so touch sizing has one breakpoint and one owner. The descendant selector is
+    needed to outweigh `.cat-tree__actions .ui-icon-button` in library.css.
+  */
+  .cat-tree__actions {
+    opacity: 1;
+  }
+
+  .cat-tree__actions .ui-icon-button,
+  .cat-tree__toggle {
+    height: var(--touch);
+    min-height: var(--touch);
+    width: var(--touch);
+  }
+
+  .cat-panel__all,
+  .cat-tree__name {
+    min-height: var(--touch);
+  }
+}
