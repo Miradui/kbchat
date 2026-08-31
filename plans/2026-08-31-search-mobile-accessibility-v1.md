@@ -122,9 +122,18 @@
    会让页面永远停在「正在生成」，因为只有请求真正落定才会记下 stoppedStream。
    未验证：NVDA / VoiceOver——真实读屏到底念出什么、节奏是否舒服，都得上硬件。
 
-8. [ ] **焦点复核与补齐**：逐个走查 Dialog、Drawer、Popover、OverflowMenu、InlineEdit
+8. [x] **焦点复核与补齐**：逐个走查 Dialog、Drawer、Popover、OverflowMenu、InlineEdit
    的关闭路径；已经正确的写测试锁住，缺的补上。列表行删除后焦点落到相邻行而不是 body。
    *Affected*：`frontend/src/components/ui/`、相关页面。
+   Dialog 和 Drawer 都走 `useModalFocus`，本来就是对的（已有 12 个测试）；Popover 和
+   InlineEdit 一个测试都没有，四个问题全在这两个加 OverflowMenu 上。
+   Tab 关闭必须 `preventDefault` 再手动归还：浏览器算 Tab 目标时 React 还没卸载
+   portal 面板，放默认走焦点会进入正在消失的面板，最后落到 body——第一版让默认继续，
+   被测试直接否掉了。
+   行删除的焦点在 effect 里移，不在 handler 里：对话框关闭时会在自己的 cleanup 里归还
+   焦点，React 先跑完所有 cleanup 再跑 effect，所以 effect 才压得住。
+   顺手修掉一个和本任务无关的 ChatPage 脆弱断言（它要求后面不能再有别的刷新落地）。
+   未验证：真实读屏和真实键盘设备上的焦点顺序，只在 jsdom 里断言过。
 
 9. [ ] **文档**：`10-frontend-spec.md` 记录搜索建议契约、触摸目标口径、live region 约束、
    焦点归还规则；路线图收尾；handoff 记录刻意偏离与未验证项。
