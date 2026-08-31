@@ -67,11 +67,24 @@
    组件用到、任何声明都不许逃出媒体查询、导入必须留在最后。
    未验证：真机与真实触摸输入——尺寸靠样式表审查断言，没有在硬件上量过。
 
-5. [ ] **移动端输入**：搜索框加 `enterKeyHint="search"`、`autoComplete="off"`、
+5. [x] **移动端输入**：搜索框加 `enterKeyHint="search"`、`autoComplete="off"`、
    `autoCapitalize="off"`、`autoCorrect="off"`；聊天输入框 `enterKeyHint="send"`。
    复核软键盘弹出时输入框不被遮挡。
-   *Affected*：`frontend/src/components/ui/Field.tsx`、`pages/Chat/ChatComposer.tsx`、
-   `pages/Search/SearchPage.tsx`、`components/CommandPalette.tsx`。
+   *Affected*：`frontend/src/components/ui/Field.tsx`、`components/ui/Field.test.tsx`、
+   `components/CommandPalette.tsx`(+test)、`pages/Chat/ChatComposer.tsx`(+test)、
+   `pages/Search/SearchCombobox.tsx`、`styles/app-shell.css`、`styles/viewport-units.test.ts`。
+   四个提示放在共享的 `SearchInput` 上，不逐个调用点重复——全项目七处搜索框都是它。属性写在
+   展开运算符之前，调用点仍可覆盖。搜索 combobox 里第 1 项留下的重复副本删掉了，它原有的测试
+   照样通过，这才说明默认值真的生效了。命令面板保留自己的裸 `<input>`（要带面板自己的布局和
+   combobox 接线），所以自己设这四个属性，并补了测试锁住这处分叉。
+   软键盘遮挡：布局本来就是 `dvh`，键盘弹出会跟着收缩，只有命令面板搜索框上方的 padding 用了
+   `vh`——下方面板从底部被压缩，顶部却仍死撑最多 140px 空白。改成 `dvh`，并加
+   `viewport-units.test.ts` 守住这个约定（`vw` 故意不管：横向不受键盘和地址栏影响，侧栏宽度
+   用 `vw` 是对的）。
+   顺带补了 ChatComposer 的单测：Enter 发送、Shift+Enter 不发送、IME 组词中的 Enter 不发送
+   （中文选词不能顺手把消息发出去）。这些逻辑早就有，但只能透过整个 ChatPage 触发，回归时会
+   表现成一个看起来无关的页面失败。
+   未验证：真机——软键盘实际画出哪个按键、以及键盘是否真的没挡住输入框，都得上硬件看。
 
 6. [ ] **长引用布局**：文件名单行截断加 `title`，页码不被挤掉，移动端引用卡片改为纵向排列。
    *Affected*：`frontend/src/styles/pages/chat.css`、`pages/Chat/ChatMessage.tsx`。
