@@ -62,6 +62,10 @@ export function ChatComposer({
           aria-label="输入问题"
           className="chat-composer__input"
           disabled={disabled}
+          // A textarea normally gets a newline key. This one sends on Enter, so the
+          // phone keyboard should say so -- Shift+Enter for a newline is a hardware
+          // gesture anyway, and the on-screen hint next to it is hidden below 680px.
+          enterKeyHint="send"
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={onKeyDown}
           placeholder={placeholder}

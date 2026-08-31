@@ -86,11 +86,30 @@ type SearchInputProps = InputHTMLAttributes<HTMLInputElement> & {
   trailing?: ReactNode;
 };
 
+/**
+ * Search field with a leading icon and optional trailing slot.
+ *
+ * The four mobile keyboard hints are defaults here rather than per call site: every
+ * one of these is a search box, so a phone should show a search key instead of a
+ * newline key, and none of them wants prose assistance. Autocapitalisation and
+ * autocorrection fight identifiers and filenames, and the browser's own autofill
+ * dropdown would cover the suggestion list.
+ *
+ * They sit before the spread so a caller can still override any of them.
+ */
 export function SearchInput({ icon, trailing, className, ...props }: SearchInputProps) {
   return (
     <div className={classNames('ui-input-group', className)}>
       {icon}
-      <input {...props} className="ui-input" type="search" />
+      <input
+        autoCapitalize="off"
+        autoComplete="off"
+        autoCorrect="off"
+        enterKeyHint="search"
+        {...props}
+        className="ui-input"
+        type="search"
+      />
       {trailing && <span className="ui-input-group__trailing">{trailing}</span>}
     </div>
   );

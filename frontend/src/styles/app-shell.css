@@ -194,7 +194,13 @@ kbd.topbar__kbd,
   display: flex;
   inset: 0;
   justify-content: center;
-  padding: clamp(var(--s-6), 12vh, 140px) var(--s-4) var(--s-4);
+  /*
+    `dvh`, not `vh`: this is top padding above a text field, and the panel below it is
+    already capped in `dvh`. With `vh` the soft keyboard shrinks the panel from the
+    bottom while this padding keeps holding up to 140px of empty space at the top, so
+    the results squeeze while the gap above them does not.
+  */
+  padding: clamp(var(--s-6), 12dvh, 140px) var(--s-4) var(--s-4);
   position: fixed;
   z-index: 150;
 }

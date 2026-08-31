@@ -184,9 +184,12 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           <Search aria-hidden="true" />
           <label className="sr-only" htmlFor="palette-input">搜索知识库、文档和内容</label>
           <input
+            autoCapitalize="off"
             autoComplete="off"
+            autoCorrect="off"
             className="palette__input"
             data-autofocus
+            enterKeyHint="search"
             id="palette-input"
             onChange={(event) => {
               setQuery(event.target.value);

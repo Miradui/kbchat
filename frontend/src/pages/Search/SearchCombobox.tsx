@@ -142,11 +142,7 @@ export function SearchCombobox({ value, onChange, onSubmit, onPick }: SearchComb
         aria-controls={visible.length > 0 ? listboxId : undefined}
         aria-expanded={visible.length > 0}
         aria-label="搜索关键词"
-        autoCapitalize="off"
-        autoComplete="off"
-        autoCorrect="off"
         autoFocus
-        enterKeyHint="search"
         icon={<Search aria-hidden="true" />}
         onBlur={() => setOpen(false)}
         onChange={(event) => {
