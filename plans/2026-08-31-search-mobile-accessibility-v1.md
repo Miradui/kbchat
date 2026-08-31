@@ -100,9 +100,27 @@
    页码本来就是 `flex: 0 0 auto`，从没被挤掉过；现在由测试钉住，不再只是个巧合。
    未验证：换行后的实际排版要真机看——jsdom 不做布局也不解析媒体查询，这里是从 CSS 推的。
 
-7. [ ] **流式播报**：一个常驻 live region，只播报阶段变化（正在检索 → 正在生成 → 完成 /
+7. [x] **流式播报**：一个常驻 live region，只播报阶段变化（正在检索 → 正在生成 → 完成 /
    已停止 / 失败），不播报 token。错误用 `role="alert"`，进度用 `role="status"`。
-   *Affected*：`frontend/src/pages/Chat/ChatPage.tsx`，可能抽出 `useStreamAnnouncement.ts`。
+   *Affected*：新增 `frontend/src/pages/Chat/useStreamAnnouncement.ts`(+test)、
+   `pages/Chat/ChatPage.tsx`、新增 `pages/Chat/ChatPage.announce.test.tsx`。
+   原来读屏只听得到第一个阶段：进度文案确实带了 `role="status"`，但它待在「回答一到就被替换掉」
+   的那个分支里，第一个 token 落地就卸载了——听不到「正在生成」，也听不到「完成」。停止提示是
+   第二个 polite region，所以一次停止可能播两遍，也可能两个抢在一起谁都没播。
+   现在页面顶部一个常驻 polite region，由 `useStreamAnnouncement` 推导阶段
+   （retrieving / generating / stopped / failed）并只播报阶段之间的跳转。三点理由：常驻是因为
+   「带着文案一起出现」的 live region 播报不可靠，必须是内容变而区域不变；播阶段不播内容是因为
+   挂在回答上会逐 token 播报，而那些文字本来就在文档里读得到；「完成」是从活动阶段跳回 idle
+   而不是独立阶段，因为线程状态里没有「刚结束」这个信号——`sending` 只是变成 false。顺带也让
+   「关掉失败提示」回到 idle 时保持安静，而不是对一个失败的回答宣布「回答完成」。
+   失败在这个区域里不出声：失败提示本身是 `role="alert"`（assertive，会自己播），再播一遍就是
+   说两次。原来那两处 role 都摘了，可见文案一字未动。
+   挂载守卫不是 dep 数组的冗余：effect 在挂载时也会跑，此时 phase 与 ref 相等，没有守卫的话
+   「挂载进一个正在进行的流」会在出现的瞬间就播报——重挂载或 strict-mode 双渲染都会踩到。这是
+   变异测试查出来的，原来的测试只覆盖了以 idle 挂载，而那种情况下两者等价。
+   另外停止测试的 mock 现在会在 abort 信号触发时 reject（真实请求就是这样）。忽略信号的 mock
+   会让页面永远停在「正在生成」，因为只有请求真正落定才会记下 stoppedStream。
+   未验证：NVDA / VoiceOver——真实读屏到底念出什么、节奏是否舒服，都得上硬件。
 
 8. [ ] **焦点复核与补齐**：逐个走查 Dialog、Drawer、Popover、OverflowMenu、InlineEdit
    的关闭路径；已经正确的写测试锁住，缺的补上。列表行删除后焦点落到相邻行而不是 body。
