@@ -1,4 +1,4 @@
-import { Command, LogOut, Menu, Monitor, Moon, Search, Settings, Sun, UserRound, X } from 'lucide-react';
+import { BookOpen, ChevronsUpDown, LogOut, Menu, Monitor, Moon, Search, Settings, Sun, UserRound, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -23,7 +23,7 @@ export type Crumb = { label: string; to?: string };
 
 export type AppShellProps = {
   active: AppSection;
-  /** Rendered in the topbar. The page must not repeat these as an h1 block. */
+  /** Navigation context rendered in the topbar. */
   breadcrumbs?: Crumb[];
   /** Page-level actions rendered at the right of the topbar. */
   topbarActions?: ReactNode;
@@ -219,9 +219,11 @@ export function AppShell({
     ? breadcrumbs
     : [{ label: sectionLabels[active] }];
   const railHidden = isMobile && !drawerOpen;
+  const shortcutLabel = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘ K' : 'Ctrl K';
 
   return (
     <div className="app">
+      <a className="app__skip" href="#main-content">跳到主要内容</a>
       <aside
         aria-hidden={railHidden || undefined}
         className={drawerOpen ? 'rail is-open' : 'rail'}
@@ -230,8 +232,8 @@ export function AppShell({
       >
         <div className="rail__brand-row">
           <Link aria-label="RAG Console" className="rail__brand" to="/home">
-            <span className="rail__mark" aria-hidden="true"><Command /></span>
-            <strong>RAG Console</strong>
+            <span className="rail__mark" aria-hidden="true"><BookOpen /></span>
+            <span className="rail__brand-text"><strong>RAG Console</strong><small>企业知识工作空间</small></span>
           </Link>
           {isMobile && (
             <IconButton className="rail__close" label="关闭导航" onClick={() => setDrawerOpen(false)} ref={closeButtonRef}>
@@ -255,6 +257,7 @@ export function AppShell({
                     : <UserRound size={13} />}
                 </span>
                 <span className="rail__user-name" title={userName}>{userName}</span>
+                <ChevronsUpDown aria-hidden="true" />
               </button>
             )}
           >
@@ -356,20 +359,21 @@ export function AppShell({
             button is not rendered and focus was falling to `body`.
           */}
           <button
+            aria-label="搜索知识库、文档和内容"
             className="topbar__search"
             data-modal-focus-fallback
             onClick={() => setPaletteOpen(true)}
             type="button"
           >
             <Search aria-hidden="true" />
-            <span className="topbar__search-label">搜索</span>
-            <kbd className="topbar__kbd">⌘K</kbd>
+            <span className="topbar__search-label">搜索知识库、文档…</span>
+            <kbd className="topbar__kbd">{shortcutLabel}</kbd>
           </button>
 
           {topbarActions && <div className="topbar__actions">{topbarActions}</div>}
         </header>
 
-        <main className={flush ? 'app__content app__content--flush' : 'app__content'}>{children}</main>
+        <main className={flush ? 'app__content app__content--flush' : 'app__content'} id="main-content" tabIndex={-1}>{children}</main>
       </div>
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />

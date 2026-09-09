@@ -50,7 +50,7 @@
 .ui-button--danger {
   background: var(--danger);
   border-color: var(--danger);
-  color: #fff;
+  color: var(--text-on-danger);
 }
 .ui-button--danger:not(:disabled):hover { background: var(--danger-hover); border-color: var(--danger-hover); }
 .ui-button--danger:focus-visible { box-shadow: var(--ring-danger); }
@@ -141,23 +141,12 @@
 
 .ui-select {
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23737b76' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-image: var(--select-chevron);
   background-position: right var(--s-2) center;
   background-repeat: no-repeat;
   background-size: 14px;
   cursor: pointer;
   padding-right: var(--s-8);
-}
-
-/* Dark mode needs a lighter chevron; the data URL cannot read a custom property. */
-:root[data-theme='dark'] .ui-select {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238a938d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .ui-select {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238a938d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  }
 }
 
 .ui-input-group { align-items: center; display: flex; position: relative; }
@@ -195,7 +184,7 @@
   color: var(--text-muted);
   display: inline-flex;
   gap: var(--s-2);
-  height: 26px;
+  min-height: var(--s-8);
   justify-content: center;
   min-width: 30px;
   padding: 0 var(--s-2);
@@ -205,7 +194,7 @@
 .ui-segmented button > svg { height: 15px; width: 15px; }
 .ui-segmented button:not(:disabled):hover { color: var(--text); }
 .ui-segmented button[aria-pressed='true'],
-.ui-segmented button[aria-selected='true'] { background: var(--surface); color: var(--text); }
+.ui-segmented button[aria-selected='true'] { background: var(--surface); color: var(--accent); font-weight: 600; }
 .ui-segmented button:disabled { opacity: 0.45; }
 
 /* ============================================================
@@ -296,7 +285,7 @@
 .ui-panel {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   min-width: 0;
   overflow: hidden;
 }
@@ -307,14 +296,14 @@
   display: flex;
   gap: var(--s-3);
   justify-content: space-between;
-  min-height: 46px;
-  padding: var(--s-3) var(--s-4);
+  min-height: var(--row-h);
+  padding: var(--s-4) var(--s-5);
 }
 
 .ui-panel__head h2,
-.ui-panel__head h3 { font-size: var(--t-body); font-weight: 600; }
+.ui-panel__head h3 { font-size: var(--t-lead); font-weight: 600; }
 .ui-panel__head-note { color: var(--text-muted); font-size: var(--t-small); }
-.ui-panel__body { padding: var(--s-4); }
+.ui-panel__body { padding: var(--s-5); }
 .ui-panel__body--flush { padding: 0; }
 
 /* ============================================================
@@ -330,7 +319,7 @@
   color: var(--text-muted);
   font-size: var(--t-small);
   font-weight: 600;
-  padding: var(--s-2) var(--s-3);
+  padding: var(--s-3) var(--s-4);
   position: sticky;
   text-align: left;
   top: 0;
@@ -341,7 +330,7 @@
 .ui-table tbody td {
   border-bottom: 1px solid var(--line);
   color: var(--text-secondary);
-  padding: var(--s-2) var(--s-3);
+  padding: var(--s-4);
   vertical-align: middle;
 }
 
@@ -361,6 +350,14 @@
 .ui-cell-stack { display: grid; gap: 2px; min-width: 0; }
 .ui-cell-stack strong { color: var(--text); font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ui-cell-stack small { color: var(--text-muted); font-size: var(--t-small); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A consistent introduction for collection and utility pages. */
+.ui-page-heading { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-4); justify-content: space-between; margin: 0 auto var(--s-6); max-width: var(--content-max); }
+.ui-page-heading__copy { display: grid; gap: var(--s-2); min-width: 0; }
+.ui-page-heading h1 { color: var(--text); font-size: var(--t-title); font-weight: 650; letter-spacing: -0.025em; }
+.ui-page-heading p { color: var(--text-muted); font-size: var(--t-body); }
+.ui-eyebrow { align-items: center; color: var(--accent); display: inline-flex; font-size: var(--t-micro); font-weight: 650; gap: var(--s-2); letter-spacing: 0.1em; }
+.ui-eyebrow > svg { height: var(--icon-sm); width: var(--icon-sm); }
 
 @media (max-width: 760px) {
   .ui-table thead { display: none; }

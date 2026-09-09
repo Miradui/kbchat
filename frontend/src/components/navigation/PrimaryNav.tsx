@@ -40,17 +40,17 @@ const groups: Array<{ label: string; items: NavItem[] }> = [
     ],
   },
   {
-    label: '系统',
-    items: [
-      { to: '/diagnostics', label: '系统诊断', section: 'diagnostics', icon: Activity },
-    ],
-  },
-  {
     label: '知识',
     items: [
       { to: '/knowledge-bases', label: '知识库', section: 'knowledge-bases', icon: Library },
       { to: '/documents', label: '文档', section: 'documents', icon: FileText },
       { to: '/tags', label: '标签', section: 'tags', icon: Tags },
+    ],
+  },
+  {
+    label: '系统',
+    items: [
+      { to: '/diagnostics', label: '系统诊断', section: 'diagnostics', icon: Activity },
     ],
   },
 ];

@@ -270,14 +270,14 @@ describe('AppShell', () => {
     stubMatchMedia(false);
     const user = userEvent.setup();
     renderWithRouter(<><AppShell active="home"><p>内容</p></AppShell><LocationProbe /></>);
-    await user.click(screen.getByRole('button', { name: /搜索⌘K/ }));
+    await user.click(screen.getByRole('button', { name: '搜索知识库、文档和内容' }));
     const input = screen.getByRole('textbox', { name: '搜索知识库、文档和内容' });
 
     await user.type(input, ' handbook & 中文 ');
     await user.keyboard('{Enter}');
     expect(screen.getByLabelText('当前位置')).toHaveTextContent('/search?q=handbook%20%26%20%E4%B8%AD%E6%96%87');
 
-    await user.click(screen.getByRole('button', { name: /搜索⌘K/ }));
+    await user.click(screen.getByRole('button', { name: '搜索知识库、文档和内容' }));
     const emptyInput = screen.getByRole('textbox', { name: '搜索知识库、文档和内容' });
     await user.type(emptyInput, '   ');
     await user.keyboard('{Escape}');

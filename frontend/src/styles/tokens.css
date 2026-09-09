@@ -7,36 +7,45 @@
   color-scheme: light;
 
   /* ---- Surfaces ---- */
-  --canvas: #f6f7f5;
+  --canvas: #f5f7fb;
   --surface: #ffffff;
-  --surface-sunken: #f1f3f0;
-  --surface-hover: #f2f4f1;
-  --surface-active: #e9ece8;
+  --surface-sunken: #f0f3f9;
+  --surface-hover: #f4f6fb;
+  --surface-active: #e9eef8;
   --surface-overlay: #ffffff;
 
   /* ---- Lines ---- */
-  --line: #e0e4de;
-  --line-strong: #c8cec7;
-  --line-focus: #1f6b57;
+  --line: #e0e6ef;
+  --line-strong: #c3cede;
+  --line-focus: #315ce7;
 
   /* ---- Text ---- */
-  --text: #161917;
-  --text-secondary: #4a524d;
-  --text-muted: #737b76;
-  --text-faint: #9aa19c;
+  --text: #1e293b;
+  --text-secondary: #4e5d75;
+  --text-muted: #5f6e85;
+  --text-faint: #69768b;
   --text-on-accent: #ffffff;
+  --text-on-danger: #ffffff;
 
   /* ---- Brand accent (single accent; never used decoratively) ---- */
-  --accent: #1f6b57;
-  --accent-hover: #195846;
-  --accent-active: #134638;
-  --accent-wash: #ecf4f0;
-  --accent-line: #c3ddd3;
+  --accent: #315ce7;
+  --accent-hover: #244bca;
+  --accent-active: #1e40af;
+  --accent-wash: #edf2ff;
+  --accent-line: #cad8ff;
+
+  /* Brand presentation surfaces stay legible in either appearance. */
+  --brand-panel: #152747;
+  --brand-panel-soft: #20385d;
+  --brand-panel-line: #3a5074;
+  --brand-panel-text: #f5f8ff;
+  --brand-panel-muted: #bac9e4;
+  --brand-panel-accent: #a6c0ff;
 
   /* ---- Status (only ever used to express status) ---- */
-  --ok: #257354;
-  --ok-wash: #e9f5ee;
-  --ok-line: #bfe0cd;
+  --ok: #386091;
+  --ok-wash: #eef3fa;
+  --ok-line: #cfdded;
 
   --warn: #8a5a12;
   --warn-wash: #fdf3e2;
@@ -53,19 +62,20 @@
   --info-line: #c2d5e6;
 
   /* ---- Elevation. Borders carry hierarchy; shadow is for floating layers only. ---- */
-  --shadow-popover: 0 4px 12px rgb(18 22 20 / 8%), 0 1px 3px rgb(18 22 20 / 6%);
-  --shadow-overlay: 0 16px 48px rgb(18 22 20 / 16%), 0 4px 12px rgb(18 22 20 / 8%);
-  --scrim: rgb(20 24 21 / 40%);
+  --shadow-popover: 0 6px 20px rgb(24 40 72 / 10%), 0 1px 3px rgb(24 40 72 / 6%);
+  --shadow-overlay: 0 20px 64px rgb(24 40 72 / 18%), 0 4px 12px rgb(24 40 72 / 8%);
+  --scrim: rgb(15 23 42 / 44%);
 
   /* ---- Focus ---- */
-  --ring: 0 0 0 3px rgb(31 107 87 / 22%);
+  --ring: 0 0 0 3px rgb(49 92 231 / 18%);
   --ring-danger: 0 0 0 3px rgb(176 68 68 / 22%);
 
   /* ---- Radius ---- */
   --r-xs: 4px;
-  --r-sm: 6px;
-  --r-md: 8px;
-  --r-lg: 12px;
+  --r-sm: 8px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
   --r-pill: 999px;
 
   /* ---- Space (4px base) ---- */
@@ -78,14 +88,16 @@
   --s-8: 32px;
   --s-10: 40px;
   --s-12: 48px;
+  --s-16: 64px;
+  --s-20: 80px;
 
   /* ---- Type scale: 6 steps, no ad-hoc sizes ---- */
-  --t-micro: 11px;
-  --t-small: 12px;
-  --t-body: 13px;
-  --t-lead: 15px;
-  --t-title: 20px;
-  --t-display: 28px;
+  --t-micro: 12px;
+  --t-small: 13px;
+  --t-body: 14px;
+  --t-lead: 16px;
+  --t-title: 24px;
+  --t-display: 36px;
 
   --lh-tight: 1.25;
   --lh-normal: 1.55;
@@ -95,18 +107,25 @@
   --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
 
   /* ---- Control sizing ---- */
-  --control-h: 34px;
-  --control-h-lg: 40px;
-  --row-h: 44px;
+  --control-h: 38px;
+  --control-h-lg: 46px;
+  --row-h: 56px;
   --touch: 44px;
 
   /* ---- Layout ---- */
-  --rail-w: 232px;
-  --topbar-h: 52px;
-  --content-max: 1400px;
+  --rail-w: 240px;
+  --topbar-h: 64px;
+  --content-max: 1440px;
+  --reading-max: 960px;
+  --auth-form-w: 400px;
+  --auth-art-w: 480px;
+  --icon-sm: 16px;
+  --icon-md: 20px;
+  --icon-lg: 24px;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235f6e85' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
   /* ---- Motion ---- */
-  --fast: 120ms;
+  --fast: 150ms;
   --normal: 200ms;
   --ease: cubic-bezier(0.2, 0, 0, 1);
 }
@@ -114,32 +133,34 @@
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  --canvas: #111412;
-  --surface: #191d1b;
-  --surface-sunken: #141816;
-  --surface-hover: #222825;
-  --surface-active: #2a312d;
-  --surface-overlay: #1e2321;
+  --canvas: #101723;
+  --surface: #172131;
+  --surface-sunken: #121c2b;
+  --surface-hover: #202e43;
+  --surface-active: #293a53;
+  --surface-overlay: #1b283c;
 
-  --line: #2b322e;
-  --line-strong: #3d4640;
-  --line-focus: #4fa88c;
+  --line: #2b3a50;
+  --line-strong: #435571;
+  --line-focus: #95b2ff;
 
-  --text: #e8ece9;
-  --text-secondary: #b3bcb6;
-  --text-muted: #8a938d;
-  --text-faint: #6a736d;
-  --text-on-accent: #0b120f;
+  --text: #edf2fc;
+  --text-secondary: #c1cee2;
+  --text-muted: #a6b5cd;
+  --text-faint: #8e9fb9;
+  --text-on-accent: #14213e;
+  --text-on-danger: #281517;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a6b5cd' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
-  --accent: #4fa88c;
-  --accent-hover: #5cb899;
-  --accent-active: #6ac5a6;
-  --accent-wash: #1a2a24;
-  --accent-line: #2f4d42;
+  --accent: #95b2ff;
+  --accent-hover: #adc3ff;
+  --accent-active: #c3d2ff;
+  --accent-wash: #1e3156;
+  --accent-line: #3e578b;
 
-  --ok: #57b088;
-  --ok-wash: #17281f;
-  --ok-line: #2c4a38;
+  --ok: #a2bfe8;
+  --ok-wash: #1b2c43;
+  --ok-line: #375276;
 
   --warn: #d1a05a;
   --warn-wash: #2a2317;
@@ -159,7 +180,7 @@
   --shadow-overlay: 0 16px 48px rgb(0 0 0 / 56%), 0 4px 12px rgb(0 0 0 / 40%);
   --scrim: rgb(0 0 0 / 62%);
 
-  --ring: 0 0 0 3px rgb(79 168 140 / 28%);
+  --ring: 0 0 0 3px rgb(149 178 255 / 24%);
   --ring-danger: 0 0 0 3px rgb(224 133 133 / 26%);
 }
 
@@ -167,32 +188,34 @@
   :root:not([data-theme='light']) {
     color-scheme: dark;
 
-    --canvas: #111412;
-    --surface: #191d1b;
-    --surface-sunken: #141816;
-    --surface-hover: #222825;
-    --surface-active: #2a312d;
-    --surface-overlay: #1e2321;
+    --canvas: #101723;
+    --surface: #172131;
+    --surface-sunken: #121c2b;
+    --surface-hover: #202e43;
+    --surface-active: #293a53;
+    --surface-overlay: #1b283c;
 
-    --line: #2b322e;
-    --line-strong: #3d4640;
-    --line-focus: #4fa88c;
+    --line: #2b3a50;
+    --line-strong: #435571;
+    --line-focus: #95b2ff;
 
-    --text: #e8ece9;
-    --text-secondary: #b3bcb6;
-    --text-muted: #8a938d;
-    --text-faint: #6a736d;
-    --text-on-accent: #0b120f;
+    --text: #edf2fc;
+    --text-secondary: #c1cee2;
+    --text-muted: #a6b5cd;
+    --text-faint: #8e9fb9;
+    --text-on-accent: #14213e;
+  --text-on-danger: #281517;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a6b5cd' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
-    --accent: #4fa88c;
-    --accent-hover: #5cb899;
-    --accent-active: #6ac5a6;
-    --accent-wash: #1a2a24;
-    --accent-line: #2f4d42;
+    --accent: #95b2ff;
+    --accent-hover: #adc3ff;
+    --accent-active: #c3d2ff;
+    --accent-wash: #1e3156;
+    --accent-line: #3e578b;
 
-    --ok: #57b088;
-    --ok-wash: #17281f;
-    --ok-line: #2c4a38;
+    --ok: #a2bfe8;
+    --ok-wash: #1b2c43;
+    --ok-line: #375276;
 
     --warn: #d1a05a;
     --warn-wash: #2a2317;
@@ -212,7 +235,7 @@
     --shadow-overlay: 0 16px 48px rgb(0 0 0 / 56%), 0 4px 12px rgb(0 0 0 / 40%);
     --scrim: rgb(0 0 0 / 62%);
 
-    --ring: 0 0 0 3px rgb(79 168 140 / 28%);
+    --ring: 0 0 0 3px rgb(149 178 255 / 24%);
     --ring-danger: 0 0 0 3px rgb(224 133 133 / 26%);
   }
 }
