@@ -766,6 +766,11 @@ manager
 
 ### GET /documents
 
+`status=processing` 汇总 `uploaded`、`parsing`、`chunking`、`embedding` 四种状态，
+由服务端筛选并计算 `total`，可与知识库、关键词、类型及分页组合使用。
+该值仅用于查询，响应的 `status` 仍为文档的具体阶段；具体阶段筛选继续可用。
+知识库内的 `GET /knowledge-bases/:kbId/documents` 同样支持此查询别名。
+
 跨当前用户拥有的知识库列出文档。支持：
 
 ```text

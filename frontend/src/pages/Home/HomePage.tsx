@@ -103,7 +103,7 @@ export function HomePage({ sources }: { sources?: HomeSources }) {
               </Link>
             )}
             {processing.length > 0 && (
-              <Link className="home-attention__row is-warn" to="/documents">
+              <Link className="home-attention__row is-warn" to="/documents?status=processing">
                 <Loader aria-hidden="true" />
                 <span className="ui-cell-stack">
                   <strong>{processing.length} 个文档正在处理</strong>

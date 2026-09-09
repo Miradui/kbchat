@@ -223,6 +223,38 @@ async function clickDocumentAction(
 }
 
 describe('DocumentsPage', () => {
+  it('queries every processing stage and preserves the aggregate filter in the URL', async () => {
+    documentListMocks.counts.mockImplementation(async (params) => ({
+      items: [], total: params.status === undefined ? 4 : 0,
+    }));
+    const user = userEvent.setup();
+    renderPage();
+
+    const processing = await screen.findByRole('button', { name: /4.*处理中/ });
+    await user.click(processing);
+    await waitFor(() => expect(documentListMocks.primary).toHaveBeenLastCalledWith(
+      'kb1', expect.objectContaining({ status: 'processing', page: 1 }),
+    ));
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent('status=processing');
+    expect(screen.getByRole('combobox', { name: '处理阶段' })).toHaveValue('processing');
+
+    await user.selectOptions(screen.getByRole('combobox', { name: '处理阶段' }), 'embedding');
+    await waitFor(() => expect(documentListMocks.primary).toHaveBeenLastCalledWith(
+      'kb1', expect.objectContaining({ status: 'embedding' }),
+    ));
+    await user.selectOptions(screen.getByRole('combobox', { name: '处理阶段' }), 'processing');
+    await user.click(screen.getByRole('button', { name: /4.*处理中/ }));
+    expect(screen.getByLabelText('当前位置')).not.toHaveTextContent('status=');
+  });
+
+  it('restores the aggregate processing filter from a deep link', async () => {
+    renderPage('/knowledge-bases/kb1/documents?status=processing');
+    expect(await screen.findByRole('combobox', { name: '处理阶段' })).toHaveValue('processing');
+    await waitFor(() => expect(documentListMocks.primary).toHaveBeenLastCalledWith(
+      'kb1', expect.objectContaining({ status: 'processing' }),
+    ));
+  });
+
   it('offers knowledge-base actions without eagerly loading edit metadata', async () => {
     const user = userEvent.setup();
     renderPage();

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 import { listGlobalDocuments } from '../../api/resources';
-import type { DocumentSort, DocumentStatus, GlobalDocumentItem } from '../../types/api';
+import type { DocumentSort, DocumentStatusFilter, GlobalDocumentItem } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
 import { documentStatuses, isTerminalDocumentStatus } from './documentDisplay';
 
@@ -12,7 +12,7 @@ const POLL_MS = 3000;
 export type DocumentFilters = {
   q: string;
   knowledgeBaseId: string;
-  status: DocumentStatus | '';
+  status: DocumentStatusFilter;
   fileType: string;
   sort: DocumentSort;
   page: number;
@@ -28,8 +28,10 @@ export type DocumentCounts = {
 
 const sorts: DocumentSort[] = ['updatedAt_desc', 'createdAt_desc', 'filename_asc'];
 
-function readStatus(raw: string | null): DocumentStatus | '' {
-  return raw !== null && (documentStatuses as string[]).includes(raw) ? (raw as DocumentStatus) : '';
+function readStatus(raw: string | null): DocumentStatusFilter {
+  return raw === 'processing' || (raw !== null && (documentStatuses as string[]).includes(raw))
+    ? raw as DocumentStatusFilter
+    : '';
 }
 
 function readPositive(raw: string | null, fallback: number): number {
@@ -40,9 +42,8 @@ function readPositive(raw: string | null, fallback: number): number {
 /**
  * One data source for both document routes.
  *
- * `GET /documents` is used even when scoped to a single knowledge base, because
- * `GET /knowledge-bases/:id/documents` accepts no query parameters — the scoped
- * page previously had to fetch every document and filter in the browser.
+ * Both document routes share the server-side query contract. A scoped view pins
+ * knowledgeBaseId while keeping search, processing stages and pagination intact.
  */
 export function useDocumentList(scopeKnowledgeBaseId?: string) {
   const [searchParams, setSearchParams] = useSearchParams();

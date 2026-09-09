@@ -421,10 +421,13 @@ export type DocumentPreviewResponse = {
 
 export type DocumentSort = 'updatedAt_desc' | 'createdAt_desc' | 'filename_asc';
 
+/** A list-query alias; documents themselves keep their concrete processing stage. */
+export type DocumentStatusFilter = DocumentStatus | 'processing' | '';
+
 export type GlobalDocumentListParams = {
   q?: string;
   knowledgeBaseId?: string;
-  status?: DocumentStatus | '';
+  status?: DocumentStatusFilter;
   fileType?: string;
   sort?: DocumentSort;
   page?: number;

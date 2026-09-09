@@ -402,7 +402,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
               tone: 'warn',
               value: counts.processing,
               active: filters.status !== '' && filters.status !== 'completed' && filters.status !== 'failed',
-              onToggle: () => setFilter({ status: filters.status === 'parsing' ? '' : 'parsing' }),
+              onToggle: () => setFilter({ status: filters.status === 'processing' ? '' : 'processing' }),
             },
             {
               key: 'failed',
@@ -423,14 +423,15 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
           ) : undefined}
         />
 
-        {filters.status !== '' && !isTerminalDocumentStatus(filters.status) && (
+        {filters.status !== '' && filters.status !== 'completed' && filters.status !== 'failed' && (
           <div className="ui-inline-notice">
-            <span>正在按“{documentStatusLabel(filters.status)}”筛选。</span>
+            <span>正在按“{filters.status === 'processing' ? '全部处理中' : documentStatusLabel(filters.status)}”筛选。</span>
             <Select
               aria-label="处理阶段"
-              onChange={(event) => setFilter({ status: event.target.value as DocumentStatus | '' })}
+              onChange={(event) => setFilter({ status: event.target.value as DocumentStatus | 'processing' })}
               value={filters.status}
             >
+              <option value="processing">全部处理中</option>
               {documentStatuses
                 .filter((status) => !isTerminalDocumentStatus(status))
                 .map((status) => (

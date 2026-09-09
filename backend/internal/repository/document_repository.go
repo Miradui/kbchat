@@ -122,7 +122,9 @@ func (r *DocumentRepository) ListForActor(ctx context.Context, actorID uuid.UUID
 	if query.KnowledgeBaseID != uuid.Nil {
 		base = base.Where("documents.knowledge_base_id = ?", query.KnowledgeBaseID)
 	}
-	if query.Status != "" {
+	if query.Status == "processing" {
+		base = base.Where("documents.status IN ?", []string{"uploaded", "parsing", "chunking", "embedding"})
+	} else if query.Status != "" {
 		base = base.Where("documents.status = ?", query.Status)
 	}
 	if query.FileType != "" {

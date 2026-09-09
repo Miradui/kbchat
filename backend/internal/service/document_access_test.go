@@ -263,9 +263,74 @@ func TestGlobalDocumentListsFollowTheSameReachabilityAsTheEndpoints(t *testing.T
 	}
 }
 
-// The recycle bin is scoped to content.write rather than document.read, because the
-// bin's only actions are restore and purge. Listing deleted documents for a viewer
-// would show a list where every row's buttons fail.
+// Aggregate filtering must happen before counting and pagination, inside the
+// existing reachability predicate used by both document endpoints.
+func TestProcessingDocumentFilterCoversAllStagesAndKeepsScope(t *testing.T) {
+	ctx := context.Background()
+	f := newDocumentAccessFixture(t)
+	for _, stage := range []string{"uploaded", "parsing", "chunking", "embedding", "failed"} {
+		createWorkspaceDocument(t, f.services.db, f.kbID, f.owner, stage+".pdf", stage)
+	}
+	otherKB := createWorkspaceKB(t, f.services.db, f.owner, uuid.Nil, "other-owned", "private", time.Now())
+	createWorkspaceDocument(t, f.services.db, otherKB.ID, f.owner, "other.pdf", "embedding")
+	foreignKB := createWorkspaceKB(t, f.services.db, f.stranger, uuid.Nil, "foreign", "private", time.Now())
+	createWorkspaceDocument(t, f.services.db, foreignKB.ID, f.stranger, "foreign.pdf", "uploaded")
+	deleted := createWorkspaceDocument(t, f.services.db, f.kbID, f.owner, "deleted.pdf", "uploaded")
+	if err := f.services.documents.Delete(ctx, f.owner, deleted.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	global, err := f.services.documents.ListGlobal(ctx, f.owner, dto.GlobalDocumentListQuery{Status: "processing"})
+	if err != nil || global.Total != 5 {
+		t.Fatalf("global processing list: got %#v, err %v", global, err)
+	}
+	scope := f.kbID.String()
+	seen := map[string]bool{}
+	for page := 1; page <= 2; page++ {
+		result, err := f.services.documents.ListGlobal(ctx, f.owner, dto.GlobalDocumentListQuery{
+			KnowledgeBaseID: &scope, Status: "processing", FileType: "pdf", Sort: "filename_asc", Page: page, PageSize: 2,
+		})
+		if err != nil || result.Total != 4 || len(result.Items) != 2 {
+			t.Fatalf("scoped page %d: got %#v, err %v", page, result, err)
+		}
+		otherID := otherKB.ID.String()
+		pinned, err := f.services.documents.List(ctx, f.owner, f.kbID, dto.GlobalDocumentListQuery{
+			KnowledgeBaseID: &otherID, Status: "processing", FileType: "pdf", Sort: "filename_asc", Page: page, PageSize: 2,
+		})
+		if err != nil || pinned.Total != result.Total || len(pinned.Items) != len(result.Items) {
+			t.Fatalf("knowledge-base endpoint disagrees with global query: %#v, %v", pinned, err)
+		}
+		for index := range result.Items {
+			if pinned.Items[index].ID != result.Items[index].ID {
+				t.Fatalf("path scope was overridden or pagination differs: %#v", pinned)
+			}
+		}
+		for _, item := range result.Items {
+			if item.KnowledgeBaseID != scope || item.Status == "completed" || item.Status == "failed" || seen[item.Status] {
+				t.Fatalf("unexpected or repeated processing document: %#v", item)
+			}
+			seen[item.Status] = true
+		}
+	}
+	for _, stage := range []string{"uploaded", "parsing", "chunking", "embedding"} {
+		if !seen[stage] {
+			t.Fatalf("missing processing stage %q", stage)
+		}
+	}
+	stage, err := f.services.documents.ListGlobal(ctx, f.owner, dto.GlobalDocumentListQuery{
+		KnowledgeBaseID: &scope, Status: "embedding",
+	})
+	if err != nil || stage.Total != 1 || len(stage.Items) != 1 || stage.Items[0].Status != "embedding" {
+		t.Fatalf("concrete stage filter changed: got %#v, err %v", stage, err)
+	}
+	_, err = f.services.documents.List(ctx, f.stranger, f.kbID, dto.GlobalDocumentListQuery{
+		Status: "processing",
+	})
+	assertAppError(t, err, "KNOWLEDGE_BASE_NOT_FOUND")
+}
+
+// The recycle bin is scoped to content.write rather than document.read, because
+// its restore and purge actions must be available to the caller.
 func TestRecycleBinIsScopedToWhoCanActOnIt(t *testing.T) {
 	ctx := context.Background()
 	f := newDocumentAccessFixture(t)
