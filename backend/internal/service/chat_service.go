@@ -1329,8 +1329,12 @@ func (s *ChatService) complete(ctx context.Context, messages []chatcore.Message,
 	if onDelta != nil {
 		if streamer, ok := s.chatProvider.(chatcore.StreamingProvider); ok {
 			var firstToken time.Duration
+			observedFirstToken := false
 			answer, err := streamer.ChatStream(ctx, messages, func(delta string) error {
-				if firstToken == 0 {
+				// A fast callback can have zero elapsed time on a coarse clock.
+				// Duration is a measurement, not a reliable "not observed" flag.
+				if !observedFirstToken {
+					observedFirstToken = true
 					firstToken = time.Since(start)
 					s.metrics.ObserveDuration(observability.MetricChatFirstToken, firstToken)
 				}
