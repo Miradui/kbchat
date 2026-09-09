@@ -138,7 +138,10 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
   const gapRequest = useRef(0);
   const mounted = useRef(true);
 
-  useEffect(() => () => { mounted.current = false; }, []);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   const reloadKnowledgeBases = useCallback(() => {
     setKbError('');
@@ -258,8 +261,8 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
   return (
     <AppShell active="quality" breadcrumbs={[{ label: '质量运营' }]}> 
       <div className="quality-page">
-        <header className="quality-page__header">
-          <div>
+        <header className="ui-page-heading quality-page__header">
+          <div className="ui-page-heading__copy">
             <h1>RAG 质量运营</h1>
             <p>从真实反馈定位回答问题、引用缺口和检索降级。</p>
           </div>

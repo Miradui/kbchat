@@ -1,7 +1,10 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { StrictMode } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
+import { ToastProvider } from '../../components/feedback/ToastProvider';
 import { renderWithRouter } from '../../test/render';
 import type {
   ChatKnowledgeGapListResponse,
@@ -86,6 +89,25 @@ function createSources() {
 }
 
 describe('QualityPage', () => {
+  it('loads all regions after Strict Mode replays mount effects', async () => {
+    const sources = createSources();
+    render(
+      <StrictMode>
+        <ToastProvider>
+          <MemoryRouter initialEntries={['/quality']}>
+            <QualityPage sources={sources} />
+          </MemoryRouter>
+        </ToastProvider>
+      </StrictMode>,
+    );
+
+    expect(await screen.findByText('60%')).toBeInTheDocument();
+    expect(screen.getByText('如何退货？')).toBeInTheDocument();
+    expect(screen.getByText('支持跨境退货吗？')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '产品知识库' })).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: '正在加载' })).not.toBeInTheDocument();
+  });
+
   it('shows quality metrics, evidence and session navigation', async () => {
     const sources = createSources();
     renderWithRouter(<QualityPage sources={sources} />, ['/quality']);
