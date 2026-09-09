@@ -223,6 +223,20 @@ async function clickDocumentAction(
 }
 
 describe('DocumentsPage', () => {
+  it('keeps a cancelled document neutral without failure advice', async () => {
+    vi.mocked(listDocuments).mockResolvedValue({ items: [{
+      ...uploadedDocument,
+      status: 'failed',
+      jobStatus: 'cancelled',
+      errorMessage: '用户主动取消',
+    }] });
+    renderPage();
+
+    const row = (await screen.findByRole('button', { name: 'handbook.pdf', exact: true })).closest('tr')!;
+    expect(within(row).getByText('已取消')).toBeInTheDocument();
+    expect(within(row).queryByText(/文档处理失败|用户主动取消/)).not.toBeInTheDocument();
+  });
+
   it('queries every processing stage and preserves the aggregate filter in the URL', async () => {
     documentListMocks.counts.mockImplementation(async (params) => ({
       items: [], total: params.status === undefined ? 4 : 0,

@@ -1,9 +1,8 @@
-import { LayoutGrid, List, Plus, Search, Tags, Trash2 } from 'lucide-react';
+import { LayoutGrid, List, Search, Tags, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { Button } from '../../components/ui/Button';
 import { SearchInput, Select } from '../../components/ui/Field';
 import { OverflowMenu } from '../../components/ui/OverflowMenu';
 import { SegmentedControl } from '../../components/ui/SegmentedControl';
@@ -31,7 +30,6 @@ type ToolbarProps = {
   recycleCount: number | null;
   onFilter: (patch: Partial<KnowledgeBaseFilters>) => void;
   onViewMode: (mode: WorkspaceViewMode) => void;
-  onCreate: () => void;
   onOpenRecycleBin: () => void;
 };
 
@@ -46,7 +44,6 @@ export function KnowledgeBaseToolbar({
   recycleCount,
   onFilter,
   onViewMode,
-  onCreate,
   onOpenRecycleBin,
 }: ToolbarProps) {
   const navigate = useNavigate();
@@ -142,7 +139,6 @@ export function KnowledgeBaseToolbar({
           ]}
         />
 
-        <Button leadingIcon={<Plus aria-hidden="true" />} onClick={onCreate}>新建知识库</Button>
       </div>
     </div>
   );

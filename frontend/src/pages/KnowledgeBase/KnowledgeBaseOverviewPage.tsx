@@ -15,7 +15,7 @@ import type {
 } from '../../types/api';
 import { formatBytes, formatCount, formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
-import { documentStatusLabel, documentStatusTone } from '../Documents/documentDisplay';
+import { documentDisplayStatusLabel, documentDisplayStatusTone } from '../Documents/documentDisplay';
 import { documentStalenessHint } from '../Documents/documentFailure';
 import { KnowledgeBaseLayout, KnowledgeBaseLoadFailure } from './KnowledgeBaseLayout';
 import { findCategoryName } from './categoryTreeUtils';
@@ -135,7 +135,7 @@ export function KnowledgeBaseOverviewPage() {
                   <strong>{known ? counts.completed : '—'}</strong>
                   <span>可用于问答</span>
                 </Link>
-                <Link className="kb-status-tile kb-status-tile--warn" to={`${documentsHref}?status=parsing`}>
+                <Link className="kb-status-tile kb-status-tile--warn" to={`${documentsHref}?status=processing`}>
                   <strong>{known ? counts.processing : '—'}</strong>
                   <span>处理中</span>
                 </Link>
@@ -179,8 +179,8 @@ export function KnowledgeBaseOverviewPage() {
                     {stalenessHint && (
                       <Badge aria-label={stalenessHint} title={stalenessHint} tone="warn">可能过期</Badge>
                     )}
-                    <Badge tone={documentStatusTone(document.status)}>
-                      {documentStatusLabel(document.status)}
+                    <Badge tone={documentDisplayStatusTone(document.status, document.jobStatus)}>
+                      {documentDisplayStatusLabel(document.status, document.jobStatus)}
                     </Badge>
                   </Link>
                   );

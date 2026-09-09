@@ -160,6 +160,7 @@ export function KnowledgeBaseCards({ items, selected, handlers }: ListProps) {
         return (
           <article
             className={handlers.isPending(item.id) ? 'kb-card is-busy' : 'kb-card'}
+            data-selected={selected.has(item.id) || undefined}
             key={item.id}
           >
             <header className="kb-card__head">
@@ -168,7 +169,7 @@ export function KnowledgeBaseCards({ items, selected, handlers }: ListProps) {
                 checked={selected.has(item.id)}
                 onChange={() => handlers.onToggleSelected(item.id)}
               />
-              <KnowledgeBaseGlyph visibility={item.visibility} />
+              <KnowledgeBaseGlyph large visibility={item.visibility} />
               <RowActions handlers={handlers} item={item} />
             </header>
 

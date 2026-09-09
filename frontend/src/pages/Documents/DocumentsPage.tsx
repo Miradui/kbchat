@@ -314,6 +314,19 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
 
   return (
     <div className="doc-page">
+      <header className="ui-page-heading doc-page__heading">
+        <div className="ui-page-heading__copy">
+          {scopeKnowledgeBaseId ? <h2>文档资料</h2> : <h1>文档资料</h1>}
+          <p>管理原始资料，查看处理进度与可用于问答的内容。</p>
+        </div>
+        <Button
+          disabled={uploadTargets.length === 0}
+          leadingIcon={<Upload aria-hidden="true" />}
+          onClick={openImport}
+        >
+          导入文档
+        </Button>
+      </header>
       <div className="doc-toolbar">
         <div className="ui-toolbar">
           <SearchInput
@@ -369,13 +382,6 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
             ]}
           />
 
-          <Button
-            disabled={uploadTargets.length === 0}
-            leadingIcon={<Upload aria-hidden="true" />}
-            onClick={openImport}
-          >
-            导入文档
-          </Button>
         </div>
 
         {/* Status counts double as filters, so a failure count is one click from the list. */}
@@ -580,7 +586,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
                           {/* The failure reason replaces the old always-present column that
                               showed "-" on every healthy row. The advice is left to the
                               drawer: the row has to stay one line tall to stay scannable. */}
-                          {document.status === 'failed' && (
+                          {document.status === 'failed' && document.jobStatus !== 'cancelled' && (
                             <small className="doc-status-cell__error">
                               {documentFailureCopy(document).reason}
                             </small>

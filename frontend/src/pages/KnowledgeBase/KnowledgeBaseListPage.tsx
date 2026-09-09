@@ -1,3 +1,4 @@
+import { Plus } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -285,6 +286,13 @@ export function KnowledgeBaseListPage() {
 
   return (
     <AppShell active="knowledge-bases" breadcrumbs={[{ label: '知识库' }]}>
+      <header className="ui-page-heading">
+        <div className="ui-page-heading__copy">
+          <h1>知识库</h1>
+          <p>按主题整理资料，构建可以随时提问的知识空间。</p>
+        </div>
+        <Button leadingIcon={<Plus aria-hidden="true" />} onClick={openCreate}>新建知识库</Button>
+      </header>
       <div className="kb-page" aria-busy={busy || undefined}>
         <CategoryPanel
           controller={categories}
@@ -299,7 +307,6 @@ export function KnowledgeBaseListPage() {
         <section className="kb-main">
           <KnowledgeBaseToolbar
             filters={filters}
-            onCreate={openCreate}
             onFilter={setFilter}
             onOpenRecycleBin={() => setRecycleOpen(true)}
             onViewMode={list.changeViewMode}
@@ -443,7 +450,7 @@ export function KnowledgeBaseListPage() {
             </div>
           )}
 
-          <div className={loading && items.length > 0 ? 'kb-results is-refreshing' : 'kb-results'}>
+          <div className={`kb-results${viewMode === 'card' && items.length > 0 && !error ? ' kb-results--cards' : ''}${loading && items.length > 0 ? ' is-refreshing' : ''}`}>
             {loading && items.length === 0 ? (
               <LoadingSkeleton announce columns={5} rows={6} />
             ) : error ? (

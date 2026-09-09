@@ -1,13 +1,14 @@
 /* Document list (global and knowledge-base scoped), detail drawer and import. */
 
-.doc-page { display: grid; gap: var(--s-4); margin: 0 auto; max-width: var(--content-max); min-width: 0; }
-.doc-toolbar { display: grid; gap: var(--s-3); }
+.doc-page { display: grid; gap: var(--s-4); margin: 0 auto; max-width: var(--content-max); min-width: 0; width: 100%; }
+.doc-page__heading { margin: 0 0 var(--s-2); width: 100%; }
+.doc-toolbar { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); display: grid; gap: var(--s-4); padding: var(--s-4); }
 .doc-toolbar .ui-input-group { flex: 1 1 200px; max-width: 280px; }
 
 .doc-results {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   min-height: 180px;
   overflow: hidden;
   transition: opacity var(--fast) var(--ease);
@@ -29,10 +30,11 @@
   text-align: left;
   width: 100%;
 }
-.doc-name > svg { color: var(--text-faint); height: 15px; width: 15px; }
+.doc-name > svg { background: var(--surface-sunken); border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--text-muted); height: var(--s-10); padding: var(--s-2); width: var(--s-10); }
 .doc-name:hover { color: var(--accent); }
 
 .doc-status-cell { display: grid; gap: var(--s-1); min-width: 140px; }
+.doc-status-cell > .ui-badge { justify-self: start; }
 .doc-status-cell__error { color: var(--danger); font-size: var(--t-micro); }
 
 /* ---------------- Progress ---------------- */

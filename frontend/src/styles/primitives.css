@@ -354,7 +354,7 @@
 /* A consistent introduction for collection and utility pages. */
 .ui-page-heading { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-4); justify-content: space-between; margin: 0 auto var(--s-6); max-width: var(--content-max); }
 .ui-page-heading__copy { display: grid; gap: var(--s-2); min-width: 0; }
-.ui-page-heading h1 { color: var(--text); font-size: var(--t-title); font-weight: 650; letter-spacing: -0.025em; }
+.ui-page-heading h1, .ui-page-heading h2 { color: var(--text); font-size: var(--t-title); font-weight: 650; letter-spacing: -0.025em; }
 .ui-page-heading p { color: var(--text-muted); font-size: var(--t-body); }
 .ui-eyebrow { align-items: center; color: var(--accent); display: inline-flex; font-size: var(--t-micro); font-weight: 650; gap: var(--s-2); letter-spacing: 0.1em; }
 .ui-eyebrow > svg { height: var(--icon-sm); width: var(--icon-sm); }
@@ -434,6 +434,7 @@ button.ui-metrics__item:not(:disabled):hover { background: var(--surface-hover);
   padding: var(--s-2) var(--s-3);
 }
 
+.ui-bulkbar .ui-select { max-width: 100%; width: auto; }
 .ui-bulkbar__count { color: var(--accent); font-size: var(--t-small); font-weight: 600; margin-right: var(--s-1); }
 
 /* ============================================================

@@ -3,8 +3,8 @@
 .kb-page {
   align-items: start;
   display: grid;
-  gap: var(--s-5);
-  grid-template-columns: 200px minmax(0, 1fr);
+  gap: var(--s-6);
+  grid-template-columns: var(--category-w) minmax(0, 1fr);
   margin: 0 auto;
   max-width: var(--content-max);
 }
@@ -13,9 +13,13 @@
 
 /* ---------------- Category panel ---------------- */
 .cat-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
   display: grid;
   gap: var(--s-2);
   min-width: 0;
+  padding: var(--s-3);
   position: sticky;
   top: calc(var(--topbar-h) + var(--s-6));
 }
@@ -42,7 +46,7 @@
   display: flex;
   font-size: var(--t-body);
   gap: var(--s-2);
-  min-height: 30px;
+  min-height: var(--control-h);
   min-width: 0;
   padding: 0 var(--s-2);
   text-align: left;
@@ -89,7 +93,7 @@
 .cat-tree__actions .ui-icon-button > svg { height: 13px; width: 13px; }
 
 /* ---------------- Toolbar ---------------- */
-.kb-toolbar { display: grid; gap: var(--s-3); }
+.kb-toolbar { display: grid; gap: var(--s-4); }
 .kb-toolbar__scopes { align-self: start; flex-wrap: wrap; justify-self: start; max-width: 100%; }
 .kb-toolbar__controls { gap: var(--s-2); }
 .kb-toolbar__search { flex: 1 1 200px; max-width: 280px; }
@@ -99,12 +103,13 @@
 .kb-results {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   min-height: 180px;
   overflow: hidden;
   transition: opacity var(--fast) var(--ease);
 }
 .kb-results.is-refreshing { opacity: 0.6; }
+.kb-results--cards { background: transparent; border: 0; border-radius: 0; overflow: visible; }
 
 .kb-name { align-items: center; display: flex; gap: var(--s-2); min-width: 0; }
 .kb-name__tags { display: inline-flex; gap: var(--s-1); margin-left: 34px; margin-top: var(--s-1); }
@@ -117,24 +122,26 @@
 
 .kb-cards {
   display: grid;
-  gap: var(--s-3);
-  grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
-  padding: var(--s-4);
+  gap: var(--s-4);
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--card-min)), 1fr));
 }
 
 .kb-card {
+  align-content: start;
+  background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   display: grid;
-  gap: var(--s-3);
-  padding: var(--s-3);
+  gap: var(--s-4);
+  padding: var(--s-5);
   transition: border-color var(--fast) var(--ease), opacity var(--fast) var(--ease);
 }
-.kb-card:hover { border-color: var(--line-strong); }
+.kb-card:hover, .kb-card:focus-within { border-color: var(--accent-line); }
+.kb-card[data-selected='true'] { background: var(--accent-wash); border-color: var(--accent-line); }
 .kb-card.is-busy { opacity: 0.55; }
 .kb-card__head { align-items: center; display: flex; gap: var(--s-2); }
 .kb-card__head .kb-row-actions { margin-left: auto; }
-.kb-card__body { display: grid; gap: var(--s-1); min-width: 0; }
+.kb-card__body { display: grid; gap: var(--s-2); min-height: var(--s-20); min-width: 0; }
 .kb-card__body strong { color: var(--text); font-size: var(--t-lead); font-weight: 600; }
 .kb-card__body p {
   color: var(--text-muted);
@@ -144,7 +151,7 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
-.kb-card__meta { align-items: center; display: flex; flex-wrap: wrap; font-size: var(--t-small); gap: var(--s-2); }
+.kb-card__meta { align-items: center; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; font-size: var(--t-small); gap: var(--s-2); padding-top: var(--s-3); }
 .kb-card__tags { display: flex; flex-wrap: wrap; gap: var(--s-1); }
 
 /* ---------------- Form dialog ---------------- */
@@ -169,7 +176,7 @@
 /* ---------------- Detail ---------------- */
 .kb-detail { display: grid; gap: var(--s-5); margin: 0 auto; max-width: var(--content-max); }
 
-.kb-detail__hero { align-items: flex-start; display: flex; flex-wrap: wrap; gap: var(--s-3); justify-content: space-between; }
+.kb-detail__hero { align-items: flex-start; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); display: flex; flex-wrap: wrap; gap: var(--s-4); justify-content: space-between; padding: var(--s-6); }
 .kb-detail__identity { align-items: flex-start; display: flex; gap: var(--s-3); min-width: 0; }
 .kb-detail__title-row { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-2); }
 .kb-detail__title-row h1 { font-size: var(--t-title); }
