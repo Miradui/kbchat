@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Download, Library, MessageSquareText, PanelLeft, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, Download, Library, MessageSquareText, PanelLeft, Sparkles, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
@@ -27,7 +27,7 @@ import { downloadBlob } from '../../utils/download';
 import { formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
 import { ChatComposer } from './ChatComposer';
-import { CitationCard, MessageBubble } from './ChatMessage';
+import { ChatAssistantLabel, CitationCard, MessageBubble } from './ChatMessage';
 import { ChatSessionRail } from './ChatSessionRail';
 import type { ChatSessionScope } from './ChatSessionRail';
 import { useChatSessions } from './useChatSessions';
@@ -551,6 +551,7 @@ export function ChatPage() {
                     )}
                     <article className="chat-msg chat-msg--assistant is-pending">
                       <div className="chat-msg__body">
+                        <ChatAssistantLabel />
                         {/*
                           Once the first token lands the answer replaces the
                           skeleton, so the wait is only unexplained for as long
@@ -600,6 +601,7 @@ export function ChatPage() {
                     </article>
                     <article className="chat-msg chat-msg--assistant is-pending">
                       <div className="chat-msg__body">
+                        <ChatAssistantLabel />
                         <p className="chat-msg__content">
                           {thread.stoppedStream.answer || '已停止生成。'}
                         </p>
@@ -793,10 +795,10 @@ function ChatEmptyState({
 
   return (
     <div className="chat-launcher">
-      <MessageSquareText aria-hidden="true" />
+      <span className="chat-launcher__mark"><Sparkles aria-hidden="true" /></span>
       <h2>选择一个知识库开始提问</h2>
       <p>回答只依据所选知识库中的文档，并在下方标注来源。</p>
-      <div className="chat-launcher__list">
+      <div aria-label="可提问的知识库" className="chat-launcher__list">
         {knowledgeBases.map((knowledgeBase) => (
           <button
             aria-pressed={selectedId === knowledgeBase.id}
@@ -810,9 +812,11 @@ function ChatEmptyState({
               <strong>{knowledgeBase.name}</strong>
               <small>{knowledgeBase.description || '未填写描述'}</small>
             </span>
+            {selectedId === knowledgeBase.id && <Check aria-hidden="true" className="chat-launcher__selected" />}
           </button>
         ))}
       </div>
+      <p className="chat-launcher__hint">{selectedId ? '已选择知识库，在下方输入你的第一个问题。' : '选择知识库后即可开始，历史会话保存在左侧。'}</p>
     </div>
   );
 }

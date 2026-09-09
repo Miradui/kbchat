@@ -80,6 +80,7 @@ export function ChatSessionRail({
 
   return (
     <aside aria-label="会话列表" className="chat-rail">
+      <div className="chat-rail__intro"><strong>会话</strong><span>基于你的知识，持续探索</span></div>
       <div className="chat-rail__head">
         <Select
           aria-label="当前知识库"

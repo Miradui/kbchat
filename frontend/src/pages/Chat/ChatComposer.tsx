@@ -1,5 +1,5 @@
-import { CornerDownLeft, Square } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { ArrowUp, Square } from 'lucide-react';
+import { useEffect, useId, useRef } from 'react';
 import type { FormEvent, KeyboardEvent } from 'react';
 
 import { Button } from '../../components/ui/Button';
@@ -33,6 +33,7 @@ export function ChatComposer({
   onCancel,
 }: ChatComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const hintId = useId();
 
   useEffect(() => {
     const element = ref.current;
@@ -59,6 +60,7 @@ export function ChatComposer({
     <form className="chat-composer" onSubmit={submit}>
       <div className="chat-composer__box">
         <textarea
+          aria-describedby={hint ? hintId : undefined}
           aria-label="输入问题"
           className="chat-composer__input"
           disabled={disabled}
@@ -88,7 +90,7 @@ export function ChatComposer({
           ) : (
             <Button
               disabled={disabled || !value.trim()}
-              leadingIcon={<CornerDownLeft aria-hidden="true" />}
+              trailingIcon={<ArrowUp aria-hidden="true" />}
               type="submit"
             >
               发送
@@ -96,7 +98,7 @@ export function ChatComposer({
           )}
         </div>
       </div>
-      {hint && <p className="chat-composer__note">{hint}</p>}
+      {hint && <p className="chat-composer__note" id={hintId}>{hint}</p>}
     </form>
   );
 }

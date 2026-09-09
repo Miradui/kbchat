@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Copy, FileText, Pencil, RotateCw, ThumbsDown, ThumbsUp, X } from 'lucide-react';
+import { Check, ChevronDown, Copy, FileText, Pencil, RotateCw, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
@@ -39,6 +39,10 @@ type MessageBubbleProps = {
   onCancelEdit?: () => void;
   onSubmitEdit?: (messageId: string, content: string) => void;
 };
+
+export function ChatAssistantLabel() {
+  return <div className="chat-msg__author"><span><Sparkles aria-hidden="true" /></span><strong>知识助手</strong></div>;
+}
 
 export function MessageBubble({
   message,
@@ -91,6 +95,7 @@ export function MessageBubble({
   return (
     <article className={`chat-msg chat-msg--${message.role}`}>
       <div className="chat-msg__body">
+        {isAssistant && <ChatAssistantLabel />}
         {editing && !isAssistant ? (
           <textarea
             aria-label="编辑消息"
