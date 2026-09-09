@@ -1,4 +1,4 @@
-import { Check, Command, Eye, EyeOff } from 'lucide-react';
+import { ArrowRight, BookOpen, Check, Eye, EyeOff, FileText, MessageSquareText, Search } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -18,7 +18,7 @@ type LoginPageProps = {
 const points = [
   '知识库与文档集中管理',
   '检索与问答过程清晰可见',
-  '每个回答都能追溯到来源',
+  '回答依据可追溯到原文',
 ];
 
 export function LoginPage({ loginRequest = login }: LoginPageProps) {
@@ -82,11 +82,21 @@ export function LoginPage({ loginRequest = login }: LoginPageProps) {
     <section className="auth">
       <aside className="auth__aside">
         <div className="auth__brand">
-          <span className="auth__mark" aria-hidden="true"><Command /></span>
+          <span className="auth__mark" aria-hidden="true"><BookOpen /></span>
           <strong>RAG Console</strong>
         </div>
-        <h2>让企业知识可检索、可问答、可追溯</h2>
-        <p>统一管理知识库与文档处理流程，让每个回答都有清晰依据。</p>
+        <div className="auth__story">
+          <span className="auth__eyebrow">KNOWLEDGE, CONNECTED.</span>
+          <h2>让每一份知识，<br />都有用武之地。</h2>
+          <p>从文档到答案，在同一个工作空间里<br />管理知识、发现线索、追溯来源。</p>
+          <div aria-hidden="true" className="auth__flow">
+            <div className="auth__flow-step"><FileText /><span>汇集文档</span><small>你的专业知识</small></div>
+            <ArrowRight className="auth__flow-arrow" />
+            <div className="auth__flow-step"><Search /><span>检索知识</span><small>找到相关内容</small></div>
+            <ArrowRight className="auth__flow-arrow" />
+            <div className="auth__flow-step"><MessageSquareText /><span>获得答案</span><small>附带真实来源</small></div>
+          </div>
+        </div>
         <ul className="auth__points">
           {points.map((point) => (
             <li key={point}><Check aria-hidden="true" /><span>{point}</span></li>
@@ -97,14 +107,16 @@ export function LoginPage({ loginRequest = login }: LoginPageProps) {
       <div className="auth__panel">
         <form className="auth__form" noValidate onSubmit={handleSubmit}>
           <header>
-            <h1>登录</h1>
-            <p>使用已配置的账户进入工作台。</p>
+            <span className="auth__form-brand"><BookOpen aria-hidden="true" />RAG Console</span>
+            <h1>欢迎回来</h1>
+            <p>登录账户，继续你的知识探索。</p>
           </header>
 
           <Field error={fieldErrors.username} htmlFor={usernameId} label="用户名">
             <Input
               aria-invalid={Boolean(fieldErrors.username)}
               autoComplete="username"
+              className="auth__input"
               disabled={submitting}
               id={usernameId}
               onChange={(event) => {
@@ -112,6 +124,7 @@ export function LoginPage({ loginRequest = login }: LoginPageProps) {
                 setFieldErrors((current) => ({ ...current, username: undefined }));
               }}
               ref={usernameRef}
+              placeholder="输入用户名"
               required
               value={username}
             />
@@ -128,6 +141,7 @@ export function LoginPage({ loginRequest = login }: LoginPageProps) {
                 aria-describedby={fieldErrors.password ? passwordMessageId : undefined}
                 aria-invalid={Boolean(fieldErrors.password)}
                 autoComplete="current-password"
+                className="auth__input"
                 disabled={submitting}
                 id={passwordId}
                 onChange={(event) => {
@@ -135,11 +149,13 @@ export function LoginPage({ loginRequest = login }: LoginPageProps) {
                   setFieldErrors((current) => ({ ...current, password: undefined }));
                 }}
                 ref={passwordRef}
+                placeholder="输入密码"
                 required
                 type={showPassword ? 'text' : 'password'}
                 value={password}
               />
               <IconButton
+                className="auth__password-toggle"
                 disabled={submitting}
                 label={showPassword ? '隐藏密码' : '显示密码'}
                 onClick={() => setShowPassword((visible) => !visible)}
@@ -151,8 +167,10 @@ export function LoginPage({ loginRequest = login }: LoginPageProps) {
 
           {error && <p className="auth__error" ref={errorRef} role="alert" tabIndex={-1}>{error}</p>}
 
-          <Button className="auth__submit" loading={submitting} loadingLabel="登录中" type="submit">登录</Button>
+          <Button className="auth__submit" loading={submitting} loadingLabel="登录中" trailingIcon={<ArrowRight aria-hidden="true" />} type="submit">登录</Button>
+          <p className="auth__help">账户由管理员配置，如需帮助请联系管理员。</p>
         </form>
+        <span className="auth__footer">RAG Console · 企业知识工作空间</span>
       </div>
     </section>
   );

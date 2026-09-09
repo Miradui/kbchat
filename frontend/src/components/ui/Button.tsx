@@ -10,6 +10,7 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   loading?: boolean;
   loadingLabel?: string;
   leadingIcon?: ReactNode;
+  trailingIcon?: ReactNode;
 };
 
 export function Button({
@@ -17,6 +18,7 @@ export function Button({
   loading = false,
   loadingLabel = '处理中',
   leadingIcon,
+  trailingIcon,
   className,
   children,
   disabled,
@@ -32,6 +34,7 @@ export function Button({
     >
       {loading ? <LoaderCircle className="ui-button__spinner" aria-hidden="true" /> : leadingIcon}
       <span>{loading ? loadingLabel : children}</span>
+      {!loading && trailingIcon}
     </button>
   );
 }

@@ -50,6 +50,23 @@ function deferred<T>() {
 }
 
 describe('HomePage', () => {
+  it('does not present a deliberately cancelled document as a processing failure', async () => {
+    const sources = createSources();
+    vi.mocked(sources.loadSummary).mockResolvedValue(createSummary({
+      failedDocuments: [{ ...document, status: 'failed', jobStatus: 'cancelled' }],
+      failedDocumentTotal: 1,
+    }));
+    renderWithRouter(<HomePage sources={sources} />);
+
+    await screen.findByText('还没有动态');
+    expect(screen.queryByRole('region', { name: '需要处理' })).not.toBeInTheDocument();
+  });
+
+  it('opens the import dialog from the home shortcut', async () => {
+    renderWithRouter(<HomePage sources={createSources()} />);
+    expect(await screen.findByRole('link', { name: /导入文档/ })).toHaveAttribute('href', '/documents?intent=upload');
+  });
+
   it('links the primary knowledge-base action to the create intent', async () => {
     renderWithRouter(<HomePage sources={createSources()} />);
 

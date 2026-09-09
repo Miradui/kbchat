@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRight, FileText, Library, Loader, MessageSquareText, Send, UserRound } from 'lucide-react';
+import { AlertTriangle, ArrowRight, BookOpen, FileText, Library, Loader, MessageSquareText, Sparkles, Upload, UserRound } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -9,9 +9,7 @@ import { Button } from '../../components/ui/Button';
 import { AppShell } from '../../layouts/AppShell';
 import type {
   ActivityItemResponse,
-  ChatSession,
   GlobalDocumentItem,
-  KnowledgeBase,
   KnowledgeBaseStatsResponse,
 } from '../../types/api';
 import { formatCount, formatRelativeTime } from '../../utils/format';
@@ -36,14 +34,13 @@ export function HomePage({ sources }: { sources?: HomeSources }) {
   const navigate = useNavigate();
   const loaders = useMemo(() => createHomeLoaders(sources), [sources]);
   const stats = useRegion(loaders.stats, null as KnowledgeBaseStatsResponse | null, '统计加载失败');
-  const knowledgeBases = useRegion(loaders.knowledgeBases, [] as KnowledgeBase[], '知识库加载失败');
   const documents = useRegion(loaders.documents, [] as GlobalDocumentItem[], '文档加载失败');
   const failedDocuments = useRegion(loaders.failedDocuments, [] as GlobalDocumentItem[], '失败文档加载失败');
-  const sessions = useRegion(loaders.sessions, [] as ChatSession[], '会话加载失败');
   const activities = useRegion(loaders.activities, [] as ActivityItemResponse[], '动态加载失败');
   const [question, setQuestion] = useState('');
 
   const processing = documents.data.filter((item) => !isTerminalDocumentStatus(item.status));
+  const actionableFailures = failedDocuments.data.filter((item) => item.jobStatus !== 'cancelled');
 
   // Real recorded events, not a merge of the three lists: deletes, restores and
   // membership changes have no row to reconstruct them from.
@@ -60,43 +57,65 @@ export function HomePage({ sources }: { sources?: HomeSources }) {
   }
 
   const activityLoading = activities.loading;
-  const needsAttention = failedDocuments.data.length > 0 || processing.length > 0;
+  const needsAttention = actionableFailures.length > 0 || processing.length > 0;
 
   return (
     <AppShell active="home" breadcrumbs={[{ label: '首页' }]}>
       <div className="home">
-        <section className="home-hero">
-          <h1>企业知识工作台</h1>
+        <section aria-label="企业知识工作台" className="home-hero">
+          <span className="ui-eyebrow"><Sparkles aria-hidden="true" />你的知识工作台</span>
+          <h1>今天，想了解什么？</h1>
+          <p className="home-hero__description">连接你的文档与答案，让每一次提问都有据可循。</p>
           <form className="home-ask" onSubmit={ask}>
-            <input
-              aria-label="向知识库提问"
-              className="ui-input"
-              onChange={(event) => setQuestion(event.target.value)}
-              placeholder="有什么想问的？"
-              value={question}
-            />
-            <Button leadingIcon={<Send aria-hidden="true" />} type="submit">提问</Button>
+            <div className="home-ask__input-row">
+              <Sparkles aria-hidden="true" />
+              <input
+                aria-label="向知识库提问"
+                className="home-ask__input"
+                enterKeyHint="send"
+                onChange={(event) => setQuestion(event.target.value)}
+                placeholder="例如：新员工入职需要准备哪些材料？"
+                value={question}
+              />
+            </div>
+            <div className="home-ask__foot">
+              <span><BookOpen aria-hidden="true" />从知识库中寻找答案</span>
+              <Button trailingIcon={<ArrowRight aria-hidden="true" />} type="submit">提问</Button>
+            </div>
           </form>
-          <div className="home-quick">
-            <Link to="/knowledge-bases?intent=create"><Library aria-hidden="true" /><span>新建知识库</span></Link>
-            <Link to="/documents"><FileText aria-hidden="true" /><span>导入文档</span></Link>
-            <Link to="/chat"><MessageSquareText aria-hidden="true" /><span>查看会话</span></Link>
-          </div>
         </section>
+
+        <nav aria-label="快捷操作" className="home-quick">
+          <Link to="/knowledge-bases?intent=create">
+            <span className="home-quick__icon"><Library aria-hidden="true" /></span>
+            <span><strong>新建知识库</strong><small>为一个主题整理专属资料</small></span>
+            <ArrowRight aria-hidden="true" />
+          </Link>
+          <Link to="/documents?intent=upload">
+            <span className="home-quick__icon"><Upload aria-hidden="true" /></span>
+            <span><strong>导入文档</strong><small>添加 PDF、Markdown 或 TXT</small></span>
+            <ArrowRight aria-hidden="true" />
+          </Link>
+          <Link to="/chat">
+            <span className="home-quick__icon"><MessageSquareText aria-hidden="true" /></span>
+            <span><strong>查看会话</strong><small>接着上次的问题继续探索</small></span>
+            <ArrowRight aria-hidden="true" />
+          </Link>
+        </nav>
 
         {/* Only rendered when something actually needs a decision. */}
         {needsAttention && (
           <section aria-label="需要处理" className="home-attention">
-            {failedDocuments.data.length > 0 && (
+            {actionableFailures.length > 0 && (
               <Link className="home-attention__row is-danger" to="/documents?status=failed">
                 <AlertTriangle aria-hidden="true" />
                 <span className="ui-cell-stack">
-                  <strong>{failedDocuments.data.length} 个文档处理失败</strong>
+                  <strong>{actionableFailures.length} 个文档处理失败</strong>
                   <small>
-                    {failedDocuments.data[0].filename}
-                    {failedDocuments.data.length > 1 ? ` 等 ${failedDocuments.data.length} 个` : ''}
+                    {actionableFailures[0].filename}
+                    {actionableFailures.length > 1 ? ` 等 ${actionableFailures.length} 个` : ''}
                     {' · '}
-                    {documentFailureCopy(failedDocuments.data[0]).reason}
+                    {documentFailureCopy(actionableFailures[0]).reason}
                   </small>
                 </span>
                 <ArrowRight aria-hidden="true" />
@@ -117,7 +136,7 @@ export function HomePage({ sources }: { sources?: HomeSources }) {
 
         <section className="ui-panel home-activity">
           <div className="ui-panel__head">
-            <h2>最近</h2>
+            <h2>最近动态</h2>
             <span className="ui-panel__head-note">会话、知识库和文档的最新动态</span>
           </div>
           {activityLoading && activity.length === 0 ? (
@@ -148,6 +167,7 @@ export function HomePage({ sources }: { sources?: HomeSources }) {
                     <small>{item.context}</small>
                   </span>
                   <span className="home-activity__time">{formatRelativeTime(item.at)}</span>
+                  <ArrowRight aria-hidden="true" className="home-activity__arrow" />
                 </Link>
               ))}
             </div>

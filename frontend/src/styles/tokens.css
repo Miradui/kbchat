@@ -117,6 +117,11 @@
   --topbar-h: 64px;
   --content-max: 1440px;
   --reading-max: 960px;
+  --home-max: 1120px;
+  --chat-reading-max: 840px;
+  --chat-rail-w: 280px;
+  --category-w: 208px;
+  --card-min: 264px;
   --auth-form-w: 400px;
   --auth-art-w: 480px;
   --icon-sm: 16px;
@@ -204,8 +209,8 @@
     --text-muted: #a6b5cd;
     --text-faint: #8e9fb9;
     --text-on-accent: #14213e;
-  --text-on-danger: #281517;
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a6b5cd' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    --text-on-danger: #281517;
+    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a6b5cd' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
     --accent: #95b2ff;
     --accent-hover: #adc3ff;
