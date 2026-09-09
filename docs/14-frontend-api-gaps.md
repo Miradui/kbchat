@@ -1,21 +1,21 @@
 # 前端接口缺口
 
-本文件记录前端在 2026-08 信息架构重构中发现的后端接口缺口。每条说明缺什么、阻塞哪个页面、以及建议的接口形态。
+本文件记录前端在信息架构重构和 UI 优化中发现的后端接口缺口。每条说明缺什么、阻塞哪个页面、以及建议的接口形态。
 
 优先级含义：
 
 - **P1** — 明显影响体验或正确性，前端已做妥协
 - **P2** — 后续增强，当前不影响主流程
 
-当前记录的 G1–G20 均已闭环。G14 由前端 XHR 传输进度完成，不需要后端协议变更；G16、G19 已补齐后端端点及前端接入。
+当前记录的 G1–G21 均已闭环。G14 由前端 XHR 传输进度完成，不需要后端协议变更；G16、G19 已补齐后端端点及前端接入。G21 先记录缺口，再补齐服务端聚合筛选和前端接入。
 
 ## 2026-09-10 UI 优化发现
 
 ### G21 文档「处理中」汇总筛选不完整（P1，已实现）
 
-文档页计数条的「处理中」包含 `uploaded`、`parsing`、`chunking`、`embedding`，
+优化前，文档页计数条的「处理中」包含 `uploaded`、`parsing`、`chunking`、`embedding`，
 但点击时只发送 `status=parsing`。这会让用户看到非零计数，却在点击后得到空列表，
-也会遗漏正在上传后排队、切片和向量化的文档。首页的处理中入口目前还直接跳转全部文档。
+也会遗漏正在上传后排队、切片和向量化的文档。首页的处理中入口当时还直接跳转全部文档。
 
 需要在 `GET /documents` 与 `GET /knowledge-bases/:id/documents` 的同一查询面增加
 `status=processing`，由服务端按这四个状态筛选并计算分页总数；具体阶段筛选继续保留。
@@ -27,7 +27,7 @@ URL 刷新后应保留筛选，阶段选择器提供「全部处理中」及各�
 
 落地：共享 repository 查询增加 GORM `IN` 条件；前端查询类型单独定义
 `DocumentStatusFilter`，不把 `processing` 混入文档实体状态。文档计数条、阶段选择器、
-URL 恢复与首页处理中入口均已接入；service 回归覆盖权限、全局/知识库作用域和分页，
+URL 恢复、首页与知识库概览的处理中入口均已接入；service 回归覆盖权限、全局/知识库作用域和分页，
 前端回归覆盖点击筛选、具体阶段切换和直接打开深链接。
 
 代码中引用本文件时使用编号，例如 `// See docs/14-frontend-api-gaps.md G1`。
@@ -60,6 +60,7 @@ URL 恢复与首页处理中入口均已接入；service 回归覆盖权限、�
 | G18 | 新增 `GET /api/v1/activities` 与 `activities` 表（migration 012） |
 | G19 | 新增 `GET /api/v1/chat/sessions/:id/export` Markdown 导出和 `GET /api/v1/search/export` CSV 导出 |
 | G20 | `GET /api/v1/knowledge-bases/:id/documents` 与 `GET /api/v1/documents` 对齐为同一查询面，重复实现已删除 |
+| G21 | 两个文档列表接口支持 `status=processing`，汇总 uploaded、parsing、chunking、embedding，并保持权限和分页一致 |
 
 ---
 
@@ -116,3 +117,4 @@ Embedding 状态；断点续传不在当前范围。
 | G18 | `frontend/src/pages/Home/activityDisplay.ts`；`HomePage.tsx` 时间线 |
 | G19 | `frontend/src/api/resources.ts` 的两个导出函数；`ChatPage.tsx` 导出 Markdown，`SearchPage.tsx` 导出 CSV |
 | G20 | `frontend/src/api/resources.ts` 的 `listDocuments(id, params)`；`KnowledgeBaseOverviewPage.tsx` 按状态取 `total` |
+| G21 | `DocumentsPage.tsx` 计数条和阶段选择器、`useDocumentList.ts` URL 恢复、`HomePage.tsx` 与 `KnowledgeBaseOverviewPage.tsx` 处理中入口 |
