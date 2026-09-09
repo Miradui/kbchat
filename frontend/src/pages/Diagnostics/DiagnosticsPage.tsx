@@ -176,8 +176,8 @@ export function DiagnosticsPage({ sources = defaultSources }: { sources?: Diagno
   return (
     <AppShell active="diagnostics" breadcrumbs={[{ label: '系统诊断' }]}>
       <div className="diagnostics-page">
-        <header className="diagnostics-page__header">
-          <div>
+        <header className="ui-page-heading diagnostics-page__header">
+          <div className="ui-page-heading__copy">
             <h1>系统诊断</h1>
             <p>依赖可用性、任务队列积压与模型调用耗时。</p>
           </div>
@@ -199,7 +199,7 @@ export function DiagnosticsPage({ sources = defaultSources }: { sources?: Diagno
                   {`检查时间：${formatRelativeTime(diagnostics.checkedAt)} · 环境：${diagnostics.env} · 整体状态：${statusLabel(diagnostics.status)}`}
                 </p>
 
-                <section aria-label="依赖状态" className="ui-panel diagnostics-dependencies">
+                <section aria-label="依赖状态" className="ui-panel diagnostics-section diagnostics-dependencies">
                   <h2>依赖状态</h2>
                   <ul className="diagnostics-dependencies__list">
                     {diagnostics.dependencies.map((dependency) => (
@@ -219,7 +219,7 @@ export function DiagnosticsPage({ sources = defaultSources }: { sources?: Diagno
                   </ul>
                 </section>
 
-                <section aria-label="任务队列" className="ui-panel diagnostics-queues">
+                <section aria-label="任务队列" className="ui-panel diagnostics-section diagnostics-queues">
                   <h2>任务队列</h2>
                   {documents && (
                     <MetricStrip label="文档处理队列指标" metrics={[
@@ -247,7 +247,7 @@ export function DiagnosticsPage({ sources = defaultSources }: { sources?: Diagno
                   )}
                 </section>
 
-                <section aria-label="模型 Provider" className="ui-panel diagnostics-providers">
+                <section aria-label="模型 Provider" className="ui-panel diagnostics-section diagnostics-providers">
                   <h2>模型 Provider</h2>
                   {/* Stated plainly, because a panel that looks like a probe result
                       but is not would mislead exactly when it matters. */}
@@ -280,7 +280,7 @@ export function DiagnosticsPage({ sources = defaultSources }: { sources?: Diagno
                   </ul>
                 </section>
 
-                <section aria-label="调用耗时" className="ui-panel diagnostics-latency">
+                <section aria-label="调用耗时" className="ui-panel diagnostics-section diagnostics-latency">
                   <h2>调用耗时</h2>
                   {diagnostics.metricsSinceRestart && (
                     <p className="ui-muted">
