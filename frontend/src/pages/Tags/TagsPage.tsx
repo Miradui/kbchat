@@ -99,11 +99,15 @@ export function TagsPage() {
     <AppShell
       active="tags"
       breadcrumbs={[{ label: '标签' }]}
-      topbarActions={
-        <Button leadingIcon={<Plus aria-hidden="true" />} onClick={() => setEditor({})}>新建标签</Button>
-      }
     >
       <div className="tags-page">
+        <header className="ui-page-heading tags-page__heading">
+          <div className="ui-page-heading__copy">
+            <h1>标签管理</h1>
+            <p>用简洁的标签关联知识，让资料更容易被找到。</p>
+          </div>
+          <Button leadingIcon={<Plus aria-hidden="true" />} onClick={() => setEditor({})}>新建标签</Button>
+        </header>
         <div className="ui-toolbar">
           <SearchInput
             aria-label="搜索标签"

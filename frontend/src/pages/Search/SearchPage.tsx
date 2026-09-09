@@ -16,6 +16,7 @@ import type { SearchGuidance } from './searchGuidance';
 import type { GlobalSearchResult, GlobalSearchResultType, SearchHighlight } from '../../types/api';
 import { downloadBlob } from '../../utils/download';
 import { getErrorMessage } from '../../utils/errors';
+import { documentStatuses, documentStatusLabel } from '../Documents/documentDisplay';
 
 type SearchType = 'all' | GlobalSearchResultType;
 
@@ -240,6 +241,12 @@ export function SearchPage() {
   return (
     <AppShell active="search" breadcrumbs={[{ label: '搜索' }]}>
       <div className="search-page">
+        <header className="ui-page-heading search-page__heading">
+          <div className="ui-page-heading__copy">
+            <h1>搜索你的知识</h1>
+            <p>通过关键词查找知识库、文档和原文片段。</p>
+          </div>
+        </header>
         <form className="search-page__form" onSubmit={handleSubmit} role="search">
           <SearchCombobox
             onChange={setDraft}
@@ -339,13 +346,19 @@ function updateParams(
 
 function SearchResultRow({ item }: { item: GlobalSearchResult }) {
   const Icon = item.type === 'knowledgeBase' ? Library : item.type === 'document' ? FileText : TextQuote;
+  const documentStatus = item.type === 'document'
+    ? documentStatuses.find((status) => status === item.snippet)
+    : undefined;
+  const snippet = documentStatus
+    ? documentStatusLabel(documentStatus)
+    : item.snippet ? highlight(item.snippet, item.highlights, 'snippet') : '暂无摘要';
   return (
     <Link className="search-result" to={resultHref(item)}>
       <span className="search-result__icon" aria-hidden="true"><Icon /></span>
       <span className="search-result__body">
         <strong>{highlight(item.title, item.highlights, 'title')}</strong>
         <small>{item.knowledgeBaseName}{item.filename ? ` · ${item.filename}` : ''}</small>
-        <p>{item.snippet ? highlight(item.snippet, item.highlights, 'snippet') : '暂无摘要'}</p>
+        <p>{snippet}</p>
       </span>
     </Link>
   );
