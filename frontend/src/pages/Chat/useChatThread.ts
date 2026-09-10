@@ -409,6 +409,9 @@ export function useChatThread({
       pendingChatRequestStore.clear(targetSessionId, clientRequestId);
       if (isCurrent()) {
         setRerankFallback(response.rerankFallback?.used ? response.rerankFallback : null);
+        // Title refresh is independent of the message-list read below, which
+        // may fail even though the first question and its title were saved.
+        onSessionsChangedRef.current();
       }
     } catch (caught) {
       if (streamController && sendAbortRef.current === streamController) sendAbortRef.current = null;
@@ -493,7 +496,6 @@ export function useChatThread({
         setLoadError('');
         setLoading(false);
       }
-      onSessionsChanged();
     } catch {
       // The write succeeded; only the refresh failed. Reported separately so the
       // user is never nudged into sending the same question twice.

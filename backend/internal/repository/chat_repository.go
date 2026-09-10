@@ -140,6 +140,25 @@ func (r *ChatRepository) UpdateSessionTitle(ctx context.Context, sessionID uuid.
 		}).Error
 }
 
+// UpdateSessionTitleIfUnchanged protects an automatic title from overwriting a
+// manual rename, including one that saved the same text while the model ran.
+// On success the snapshot advances so it can guard a later title refinement.
+func (r *ChatRepository) UpdateSessionTitleIfUnchanged(ctx context.Context, session *model.ChatSession, title string) (bool, error) {
+	// Keep the same wall-clock convention as the existing timestamp columns and
+	// all other session writes; pgx drops the zone for timestamp without time zone.
+	updatedAt := time.Now().Truncate(time.Microsecond)
+	result := r.db.WithContext(ctx).
+		Model(&model.ChatSession{}).
+		Where("id = ? AND user_id = ? AND title = ? AND updated_at = ?", session.ID, session.UserID, session.Title, session.UpdatedAt).
+		Updates(map[string]any{"title": title, "updated_at": updatedAt})
+	if result.Error != nil || result.RowsAffected == 0 {
+		return false, result.Error
+	}
+	session.Title = title
+	session.UpdatedAt = updatedAt
+	return true, nil
+}
+
 func (r *ChatRepository) ArchiveSession(ctx context.Context, sessionID uuid.UUID, archivedAt time.Time) error {
 	return r.db.WithContext(ctx).
 		Model(&model.ChatSession{}).

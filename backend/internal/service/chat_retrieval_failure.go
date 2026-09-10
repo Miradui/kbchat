@@ -69,7 +69,8 @@ func isRetrievalInfrastructureFailure(err error) bool {
 // turn; the client retries with a new id.
 func (s *ChatService) recordRetrievalFailure(
 	ctx context.Context,
-	sessionID, clientRequestID uuid.UUID,
+	session *model.ChatSession,
+	clientRequestID uuid.UUID,
 	content string,
 	history []model.ChatMessage,
 ) {
@@ -79,11 +80,13 @@ func (s *ChatService) recordRetrievalFailure(
 		intent:       chatIntentKnowledgeBase,
 		answerStatus: AnswerStatusRetrievalFailed,
 	}
-	userMessage, assistantMessage, err := buildChatMessagePair(sessionID, clientRequestID, content, generated)
+	userMessage, assistantMessage, err := buildChatMessagePair(session.ID, clientRequestID, content, generated)
 	if err != nil {
 		return
 	}
 	// Best effort: the caller is already returning an error, so a failure to
 	// record it must not replace that error with a different one.
-	_ = s.chats.CreateMessagesIfUnchanged(ctx, chatMessageIDs(history), userMessage, assistantMessage)
+	if err := s.chats.CreateMessagesIfUnchanged(ctx, chatMessageIDs(history), userMessage, assistantMessage); err == nil {
+		s.updateSessionTitleIfNeeded(ctx, session, content, history)
+	}
 }

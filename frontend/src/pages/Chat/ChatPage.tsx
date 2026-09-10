@@ -109,13 +109,13 @@ export function ChatPage() {
     onSessionsChanged: () => void reloadSessions(),
   });
 
-  const currentSession = sessionId
-    ? (
-      thread.session?.id === sessionId
-        ? thread.session
-        : sessions.find((session) => session.id === sessionId) ?? null
-    )
-    : null;
+  const loadedSession = sessionId && thread.session?.id === sessionId ? thread.session : null;
+  const listedSession = sessions.find((session) => session.id === sessionId) ?? null;
+  // Sending refreshes the list, which can now carry the first question's title.
+  // A slower detail or list response must not replace a newer manual rename.
+  const currentSession = listedSession && (
+    !loadedSession || Date.parse(listedSession.updatedAt) > Date.parse(loadedSession.updatedAt)
+  ) ? listedSession : loadedSession;
 
   const activeKnowledgeBaseId = currentSession?.knowledgeBaseId
     ?? urlKnowledgeBaseId

@@ -228,18 +228,79 @@ async function finishAutomaticSendChecks() {
 
 async function submitWithAutomaticChecksPaused() {
   vi.useFakeTimers();
-  fireEvent.click(screen.getByRole('button', { name: '发送' }));
-  await vi.waitFor(() => {
-    expect(screen.getByText('正在确认这条消息…')).toBeInTheDocument();
-  }, {
-    interval: 10,
-    // The full suite runs many jsdom workers concurrently on Windows; keep the
-    // assertion strict while allowing React enough wall-clock time to commit.
-    timeout: 3_000,
+  // Flush the rejected request without advancing the reconciliation timers.
+  // Polling with fake timers could finish every check before React committed.
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
   });
+  expect(screen.getByText('正在确认这条消息…')).toBeInTheDocument();
 }
 
 describe('ChatPage', () => {
+  it('updates both the rail and header from the first question without reloading the page', async () => {
+    const unnamed = { ...session, title: '新会话' };
+    const named = { ...session, title: '报销发票提交', updatedAt: '2026-07-01T00:01:00Z' };
+    vi.mocked(createChatSession).mockResolvedValue(unnamed);
+    vi.mocked(getChatSession).mockResolvedValue(unnamed);
+    vi.mocked(listChatSessions).mockResolvedValue({ items: [] });
+    vi.mocked(sendChatMessage).mockImplementation(async () => {
+      vi.mocked(listChatSessions).mockResolvedValue({ items: [named] });
+      return { answer: '回答', citations: [], rerankFallback: null };
+    });
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes><Route path="/chat/:sessionId?" element={<ChatPage />} /></Routes>,
+      ['/chat?knowledgeBaseId=kb1'],
+    );
+    await user.type(await screen.findByRole('textbox', { name: '输入问题' }), '报销发票怎么提交？');
+    await user.click(screen.getByRole('button', { name: '发送' }));
+    expect(await findSessionTitle(named.title)).toBeInTheDocument();
+    expect(within(screen.getByRole('complementary', { name: '会话列表' })).getByRole('link', { name: new RegExp(named.title) })).toBeInTheDocument();
+    expect(screen.queryByText('新会话', { selector: '.ui-inline-edit__text' })).not.toBeInTheDocument();
+    expect(updateChatSessionTitle).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the generated title even when the successful send cannot refresh messages', async () => {
+    const unnamed = { ...session, title: '新会话' };
+    const named = { ...session, title: '报销发票提交', updatedAt: '2026-07-01T00:01:00Z' };
+    vi.mocked(getChatSession).mockResolvedValue(unnamed);
+    vi.mocked(listChatSessions).mockResolvedValue({ items: [unnamed] });
+    vi.mocked(sendChatMessage).mockImplementation(async () => {
+      vi.mocked(listChatSessions).mockResolvedValue({ items: [named] });
+      vi.mocked(listChatMessages).mockRejectedValue(new TypeError('Failed to fetch'));
+      return { answer: '回答', citations: [], rerankFallback: null };
+    });
+    const user = userEvent.setup();
+    renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>, ['/chat/s1']);
+    await findSessionTitle('新会话');
+    await user.type(screen.getByRole('textbox', { name: '输入问题' }), '报销发票怎么提交？');
+    await user.click(screen.getByRole('button', { name: '发送' }));
+    expect(await findSessionTitle(named.title)).toBeInTheDocument();
+    expect(await screen.findByText('回答已生成，但消息列表刷新失败。刷新页面即可看到。')).toBeInTheDocument();
+    expect(sendChatMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a newer title when an older session detail arrives after the list', async () => {
+    const detail = deferred<ChatSession>();
+    const named = { ...session, title: '首问自动标题', updatedAt: '2026-07-01T00:01:00Z' };
+    vi.mocked(listChatSessions).mockResolvedValue({ items: [named] });
+    vi.mocked(getChatSession).mockReturnValue(detail.promise);
+    renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>, ['/chat/s1']);
+    await findSessionTitle(named.title);
+    await act(async () => detail.resolve({ ...session, title: '新会话' }));
+    expect(await findSessionTitle(named.title)).toBeInTheDocument();
+  });
+
+  it('uses a newer manually named session detail while an older rail is loading', async () => {
+    const list = deferred<Awaited<ReturnType<typeof listChatSessions>>>();
+    vi.mocked(listChatSessions).mockReturnValue(list.promise);
+    vi.mocked(getChatSession).mockResolvedValue({ ...session, title: '手动名称', updatedAt: '2026-07-01T00:02:00Z' });
+    renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>, ['/chat/s1']);
+    await findSessionTitle('手动名称');
+    await act(async () => list.resolve({ items: [{ ...session, title: '首问自动标题', updatedAt: '2026-07-01T00:01:00Z' }] }));
+    expect(await findSessionTitle('手动名称')).toBeInTheDocument();
+  });
+
   it('renames the right-clicked session, keeps failed edits retryable and preserves the active conversation draft', async () => {
     const other = { ...secondSession, knowledgeBaseId: knowledgeBase.id };
     vi.mocked(listChatSessions).mockResolvedValue({ items: [session, other] });

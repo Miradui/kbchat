@@ -221,7 +221,7 @@ func TestParseChatIntentOutputFallsBackToKnowledgeBase(t *testing.T) {
 func TestGenerateSessionTitleUsesDedicatedTitleProvider(t *testing.T) {
 	provider := &fakeTitleProvider{response: "报销制度咨询"}
 
-	title, err := generateSessionTitle(context.Background(), provider, "报销发票怎么提交？", "需要在系统中上传发票影像。")
+	title, err := generateSessionTitle(context.Background(), provider, "报销发票怎么提交？")
 	if err != nil {
 		t.Fatalf("generate session title returned error: %v", err)
 	}

@@ -57,6 +57,7 @@ const (
 	chatIntentConversation  = "conversation"
 	chatIntentKnowledgeBase = "knowledge_base"
 	defaultChatSessionTitle = "新会话"
+	sessionTitleTimeout     = 5 * time.Second
 )
 
 type chatIntentDecision struct {
@@ -867,7 +868,7 @@ func (s *ChatService) SendMessage(ctx context.Context, userID, sessionID uuid.UU
 		// The turn is recorded before the error is returned, so a refresh still shows
 		// the question. The error is unchanged: the request did fail.
 		if isRetrievalInfrastructureFailure(err) {
-			s.recordRetrievalFailure(ctx, session.ID, clientRequestID, content, history)
+			s.recordRetrievalFailure(ctx, session, clientRequestID, content, history)
 		}
 		return nil, err
 	}
@@ -886,7 +887,7 @@ func (s *ChatService) SendMessage(ctx context.Context, userID, sessionID uuid.UU
 		}
 		return nil, apperror.Internal(err)
 	}
-	s.updateSessionTitleIfNeeded(ctx, session, content, generated.answer)
+	s.updateSessionTitleIfNeeded(ctx, session, content, history)
 
 	return &dto.SendChatMessageResponse{
 		ClientRequestID:  clientRequestID.String(),
@@ -978,7 +979,7 @@ func (s *ChatService) SendMessageStream(
 		// went away, matching this path's existing rule of persisting nothing on
 		// interruption.
 		if isRetrievalInfrastructureFailure(err) {
-			s.recordRetrievalFailure(ctx, session.ID, clientRequestID, content, history)
+			s.recordRetrievalFailure(ctx, session, clientRequestID, content, history)
 		}
 		return err
 	}
@@ -1023,7 +1024,7 @@ func (s *ChatService) SendMessageStream(
 		}
 		return apperror.Internal(err)
 	}
-	s.updateSessionTitleIfNeeded(ctx, session, content, generated.answer)
+	s.updateSessionTitleIfNeeded(ctx, session, content, history)
 
 	return sink.Done(&dto.SendChatMessageResponse{
 		ClientRequestID:  clientRequestID.String(),
@@ -1278,7 +1279,6 @@ func (s *ChatService) EditMessageAndRegenerate(
 		}
 		return nil, apperror.Internal(err)
 	}
-	s.updateSessionTitleIfNeeded(ctx, session, content, generated.answer)
 	return &dto.SendChatMessageResponse{
 		ClientRequestID:  clientRequestID.String(),
 		UserMessage:      toChatMessageResponse(userMessage),
@@ -1544,18 +1544,41 @@ func chatCompletionError(err error) error {
 	return apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "回答生成失败，请稍后重试", err)
 }
 
-func (s *ChatService) updateSessionTitleIfNeeded(ctx context.Context, session *model.ChatSession, question string, answer string) {
-	if s.titleProvider == nil || !shouldGenerateSessionTitle(session.Title) {
+func (s *ChatService) updateSessionTitleIfNeeded(ctx context.Context, session *model.ChatSession, question string, history []model.ChatMessage) {
+	if !shouldGenerateSessionTitle(session.Title) {
 		return
 	}
-	title, err := generateSessionTitle(ctx, s.titleProvider, question, answer)
-	if err != nil || title == "" || title == defaultChatSessionTitle {
+	for _, message := range history {
+		if message.Role == "user" {
+			return
+		}
+	}
+	// Message persistence advances updatedAt. Read its current value and recheck
+	// the title so a rename made while the answer ran is also respected.
+	current, err := s.chats.FindSessionByIDAndUser(ctx, session.ID, session.UserID)
+	if err != nil || current == nil || !shouldGenerateSessionTitle(current.Title) {
 		return
 	}
-	if err := s.chats.UpdateSessionTitle(ctx, session.ID, title); err != nil {
+	// Save a useful title before contacting the optional model. A failed or
+	// canceled summary must not leave an accepted first question unnamed.
+	fallback := truncateRunes(strings.Join(strings.Fields(question), " "), 29)
+	updated, err := s.chats.UpdateSessionTitleIfUnchanged(ctx, current, fallback)
+	if err != nil || !updated {
 		return
 	}
-	session.Title = title
+	session.Title, session.UpdatedAt = current.Title, current.UpdatedAt
+	if s.titleProvider == nil {
+		return
+	}
+	titleCtx, cancel := context.WithTimeout(ctx, sessionTitleTimeout)
+	defer cancel()
+	title, err := generateSessionTitle(titleCtx, s.titleProvider, question)
+	if err != nil || titleCtx.Err() != nil || shouldGenerateSessionTitle(title) || title == fallback {
+		return
+	}
+	if updated, err := s.chats.UpdateSessionTitleIfUnchanged(ctx, current, title); err == nil && updated {
+		session.Title, session.UpdatedAt = current.Title, current.UpdatedAt
+	}
 }
 
 func shouldGenerateSessionTitle(title string) bool {
@@ -1563,28 +1586,25 @@ func shouldGenerateSessionTitle(title string) bool {
 	return title == "" || title == defaultChatSessionTitle
 }
 
-func generateSessionTitle(ctx context.Context, provider titlecore.Provider, question string, answer string) (string, error) {
-	raw, err := provider.SummarizeTitle(ctx, buildSessionTitleMessages(question, answer))
+func generateSessionTitle(ctx context.Context, provider titlecore.Provider, question string) (string, error) {
+	raw, err := provider.SummarizeTitle(ctx, buildSessionTitleMessages(question))
 	if err != nil {
 		return "", err
 	}
 	return cleanSessionTitle(raw), nil
 }
 
-func buildSessionTitleMessages(question string, answer string) []titlecore.Message {
+func buildSessionTitleMessages(question string) []titlecore.Message {
 	return []titlecore.Message{
 		{Role: "system", Content: strings.Join([]string{
 			"你是企业知识库问答系统的会话标题生成器。",
-			"请根据用户问题和助手回答生成一个简短的会话标题。",
+			"请仅根据用户的第一次提问生成一个简短的会话标题，概括提问主题，不要回答问题。",
 			"只输出标题本身，不要输出 JSON、Markdown、引号或解释。",
 			"标题使用用户提问语言，长度控制在 3 到 20 个字符。",
 		}, "\n")},
 		{Role: "user", Content: strings.Join([]string{
-			"用户问题：",
+			"第一次提问：",
 			strings.TrimSpace(question),
-			"",
-			"助手回答：",
-			strings.TrimSpace(answer),
 		}, "\n")},
 	}
 }
