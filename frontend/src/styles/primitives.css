@@ -728,10 +728,10 @@ button.ui-metrics__item:not(:disabled):hover { background: var(--surface-hover);
 
 .ui-kb-glyph {
   align-items: center;
-  background: var(--surface-sunken);
-  border: 1px solid var(--line);
+  background: var(--accent-wash);
+  border: 1px solid var(--accent-line);
   border-radius: var(--r-sm);
-  color: var(--text-muted);
+  color: var(--accent);
   display: inline-flex;
   flex: 0 0 auto;
   height: 26px;
@@ -739,7 +739,6 @@ button.ui-metrics__item:not(:disabled):hover { background: var(--surface-hover);
   width: 26px;
 }
 .ui-kb-glyph > svg { height: 14px; width: 14px; }
-.ui-kb-glyph--public { background: var(--info-wash); border-color: var(--info-line); color: var(--info); }
 .ui-kb-glyph--lg { height: 36px; width: 36px; }
 .ui-kb-glyph--lg > svg { height: 18px; width: 18px; }
 

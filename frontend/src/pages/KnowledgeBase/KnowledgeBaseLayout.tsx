@@ -2,13 +2,12 @@ import { MessageSquareText } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
-import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { NavTabs } from '../../components/ui/NavTabs';
 import { AppShell } from '../../layouts/AppShell';
 import type { KnowledgeBase } from '../../types/api';
 import { KnowledgeBaseEntityActions } from './KnowledgeBaseEntityActions';
-import { KnowledgeBaseGlyph } from './KnowledgeBaseList';
+import { KnowledgeBaseGlyph, KnowledgeBaseVisibility } from './KnowledgeBaseList';
 
 export type KnowledgeBaseSection = 'overview' | 'documents' | 'settings';
 
@@ -34,7 +33,6 @@ export function KnowledgeBaseLayout({
 }: KnowledgeBaseLayoutProps) {
   const navigate = useNavigate();
   const encodedId = encodeURIComponent(knowledgeBase.id);
-  const isPublic = knowledgeBase.visibility === 'public';
 
   return (
     <AppShell
@@ -47,11 +45,11 @@ export function KnowledgeBaseLayout({
       <div className="kb-detail">
         <header className="kb-detail__hero">
           <div className="kb-detail__identity">
-            <KnowledgeBaseGlyph large visibility={knowledgeBase.visibility} />
+            <KnowledgeBaseGlyph large />
             <div>
               <div className="kb-detail__title-row">
                 <h1>{knowledgeBase.name}</h1>
-                <Badge plain tone={isPublic ? 'info' : 'neutral'}>{isPublic ? '公开' : '私有'}</Badge>
+                <KnowledgeBaseVisibility visibility={knowledgeBase.visibility} />
               </div>
               <p className="kb-detail__desc">{knowledgeBase.description || '这个知识库还没有描述。'}</p>
             </div>

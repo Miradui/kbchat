@@ -1,4 +1,4 @@
-import { FolderInput, Lock, Pencil, Star, Trash2, Globe } from 'lucide-react';
+import { FolderInput, Library, Lock, Pencil, Star, Trash2, Globe } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 import { Badge } from '../../components/ui/Badge';
@@ -21,20 +21,26 @@ export type RowHandlers = {
   onToggleSelected: (id: string) => void;
 };
 
-export function KnowledgeBaseGlyph({ visibility, large = false }: { visibility?: string; large?: boolean }) {
-  const isPublic = visibility === 'public';
+export function KnowledgeBaseGlyph({ large = false }: { large?: boolean }) {
   return (
     <span
       aria-hidden="true"
       className={[
         'ui-kb-glyph',
-        isPublic && 'ui-kb-glyph--public',
         large && 'ui-kb-glyph--lg',
       ].filter(Boolean).join(' ')}
     >
-      {isPublic ? <Globe /> : <Lock />}
+      <Library />
     </span>
   );
+}
+
+export function KnowledgeBaseVisibility({ visibility }: { visibility?: string }) {
+  const isPublic = visibility === 'public';
+  return <span className="kb-visibility" title={isPublic ? '公开标记，访问仍需知识库成员权限' : '私有知识库，仅拥有者与受邀成员可访问'}>
+    {isPublic ? <Globe aria-hidden="true" /> : <Lock aria-hidden="true" />}
+    {isPublic ? '公开' : '私有'}
+  </span>;
 }
 
 /** Star plus an overflow menu. Only this row's controls are disabled while it mutates. */
@@ -89,6 +95,8 @@ export function KnowledgeBaseTable({
               <Checkbox
                 aria-label="选择当前页全部知识库"
                 checked={allSelected}
+                ref={element => { if (element) element.indeterminate = selected.size > 0 && !allSelected; }}
+                disabled={items.some(item => handlers.isPending(item.id))}
                 onChange={onToggleAll}
               />
             </th>
@@ -109,6 +117,7 @@ export function KnowledgeBaseTable({
                   <Checkbox
                     aria-label={`选择 ${item.name}`}
                     checked={selected.has(item.id)}
+                    disabled={handlers.isPending(item.id)}
                     onChange={() => handlers.onToggleSelected(item.id)}
                   />
                 </td>
@@ -116,12 +125,11 @@ export function KnowledgeBaseTable({
                   <Link
                     className="kb-name"
                     onClick={() => handlers.onOpen(item)}
-                    title={item.visibility === 'public' ? '公开知识库' : '私有知识库'}
                     to={`/knowledge-bases/${item.id}`}
                   >
-                    <KnowledgeBaseGlyph visibility={item.visibility} />
+                    <KnowledgeBaseGlyph />
                     <span className="ui-cell-stack">
-                      <strong>{item.name}</strong>
+                      <span className="kb-name__title"><strong>{item.name}</strong><KnowledgeBaseVisibility visibility={item.visibility} /></span>
                       <small>{item.description || '未填写描述'}</small>
                     </span>
                   </Link>
@@ -167,9 +175,11 @@ export function KnowledgeBaseCards({ items, selected, handlers }: ListProps) {
               <Checkbox
                 aria-label={`选择 ${item.name}`}
                 checked={selected.has(item.id)}
+                disabled={handlers.isPending(item.id)}
                 onChange={() => handlers.onToggleSelected(item.id)}
               />
-              <KnowledgeBaseGlyph large visibility={item.visibility} />
+              <KnowledgeBaseGlyph large />
+              <KnowledgeBaseVisibility visibility={item.visibility} />
               <RowActions handlers={handlers} item={item} />
             </header>
 

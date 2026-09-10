@@ -1,4 +1,4 @@
-import { Plus } from 'lucide-react';
+import { FolderInput, Plus, Star, Tags, Trash2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -25,7 +25,7 @@ import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { Button } from '../../components/ui/Button';
 import { MetricStrip } from '../../components/ui/MetricStrip';
 import { Pagination } from '../../components/ui/Pagination';
-import { Select } from '../../components/ui/Field';
+import { Checkbox } from '../../components/ui/Field';
 import { useEntityMutation } from '../../hooks/useEntityMutation';
 import { AppShell } from '../../layouts/AppShell';
 import type {
@@ -42,6 +42,7 @@ import type { RowHandlers } from './KnowledgeBaseList';
 import { KnowledgeBaseFormDialog } from './KnowledgeBaseFormDialog';
 import type { KnowledgeBaseFormState } from './KnowledgeBaseFormDialog';
 import { KnowledgeBaseMoveDialog } from './KnowledgeBaseMoveDialog';
+import { KnowledgeBaseBatchDialog, type KnowledgeBaseBatchChange } from './KnowledgeBaseBatchDialog';
 import { KnowledgeBaseRecycleBinDrawer } from './KnowledgeBaseRecycleBinDrawer';
 import { KnowledgeBaseToolbar } from './KnowledgeBaseToolbar';
 import { flattenCategories } from './categoryTreeUtils';
@@ -81,11 +82,13 @@ export function KnowledgeBaseListPage() {
   const mutation = useEntityMutation();
 
   const [tags, setTags] = useState<KnowledgeBaseTag[]>([]);
+  const [tagsLoading, setTagsLoading] = useState(true);
+  const [tagsError, setTagsError] = useState('');
+  const tagsRequestRef = useRef(0);
   const [recycleCount, setRecycleCount] = useState<number | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [bulkCategoryId, setBulkCategoryId] = useState('');
-  const [bulkTagId, setBulkTagId] = useState('');
-  const [bulkTagMode, setBulkTagMode] = useState<KnowledgeBaseBatchTagMode>('add');
+  const [batchTarget, setBatchTarget] = useState<{ kind: 'move' | 'tags'; ids: string[] } | null>(null);
+  const [batchError, setBatchError] = useState('');
   const [form, setForm] = useState<KnowledgeBaseFormState | null>(null);
   const [formError, setFormError] = useState('');
   const [moveTarget, setMoveTarget] = useState<KnowledgeBase | null>(null);
@@ -95,6 +98,15 @@ export function KnowledgeBaseListPage() {
   const [deleteError, setDeleteError] = useState('');
   const [recycleOpen, setRecycleOpen] = useState(false);
   const openedCreateRef = useRef(false);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const focusResultsRef = useRef(false);
+
+  useEffect(() => {
+    if (focusResultsRef.current && !batchTarget && !deleteTarget) {
+      focusResultsRef.current = false;
+      resultsRef.current?.focus();
+    }
+  }, [selectedIds, batchTarget, deleteTarget]);
 
   const { items, total, loading, error, filters, activeFilterCount, viewMode, reload, setFilter } = list;
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
@@ -117,12 +129,26 @@ export function KnowledgeBaseListPage() {
       .catch(() => setRecycleCount(null));
   }, []);
 
+  const loadTags = useCallback(async () => {
+    const request = ++tagsRequestRef.current;
+    setTagsLoading(true);
+    try {
+      const response = await listKnowledgeBaseTags();
+      if (request !== tagsRequestRef.current) return;
+      setTags(response.items);
+      setTagsError('');
+    } catch (caught) {
+      if (request === tagsRequestRef.current) setTagsError(getErrorMessage(caught, '标签加载失败'));
+    } finally {
+      if (request === tagsRequestRef.current) setTagsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    void listKnowledgeBaseTags()
-      .then((response) => setTags(response.items))
-      .catch(() => setTags([]));
+    void loadTags();
     refreshRecycleCount();
-  }, [refreshRecycleCount]);
+    return () => { tagsRequestRef.current += 1; };
+  }, [loadTags, refreshRecycleCount]);
 
   // Drop selections for rows that are no longer on screen.
   useEffect(() => {
@@ -224,6 +250,7 @@ export function KnowledgeBaseListPage() {
       try {
         if (deleteTarget.kind === 'single') await deleteKnowledgeBase(deleteTarget.item.id);
         else await batchDeleteKnowledgeBases(deleteTarget.ids);
+        focusResultsRef.current = true;
         setDeleteTarget(null);
         setSelectedIds([]);
         toast.success(deleteTarget.kind === 'single' ? '知识库已移入回收站' : '所选知识库已移入回收站');
@@ -251,11 +278,33 @@ export function KnowledgeBaseListPage() {
     });
   }
 
+  async function submitBatch(change: KnowledgeBaseBatchChange) {
+    if (!batchTarget) return;
+    const ids = batchTarget.ids;
+    await mutation.run('bulk', async () => {
+      setBatchError('');
+      try {
+        if (change.kind === 'move') await batchMoveKnowledgeBases(ids, change.categoryId);
+        else await batchTagKnowledgeBases(ids, change.tagIds, change.mode);
+        focusResultsRef.current = true;
+        setBatchTarget(null);
+        setSelectedIds(current => current.filter(id => !ids.includes(id)));
+        toast.success(change.kind === 'move' ? `已移动 ${ids.length} 个知识库` : bulkTagFeedback[change.mode].success);
+        void reload();
+        if (change.kind === 'move') void categories.reload();
+      } catch (caught) {
+        setBatchError(getErrorMessage(caught, change.kind === 'move' ? '批量移动失败' : bulkTagFeedback[change.mode].failure));
+      }
+    });
+  }
+
   const allSelected = items.length > 0 && items.every((item) => selected.has(item.id));
+  const allFavorited = selectedItems.length > 0 && selectedItems.every(item => item.isFavorite);
+  const bulkBusy = mutation.isPending('bulk') || mutation.isPending('delete') || selectedItems.some(item => mutation.isPending(item.id));
   const busy = mutation.anyPending;
 
   const rowHandlers: RowHandlers = {
-    isPending: mutation.isPending,
+    isPending: (id) => mutation.isPending(id) || (bulkBusy && (batchTarget?.ids ?? selectedIds).includes(id)),
     onDelete: (item) => {
       setDeleteError('');
       setDeleteTarget({ kind: 'single', item });
@@ -342,115 +391,33 @@ export function KnowledgeBaseListPage() {
             ) : undefined}
           />
 
+          {viewMode === 'card' && items.length > 0 && !error && (
+            <label className="kb-select-page">
+              <Checkbox aria-label="选择当前页全部知识库" checked={allSelected} disabled={bulkBusy || loading}
+                ref={element => { if (element) element.indeterminate = selectedIds.length > 0 && !allSelected; }}
+                onChange={() => setSelectedIds(allSelected ? [] : items.map(item => item.id))} />
+              选择当前页
+            </label>
+          )}
           {selectedIds.length > 0 && (
-            <div className="ui-bulkbar">
+            <div className="ui-bulkbar" role="region" aria-label="知识库批量操作">
               <span className="ui-bulkbar__count">已选择 {selectedIds.length} 项</span>
-              <Button
-                disabled={mutation.isPending('bulk')}
-                variant="secondary"
-                onClick={() => void withRefresh(
-                  'bulk',
-                  async () => { await batchFavoriteKnowledgeBases(selectedIds, true); },
-                  '已批量收藏',
-                  '批量收藏失败',
-                )}
-              >
-                收藏
+              <Button disabled={bulkBusy} leadingIcon={<Star aria-hidden="true" />} variant="secondary"
+                onClick={() => void withRefresh('bulk', async () => { await batchFavoriteKnowledgeBases([...selectedIds], !allFavorited); }, allFavorited ? '已取消收藏' : '已批量收藏', '收藏状态更新失败')}>
+                {allFavorited ? '取消收藏' : '收藏'}
               </Button>
-              <Button
-                disabled={mutation.isPending('bulk')}
-                variant="secondary"
-                onClick={() => void withRefresh(
-                  'bulk',
-                  async () => { await batchFavoriteKnowledgeBases(selectedIds, false); },
-                  '已取消收藏',
-                  '批量取消收藏失败',
-                )}
-              >
-                取消收藏
-              </Button>
-              {canBulkWrite && (
-              <>
-              <Select
-                aria-label="批量移动到分类"
-                onChange={(event) => setBulkCategoryId(event.target.value)}
-                value={bulkCategoryId}
-              >
-                <option value="">未分类</option>
-                {categoryOptions.map((option) => (
-                  <option key={option.id} value={option.id}>{option.label}</option>
-                ))}
-              </Select>
-              <Button
-                disabled={mutation.isPending('bulk')}
-                variant="secondary"
-                onClick={() => void withRefresh(
-                  'bulk',
-                  async () => {
-                    await batchMoveKnowledgeBases(selectedIds, bulkCategoryId || null);
-                    setSelectedIds([]);
-                  },
-                  '知识库已批量移动',
-                  '批量移动失败',
-                )}
-              >
-                移动
-              </Button>
-              <Select
-                aria-label="批量标签"
-                onChange={(event) => setBulkTagId(event.target.value)}
-                value={bulkTagId}
-              >
-                <option value="">选择标签</option>
-                {tags.map((tag) => (
-                  <option key={tag.id} value={tag.id}>{tag.name}</option>
-                ))}
-              </Select>
-              <Select
-                aria-label="批量标签方式"
-                onChange={(event) => setBulkTagMode(event.target.value as KnowledgeBaseBatchTagMode)}
-                value={bulkTagMode}
-              >
-                <option value="add">添加</option>
-                <option value="remove">移除</option>
-                <option value="replace">替换</option>
-              </Select>
-              <Button
-                disabled={mutation.isPending('bulk') || !bulkTagId}
-                variant="secondary"
-                onClick={() => void withRefresh(
-                  'bulk',
-                  async () => {
-                    await batchTagKnowledgeBases(selectedIds, [bulkTagId], bulkTagMode);
-                    setSelectedIds([]);
-                  },
-                  bulkTagFeedback[bulkTagMode].success,
-                  bulkTagFeedback[bulkTagMode].failure,
-                )}
-              >
-                应用标签
-              </Button>
-              </>
-              )}
+              {canBulkWrite && <>
+                <Button disabled={bulkBusy} leadingIcon={<FolderInput aria-hidden="true" />} variant="secondary" onClick={() => { setBatchError(''); setBatchTarget({ kind: 'move', ids: [...selectedIds] }); }}>移动到分类</Button>
+                <Button disabled={bulkBusy} leadingIcon={<Tags aria-hidden="true" />} variant="secondary" onClick={() => { setBatchError(''); setBatchTarget({ kind: 'tags', ids: [...selectedIds] }); }}>管理标签</Button>
+              </>}
+              {!canBulkWrite && <span className="ui-muted">部分所选知识库没有整理权限。</span>}
               <span className="ui-toolbar__spacer" />
-              {!canBulkWrite && (
-                <span className="ui-muted">所选知识库中有你无权修改的，批量整理不可用。</span>
-              )}
-              {canBulkDelete && (
-                <Button
-                  variant="danger"
-                  onClick={() => {
-                    setDeleteError('');
-                    setDeleteTarget({ kind: 'batch', ids: selectedIds });
-                  }}
-                >
-                  删除
-                </Button>
-              )}
+              {canBulkDelete && <Button disabled={bulkBusy} leadingIcon={<Trash2 aria-hidden="true" />} variant="danger" onClick={() => { setDeleteError(''); setDeleteTarget({ kind: 'batch', ids: [...selectedIds] }); }}>删除</Button>}
+              <Button disabled={bulkBusy} leadingIcon={<X aria-hidden="true" />} variant="ghost" onClick={() => { focusResultsRef.current = true; setSelectedIds([]); }}>取消选择</Button>
             </div>
           )}
 
-          <div className={`kb-results${viewMode === 'card' && items.length > 0 && !error ? ' kb-results--cards' : ''}${loading && items.length > 0 ? ' is-refreshing' : ''}`}>
+          <div ref={resultsRef} role="region" aria-label="知识库列表" tabIndex={-1} className={`kb-results${viewMode === 'card' && items.length > 0 && !error ? ' kb-results--cards' : ''}${loading && items.length > 0 ? ' is-refreshing' : ''}`}>
             {loading && items.length === 0 ? (
               <LoadingSkeleton announce columns={5} rows={6} />
             ) : error ? (
@@ -527,6 +494,18 @@ export function KnowledgeBaseListPage() {
           }}
           onSubmit={(event) => void submitMove(event)}
           targetCategoryId={moveCategoryId}
+        />
+      )}
+
+      {batchTarget && (
+        <KnowledgeBaseBatchDialog
+          kind={batchTarget.kind} count={batchTarget.ids.length} busy={mutation.isPending('bulk')} error={batchError}
+          categories={categoryOptions} tags={tags}
+          optionsLoading={batchTarget.kind === 'move' ? categories.loading : tagsLoading}
+          optionsError={batchTarget.kind === 'move' ? categories.error : tagsError}
+          onRetryOptions={() => { if (batchTarget.kind === 'move') void categories.reload(); else void loadTags(); }}
+          onClose={() => { if (!mutation.isPendingSync('bulk')) setBatchTarget(null); }}
+          onSubmit={change => void submitBatch(change)}
         />
       )}
 

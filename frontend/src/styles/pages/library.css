@@ -116,6 +116,10 @@
 .kb-name { align-items: center; display: flex; gap: var(--s-2); min-width: 0; }
 .kb-name__tags { display: inline-flex; gap: var(--s-1); margin-left: 34px; margin-top: var(--s-1); }
 .kb-row-actions { display: inline-flex; gap: var(--s-1); }
+.kb-name__title { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.kb-visibility { align-items: center; color: var(--text-muted); display: inline-flex; flex: 0 0 auto; font-size: var(--t-small); font-weight: 400; gap: var(--s-1); white-space: nowrap; }
+.kb-visibility > svg { height: 13px; width: 13px; }
+.kb-select-page { align-items: center; color: var(--text-secondary); cursor: pointer; display: inline-flex; font-size: var(--t-small); gap: var(--s-2); justify-self: start; min-height: var(--control-h); }
 
 .kb-table th:first-child,
 .kb-table td:first-child { padding-left: var(--s-4); }
