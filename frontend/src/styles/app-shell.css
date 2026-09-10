@@ -39,32 +39,63 @@
   display: flex;
   gap: var(--s-2);
   min-width: 0;
-  padding: 0 var(--s-1) var(--s-8);
+  padding: 0 var(--s-1) var(--s-6);
 }
 
 .rail__brand {
   align-items: center;
+  border-radius: var(--r-md);
   color: var(--text);
   display: flex;
+  flex: 1 1 auto;
   gap: var(--s-3);
   min-width: 0;
 }
+.rail__brand:focus-visible { outline-offset: var(--s-1); }
 
 .rail__mark {
   align-items: center;
-  background: var(--accent);
-  border-radius: var(--r-md);
-  color: var(--text-on-accent);
+  background: var(--brand-panel);
+  border: 1px solid var(--brand-panel-line);
+  border-radius: var(--r-lg);
+  color: var(--brand-panel-accent);
   display: inline-flex;
   flex: 0 0 auto;
-  height: var(--control-h);
+  height: var(--s-12);
   justify-content: center;
-  width: var(--control-h);
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+  width: var(--s-12);
 }
-.rail__mark > svg { height: var(--icon-md); width: var(--icon-md); }
-.rail__brand-text { display: grid; gap: var(--s-1); }
-.rail__brand strong { font-size: var(--t-lead); font-weight: 650; letter-spacing: -0.02em; }
-.rail__brand small { color: var(--text-muted); font-size: var(--t-micro); }
+.rail__brand:hover .rail__mark { background: var(--brand-panel-soft); border-color: var(--brand-panel-accent); }
+.rail__mark > svg { height: var(--icon-lg); width: var(--icon-lg); }
+.rail__brand-text { display: grid; gap: var(--s-1); min-width: 0; }
+.rail__wordmark {
+  align-items: baseline;
+  display: flex;
+  font-size: var(--t-brand);
+  font-weight: 750;
+  gap: var(--s-1);
+  letter-spacing: -0.02em;
+  line-height: var(--lh-tight);
+  min-width: 0;
+  white-space: nowrap;
+}
+.rail__wordmark > span {
+  color: var(--text-secondary);
+  font-size: var(--t-lead);
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rail__brand small {
+  color: var(--text-muted);
+  font-size: var(--t-micro);
+  line-height: var(--lh-normal);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .rail__cta {
   align-items: center;

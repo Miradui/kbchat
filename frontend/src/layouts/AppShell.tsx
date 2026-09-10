@@ -1,4 +1,4 @@
-import { BookOpen, ChevronsUpDown, LogOut, Menu, Monitor, Moon, Search, Settings, Sun, UserRound, X } from 'lucide-react';
+import { BookOpenText, ChevronsUpDown, LogOut, Menu, Monitor, Moon, Search, Settings, Sun, UserRound, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -232,8 +232,11 @@ export function AppShell({
       >
         <div className="rail__brand-row">
           <Link aria-label="RAG Console" className="rail__brand" to="/home">
-            <span className="rail__mark" aria-hidden="true"><BookOpen /></span>
-            <span className="rail__brand-text"><strong>RAG Console</strong><small>企业知识工作空间</small></span>
+            <span className="rail__mark" aria-hidden="true"><BookOpenText /></span>
+            <span className="rail__brand-text">
+              <strong className="rail__wordmark">RAG <span>Console</span></strong>
+              <small>知识管理 · 智能问答</small>
+            </span>
           </Link>
           {isMobile && (
             <IconButton className="rail__close" label="关闭导航" onClick={() => setDrawerOpen(false)} ref={closeButtonRef}>
