@@ -1,5 +1,5 @@
 import { Check, ChevronDown, Copy, FileText, Pencil, RotateCw, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react';
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -11,11 +11,11 @@ import type {
   Citation,
 } from '../../types/api';
 import { formatNullableScore, formatScore } from '../../utils/format';
+import { copyText } from '../../utils/clipboard';
 import { answerStatusNotice } from './answerStatus';
+import { ChatMarkdown } from './ChatMarkdown';
 
 const PREVIEW_LENGTH = 220;
-/** Guard against a pathological marker like `[source:1,1,1,...]`. */
-const MAX_GROUP_SIZE = 20;
 
 type MessageBubbleProps = {
   message: ChatMessageType;
@@ -114,18 +114,14 @@ export function MessageBubble({
             }}
             value={editDraft}
           />
-        ) : (
-          <p className="chat-msg__content">
-            {isAssistant
-              ? renderWithCitations(
-                message.content,
-                message.citations,
-                focusedCitationIndex,
-                (index) => onFocusCitation(message.id, index),
-              )
-              : message.content}
-          </p>
-        )}
+        ) : isAssistant ? (
+          <ChatMarkdown
+            citations={message.citations}
+            content={message.content}
+            focusedIndex={focusedCitationIndex}
+            onSelect={(index) => onFocusCitation(message.id, index)}
+          />
+        ) : <p className="chat-msg__content">{message.content}</p>}
 
         {editing && !isAssistant ? (
           <div className="chat-msg__edit-actions">
@@ -255,60 +251,6 @@ export function MessageBubble({
   );
 }
 
-/**
- * Turns `[source:n]` and `[source:n,m]` into clickable markers.
- *
- * A group only becomes interactive when every number in it resolves to a
- * citation on this message; otherwise the original text is preserved verbatim.
- */
-function renderWithCitations(
-  content: string,
-  citations: Citation[],
-  focusedIndex: number | null,
-  onSelect: (index: number) => void,
-): ReactNode[] {
-  const parts: ReactNode[] = [];
-  const pattern = /\[source:\s*(\d+(?:\s*,\s*\d+)*)\s*\]/gi;
-  let cursor = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = pattern.exec(content)) !== null) {
-    if (match.index > cursor) parts.push(content.slice(cursor, match.index));
-
-    const numbers = match[1].split(',').map((value) => Number(value.trim()));
-    const unique = [...new Set(numbers)];
-    const valid = numbers.length <= MAX_GROUP_SIZE
-      && numbers.every((value) => value >= 1 && Boolean(citations[value - 1]));
-
-    if (valid) {
-      parts.push(
-        <span className="chat-cite-group" key={`${match.index}-${match[1]}`}>
-          {unique.map((value, groupIndex) => (
-            <Fragment key={`${value}-${groupIndex}`}>
-              {groupIndex > 0 && <span aria-hidden="true">,</span>}
-              <button
-                aria-label={`查看来源 ${value}：${citations[value - 1].filename}`}
-                aria-pressed={focusedIndex === value - 1}
-                className="chat-cite"
-                onClick={() => onSelect(value - 1)}
-                type="button"
-              >
-                {value}
-              </button>
-            </Fragment>
-          ))}
-        </span>,
-      );
-    } else {
-      parts.push(match[0]);
-    }
-    cursor = pattern.lastIndex;
-  }
-
-  if (cursor < content.length) parts.push(content.slice(cursor));
-  return parts;
-}
-
 type CitationCardProps = {
   citation: Citation;
   focused: boolean;
@@ -376,21 +318,4 @@ export function CitationCard({ citation, focused, index, knowledgeBaseId }: Cita
       </footer>
     </article>
   );
-}
-
-async function copyText(content: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(content);
-    return;
-  }
-  const input = document.createElement('textarea');
-  input.value = content;
-  input.setAttribute('readonly', '');
-  input.style.position = 'fixed';
-  input.style.opacity = '0';
-  document.body.appendChild(input);
-  input.select();
-  const copied = document.execCommand('copy');
-  input.remove();
-  if (!copied) throw new Error('copy failed');
 }

@@ -7,6 +7,7 @@
 @import './pages/library.css';
 @import './pages/documents.css';
 @import './pages/chat.css';
+@import './pages/chat-markdown.css';
 @import './pages/search.css';
 @import './pages/tags.css';
 @import './pages/quality.css';

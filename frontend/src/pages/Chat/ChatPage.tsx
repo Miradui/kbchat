@@ -27,6 +27,7 @@ import { downloadBlob } from '../../utils/download';
 import { formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
 import { ChatComposer } from './ChatComposer';
+import { ChatMarkdown } from './ChatMarkdown';
 import { ChatAssistantLabel, CitationCard, MessageBubble } from './ChatMessage';
 import { ChatSessionRail } from './ChatSessionRail';
 import type { ChatSessionScope } from './ChatSessionRail';
@@ -559,10 +560,13 @@ export function ChatPage() {
                           See docs/14-frontend-api-gaps.md G2.
                         */}
                         {thread.streamingAnswer ? (
-                          <p className="chat-msg__content">
-                            {thread.streamingAnswer}
-                            <span aria-hidden="true" className="chat-msg__caret" />
-                          </p>
+                          <ChatMarkdown
+                            citations={thread.streamingCitations}
+                            content={thread.streamingAnswer}
+                            focusedIndex={focusedCitation?.messageId === 'streaming' ? focusedCitation.index : null}
+                            onSelect={(index) => setFocusedCitation({ messageId: 'streaming', index })}
+                            streaming
+                          />
                         ) : (
                           <>
                             {/* Visible text only. This element unmounts as soon as the
@@ -581,7 +585,7 @@ export function ChatPage() {
                             {thread.streamingCitations.map((citation, index) => (
                               <CitationCard
                                 citation={citation}
-                                focused={false}
+                                focused={focusedCitation?.messageId === 'streaming' && focusedCitation.index === index}
                                 index={index + 1}
                                 key={`${citation.documentId}-${citation.chunkId}-${index}`}
                                 knowledgeBaseId={activeKnowledgeBaseId || undefined}
@@ -602,9 +606,12 @@ export function ChatPage() {
                     <article className="chat-msg chat-msg--assistant is-pending">
                       <div className="chat-msg__body">
                         <ChatAssistantLabel />
-                        <p className="chat-msg__content">
-                          {thread.stoppedStream.answer || '已停止生成。'}
-                        </p>
+                        <ChatMarkdown
+                          citations={thread.stoppedStream.citations}
+                          content={thread.stoppedStream.answer || '已停止生成。'}
+                          focusedIndex={focusedCitation?.messageId === 'stopped' ? focusedCitation.index : null}
+                          onSelect={(index) => setFocusedCitation({ messageId: 'stopped', index })}
+                        />
                         {/* No `role="status"`: the permanent region already announces
                             the stop. Two polite regions racing over one event is how a
                             reader ends up hearing it twice, or neither. */}
@@ -617,7 +624,7 @@ export function ChatPage() {
                             {thread.stoppedStream.citations.map((citation, index) => (
                               <CitationCard
                                 citation={citation}
-                                focused={false}
+                                focused={focusedCitation?.messageId === 'stopped' && focusedCitation.index === index}
                                 index={index + 1}
                                 key={`${citation.documentId}-${citation.chunkId}-${index}`}
                                 knowledgeBaseId={activeKnowledgeBaseId || undefined}
