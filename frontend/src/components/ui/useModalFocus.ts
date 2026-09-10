@@ -21,27 +21,25 @@ let originalBodyOverflow = '';
 function getFocusable(panel: HTMLElement): HTMLElement[] {
   return Array.from(panel.querySelectorAll<HTMLElement>(
     'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-  )).filter((element) => (
-    !element.matches(':disabled')
-    && !element.hidden
-    && element.getAttribute('aria-hidden') !== 'true'
-    && !element.closest('[hidden], [inert], [aria-hidden="true"]')
-  ));
+  )).filter((element) => element.tabIndex >= 0 && canRestoreFocus(element));
 }
 
 function canRestoreFocus(element: HTMLElement | null): element is HTMLElement {
-  return Boolean(
-    element?.isConnected
-    && !element.matches(':disabled')
-    && !element.hidden
-    && element.getAttribute('aria-hidden') !== 'true'
-    && !element.closest('[hidden], [inert], [aria-hidden="true"]'),
-  );
+  if (!element?.isConnected
+    || element.matches(':disabled, input[type="hidden"]')
+    || element.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+  const visibility = getComputedStyle(element).visibility;
+  if (visibility === 'hidden' || visibility === 'collapse') return false;
+  // A child's display value does not reflect a display:none ancestor.
+  for (let current: HTMLElement | null = element; current; current = current.parentElement) {
+    if (getComputedStyle(current).display === 'none') return false;
+  }
+  return true;
 }
 
 function focusModal(entry: ModalEntry) {
   const requestedInitialFocus = entry.panel.querySelector<HTMLElement>('[data-autofocus]');
-  (requestedInitialFocus ?? getFocusable(entry.panel)[0] ?? entry.panel).focus();
+  (canRestoreFocus(requestedInitialFocus) ? requestedInitialFocus : getFocusable(entry.panel)[0] ?? entry.panel).focus();
 }
 
 function concealModal(entry: ModalEntry) {

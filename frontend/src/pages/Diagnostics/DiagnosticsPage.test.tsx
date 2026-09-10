@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -179,5 +179,26 @@ describe('DiagnosticsPage', () => {
     await userEvent.click(screen.getByRole('button', { name: '重试' }));
 
     expect(await screen.findByLabelText('依赖状态')).toBeInTheDocument();
+  });
+
+  it('keeps the existing data visible while refreshing and prevents repeated clicks', async () => {
+    const user = userEvent.setup();
+    const loadDiagnostics = await renderPage(diagnostics());
+    await screen.findByLabelText('依赖状态');
+    let reject!: (reason: Error) => void;
+    loadDiagnostics.mockReturnValueOnce(new Promise((_resolve, fail) => { reject = fail; }));
+    const refresh = screen.getByRole('button', { name: '刷新诊断数据' });
+    await user.click(refresh);
+    expect(refresh).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent('正在刷新诊断数据');
+    expect(screen.getByLabelText('依赖状态')).toBeInTheDocument();
+    await user.click(refresh);
+    expect(loadDiagnostics).toHaveBeenCalledTimes(2);
+    await act(async () => reject(new Error('unavailable')));
+    expect(await screen.findByText('诊断数据加载失败')).toBeInTheDocument();
+    expect(refresh).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: '重试' }));
+    expect(await screen.findByLabelText('依赖状态')).toBeInTheDocument();
+    expect(screen.queryByText('诊断数据加载失败')).not.toBeInTheDocument();
   });
 });

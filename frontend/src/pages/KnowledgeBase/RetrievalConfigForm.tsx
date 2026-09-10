@@ -1,5 +1,5 @@
 import { TriangleAlert } from 'lucide-react';
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 
 import { updateKnowledgeBase } from '../../api/resources';
@@ -30,6 +30,13 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
   const [config, setConfig] = useState<RetrievalConfig>(knowledgeBase.retrievalConfig);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const savingRef = useRef(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   // Read-only rather than hidden for a caller without kb.write. These four numbers
   // explain why an answer cited what it cited, which is worth as much to someone
   // debugging a bad answer as to whoever tunes them.
@@ -47,6 +54,8 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (savingRef.current || !editable || !dirty) return;
+    savingRef.current = true;
     setSaving(true);
     setError('');
     try {
@@ -63,12 +72,14 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
         },
         tagIds: knowledgeBase.tags?.map((tag) => tag.id) ?? [],
       });
+      if (!mountedRef.current) return;
       onUpdated(updated);
       toast.success('检索配置已保存');
     } catch (caught) {
-      setError(getErrorMessage(caught, '检索配置保存失败'));
+      if (mountedRef.current) setError(getErrorMessage(caught, '检索配置保存失败'));
     } finally {
-      setSaving(false);
+      savingRef.current = false;
+      if (mountedRef.current) setSaving(false);
     }
   }
 
@@ -87,7 +98,7 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
               label="向量召回数量"
             >
               <Input
-                disabled={!editable}
+                disabled={!editable || saving}
                 id={vectorId}
                 max={retrieval.maxVectorTopN}
                 min={1}
@@ -103,7 +114,7 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
               label="精排保留数量"
             >
               <Input
-                disabled={!editable}
+                disabled={!editable || saving}
                 id={rerankId}
                 max={Math.min(retrieval.maxRerankTopK, vectorTopN)}
                 min={1}
@@ -120,7 +131,7 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
             label="最低相关度"
           >
             <Input
-              disabled={!editable}
+              disabled={!editable || saving}
               id={thresholdId}
               max={1}
               min={0}
@@ -134,7 +145,7 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
           <label className="ui-switch-row">
             <Checkbox
               checked={config.enableRerank}
-              disabled={!editable}
+              disabled={!editable || saving}
               onChange={(event) => setConfig({ ...config, enableRerank: event.target.checked })}
             />
             <span>启用精排。关闭后直接使用向量召回的前 N 条。</span>
@@ -159,7 +170,8 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
               <Button
                 disabled={!dirty || saving}
                 variant="secondary"
-                onClick={() => setConfig(knowledgeBase.retrievalConfig)}
+                title="恢复已保存的配置"
+                onClick={() => { setConfig(knowledgeBase.retrievalConfig); setError(''); }}
               >
                 重置
               </Button>

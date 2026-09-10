@@ -1,4 +1,5 @@
 import { useCallback } from 'react';
+import { useParams } from 'react-router-dom';
 
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { AppShell } from '../../layouts/AppShell';
@@ -15,6 +16,11 @@ import { useKnowledgeBase } from './useKnowledgeBase';
  * on the detail page.
  */
 export function KnowledgeBaseSettingsPage() {
+  const { id } = useParams();
+  return <KnowledgeBaseSettings key={id} />;
+}
+
+function KnowledgeBaseSettings() {
   const { knowledgeBase, setKnowledgeBase, loading, error, reload } = useKnowledgeBase();
 
   const handleVisibility = useCallback((visibility: 'private' | 'public') => {

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
 
 import { getKnowledgeBaseDetailStats, listDocuments, listKnowledgeBaseCategories } from '../../api/resources';
 import { EmptyState } from '../../components/feedback/EmptyState';
@@ -31,6 +31,11 @@ type DocumentCounts = {
 };
 
 export function KnowledgeBaseOverviewPage() {
+  const { id } = useParams();
+  return <KnowledgeBaseOverview key={id} />;
+}
+
+function KnowledgeBaseOverview() {
   const { id, knowledgeBase, setKnowledgeBase, loading, error, reload } = useKnowledgeBase();
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [counts, setCounts] = useState<DocumentCounts | null>(null);
@@ -40,10 +45,17 @@ export function KnowledgeBaseOverviewPage() {
   const [stats, setStats] = useState<KnowledgeBaseDetailStatsResponse | null>(null);
   const [statsPeriod, setStatsPeriod] = useState<'day' | 'month'>('month');
   const [statsError, setStatsError] = useState('');
+  const [statsLoading, setStatsLoading] = useState(true);
+  const documentsRequest = useRef(0);
+  const statsRequest = useRef(0);
 
   const loadDocuments = useCallback(async () => {
     if (!id) return;
+    const request = ++documentsRequest.current;
     setDocumentsLoading(true);
+    setDocumentError('');
+    setDocuments([]);
+    setCounts(null);
     try {
       // The document list is paginated, so the status tiles come from filtered
       // totals rather than from counting a page. `processing` is the remainder:
@@ -53,6 +65,7 @@ export function KnowledgeBaseOverviewPage() {
         listDocuments(id, { status: 'completed', pageSize: 1 }),
         listDocuments(id, { status: 'failed', pageSize: 1 }),
       ]);
+      if (request !== documentsRequest.current) return;
       setDocuments(recent.items);
       setCounts({
         completed: completed.total,
@@ -61,31 +74,43 @@ export function KnowledgeBaseOverviewPage() {
       });
       setDocumentError('');
     } catch (caught) {
+      if (request !== documentsRequest.current) return;
       setDocuments([]);
       setCounts(null);
       setDocumentError(getErrorMessage(caught, '文档摘要加载失败'));
     } finally {
-      setDocumentsLoading(false);
+      if (request === documentsRequest.current) setDocumentsLoading(false);
     }
   }, [id]);
 
   useEffect(() => {
     void loadDocuments();
+    return () => { documentsRequest.current++; };
   }, [loadDocuments]);
 
   const loadStats = useCallback(async () => {
     if (!id) return;
+    const request = ++statsRequest.current;
+    setStatsLoading(true);
+    setStats(null);
+    setStatsError('');
     try {
-      setStats(await getKnowledgeBaseDetailStats(id, statsPeriod));
+      const response = await getKnowledgeBaseDetailStats(id, statsPeriod);
+      if (request !== statsRequest.current) return;
+      setStats(response);
       setStatsError('');
     } catch (caught) {
+      if (request !== statsRequest.current) return;
       setStats(null);
       setStatsError(getErrorMessage(caught, '统计加载失败'));
+    } finally {
+      if (request === statsRequest.current) setStatsLoading(false);
     }
   }, [id, statsPeriod]);
 
   useEffect(() => {
     void loadStats();
+    return () => { statsRequest.current++; };
   }, [loadStats]);
 
   useEffect(() => {
@@ -154,6 +179,8 @@ export function KnowledgeBaseOverviewPage() {
             </div>
             {documentsLoading && documents.length === 0 ? (
               <LoadingSkeleton announce compact columns={2} rows={3} />
+            ) : documentError ? (
+              <div className="ui-panel__body"><p className="ui-muted">文档摘要暂不可用，请在上方重试。</p></div>
             ) : documents.length === 0 ? (
               <EmptyState
                 action={<Link className="ui-button ui-button--primary" to={`${documentsHref}?intent=upload`}><span>导入文档</span></Link>}
@@ -208,7 +235,8 @@ export function KnowledgeBaseOverviewPage() {
               the detail payload — detail responses stay free of list-only
               aggregates. See docs/14-frontend-api-gaps.md G13.
             */}
-            <div>
+            <p className="sr-only" role="status">{statsLoading ? '正在加载统计…' : ''}</p>
+            <div aria-busy={statsLoading}>
               <div className="ui-panel__head" style={{ padding: 0 }}>
                 <p className="ui-field__label">本{statsPeriod === 'day' ? '日' : '月'}趋势</p>
                 <SegmentedControl<'day' | 'month'>

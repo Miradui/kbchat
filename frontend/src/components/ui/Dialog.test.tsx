@@ -104,6 +104,45 @@ describe('Dialog', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it('focuses an available action while the autofocus field is disabled for loading', () => {
+    const view = render(
+      <Dialog open title="移动到分类" onClose={() => undefined}>
+        <select data-autofocus disabled aria-label="目标分类"><option>正在加载</option></select>
+        <button type="button">取消</button>
+        <button type="button" disabled>确认移动</button>
+      </Dialog>,
+    );
+    expect(screen.getByRole('button', { name: '取消' })).toHaveFocus();
+    view.rerender(
+      <Dialog open title="移动到分类" onClose={() => undefined}>
+        <select data-autofocus aria-label="目标分类"><option>未分类</option></select>
+        <button type="button">取消</button>
+        <button type="button" disabled>确认移动</button>
+      </Dialog>,
+    );
+    expect(screen.getByRole('button', { name: '取消' })).toHaveFocus();
+  });
+
+  it('skips CSS-hidden and negative-tabindex controls at both tab boundaries', async () => {
+    const user = userEvent.setup();
+    render(
+      <Dialog open title="选择目标" onClose={() => undefined}>
+        <div style={{ display: 'none' }}><input data-autofocus aria-label="隐藏字段" /></div>
+        <button type="button" tabIndex={-2}>不在顺序中</button>
+        <input type="hidden" />
+        <button type="button">第一项</button>
+        <button type="button">最后一项</button>
+        <button type="button" style={{ visibility: 'hidden' }}>不可见</button>
+        <button type="button" style={{ display: 'none' }}>不显示</button>
+      </Dialog>,
+    );
+    expect(screen.getByRole('button', { name: '第一项' })).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(screen.getByRole('button', { name: '最后一项' })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('button', { name: '第一项' })).toHaveFocus();
+  });
+
   it('does not try to focus a removed opener', () => {
     const opener = document.createElement('button');
     document.body.append(opener);

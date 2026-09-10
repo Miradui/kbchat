@@ -1,5 +1,5 @@
 import { RefreshCw } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { getSystemDiagnostics } from '../../api/resources';
 import type { BadgeTone } from '../../components/ui/Badge';
@@ -154,20 +154,26 @@ export function DiagnosticsPage({ sources = defaultSources }: { sources?: Diagno
   const [diagnostics, setDiagnostics] = useState<SystemDiagnostics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const requestRef = useRef(0);
 
   const reload = useCallback(async () => {
+    const request = ++requestRef.current;
     setLoading(true);
+    setError('');
     try {
-      setDiagnostics(await sources.loadDiagnostics());
-      setError('');
+      const response = await sources.loadDiagnostics();
+      if (requestRef.current === request) setDiagnostics(response);
     } catch (loadError) {
-      setError(getErrorMessage(loadError, '无法加载系统诊断数据'));
+      if (requestRef.current === request) setError(getErrorMessage(loadError, '无法加载系统诊断数据'));
     } finally {
-      setLoading(false);
+      if (requestRef.current === request) setLoading(false);
     }
   }, [sources]);
 
-  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => {
+    void reload();
+    return () => { requestRef.current++; };
+  }, [reload]);
 
   const documents = diagnostics?.queues.documents;
   const cleanup = diagnostics?.queues.cleanup;
@@ -184,12 +190,16 @@ export function DiagnosticsPage({ sources = defaultSources }: { sources?: Diagno
           <Button
             aria-label="刷新诊断数据"
             leadingIcon={<RefreshCw aria-hidden="true" />}
+            loading={loading}
+            loadingLabel="刷新中"
             onClick={() => { reload(); }}
             variant="secondary"
           >
             刷新
           </Button>
         </header>
+
+        <p className={loading && diagnostics ? 'ui-muted' : 'sr-only'} role="status">{loading && diagnostics ? '正在刷新诊断数据…' : ''}</p>
 
         {loading && !diagnostics ? <LoadingSkeleton announce columns={3} rows={4} />
           : error ? <ErrorState description={error} onRetry={reload} title="诊断数据加载失败" />

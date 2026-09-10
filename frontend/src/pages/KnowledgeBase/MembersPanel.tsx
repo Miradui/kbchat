@@ -1,5 +1,5 @@
 import { Search } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 
 import {
@@ -35,6 +35,7 @@ type MembersPanelProps = {
 export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanelProps) {
   const toast = useToast();
   const mutation = useEntityMutation();
+  const visibilityId = useId();
   const [permissions, setPermissions] = useState<KnowledgeBasePermissionResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -44,10 +45,13 @@ export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanel
   const [memberRole, setMemberRole] = useState<MemberRole>('viewer');
   const [userResults, setUserResults] = useState<UserSummary[]>([]);
   const [searchingUsers, setSearchingUsers] = useState(false);
+  const [usersSearched, setUsersSearched] = useState(false);
+  const [userSearchError, setUserSearchError] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<PermissionMember | null>(null);
   const [deleteError, setDeleteError] = useState('');
   const requestRef = useRef(0);
   const userSearchRef = useRef(0);
+  const searchingUsersRef = useRef(false);
 
   const load = useCallback(async () => {
     const request = ++requestRef.current;
@@ -89,25 +93,41 @@ export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanel
   async function handleUserSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const query = memberQuery.trim();
-    if (!query) {
-      userSearchRef.current += 1;
-      setUserResults([]);
-      return;
-    }
+    if (!query || searchingUsersRef.current) return;
 
     const request = ++userSearchRef.current;
+    searchingUsersRef.current = true;
     setSearchingUsers(true);
+    setUsersSearched(false);
+    setUserSearchError('');
+    setUserResults([]);
     try {
       const response = await searchUsers(query);
-      if (userSearchRef.current === request) setUserResults(response.items);
+      if (userSearchRef.current === request) {
+        setUserResults(response.items);
+        setUsersSearched(true);
+      }
     } catch (caught) {
       if (userSearchRef.current === request) {
         setUserResults([]);
-        toast.error(getErrorMessage(caught, '用户搜索失败'));
+        setUserSearchError(getErrorMessage(caught, '用户搜索失败，请重试'));
       }
     } finally {
-      if (userSearchRef.current === request) setSearchingUsers(false);
+      if (userSearchRef.current === request) {
+        searchingUsersRef.current = false;
+        setSearchingUsers(false);
+      }
     }
+  }
+
+  function changeMemberQuery(value: string) {
+    userSearchRef.current++;
+    searchingUsersRef.current = false;
+    setMemberQuery(value);
+    setSearchingUsers(false);
+    setUserResults([]);
+    setUsersSearched(false);
+    setUserSearchError('');
   }
 
   function runMemberAction(key: string, action: () => Promise<void>, failure: string) {
@@ -148,10 +168,12 @@ export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanel
           ) : permissions ? (
             <>
               <Field
+                htmlFor={visibilityId}
                 hint="可见性目前只影响展示，不改变文档和问答的访问控制。"
                 label="可见性"
               >
                 <Select
+                  id={visibilityId}
                   disabled={mutation.anyPending || !canManageMembers}
                   onChange={(event) => {
                     const next = event.target.value as 'private' | 'public';
@@ -183,7 +205,7 @@ export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanel
                 <SearchInput
                   aria-label="搜索用户"
                   icon={<Search aria-hidden="true" />}
-                  onChange={(event) => setMemberQuery(event.target.value)}
+                  onChange={(event) => changeMemberQuery(event.target.value)}
                   placeholder="按用户名或显示名搜索"
                   value={memberQuery}
                 />
@@ -210,6 +232,14 @@ export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanel
               )}
 
               {canManageMembers && <p className="ui-field__hint">{roleHints[memberRole]}</p>}
+              {canManageMembers && (
+                <p className={searchingUsers || usersSearched ? 'ui-field__hint' : 'sr-only'} role="status">
+                  {searchingUsers ? '正在搜索用户…' : !usersSearched ? '' : userResults.length === 0
+                    ? '没有找到匹配的用户，请调整关键词。'
+                    : `找到 ${userResults.length} 位用户。`}
+                </p>
+              )}
+              {userSearchError && <p className="ui-inline-error" role="alert">{userSearchError}</p>}
 
               {userResults.length > 0 && (
                 <div className="member-list">

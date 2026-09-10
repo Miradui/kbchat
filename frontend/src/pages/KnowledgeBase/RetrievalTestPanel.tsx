@@ -1,5 +1,5 @@
 import { Search } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 
 import { searchKnowledgeBase } from '../../api/resources';
@@ -33,14 +33,30 @@ export function RetrievalTestPanel({ knowledgeBase }: { knowledgeBase: Knowledge
   const [error, setError] = useState('');
   const [searched, setSearched] = useState(false);
   const requestRef = useRef(0);
+  const searchingRef = useRef(false);
+
+  useEffect(() => {
+    requestRef.current++;
+    searchingRef.current = false;
+    setQuery('');
+    setResults([]);
+    setFallback(null);
+    setDebug(null);
+    setSearching(false);
+    setError('');
+    setSearched(false);
+    return () => { requestRef.current++; };
+  }, [knowledgeBase.id]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmed = query.trim();
-    if (!trimmed) return;
+    if (!trimmed || searchingRef.current) return;
 
     const request = ++requestRef.current;
+    searchingRef.current = true;
     setSearching(true);
+    setResults([]);
     setError('');
     setFallback(null);
     setDebug(null);
@@ -63,7 +79,10 @@ export function RetrievalTestPanel({ knowledgeBase }: { knowledgeBase: Knowledge
       setResults([]);
       setError(getErrorMessage(caught, '知识库内检索失败'));
     } finally {
-      if (requestRef.current === request) setSearching(false);
+      if (requestRef.current === request) {
+        searchingRef.current = false;
+        setSearching(false);
+      }
     }
   }
 
@@ -91,10 +110,11 @@ export function RetrievalTestPanel({ knowledgeBase }: { knowledgeBase: Knowledge
           </form>
 
           <RerankFallbackNotice fallback={fallback} />
+          <p className={searching ? 'ui-muted' : 'sr-only'} role="status">{searching ? '正在检索相关片段…' : ''}</p>
           {error && <p className="ui-inline-error" role="alert">{error}</p>}
           {debugEnabled && debug && <DebugPanel debug={debug} />}
 
-          {results.length === 0 ? (
+          {!searching && !error && (results.length === 0 ? (
             <EmptyState
               description={searched
                 ? '当前配置下没有召回片段。可以降低最低相关度，或确认文档已完成处理。'
@@ -116,7 +136,7 @@ export function RetrievalTestPanel({ knowledgeBase }: { knowledgeBase: Knowledge
                 </article>
               ))}
             </div>
-          )}
+          ))}
         </div>
       </div>
     </section>
