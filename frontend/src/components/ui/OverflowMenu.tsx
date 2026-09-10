@@ -8,6 +8,7 @@ import {
   useState,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
 } from 'react';
 
 import { IconButton } from './IconButton';
@@ -24,15 +25,18 @@ type OverflowMenuProps = {
   label: string;
   items: OverflowMenuItem[];
   disabled?: boolean;
+  /** Also open this menu from a row's context menu or Shift+F10. */
+  contextTargetRef?: RefObject<HTMLElement | null>;
 };
 
 const menuWidth = 192;
 const viewportInset = 8;
 
-export function OverflowMenu({ label, items, disabled = false }: OverflowMenuProps) {
+export function OverflowMenu({ label, items, disabled = false, contextTargetRef }: OverflowMenuProps) {
   const menuId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const contextPositionRef = useRef<{ x: number; y: number } | null>(null);
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ left: viewportInset, top: viewportInset });
 
@@ -42,6 +46,14 @@ export function OverflowMenu({ label, items, disabled = false }: OverflowMenuPro
     const rect = trigger.getBoundingClientRect();
     const menuHeight = menuRef.current?.offsetHeight ?? items.length * 40 + 8;
     const maxLeft = Math.max(viewportInset, window.innerWidth - menuWidth - viewportInset);
+    const point = contextPositionRef.current;
+    if (point) {
+      setPosition({
+        left: Math.min(Math.max(viewportInset, point.x), maxLeft),
+        top: Math.min(Math.max(viewportInset, point.y), Math.max(viewportInset, window.innerHeight - menuHeight - viewportInset)),
+      });
+      return;
+    }
     const left = Math.min(Math.max(viewportInset, rect.right - menuWidth), maxLeft);
     const below = rect.bottom + 4;
     const top = below + menuHeight <= window.innerHeight - viewportInset
@@ -49,6 +61,33 @@ export function OverflowMenu({ label, items, disabled = false }: OverflowMenuPro
       : Math.max(viewportInset, rect.top - menuHeight - 4);
     setPosition({ left, top });
   }, [items.length]);
+
+  useEffect(() => {
+    const target = contextTargetRef?.current;
+    if (!target) return;
+    function handleContextMenu(event: MouseEvent) {
+      if (disabled) return;
+      event.preventDefault();
+      contextPositionRef.current = event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : null;
+      updatePosition();
+      setOpen(true);
+    }
+    function handleContextKey(event: globalThis.KeyboardEvent) {
+      if (disabled || !(event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) return;
+      event.preventDefault();
+      contextPositionRef.current = null;
+      updatePosition();
+      setOpen(true);
+    }
+    target.addEventListener('contextmenu', handleContextMenu);
+    target.addEventListener('keydown', handleContextKey);
+    return () => {
+      target.removeEventListener('contextmenu', handleContextMenu);
+      target.removeEventListener('keydown', handleContextKey);
+    };
+  }, [contextTargetRef, disabled, updatePosition]);
+
+  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
 
   useEffect(() => {
     if (!open) return;
@@ -130,7 +169,11 @@ export function OverflowMenu({ label, items, disabled = false }: OverflowMenuPro
         disabled={disabled}
         label={label}
         ref={triggerRef}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => {
+          contextPositionRef.current = null;
+          updatePosition();
+          setOpen((current) => !current);
+        }}
       >
         <MoreHorizontal aria-hidden="true" />
       </IconButton>

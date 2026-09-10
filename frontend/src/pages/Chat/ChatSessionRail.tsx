@@ -1,5 +1,5 @@
 import { MessageSquarePlus, PanelLeftClose } from 'lucide-react';
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 
 import { EmptyState } from '../../components/feedback/EmptyState';
@@ -7,6 +7,7 @@ import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { Button } from '../../components/ui/Button';
 import { IconButton } from '../../components/ui/IconButton';
 import { Select } from '../../components/ui/Field';
+import { OverflowMenu, type OverflowMenuItem } from '../../components/ui/OverflowMenu';
 import { SegmentedControl } from '../../components/ui/SegmentedControl';
 import type { ChatSession, KnowledgeBase } from '../../types/api';
 import { formatRelativeTime, relativeDayBucket } from '../../utils/format';
@@ -26,6 +27,8 @@ type ChatSessionRailProps = {
   scope: ChatSessionScope;
   activeSessionId?: string;
   disabled?: boolean;
+  actionsDisabled?: boolean;
+  getSessionActions: (session: ChatSession) => OverflowMenuItem[];
   loading: boolean;
   error: string;
   knowledgeBasesError?: string;
@@ -50,6 +53,8 @@ export function ChatSessionRail({
   scope,
   activeSessionId,
   disabled = false,
+  actionsDisabled = disabled,
+  getSessionActions,
   loading,
   error,
   knowledgeBasesError = '',
@@ -147,30 +152,15 @@ export function ChatSessionRail({
               <div className="chat-rail__group" key={group.bucket}>
                 <p className="chat-rail__group-label">{group.bucket}</p>
                 {group.sessions.map((session) => (
-                  <Link
-                    aria-current={session.id === activeSessionId ? 'page' : undefined}
-                    aria-disabled={disabled ? 'true' : undefined}
-                    className={session.id === activeSessionId ? 'chat-rail__item is-active' : 'chat-rail__item'}
+                  <SessionItem
+                    active={session.id === activeSessionId}
+                    disabled={disabled}
+                    actionsDisabled={actionsDisabled}
+                    items={getSessionActions(session)}
                     key={session.id}
-                    onClick={(event) => {
-                      if (disabled) {
-                        event.preventDefault();
-                        return;
-                      }
-                      onNavigate();
-                    }}
-                    to={`/chat/${session.id}`}
-                  >
-                    <span className="ui-truncate">{session.title || '未命名会话'}</span>
-                    {session.lastMessagePreview && (
-                      <span className="chat-rail__preview ui-truncate">{session.lastMessagePreview}</span>
-                    )}
-                    <small>
-                      {formatRelativeTime(session.updatedAt || session.createdAt)}
-                      {/* Only the list endpoint reports this, so an unknown count stays hidden. */}
-                      {session.messageCount !== undefined && ` · ${session.messageCount} 条消息`}
-                    </small>
-                  </Link>
+                    onNavigate={onNavigate}
+                    session={session}
+                  />
                 ))}
               </div>
             ))}
@@ -187,6 +177,41 @@ export function ChatSessionRail({
         )}
       </div>
     </aside>
+  );
+}
+
+function SessionItem({ session, active, disabled, actionsDisabled, items, onNavigate }: {
+  session: ChatSession;
+  active: boolean;
+  disabled: boolean;
+  actionsDisabled: boolean;
+  items: OverflowMenuItem[];
+  onNavigate: () => void;
+}) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const title = session.title || '未命名会话';
+  return (
+    <div className={active ? 'chat-rail__item is-active' : 'chat-rail__item'} ref={rowRef}>
+      <Link
+        aria-current={active ? 'page' : undefined}
+        aria-disabled={disabled ? 'true' : undefined}
+        className="chat-rail__link"
+        title={title}
+        onClick={(event) => {
+          if (disabled) { event.preventDefault(); return; }
+          onNavigate();
+        }}
+        to={`/chat/${session.id}`}
+      >
+        <span className="ui-truncate">{title}</span>
+        {session.lastMessagePreview && <span className="chat-rail__preview ui-truncate">{session.lastMessagePreview}</span>}
+        <small>
+          {formatRelativeTime(session.updatedAt || session.createdAt)}
+          {session.messageCount !== undefined && ` · ${session.messageCount} 条消息`}
+        </small>
+      </Link>
+      <OverflowMenu contextTargetRef={rowRef} disabled={actionsDisabled} items={items} label={`会话“${title}”的更多操作`} />
+    </div>
   );
 }
 

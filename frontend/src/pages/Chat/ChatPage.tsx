@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Check, Download, Library, MessageSquareText, PanelLeft, Search, Sparkles, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, Download, Library, MessageSquareText, PanelLeft, Pencil, Search, Sparkles, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
@@ -19,10 +19,10 @@ import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { IconButton } from '../../components/ui/IconButton';
 import { InlineEdit } from '../../components/ui/InlineEdit';
-import { OverflowMenu } from '../../components/ui/OverflowMenu';
+import { OverflowMenu, type OverflowMenuItem } from '../../components/ui/OverflowMenu';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { AppShell } from '../../layouts/AppShell';
-import type { ChatFeedbackDetails, ChatFeedbackRating, ChatMessage, Citation } from '../../types/api';
+import type { ChatFeedbackDetails, ChatFeedbackRating, ChatMessage, ChatSession, Citation } from '../../types/api';
 import { downloadBlob } from '../../utils/download';
 import { formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
@@ -33,6 +33,7 @@ import { ChatMessageSearch, useChatMessageSearch } from './ChatMessageSearch';
 import { ChatMarkdown } from './ChatMarkdown';
 import { ChatAssistantLabel, CitationCard, MessageBubble } from './ChatMessage';
 import { ChatSessionRail } from './ChatSessionRail';
+import { ChatSessionRenameDialog } from './ChatSessionRenameDialog';
 import { ChatSourcePreview } from './ChatSourcePreview';
 import type { ChatSessionScope } from './ChatSessionRail';
 import { useChatSessions } from './useChatSessions';
@@ -58,8 +59,9 @@ export function ChatPage() {
   const [focusedCitation, setFocusedCitation] = useState<{ messageId: string; index: number | null } | null>(null);
   const [sourcePreview, setSourcePreview] = useState<{ citation: Citation; index: number; scope: string } | null>(null);
   const sourceTriggerRef = useRef<HTMLElement | null>(null);
-  const [confirmArchive, setConfirmArchive] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmArchive, setConfirmArchive] = useState<ChatSession | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<ChatSession | null>(null);
+  const [renameTarget, setRenameTarget] = useState<ChatSession | null>(null);
   const [sessionActionError, setSessionActionError] = useState('');
   const [sessionBusy, setSessionBusy] = useState(false);
   const [sessionExporting, setSessionExporting] = useState(false);
@@ -208,8 +210,9 @@ export function ChatPage() {
     setFocusedCitation(null);
     setEditingMessageId(null);
     setEditingDraft('');
-    setConfirmArchive(false);
-    setConfirmDelete(false);
+    setConfirmArchive(null);
+    setConfirmDelete(null);
+    setRenameTarget(null);
     setSessionActionError('');
     sessionActionOperationRef.current = null;
     sessionBusyRef.current = false;
@@ -287,7 +290,7 @@ export function ChatPage() {
     else navigate('/chat');
   }, [navigate]);
 
-  async function runSessionAction(action: () => Promise<void>, failure: string) {
+  async function runSessionAction(action: (isCurrent: () => boolean) => Promise<void>, failure: string) {
     if (sessionBusyRef.current || thread.hasPendingWrite()) return;
     const operation = Symbol('session-action');
     const operationSessionId = sessionId;
@@ -295,8 +298,10 @@ export function ChatPage() {
     sessionBusyRef.current = true;
     setSessionBusy(true);
     setSessionActionError('');
+    const isCurrent = () => sessionActionOperationRef.current === operation
+      && activeSessionIdRef.current === operationSessionId;
     try {
-      await action();
+      await action(isCurrent);
     } catch (caught) {
       if (
         sessionActionOperationRef.current === operation
@@ -341,14 +346,12 @@ export function ChatPage() {
     }
   }
 
-  async function handleSessionExport() {
+  async function handleSessionExport(targetSession: ChatSession) {
     if (
-      !currentSession
-      || sessionExportOperationRef.current
+      sessionExportOperationRef.current
       || sessionBusyRef.current
       || thread.hasPendingWrite()
     ) return;
-    const targetSession = currentSession;
     const operation = Symbol('chat-session-export');
     sessionExportOperationRef.current = operation;
     setSessionExporting(true);
@@ -370,18 +373,35 @@ export function ChatPage() {
     }
   }
 
-  const topbarActions = currentSession ? (
-    <OverflowMenu
-      disabled={interactionLocked || sessionExporting}
-      label="会话操作"
-      items={[
-        archived
+  function renameSession(target: ChatSession, title: string) {
+    void runSessionAction(async (isCurrent) => {
+      const updated = await updateChatSessionTitle(target.id, title);
+      mergeSession(updated);
+      if (!isCurrent()) return;
+      if (activeSessionIdRef.current === target.id) thread.setSession(updated);
+      setRenameTarget(null);
+      toast.success('会话已重命名');
+    }, '会话标题更新失败');
+  }
+
+  function getSessionActions(target: ChatSession, includeRename = false): OverflowMenuItem[] {
+    return [
+        ...(includeRename ? [{
+          label: '重命名会话',
+          icon: <Pencil aria-hidden="true" />,
+          onSelect: () => {
+            if (sessionBusyRef.current || thread.hasPendingWrite()) return;
+            setSessionActionError('');
+            setRenameTarget(target);
+          },
+        }] : []),
+        target.archivedAt
           ? {
             label: '取消归档',
             icon: <ArchiveRestore aria-hidden="true" />,
-            onSelect: () => void runSessionAction(async () => {
-              const target = currentSession;
+            onSelect: () => void runSessionAction(async (isCurrent) => {
               const restored = await unarchiveChatSession(target.id);
+              if (!isCurrent()) return;
               removeSession(target.id);
               if (activeSessionIdRef.current === target.id) {
                 skipSessionScopeSyncRef.current = true;
@@ -399,13 +419,13 @@ export function ChatPage() {
             onSelect: () => {
               if (sessionBusyRef.current || thread.hasPendingWrite()) return;
               setSessionActionError('');
-              setConfirmArchive(true);
+              setConfirmArchive(target);
             },
           },
         {
           label: '导出会话',
           icon: <Download aria-hidden="true" />,
-          onSelect: () => void handleSessionExport(),
+          onSelect: () => void handleSessionExport(target),
         },
         {
           label: '删除会话',
@@ -414,11 +434,14 @@ export function ChatPage() {
           onSelect: () => {
             if (sessionBusyRef.current || thread.hasPendingWrite()) return;
             setSessionActionError('');
-            setConfirmDelete(true);
+            setConfirmDelete(target);
           },
         },
-      ]}
-    />
+    ];
+  }
+
+  const topbarActions = currentSession ? (
+    <OverflowMenu disabled={interactionLocked || sessionExporting} label="会话操作" items={getSessionActions(currentSession)} />
   ) : undefined;
 
   return (
@@ -439,6 +462,8 @@ export function ChatPage() {
         <ChatSessionRail
           activeSessionId={sessionId}
           disabled={interactionLocked}
+          actionsDisabled={interactionLocked || sessionExporting}
+          getSessionActions={(target) => getSessionActions(target, true)}
           error={sessionStore.sessionsError}
           knowledgeBaseId={activeKnowledgeBaseId}
           knowledgeBases={knowledgeBases}
@@ -481,12 +506,7 @@ export function ChatPage() {
                   busy={sessionBusy}
                   disabled={interactionLocked}
                   label="重命名会话"
-                  onSubmit={(title) => void runSessionAction(async () => {
-                    const target = currentSession;
-                    const updated = await updateChatSessionTitle(target.id, title);
-                    mergeSession(updated);
-                    if (activeSessionIdRef.current === target.id) thread.setSession(updated);
-                  }, '会话标题更新失败')}
+                  onSubmit={(title) => renameSession(currentSession, title)}
                   value={currentSession.title || ''}
                 />
               ) : (
@@ -519,7 +539,7 @@ export function ChatPage() {
           */}
           <p aria-live="polite" className="sr-only" role="status">{streamAnnouncement}</p>
 
-          {sessionActionError && <p className="ui-inline-error" role="alert">{sessionActionError}</p>}
+          {sessionActionError && !confirmArchive && !confirmDelete && !renameTarget && <p className="ui-inline-error" role="alert">{sessionActionError}</p>}
           <RerankFallbackNotice fallback={thread.rerankFallback} />
           {thread.loadError && (
             <div className="ui-inline-notice" role="status">
@@ -817,25 +837,31 @@ export function ChatPage() {
         )}
       </div>
 
-      {confirmArchive && currentSession && (
+      {renameTarget && <ChatSessionRenameDialog key={renameTarget.id} title={renameTarget.title || ''}
+        busy={sessionBusy} error={sessionActionError}
+        onClose={() => { if (!sessionBusyRef.current) { setRenameTarget(null); setSessionActionError(''); } }}
+        onSubmit={(title) => renameSession(renameTarget, title)} />}
+
+      {confirmArchive && (
         <ConfirmDialog
           busy={sessionBusy}
           confirmLabel="归档"
-          description={`归档后“${currentSession.title || '未命名会话'}”默认不再出现在会话列表中，内容仍可通过链接查看。`}
+          description={`归档后“${confirmArchive.title || '未命名会话'}”将移至“已归档”列表，可随时取消归档继续对话。`}
           error={sessionActionError}
           onCancel={() => {
             setSessionActionError('');
-            setConfirmArchive(false);
+            setConfirmArchive(null);
           }}
-          onConfirm={() => void runSessionAction(async () => {
-            const target = currentSession;
+          onConfirm={() => void runSessionAction(async (isCurrent) => {
+            const target = confirmArchive;
             const archivedSession = await archiveChatSession(target.id);
+            if (!isCurrent()) return;
             removeSession(target.id);
             if (activeSessionIdRef.current === target.id) {
               skipSessionScopeSyncRef.current = true;
               thread.setSession(archivedSession);
             }
-            setConfirmArchive(false);
+            setConfirmArchive(null);
             toast.success('会话已归档');
           }, '会话归档失败')}
           title="归档会话"
@@ -845,21 +871,22 @@ export function ChatPage() {
       {feedbackTarget && <ChatFeedbackDialog key={feedbackTarget.id} initial={feedbackTarget.feedback}
         onClose={() => setFeedbackTarget(null)} onSubmit={(details) => handleMessageFeedback(feedbackTarget.id, 'negative', details)} />}
 
-      {confirmDelete && currentSession && (
+      {confirmDelete && (
         <ConfirmDialog
           busy={sessionBusy}
           confirmLabel="删除"
-          description={`确认删除“${currentSession.title || '未命名会话'}”？会话和消息将移入回收站，可在永久删除前恢复。`}
+          description={`确认删除“${confirmDelete.title || '未命名会话'}”？会话和消息将移入回收站，可在永久删除前恢复。`}
           error={sessionActionError}
           onCancel={() => {
             setSessionActionError('');
-            setConfirmDelete(false);
+            setConfirmDelete(null);
           }}
-          onConfirm={() => void runSessionAction(async () => {
-            const target = currentSession;
+          onConfirm={() => void runSessionAction(async (isCurrent) => {
+            const target = confirmDelete;
             await deleteChatSession(target.id);
+            if (!isCurrent()) return;
             removeSession(target.id);
-            setConfirmDelete(false);
+            setConfirmDelete(null);
             toast.success('会话已删除');
             if (activeSessionIdRef.current === target.id) navigate('/chat', { replace: true });
           }, '会话删除失败')}

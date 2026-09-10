@@ -9,6 +9,7 @@ import {
   createChatSession,
   deleteChatSession,
   editChatMessage,
+  exportChatSession,
   getChatSession,
   getDocument,
   getDocumentPreview,
@@ -20,9 +21,11 @@ import {
   regenerateChatMessage,
   setChatMessageFeedback,
   sendChatMessageStream as sendChatMessage,
+  unarchiveChatSession,
   updateChatSessionTitle,
 } from '../../api/resources';
 import { renderWithRouter } from '../../test/render';
+import { downloadBlob } from '../../utils/download';
 import type { ChatMessage, ChatSession, KnowledgeBase } from '../../types/api';
 import { ChatPage } from './ChatPage';
 
@@ -45,6 +48,7 @@ vi.mock('../../api/resources', () => ({
   regenerateChatMessage: vi.fn(),
   setChatMessageFeedback: vi.fn(),
   sendChatMessageStream: vi.fn(),
+  unarchiveChatSession: vi.fn(),
   updateChatSessionTitle: vi.fn(),
 }));
 vi.mock('../../utils/download', () => ({ downloadBlob: vi.fn() }));
@@ -165,9 +169,11 @@ beforeEach(() => {
   vi.mocked(createChatSession).mockReset();
   vi.mocked(deleteChatSession).mockReset();
   vi.mocked(editChatMessage).mockReset();
+  vi.mocked(exportChatSession).mockReset();
   vi.mocked(regenerateChatMessage).mockReset();
   vi.mocked(setChatMessageFeedback).mockReset();
   vi.mocked(updateChatSessionTitle).mockReset();
+  vi.mocked(unarchiveChatSession).mockReset();
 });
 
 afterEach(() => {
@@ -234,6 +240,118 @@ async function submitWithAutomaticChecksPaused() {
 }
 
 describe('ChatPage', () => {
+  it('renames the right-clicked session, keeps failed edits retryable and preserves the active conversation draft', async () => {
+    const other = { ...secondSession, knowledgeBaseId: knowledgeBase.id };
+    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, other] });
+    vi.mocked(updateChatSessionTitle)
+      .mockRejectedValueOnce(new ApiError(500, { code: 'RENAME_FAILED', message: '暂时无法修改会话名称' }))
+      .mockResolvedValueOnce({ ...other, title: '产品说明' });
+    const user = userEvent.setup();
+    renderWithRouter(<><Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes><LocationProbe /></>, ['/chat/s1']);
+    await findSessionTitle('制度问答');
+    await user.type(screen.getByRole('textbox', { name: '输入问题' }), '保留当前问题草稿');
+    fireEvent.contextMenu(screen.getByRole('link', { name: /产品问答/ }));
+    const menu = screen.getByRole('menu', { name: '会话“产品问答”的更多操作' });
+    expect(within(menu).getAllByRole('menuitem')).toHaveLength(4);
+    await user.click(within(menu).getByRole('menuitem', { name: '重命名会话' }));
+    const dialog = screen.getByRole('dialog', { name: '重命名会话' });
+    const title = within(dialog).getByRole('textbox', { name: '会话名称' });
+    expect(title).toHaveFocus();
+    expect(title).toHaveValue('产品问答');
+    await user.clear(title);
+    await user.type(title, '产品说明');
+    await user.click(within(dialog).getByRole('button', { name: '保存' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('暂时无法修改会话名称');
+    expect(title).toHaveValue('产品说明');
+    await user.click(within(dialog).getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(updateChatSessionTitle).toHaveBeenLastCalledWith(other.id, '产品说明');
+    expect(screen.getByRole('link', { name: /产品说明/ })).toBeInTheDocument();
+    expect(screen.getByText('制度问答', { selector: '.ui-inline-edit__text' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: '输入问题' })).toHaveValue('保留当前问题草稿');
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/chat/s1');
+    expect(getChatSession).not.toHaveBeenCalledWith(other.id);
+  });
+
+  it('archives a different session from its visible row menu without opening it', async () => {
+    const other = { ...secondSession, knowledgeBaseId: knowledgeBase.id };
+    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, other] });
+    vi.mocked(archiveChatSession).mockResolvedValue({ ...other, archivedAt: '2026-07-01T01:00:00Z' });
+    const user = userEvent.setup();
+    renderWithRouter(<><Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes><LocationProbe /></>, ['/chat/s1']);
+    await findSessionTitle('制度问答');
+    const trigger = screen.getByRole('button', { name: '会话“产品问答”的更多操作' });
+    await user.click(trigger);
+    await user.click(screen.getByRole('menuitem', { name: '归档会话' }));
+    let dialog = screen.getByRole('dialog', { name: '归档会话' });
+    expect(dialog).toHaveTextContent('产品问答');
+    await user.click(within(dialog).getByRole('button', { name: '取消' }));
+    expect(archiveChatSession).not.toHaveBeenCalled();
+    expect(trigger).toHaveFocus();
+    await user.click(trigger);
+    await user.click(screen.getByRole('menuitem', { name: '归档会话' }));
+    dialog = screen.getByRole('dialog', { name: '归档会话' });
+    await user.click(within(dialog).getByRole('button', { name: '归档' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(archiveChatSession).toHaveBeenCalledExactlyOnceWith(other.id);
+    expect(screen.queryByRole('link', { name: /产品问答/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /制度问答/ })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/chat/s1');
+  });
+
+  it('deletes a chosen session from the draft page without requiring an active session', async () => {
+    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, secondSession] });
+    vi.mocked(deleteChatSession).mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderWithRouter(<><Routes><Route path="/chat" element={<ChatPage />} /></Routes><LocationProbe /></>, ['/chat?knowledgeBaseId=kb1']);
+    fireEvent.contextMenu(await screen.findByRole('link', { name: /产品问答/ }));
+    await user.click(screen.getByRole('menuitem', { name: '删除会话' }));
+    const dialog = screen.getByRole('dialog', { name: '删除会话' });
+    expect(dialog).toHaveTextContent('产品问答');
+    expect(dialog).toHaveTextContent('回收站');
+    expect(deleteChatSession).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole('button', { name: '删除' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(deleteChatSession).toHaveBeenCalledExactlyOnceWith(secondSession.id);
+    expect(screen.queryByRole('link', { name: /产品问答/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /制度问答/ })).toBeInTheDocument();
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/chat?knowledgeBaseId=kb1');
+    expect(getChatSession).not.toHaveBeenCalled();
+  });
+
+  it('restores an archived row without switching the current conversation', async () => {
+    const other = { ...secondSession, knowledgeBaseId: knowledgeBase.id, archivedAt: '2026-07-01T01:00:00Z' };
+    vi.mocked(listChatSessions).mockImplementation(async (params) => ({ items: params?.archived ? [other] : [session] }));
+    vi.mocked(unarchiveChatSession).mockResolvedValue({ ...other, archivedAt: null });
+    const user = userEvent.setup();
+    renderWithRouter(<><Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes><LocationProbe /></>, ['/chat/s1']);
+    await findSessionTitle('制度问答');
+    await user.click(screen.getByRole('button', { name: '已归档', exact: true }));
+    await user.click(await screen.findByRole('button', { name: '会话“产品问答”的更多操作' }));
+    expect(screen.queryByRole('menuitem', { name: '归档会话' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('menuitem', { name: '取消归档' }));
+    await waitFor(() => expect(screen.queryByRole('link', { name: /产品问答/ })).not.toBeInTheDocument());
+    expect(unarchiveChatSession).toHaveBeenCalledExactlyOnceWith(other.id);
+    expect(screen.getByText('制度问答', { selector: '.ui-inline-edit__text' })).toBeInTheDocument();
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/chat/s1');
+    expect(screen.getByRole('button', { name: '已归档', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('exports the selected row using its own session ID and title', async () => {
+    const other = { ...secondSession, knowledgeBaseId: knowledgeBase.id };
+    const markdown = new Blob(['产品会话内容'], { type: 'text/markdown' });
+    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, other] });
+    vi.mocked(exportChatSession).mockResolvedValue(markdown);
+    const user = userEvent.setup();
+    renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>, ['/chat/s1']);
+    await findSessionTitle('制度问答');
+    await user.click(screen.getByRole('button', { name: '会话“产品问答”的更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '导出会话' }));
+    await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(markdown, '产品问答.md'));
+    expect(exportChatSession).toHaveBeenCalledExactlyOnceWith(other.id);
+    expect(screen.getByText('制度问答', { selector: '.ui-inline-edit__text' })).toBeInTheDocument();
+  });
+
   it('shows a regenerated answer as the latest version of one question, including after reload', async () => {
     const user = userEvent.setup();
     const question: ChatMessage = { ...historicalAnswers[0], id: 'question-versions', role: 'user', content: '请介绍自己', citations: [] };
@@ -571,9 +689,9 @@ describe('ChatPage', () => {
     // Any call, not the last one. The tab state above is what pins down where the rail
     // ended up; asserting on the *latest* call additionally requires that no unrelated
     // refresh lands afterwards, which is a race that has been seen to fail under load.
-    expect(vi.mocked(listChatSessions).mock.calls.some(
+    await waitFor(() => expect(vi.mocked(listChatSessions).mock.calls.some(
       ([params]) => params?.archived === true,
-    )).toBe(true);
+    )).toBe(true));
   });
 
   it('does not refresh chat state after an in-flight send outlives the page', async () => {
