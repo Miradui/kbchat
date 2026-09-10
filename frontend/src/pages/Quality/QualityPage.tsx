@@ -415,7 +415,7 @@ function FeedbackItem({ item }: { item: ChatQualityFeedbackItem }) {
           <strong>{item.knowledgeBaseName}</strong>
           <small>{item.sessionTitle} · 评价于 {formatRelativeTime(item.feedbackUpdatedAt)}</small>
         </div>
-        <Link className="ui-button ui-button--link" to={`/chat/${encodeURIComponent(item.sessionId)}`}>
+        <Link className="ui-button ui-button--link" to={`/chat/${encodeURIComponent(item.sessionId)}?messageId=${encodeURIComponent(item.messageId)}`}>
           查看会话 <ExternalLink aria-hidden="true" />
         </Link>
       </div>
@@ -462,7 +462,7 @@ function KnowledgeGapItem({ item }: { item: ChatKnowledgeGapItem }) {
           <small>{item.sessionTitle} · 最近 {formatRelativeTime(item.lastSeenAt)}</small>
         </div>
         <Badge tone={presentation.tone}>{presentation.label}</Badge>
-        <Link className="ui-button ui-button--link" to={`/chat/${encodeURIComponent(item.sessionId)}`}>
+        <Link className="ui-button ui-button--link" to={`/chat/${encodeURIComponent(item.sessionId)}${item.messageId ? `?messageId=${encodeURIComponent(item.messageId)}` : ''}`}>
           查看会话 <ExternalLink aria-hidden="true" />
         </Link>
       </div>

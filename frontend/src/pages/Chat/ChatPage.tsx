@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Check, Download, Library, MessageSquareText, PanelLeft, Sparkles, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, Download, Library, MessageSquareText, PanelLeft, Search, Sparkles, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
@@ -27,6 +27,7 @@ import { downloadBlob } from '../../utils/download';
 import { formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
 import { ChatComposer } from './ChatComposer';
+import { ChatMessageSearch, useChatMessageSearch } from './ChatMessageSearch';
 import { ChatMarkdown } from './ChatMarkdown';
 import { ChatAssistantLabel, CitationCard, MessageBubble } from './ChatMessage';
 import { ChatSessionRail } from './ChatSessionRail';
@@ -72,6 +73,7 @@ export function ChatPage() {
   const skipSessionScopeSyncRef = useRef(false);
 
   const urlKnowledgeBaseId = searchParams.get('knowledgeBaseId') ?? '';
+  const targetMessageId = searchParams.get('messageId') ?? '';
   const [railScope, setRailScope] = useState<ChatSessionScope>('active');
 
   activeSessionIdRef.current = sessionId;
@@ -115,6 +117,22 @@ export function ChatPage() {
   const activeKnowledgeBase = knowledgeBases.find((item) => item.id === activeKnowledgeBaseId);
   const sourceScope = `${sessionId ?? ''}:${activeKnowledgeBaseId}`;
   const visibleSource = sourcePreview?.scope === sourceScope ? sourcePreview : null;
+
+  const locateMessage = useCallback((messageId: string, focus: boolean) => {
+    const container = messagesRef.current;
+    const element = document.getElementById(`chat-message-${messageId}`);
+    if (!container || !element || !container.contains(element)) return;
+    stickToBottomRef.current = false;
+    const target = element.getBoundingClientRect();
+    const frame = container.getBoundingClientRect();
+    container.scrollTo({ top: container.scrollTop + target.top - frame.top - (container.clientHeight - Math.min(target.height, container.clientHeight)) / 2, behavior: 'instant' });
+    if (focus) element.focus({ preventScroll: true });
+  }, []);
+  const messagesReady = Boolean(sessionId && !thread.loading && !thread.loadError && thread.session?.id === sessionId);
+  const messageSearch = useChatMessageSearch({
+    sessionId, messages: thread.messages, targetMessageId, onLocate: locateMessage,
+    ready: messagesReady,
+  });
 
   useEffect(() => { setSourcePreview(null); }, [sourceScope]);
 
@@ -188,13 +206,13 @@ export function ChatPage() {
   }, [searchParams, setSearchParams]);
 
   useEffect(() => {
-    if (!stickToBottomRef.current) return;
+    if (!stickToBottomRef.current || targetMessageId || messageSearch.open) return;
     // `auto` while streaming: a smooth scroll per token never settles.
     messagesRef.current?.scrollTo({
       top: messagesRef.current.scrollHeight,
       behavior: thread.streamingAnswer ? 'auto' : 'smooth',
     });
-  }, [thread.messages, thread.pendingQuestion, thread.streamingAnswer]);
+  }, [thread.messages, thread.pendingQuestion, thread.streamingAnswer, targetMessageId, messageSearch.open]);
 
   const latestAssistantId = useMemo(
     () => [...thread.messages].reverse().find((message) => message.role === 'assistant')?.id ?? null,
@@ -453,7 +471,14 @@ export function ChatPage() {
                 <span className="ui-truncate">{activeKnowledgeBase.name}</span>
               </Link>
             )}
+            {sessionId && <IconButton aria-expanded={messageSearch.open} label="查找会话消息" ref={messageSearch.triggerRef} onClick={messageSearch.openSearch}><Search aria-hidden="true" /></IconButton>}
           </header>
+
+          {messageSearch.open && <ChatMessageSearch {...messageSearch} loading={thread.loading} />}
+          {targetMessageId && messagesReady && !messageSearch.open && <div className="chat-find__location">
+            <span>{messageSearch.missingTarget ? '指定消息已不存在或不属于当前会话。' : '已定位到指定消息。'}</span>
+            <Button variant="ghost" onClick={() => { setSearchParams((current) => { const next = new URLSearchParams(current); next.delete('messageId'); return next; }, { replace: true }); messageSearch.triggerRef.current?.focus(); }}>取消定位</Button>
+          </div>}
 
           {/*
             The one polite region for answer progress. Permanently mounted and outside
@@ -506,6 +531,7 @@ export function ChatPage() {
                       focusedCitation?.messageId === message.id ? focusedCitation.index : null
                     }
                     key={message.id}
+                    located={messageSearch.locatedId === message.id}
                     knowledgeBaseId={activeKnowledgeBaseId || undefined}
                     onOpenCitation={openSource}
                     message={message}

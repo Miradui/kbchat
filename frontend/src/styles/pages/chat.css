@@ -163,6 +163,14 @@
 .chat-msg--user { justify-content: flex-end; }
 .chat-msg--assistant { justify-content: flex-start; }
 .chat-msg.is-pending { opacity: 0.75; }
+.chat-msg.is-located { border-radius: var(--r-sm); outline: 2px solid var(--accent); outline-offset: var(--s-2); }
+.chat-find { background: var(--surface-sunken); border-bottom: 1px solid var(--line); display: grid; flex: 0 0 auto; gap: var(--s-2); padding: var(--s-3) var(--s-5); }
+.chat-find__controls { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.chat-find__controls input { flex: 1; min-width: 0; }
+.chat-find__count { color: var(--text-muted); font-size: var(--t-small); white-space: nowrap; }
+.chat-find__excerpt { color: var(--text-secondary); font-size: var(--t-small); line-height: var(--lh-normal); overflow-wrap: anywhere; }
+.chat-find__excerpt mark { background: var(--accent-wash); border-bottom: 1px solid var(--accent); color: var(--text); }
+.chat-find__location { align-items: center; background: var(--accent-wash); color: var(--text-secondary); display: flex; flex: 0 0 auto; flex-wrap: wrap; font-size: var(--t-small); gap: var(--s-2); justify-content: space-between; padding: var(--s-2) var(--s-5); }
 
 .chat-msg__body { max-width: 100%; min-width: 0; }
 .chat-msg--user .chat-msg__body {

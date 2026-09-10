@@ -234,6 +234,79 @@ async function submitWithAutomaticChecksPaused() {
 }
 
 describe('ChatPage', () => {
+  it('finds literal text across messages, cycles results and preserves the question draft', async () => {
+    const user = userEvent.setup();
+    vi.mocked(listChatMessages).mockResolvedValue({ items: [
+      { ...historicalAnswers[0], id: 'question', role: 'user', content: '怎么使用 A+B？', citations: [] },
+      { ...historicalAnswers[1], content: '示例：`a+b`。', citations: [] },
+    ] });
+    renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>, ['/chat/s1']);
+    await screen.findByText('怎么使用 A+B？');
+    const composer = screen.getByRole('textbox', { name: '输入问题' });
+    await user.type(composer, '保留这个追问');
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+    const input = screen.getByRole('textbox', { name: '查找消息关键词' });
+    expect(input).toHaveFocus();
+    await user.type(input, 'a+b');
+    expect(screen.getByText('1 / 2 条匹配消息')).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: '已定位消息' })).toHaveAttribute('id', 'chat-message-question');
+    await user.keyboard('{Enter}');
+    expect(screen.getByText('2 / 2 条匹配消息')).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: '已定位消息' })).toHaveAttribute('id', 'chat-message-assistant-new');
+    await user.click(screen.getByRole('button', { name: '下一条匹配消息' }));
+    expect(screen.getByText('1 / 2 条匹配消息')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '上一条匹配消息' }));
+    expect(screen.getByText('2 / 2 条匹配消息')).toBeInTheDocument();
+    await user.click(input);
+    await user.clear(input);
+    await user.type(input, '不存在');
+    expect(screen.getByText('没有匹配消息')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '下一条匹配消息' })).toBeDisabled();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('region', { name: '会话内查找' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查找会话消息' })).toHaveFocus();
+    expect(composer).toHaveValue('保留这个追问');
+  });
+
+  it('waits for the thread before locating a deep-linked message instead of scrolling to the end', async () => {
+    const pending = deferred<{ items: ChatMessage[] }>();
+    vi.mocked(listChatMessages).mockReturnValue(pending.promise);
+    renderWithRouter(<><Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes><LocationProbe /></>, ['/chat/s1?messageId=assistant-old']);
+    expect(screen.queryByText('指定消息已不存在或不属于当前会话。')).not.toBeInTheDocument();
+    await act(async () => pending.resolve({ items: historicalAnswers }));
+    const located = await screen.findByRole('article', { name: '已定位消息' });
+    expect(located).toHaveAttribute('id', 'chat-message-assistant-old');
+    expect(located).toHaveFocus();
+    expect(Element.prototype.scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ behavior: 'instant' }));
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent('messageId=assistant-old');
+    await userEvent.setup().click(screen.getByRole('button', { name: '取消定位' }));
+    expect(screen.queryByRole('article', { name: '已定位消息' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('当前位置')).not.toHaveTextContent('messageId=');
+  });
+
+  it('reports a missing target without fetching messages outside the current session', async () => {
+    vi.mocked(listChatMessages).mockResolvedValue({ items: historicalAnswers });
+    renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>, ['/chat/s1?messageId=other-session-message']);
+    expect(await screen.findByText('指定消息已不存在或不属于当前会话。')).toBeInTheDocument();
+    expect(screen.queryByRole('article', { name: '已定位消息' })).not.toBeInTheDocument();
+    expect(listChatMessages).toHaveBeenCalledTimes(1);
+    expect(listChatMessages).toHaveBeenCalledWith('s1');
+  });
+
+  it('clears conversation search when navigating to another session', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getChatSession).mockImplementation(async (id) => id === 's1' ? session : secondSession);
+    vi.mocked(listChatMessages).mockImplementation(async (id) => ({ items: id === 's1' ? historicalAnswers : [secondSessionMessage] }));
+    renderWithRouter(<><Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes><ChatRouteControls /></>, ['/chat/s1']);
+    await screen.findByText('旧回答');
+    await user.click(screen.getByRole('button', { name: '查找会话消息' }));
+    await user.type(screen.getByRole('textbox', { name: '查找消息关键词' }), '回答');
+    await user.click(screen.getByRole('button', { name: '强制切换产品会话' }));
+    await screen.findByText('产品会话回答');
+    expect(screen.queryByRole('region', { name: '会话内查找' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('article', { name: '已定位消息' })).not.toBeInTheDocument();
+  });
+
   it('locks other chat writes while an edited message is being saved', async () => {
     const editResult = deferred<{
       clientRequestId: string;

@@ -20,6 +20,7 @@ const PREVIEW_LENGTH = 220;
 type MessageBubbleProps = {
   message: ChatMessageType;
   knowledgeBaseId?: string;
+  located?: boolean;
   /** Index of the citation to scroll to and highlight, if any. */
   focusedCitationIndex: number | null;
   onFocusCitation: (messageId: string, index: number | null) => void;
@@ -48,6 +49,7 @@ export function ChatAssistantLabel() {
 export function MessageBubble({
   message,
   knowledgeBaseId,
+  located = false,
   focusedCitationIndex,
   onFocusCitation,
   onOpenCitation,
@@ -95,7 +97,7 @@ export function MessageBubble({
   }, [focusedCitationIndex]);
 
   return (
-    <article className={`chat-msg chat-msg--${message.role}`}>
+    <article aria-label={located ? '已定位消息' : undefined} className={`chat-msg chat-msg--${message.role}${located ? ' is-located' : ''}`} id={`chat-message-${message.id}`} tabIndex={-1}>
       <div className="chat-msg__body">
         {isAssistant && <ChatAssistantLabel />}
         {editing && !isAssistant ? (

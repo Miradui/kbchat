@@ -118,7 +118,7 @@ describe('QualityPage', () => {
     expect(screen.getByText('policy.pdf · 第 3 页')).toBeInTheDocument();
     // Gap rows link to sessions too, so this stays scoped to the feedback panel.
     const feedbackPanel = screen.getByRole('region', { name: '负反馈列表' });
-    expect(within(feedbackPanel).getByRole('link', { name: /查看会话/ })).toHaveAttribute('href', '/chat/session-1');
+    expect(within(feedbackPanel).getByRole('link', { name: /查看会话/ })).toHaveAttribute('href', '/chat/session-1?messageId=message-1');
   });
 
   it('reloads both requests when filters change and keeps the latest filter', async () => {
