@@ -69,28 +69,30 @@
 .cat-tree__spacer { flex: 0 0 auto; width: 24px; }
 .cat-tree__toggle { height: 24px; min-height: 24px; width: 24px; }
 .cat-tree__toggle > svg { height: 14px; width: 14px; }
-.cat-tree__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat-tree__name { flex: 1 1 0; width: auto; }
+.cat-tree__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cat-tree__name--static { cursor: default; }
 
 .cat-tree__count {
-  color: var(--text-faint);
+  align-items: center;
+  background: var(--surface-sunken);
+  border-radius: var(--r-xs);
+  color: var(--text-muted);
+  display: inline-flex;
   flex: 0 0 auto;
   font-size: var(--t-micro);
   font-variant-numeric: tabular-nums;
+  justify-content: center;
+  min-height: var(--s-5);
+  min-width: var(--s-5);
   padding: 0 var(--s-1);
 }
 .cat-tree__row.is-selected .cat-tree__count { color: var(--accent); }
 
 .cat-tree__actions {
   display: flex;
-  margin-left: auto;
-  opacity: 0;
-  transition: opacity var(--fast) var(--ease);
+  flex: 0 0 auto;
 }
-.cat-tree__row:hover .cat-tree__actions,
-.cat-tree__actions:focus-within { opacity: 1; }
-.cat-tree__actions .ui-icon-button { height: 24px; min-height: 24px; width: 24px; }
-.cat-tree__actions .ui-icon-button > svg { height: 13px; width: 13px; }
 
 /* ---------------- Toolbar ---------------- */
 .kb-toolbar { display: grid; gap: var(--s-4); }

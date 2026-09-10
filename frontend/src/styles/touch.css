@@ -92,22 +92,16 @@
   }
 
   /*
-    The category tree shrinks its row actions to 24px and hides them behind hover, which
-    is unreachable without a pointer. These lived in library.css at its own 680px
-    breakpoint, which left 681-980px both tiny and invisible on a touch screen; they are
-    here so touch sizing has one breakpoint and one owner. The descendant selector is
-    needed to outweigh `.cat-tree__actions .ui-icon-button` in library.css.
+    Keep category expand controls and leaf spacers aligned at the touch size. The
+    more-menu trigger already inherits the shared icon button sizing above.
   */
-  .cat-tree__actions {
-    opacity: 1;
-  }
-
-  .cat-tree__actions .ui-icon-button,
   .cat-tree__toggle {
     height: var(--touch);
     min-height: var(--touch);
     width: var(--touch);
   }
+
+  .cat-tree__spacer { width: var(--touch); }
 
   .cat-panel__all,
   .cat-tree__name {

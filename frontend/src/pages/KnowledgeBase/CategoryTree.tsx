@@ -1,6 +1,7 @@
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Pencil, Plus, Trash2 } from 'lucide-react';
 
 import { IconButton } from '../../components/ui/IconButton';
+import { OverflowMenu, type OverflowMenuItem } from '../../components/ui/OverflowMenu';
 import type { KnowledgeBaseCategory } from '../../types/api';
 
 type CategoryTreeProps = {
@@ -92,8 +93,47 @@ function CategoryNode({
   const expanded = !hasChildren || expandedIds.includes(category.id);
   const selected = selectedId === category.id;
   const pending = pendingIds.has(category.id);
-  const hasActions = Boolean(onCreateCategory || onEditCategory || onMoveCategory || onDeleteCategory);
   const { countLabel, countTitle } = categoryCountBadge(category, hasChildren && !expanded);
+  const actions: OverflowMenuItem[] = [];
+
+  if (onCreateCategory) {
+    actions.push({
+      label: '新增子分类',
+      icon: <Plus aria-hidden="true" />,
+      onSelect: () => onCreateCategory(category.id),
+    });
+  }
+  if (onEditCategory) {
+    actions.push({
+      label: '编辑分类',
+      icon: <Pencil aria-hidden="true" />,
+      onSelect: () => onEditCategory(category),
+    });
+  }
+  if (onMoveCategory) {
+    actions.push(
+      {
+        label: '上移',
+        icon: <ArrowUp aria-hidden="true" />,
+        disabled: pending,
+        onSelect: () => onMoveCategory(category.id, 'up'),
+      },
+      {
+        label: '下移',
+        icon: <ArrowDown aria-hidden="true" />,
+        disabled: pending,
+        onSelect: () => onMoveCategory(category.id, 'down'),
+      },
+    );
+  }
+  if (onDeleteCategory) {
+    actions.push({
+      label: '删除分类',
+      icon: <Trash2 aria-hidden="true" />,
+      tone: 'danger',
+      onSelect: () => onDeleteCategory(category),
+    });
+  }
 
   return (
     <li className="cat-tree__node">
@@ -119,12 +159,15 @@ function CategoryNode({
             aria-current={selected ? 'true' : undefined}
             className="cat-tree__name"
             onClick={() => onSelectCategory(category.id)}
+            title={category.name}
             type="button"
           >
-            {category.name}
+            <span className="cat-tree__label">{category.name}</span>
           </button>
         ) : (
-          <span className="cat-tree__name cat-tree__name--static">{category.name}</span>
+          <span className="cat-tree__name cat-tree__name--static" title={category.name}>
+            <span className="cat-tree__label">{category.name}</span>
+          </span>
         )}
 
         {/* Collapsed parents stand in for their subtree, so they show the rolled-up
@@ -133,33 +176,9 @@ function CategoryNode({
           <span className="cat-tree__count" title={countTitle}>{countLabel}</span>
         )}
 
-        {hasActions && (
+        {actions.length > 0 && (
           <div className="cat-tree__actions">
-            {onCreateCategory && (
-              <IconButton label={`新增 ${category.name} 子分类`} onClick={() => onCreateCategory(category.id)}>
-                <Plus aria-hidden="true" />
-              </IconButton>
-            )}
-            {onEditCategory && (
-              <IconButton label={`编辑 ${category.name}`} onClick={() => onEditCategory(category)}>
-                <Pencil aria-hidden="true" />
-              </IconButton>
-            )}
-            {onMoveCategory && (
-              <>
-                <IconButton disabled={pending} label={`${category.name} 上移`} onClick={() => onMoveCategory(category.id, 'up')}>
-                  <ArrowUp aria-hidden="true" />
-                </IconButton>
-                <IconButton disabled={pending} label={`${category.name} 下移`} onClick={() => onMoveCategory(category.id, 'down')}>
-                  <ArrowDown aria-hidden="true" />
-                </IconButton>
-              </>
-            )}
-            {onDeleteCategory && (
-              <IconButton label={`删除 ${category.name}`} tone="danger" onClick={() => onDeleteCategory(category)}>
-                <Trash2 aria-hidden="true" />
-              </IconButton>
-            )}
+            <OverflowMenu items={actions} label={`${category.name} 的更多操作`} />
           </div>
         )}
       </div>
