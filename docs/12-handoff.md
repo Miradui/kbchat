@@ -1,5 +1,17 @@
 # 跨会话交接
 
+## CI 与 README（2026-09-11）
+
+- 已完成最后一条排队请求。新增 `.github/workflows/ci.yml`，支持 push、pull request 和手动触发，
+  只读仓库权限、同一引用取消过期运行，前后端独立任务与依赖缓存。
+  后端按 `go.mod` 安装 Go，启用 CGO，执行 vet / test / build；前端 Node 22 执行 npm ci / test / build，包含分包检查。
+- README 以中文品牌“知汇”重写，增加真实仓库 CI 徽章、当前功能、基础服务、配置、启动、迁移、测试和文档索引。
+  修正角色说明、前端环境变量读取位置及标题 Provider 的首问说明，`.env.example` 仅调整该注释。
+- actionlint 1.7.7 校验通过，npm ci 在独立忽略目录成功，README 17 个本地链接有效。
+  本地 Node 24.6.0 下 645 项前端测试、生产构建及 11 项分包检查通过；后端测试/vet/构建通过。
+  CI 的 Node 22 运行尚待 GitHub 实际执行，本轮按要求仅提交、不推送。
+- 首问命名、批量操作/图标、账户头像、交互巡检及 CI/README 均已完成。已知数据时间问题 I11 和真实环境验证限制见 `16-interaction-review.md`。
+
 ## 全站交互巡检（2026-09-11）
 
 - 已完成此前排队的交互检查，逐页路径与结果见 `16-interaction-review.md`。
