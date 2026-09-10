@@ -1,9 +1,10 @@
-import { ArrowRight, BookOpen, Check, Eye, EyeOff, FileText, MessageSquareText, Search } from 'lucide-react';
+import { ArrowRight, Check, Eye, EyeOff, FileText, MessageSquareText, Search } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { login } from '../../api/resources';
+import { BrandMark } from '../../components/BrandMark';
 import { Button } from '../../components/ui/Button';
 import { Field, Input } from '../../components/ui/Field';
 import { IconButton } from '../../components/ui/IconButton';
@@ -82,11 +83,11 @@ export function LoginPage({ loginRequest = login }: LoginPageProps) {
     <section className="auth">
       <aside className="auth__aside">
         <div className="auth__brand">
-          <span className="auth__mark" aria-hidden="true"><BookOpen /></span>
-          <strong>RAG Console</strong>
+          <BrandMark className="auth__mark" />
+          <strong>知汇</strong>
         </div>
         <div className="auth__story">
-          <span className="auth__eyebrow">KNOWLEDGE, CONNECTED.</span>
+          <span className="auth__eyebrow">让知识相连，让答案有据</span>
           <h2>让每一份知识，<br />都有用武之地。</h2>
           <p>从文档到答案，在同一个工作空间里<br />管理知识、发现线索、追溯来源。</p>
           <div aria-hidden="true" className="auth__flow">
@@ -107,7 +108,7 @@ export function LoginPage({ loginRequest = login }: LoginPageProps) {
       <div className="auth__panel">
         <form className="auth__form" noValidate onSubmit={handleSubmit}>
           <header>
-            <span className="auth__form-brand"><BookOpen aria-hidden="true" />RAG Console</span>
+            <span className="auth__form-brand"><BrandMark />知汇</span>
             <h1>欢迎回来</h1>
             <p>登录账户，继续你的知识探索。</p>
           </header>
@@ -170,7 +171,7 @@ export function LoginPage({ loginRequest = login }: LoginPageProps) {
           <Button className="auth__submit" loading={submitting} loadingLabel="登录中" trailingIcon={<ArrowRight aria-hidden="true" />} type="submit">登录</Button>
           <p className="auth__help">账户由管理员配置，如需帮助请联系管理员。</p>
         </form>
-        <span className="auth__footer">RAG Console · 企业知识工作空间</span>
+        <span className="auth__footer">知汇 · 企业知识工作空间</span>
       </div>
     </section>
   );

@@ -1,10 +1,11 @@
-import { BookOpenText, ChevronsUpDown, LogOut, Menu, Monitor, Moon, Search, Settings, Sun, UserRound, X } from 'lucide-react';
+import { ChevronsUpDown, LogOut, Menu, Monitor, Moon, Search, Settings, Sun, UserRound, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import type { NavigateFunction } from 'react-router-dom';
 
 import { getCurrentUser, logout } from '../api/resources';
+import { BrandMark } from '../components/BrandMark';
 import { CommandPalette } from '../components/CommandPalette';
 import { PrimaryNav } from '../components/navigation/PrimaryNav';
 import type { AppSection } from '../components/navigation/PrimaryNav';
@@ -232,10 +233,10 @@ export function AppShell({
         ref={railRef}
       >
         <div className="rail__brand-row">
-          <Link aria-label="RAG Console" className="rail__brand" to="/home">
-            <span className="rail__mark" aria-hidden="true"><BookOpenText /></span>
+          <Link aria-label="知汇首页" className="rail__brand" to="/home">
+            <BrandMark className="rail__mark" />
             <span className="rail__brand-text">
-              <strong className="rail__wordmark">RAG <span>Console</span></strong>
+              <strong className="rail__wordmark">知汇</strong>
               <small>知识管理 · 智能问答</small>
             </span>
           </Link>

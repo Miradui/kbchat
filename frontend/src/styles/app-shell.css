@@ -54,39 +54,23 @@
 .rail__brand:focus-visible { outline-offset: var(--s-1); }
 
 .rail__mark {
-  align-items: center;
-  background: var(--brand-panel);
-  border: 1px solid var(--brand-panel-line);
   border-radius: var(--r-lg);
-  color: var(--brand-panel-accent);
-  display: inline-flex;
+  box-shadow: var(--shadow-popover);
+  display: block;
   flex: 0 0 auto;
   height: var(--s-12);
-  justify-content: center;
-  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+  transition: filter var(--fast) var(--ease);
   width: var(--s-12);
 }
-.rail__brand:hover .rail__mark { background: var(--brand-panel-soft); border-color: var(--brand-panel-accent); }
-.rail__mark > svg { height: var(--icon-lg); width: var(--icon-lg); }
+.rail__brand:hover .rail__mark { filter: brightness(1.06); }
 .rail__brand-text { display: grid; gap: var(--s-1); min-width: 0; }
 .rail__wordmark {
-  align-items: baseline;
-  display: flex;
   font-size: var(--t-brand);
   font-weight: 750;
-  gap: var(--s-1);
-  letter-spacing: -0.02em;
+  letter-spacing: 0.14em;
   line-height: var(--lh-tight);
   min-width: 0;
   white-space: nowrap;
-}
-.rail__wordmark > span {
-  color: var(--text-secondary);
-  font-size: var(--t-lead);
-  font-weight: 500;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .rail__brand small {
   color: var(--text-muted);

@@ -196,7 +196,7 @@ describe('AppShell', () => {
     expect(screen.getByRole('main', { hidden: true })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /搜索/ , hidden: true }).closest('.app__main')).toBe(applicationMain);
 
-    const first = screen.getByRole('link', { name: 'RAG Console' });
+    const first = screen.getByRole('link', { name: '知汇首页' });
     const last = screen.getByRole('button', { name: '管理员' });
     last.focus();
     await user.tab();
