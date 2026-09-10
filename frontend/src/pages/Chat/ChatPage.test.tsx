@@ -10,6 +10,8 @@ import {
   deleteChatSession,
   editChatMessage,
   getChatSession,
+  getDocument,
+  getDocumentPreview,
   getWorkspacePreference,
   listChatMessages,
   listChatSessions,
@@ -31,6 +33,9 @@ vi.mock('../../api/resources', () => ({
   editChatMessage: vi.fn(),
   exportChatSession: vi.fn(),
   getChatSession: vi.fn(),
+  getDocument: vi.fn(),
+  getDocumentPreview: vi.fn(),
+  downloadDocument: vi.fn(),
   getWorkspacePreference: vi.fn(),
   listChatMessages: vi.fn(),
   listChatSessions: vi.fn(),
@@ -152,6 +157,8 @@ beforeEach(() => {
     viewMode: 'table', scope: 'all', sort: 'updatedAt_desc', visibility: 'all', expandedCategoryIds: [],
   });
   vi.mocked(getChatSession).mockReset().mockResolvedValue(session);
+  vi.mocked(getDocument).mockReset().mockImplementation(async (id) => ({ id, knowledgeBaseId: 'kb1', filename: '新制度.pdf', fileType: 'pdf', fileSize: 1024, status: 'completed', errorMessage: null, createdAt: '', updatedAt: '' }));
+  vi.mocked(getDocumentPreview).mockReset().mockResolvedValue({ id: 'doc-new', filename: '新制度.pdf', kind: 'text', fileType: 'pdf', contentType: 'text/plain', content: '新制度依据的完整原文', downloadUrl: '' });
   vi.mocked(listChatMessages).mockReset().mockResolvedValue({ items: [] });
   vi.mocked(sendChatMessage).mockReset();
   vi.mocked(archiveChatSession).mockReset();
@@ -816,6 +823,10 @@ describe('ChatPage', () => {
     }]));
 
     expect(await screen.findByText('流式来源.pdf')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '打开来源：流式来源.pdf，p.3' }));
+    expect(await screen.findByRole('complementary', { name: '原文预览' })).toBeInTheDocument();
+    expect(getDocument).toHaveBeenCalledWith('doc-stream');
+    expect(screen.getByRole('button', { name: '停止生成' })).toBeEnabled();
   });
 
   it('loads more sessions after the first page', async () => {
@@ -836,24 +847,48 @@ describe('ChatPage', () => {
     expect(vi.mocked(listChatSessions)).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2, pageSize: 50 }));
   });
 
-  it('links each citation to its exact document and chunk', async () => {
+  it('opens a source alongside the chat, preserves the draft and restores focus on close', async () => {
     vi.mocked(listChatMessages).mockResolvedValue({ items: historicalAnswers });
     const user = userEvent.setup();
 
     renderWithRouter(
-      <Routes>
+      <><LocationProbe /><Routes>
         <Route path="/chat/:sessionId" element={<ChatPage />} />
-      </Routes>,
+      </Routes></>,
       ['/chat/s1'],
     );
 
     const answer = (await screen.findByText('新回答')).closest('article');
+    const input = screen.getByRole('textbox', { name: '输入问题' });
+    await user.type(input, '未发送的问题');
     await user.click(within(answer!).getByRole('button', { name: '1 条来源' }));
 
-    expect(await screen.findByRole('link', { name: '打开来源：新制度.pdf，p.5' })).toHaveAttribute(
-      'href',
-      '/knowledge-bases/kb1/documents?documentId=doc-new&chunkId=chunk-new',
-    );
+    const source = screen.getByRole('button', { name: '打开来源：新制度.pdf，p.5' });
+    await user.click(source);
+    expect(await screen.findByLabelText('文档原文')).toHaveTextContent('新制度依据的完整原文');
+    expect(getDocument).toHaveBeenCalledWith('doc-new');
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/chat/s1');
+    expect(input).toHaveValue('未发送的问题');
+    await user.type(input, '，补充内容');
+    await user.click(screen.getByRole('button', { name: '关闭原文预览' }));
+    expect(screen.queryByRole('complementary', { name: '原文预览' })).not.toBeInTheDocument();
+    expect(source).toHaveFocus();
+    expect(input).toHaveValue('未发送的问题，补充内容');
+  });
+
+  it('closes the old source when switching to a session in another knowledge base', async () => {
+    vi.mocked(listChatMessages).mockResolvedValue({ items: historicalAnswers });
+    const user = userEvent.setup();
+    renderWithRouter(<><ChatRouteControls /><Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes></>, ['/chat/s1']);
+    const answer = (await screen.findByText('新回答')).closest('article');
+    await user.click(within(answer!).getByRole('button', { name: '1 条来源' }));
+    await user.click(screen.getByRole('button', { name: '打开来源：新制度.pdf，p.5' }));
+    await screen.findByRole('complementary', { name: '原文预览' });
+    vi.mocked(getChatSession).mockResolvedValue(secondSession);
+    vi.mocked(listChatMessages).mockResolvedValue({ items: [secondSessionMessage] });
+    await user.click(screen.getByRole('button', { name: '强制切换产品会话' }));
+    await screen.findByText('产品会话回答');
+    expect(screen.queryByRole('complementary', { name: '原文预览' })).not.toBeInTheDocument();
   });
 
   it('renders valid inline citations as source controls and keeps invalid markers as text', async () => {

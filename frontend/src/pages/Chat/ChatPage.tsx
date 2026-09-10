@@ -22,7 +22,7 @@ import { InlineEdit } from '../../components/ui/InlineEdit';
 import { OverflowMenu } from '../../components/ui/OverflowMenu';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { AppShell } from '../../layouts/AppShell';
-import type { ChatFeedbackRating } from '../../types/api';
+import type { ChatFeedbackRating, Citation } from '../../types/api';
 import { downloadBlob } from '../../utils/download';
 import { formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
@@ -30,6 +30,7 @@ import { ChatComposer } from './ChatComposer';
 import { ChatMarkdown } from './ChatMarkdown';
 import { ChatAssistantLabel, CitationCard, MessageBubble } from './ChatMessage';
 import { ChatSessionRail } from './ChatSessionRail';
+import { ChatSourcePreview } from './ChatSourcePreview';
 import type { ChatSessionScope } from './ChatSessionRail';
 import { useChatSessions } from './useChatSessions';
 import { useChatThread } from './useChatThread';
@@ -51,6 +52,8 @@ export function ChatPage() {
   const [railOpen, setRailOpen] = useState(false);
   const [draft, setDraft] = useState('');
   const [focusedCitation, setFocusedCitation] = useState<{ messageId: string; index: number | null } | null>(null);
+  const [sourcePreview, setSourcePreview] = useState<{ citation: Citation; index: number; scope: string } | null>(null);
+  const sourceTriggerRef = useRef<HTMLElement | null>(null);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [sessionActionError, setSessionActionError] = useState('');
@@ -110,6 +113,21 @@ export function ChatPage() {
     ?? urlKnowledgeBaseId
     ?? '';
   const activeKnowledgeBase = knowledgeBases.find((item) => item.id === activeKnowledgeBaseId);
+  const sourceScope = `${sessionId ?? ''}:${activeKnowledgeBaseId}`;
+  const visibleSource = sourcePreview?.scope === sourceScope ? sourcePreview : null;
+
+  useEffect(() => { setSourcePreview(null); }, [sourceScope]);
+
+  function openSource(citation: Citation, index: number) {
+    if (!activeKnowledgeBaseId) return;
+    sourceTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setSourcePreview({ citation, index, scope: sourceScope });
+  }
+
+  function closeSource() {
+    setSourcePreview(null);
+    if (sourceTriggerRef.current?.isConnected) sourceTriggerRef.current.focus({ preventScroll: true });
+  }
 
   // The rail is scoped to the conversation you are in, and that scope is now a
   // server-side filter, so the URL has to carry it. Opening a session from
@@ -364,7 +382,7 @@ export function ChatPage() {
       flush
       topbarActions={topbarActions}
     >
-      <div className={railOpen ? 'chat-layout is-rail-open' : 'chat-layout'}>
+      <div className={`chat-layout${railOpen ? ' is-rail-open' : ''}${visibleSource ? ' has-source-preview' : ''}`}>
         {isNarrow && railOpen && (
           <button aria-hidden="true" className="chat-layout__scrim" onClick={() => setRailOpen(false)} tabIndex={-1} type="button" />
         )}
@@ -489,6 +507,7 @@ export function ChatPage() {
                     }
                     key={message.id}
                     knowledgeBaseId={activeKnowledgeBaseId || undefined}
+                    onOpenCitation={openSource}
                     message={message}
                     editDraft={editingDraft}
                     editing={editingMessageId === message.id}
@@ -564,7 +583,10 @@ export function ChatPage() {
                             citations={thread.streamingCitations}
                             content={thread.streamingAnswer}
                             focusedIndex={focusedCitation?.messageId === 'streaming' ? focusedCitation.index : null}
-                            onSelect={(index) => setFocusedCitation({ messageId: 'streaming', index })}
+                            onSelect={(index) => {
+                              setFocusedCitation({ messageId: 'streaming', index });
+                              openSource(thread.streamingCitations[index], index + 1);
+                            }}
                             streaming
                           />
                         ) : (
@@ -589,6 +611,7 @@ export function ChatPage() {
                                 index={index + 1}
                                 key={`${citation.documentId}-${citation.chunkId}-${index}`}
                                 knowledgeBaseId={activeKnowledgeBaseId || undefined}
+                                onOpen={() => openSource(citation, index + 1)}
                               />
                             ))}
                           </div>
@@ -610,7 +633,10 @@ export function ChatPage() {
                           citations={thread.stoppedStream.citations}
                           content={thread.stoppedStream.answer || '已停止生成。'}
                           focusedIndex={focusedCitation?.messageId === 'stopped' ? focusedCitation.index : null}
-                          onSelect={(index) => setFocusedCitation({ messageId: 'stopped', index })}
+                          onSelect={(index) => {
+                            setFocusedCitation({ messageId: 'stopped', index });
+                            openSource(thread.stoppedStream!.citations[index], index + 1);
+                          }}
                         />
                         {/* No `role="status"`: the permanent region already announces
                             the stop. Two polite regions racing over one event is how a
@@ -628,6 +654,7 @@ export function ChatPage() {
                                 index={index + 1}
                                 key={`${citation.documentId}-${citation.chunkId}-${index}`}
                                 knowledgeBaseId={activeKnowledgeBaseId || undefined}
+                                onOpen={() => openSource(citation, index + 1)}
                               />
                             ))}
                           </div>
@@ -722,6 +749,15 @@ export function ChatPage() {
             value={draft}
           />
         </section>
+        {visibleSource && (
+          <ChatSourcePreview
+            citation={visibleSource.citation}
+            index={visibleSource.index}
+            key={`${sourceScope}:${visibleSource.citation.documentId}`}
+            knowledgeBaseId={activeKnowledgeBaseId}
+            onClose={closeSource}
+          />
+        )}
       </div>
 
       {confirmArchive && currentSession && (

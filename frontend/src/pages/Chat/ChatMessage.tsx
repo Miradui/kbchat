@@ -23,6 +23,7 @@ type MessageBubbleProps = {
   /** Index of the citation to scroll to and highlight, if any. */
   focusedCitationIndex: number | null;
   onFocusCitation: (messageId: string, index: number | null) => void;
+  onOpenCitation?: (citation: Citation, index: number) => void;
   canRegenerate: boolean;
   canEdit?: boolean;
   regenerating: boolean;
@@ -49,6 +50,7 @@ export function MessageBubble({
   knowledgeBaseId,
   focusedCitationIndex,
   onFocusCitation,
+  onOpenCitation,
   canRegenerate,
   canEdit = true,
   regenerating,
@@ -119,7 +121,10 @@ export function MessageBubble({
             citations={message.citations}
             content={message.content}
             focusedIndex={focusedCitationIndex}
-            onSelect={(index) => onFocusCitation(message.id, index)}
+            onSelect={(index) => {
+              onFocusCitation(message.id, index);
+              onOpenCitation?.(message.citations[index], index + 1);
+            }}
           />
         ) : <p className="chat-msg__content">{message.content}</p>}
 
@@ -240,6 +245,7 @@ export function MessageBubble({
                 index={index + 1}
                 key={`${citation.documentId}-${citation.chunkId}-${index}`}
                 knowledgeBaseId={knowledgeBaseId}
+                onOpen={onOpenCitation ? () => onOpenCitation(citation, index + 1) : undefined}
               />
             ))}
           </div>
@@ -256,9 +262,10 @@ type CitationCardProps = {
   focused: boolean;
   index: number;
   knowledgeBaseId?: string;
+  onOpen?: () => void;
 };
 
-export function CitationCard({ citation, focused, index, knowledgeBaseId }: CitationCardProps) {
+export function CitationCard({ citation, focused, index, knowledgeBaseId, onOpen }: CitationCardProps) {
   const ref = useRef<HTMLElement | null>(null);
   const long = citation.content.length > PREVIEW_LENGTH;
   const preview = long ? `${citation.content.slice(0, PREVIEW_LENGTH).trimEnd()}…` : citation.content;
@@ -286,7 +293,12 @@ export function CitationCard({ citation, focused, index, knowledgeBaseId }: Cita
           aria-label and from the link's, so this is purely for sighted pointer users --
           and it is why the name is allowed to clip rather than wrap.
         */}
-        {href ? (
+        {onOpen ? (
+          <button aria-label={`打开来源：${citation.filename}，${pageLabel}`} className="chat-source__link" onClick={onOpen} type="button">
+            <FileText aria-hidden="true" />
+            <span className="ui-truncate" title={citation.filename}>{citation.filename}</span>
+          </button>
+        ) : href ? (
           <Link aria-label={`打开来源：${citation.filename}，${pageLabel}`} className="chat-source__link" to={href}>
             <FileText aria-hidden="true" />
             <span className="ui-truncate" title={citation.filename}>{citation.filename}</span>
