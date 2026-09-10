@@ -243,7 +243,7 @@ func (h *ChatHandler) SetMessageFeedback(c *gin.Context) {
 		RespondError(c, apperror.Validation(map[string]any{"body": "request body is invalid"}))
 		return
 	}
-	res, err := h.chats.SetMessageFeedback(c.Request.Context(), userID, messageID, req.Rating)
+	res, err := h.chats.SetMessageFeedback(c.Request.Context(), userID, messageID, req.Rating, req.ChatFeedbackDetails)
 	if err != nil {
 		RespondError(c, err)
 		return

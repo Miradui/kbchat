@@ -341,6 +341,7 @@ func (r *ChatRepository) UpdateMessageFeedback(
 	messageID uuid.UUID,
 	rating string,
 	updatedAt time.Time,
+	reason, comment string,
 ) error {
 	result := r.db.WithContext(ctx).
 		Model(&model.ChatMessage{}).
@@ -348,6 +349,8 @@ func (r *ChatRepository) UpdateMessageFeedback(
 		Updates(map[string]any{
 			"feedback_rating":     rating,
 			"feedback_updated_at": updatedAt,
+			"feedback_reason":     reason,
+			"feedback_comment":    comment,
 		})
 	if result.Error != nil {
 		return result.Error
@@ -377,6 +380,8 @@ type ChatQualityOverview struct {
 }
 
 type ChatQualityFeedbackItem struct {
+	Reason            string
+	Comment           string
 	MessageID         uuid.UUID
 	SessionID         uuid.UUID
 	SessionTitle      string
@@ -820,6 +825,8 @@ func (r *ChatRepository) ListNegativeFeedback(
 			chat_messages.content AS answer,
 			chat_messages.citations AS citations,
 			chat_messages.rerank_fallback AS rerank_fallback,
+			chat_messages.feedback_reason AS reason,
+			chat_messages.feedback_comment AS comment,
 			chat_messages.created_at AS created_at,
 			chat_messages.feedback_updated_at AS feedback_updated_at
 		`).

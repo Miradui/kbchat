@@ -22,11 +22,12 @@ import { InlineEdit } from '../../components/ui/InlineEdit';
 import { OverflowMenu } from '../../components/ui/OverflowMenu';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { AppShell } from '../../layouts/AppShell';
-import type { ChatFeedbackRating, Citation } from '../../types/api';
+import type { ChatFeedbackDetails, ChatFeedbackRating, ChatMessage, Citation } from '../../types/api';
 import { downloadBlob } from '../../utils/download';
 import { formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
 import { ChatComposer } from './ChatComposer';
+import { ChatFeedbackDialog } from './ChatFeedbackDialog';
 import { ChatMessageSearch, useChatMessageSearch } from './ChatMessageSearch';
 import { ChatMarkdown } from './ChatMarkdown';
 import { ChatAssistantLabel, CitationCard, MessageBubble } from './ChatMessage';
@@ -61,6 +62,7 @@ export function ChatPage() {
   const [sessionBusy, setSessionBusy] = useState(false);
   const [sessionExporting, setSessionExporting] = useState(false);
   const [feedbackSavingIds, setFeedbackSavingIds] = useState<Set<string>>(() => new Set());
+  const [feedbackTarget, setFeedbackTarget] = useState<ChatMessage | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingDraft, setEditingDraft] = useState('');
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -190,6 +192,7 @@ export function ChatPage() {
     setSessionExporting(false);
     feedbackOperationsRef.current.clear();
     setFeedbackSavingIds(new Set());
+    setFeedbackTarget(null);
     stickToBottomRef.current = true;
   }, [sessionId]);
 
@@ -284,20 +287,22 @@ export function ChatPage() {
     }
   }
 
-  async function handleMessageFeedback(messageId: string, rating: ChatFeedbackRating) {
-    if (feedbackOperationsRef.current.has(messageId)) return;
+  async function handleMessageFeedback(messageId: string, rating: ChatFeedbackRating, details?: ChatFeedbackDetails): Promise<boolean> {
+    if (feedbackOperationsRef.current.has(messageId)) return false;
     const operation = Symbol('chat-feedback');
     feedbackOperationsRef.current.set(messageId, operation);
     setFeedbackSavingIds((current) => new Set(current).add(messageId));
     try {
-      const feedback = await setChatMessageFeedback(messageId, rating);
-      if (feedbackOperationsRef.current.get(messageId) !== operation) return;
+      const feedback = await (details ? setChatMessageFeedback(messageId, rating, details) : setChatMessageFeedback(messageId, rating));
+      if (feedbackOperationsRef.current.get(messageId) !== operation) return false;
       thread.updateMessageFeedback(messageId, feedback);
       toast.success(rating === 'positive' ? '已记录“有帮助”' : '已记录“没有帮助”');
+      return true;
     } catch (caught) {
       if (feedbackOperationsRef.current.get(messageId) === operation) {
         toast.error(getErrorMessage(caught, '回答反馈保存失败'));
       }
+      return false;
     } finally {
       if (feedbackOperationsRef.current.get(messageId) === operation) {
         feedbackOperationsRef.current.delete(messageId);
@@ -539,7 +544,7 @@ export function ChatPage() {
                     editing={editingMessageId === message.id}
                     editSaving={thread.editingId === message.id}
                     feedbackSaving={feedbackSavingIds.has(message.id)}
-                    onFeedback={(messageId, rating) => void handleMessageFeedback(messageId, rating)}
+                    onFeedback={(messageId, rating) => { if (rating === 'negative') setFeedbackTarget(message); else void handleMessageFeedback(messageId, rating); }}
                     onEditDraftChange={setEditingDraft}
                     onStartEdit={(messageId, content) => {
                       if (archived || interactionLocked || thread.editingId || message.role !== 'user') return;
@@ -810,6 +815,9 @@ export function ChatPage() {
           title="归档会话"
         />
       )}
+
+      {feedbackTarget && <ChatFeedbackDialog key={feedbackTarget.id} initial={feedbackTarget.feedback}
+        onClose={() => setFeedbackTarget(null)} onSubmit={(details) => handleMessageFeedback(feedbackTarget.id, 'negative', details)} />}
 
       {confirmDelete && currentSession && (
         <ConfirmDialog

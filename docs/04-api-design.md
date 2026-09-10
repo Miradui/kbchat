@@ -1288,7 +1288,9 @@ limit=10
 
 未传 `vectorTopN`、`rerankTopK` 或 `enableRerank` 时，使用当前知识库持久化的 `retrievalConfig`；环境变量仅作为知识库配置缺失时的默认值。服务端限制 `vectorTopN<=100`、`rerankTopK<=20`，并保证 `rerankTopK<=vectorTopN`。
 
-最终结果必须应用知识库 `scoreThreshold`：Rerank 成功时使用 `rerankScore` 判断，Rerank 关闭或 fallback 时使用 `vectorScore` 判断。未达到阈值的 chunk 不得进入 `items`、Prompt 或 citations。
+可选 `scoreThreshold` 为 0–1 的数值，包含显式的 0；省略或 null 使用知识库配置。覆盖值只作用于当前请求，不修改知识库；越界返回 `VALIDATION_ERROR`。
+
+最终结果必须应用本次生效的 `scoreThreshold`：Rerank 成功时使用 `rerankScore` 判断，Rerank 关闭或 fallback 时使用 `vectorScore` 判断。未达到阈值的 chunk 不得进入 `items`、Prompt 或 citations。
 
 `debug` 默认为 `false`。当 `debug=true` 时，响应增加 `debug`，用于检索调试面板；普通响应不包含该字段，避免响应体过大。
 
@@ -1539,7 +1541,7 @@ Markdown 按消息创建时间升序包含会话标题、`知识库：<名称>`�
 消息项包含 `clientRequestId`；历史消息或 regenerate 产生的 assistant 消息可为 `null`。客户端用该字段确定性核对发送结果，不得按消息数量或文本相等推测。
 
 每条消息都固定返回 `feedback`。未评价消息和 user 消息为 `null`；已评价的
-assistant 消息为 `{ "messageId", "rating", "updatedAt" }`。消息列表、阻塞发送、
+assistant 消息为 `{ "messageId", "rating", "reason", "comment", "updatedAt" }`。消息列表、阻塞发送、
 流式 `done` 和 regenerate 返回的消息均使用同一结构。
 
 ### POST /chat/messages/:messageId/feedback
@@ -1560,9 +1562,22 @@ assistant 消息为 `{ "messageId", "rating", "updatedAt" }`。消息列表、�
 {
   "messageId": "assistant_message_uuid",
   "rating": "positive",
+  "reason": "",
+  "comment": "",
   "updatedAt": "2026-08-12T10:00:00Z"
 }
 ```
+
+差评可追加 `reason` 和 `comment`，例如：
+
+```json
+{ "rating": "negative", "reason": "missing_evidence", "comment": "缺少退货政策的引用依据。" }
+```
+
+`reason` 允许空值（兼容旧客户端）、`inaccurate`（不准确）、`missing_evidence`（缺少依据）、
+`irrelevant`（答非所问）、`incomplete`（不完整）、`other`（其他）；`comment` 去除首尾空白后最多 1000 字。
+未知原因或超长说明返回 `VALIDATION_ERROR`。好评清空原因与说明。负反馈列表也返回这两个字段；
+修改反馈沿用当前用户会话所有权与 `feedback.write` 检查。
 
 ### POST /chat/sessions/:id/messages
 
@@ -1966,6 +1981,97 @@ MVP 语义：
 分页在拼接后的序列上进行。
 
 未分类（`intent IS NULL`）的历史回答不会出现在任何类别中。
+
+## 回答质量回归评测
+
+以下路径均在 `/api/v1` 下。每个接口校验知识库的 `quality.read` 权限；创建运行与执行每道题还校验
+`chat.use`。资源 id 必须属于路径中的知识库，无权限访问的知识库和跨库资源不返回内容。
+
+### 测试问题集
+
+| 方法与路径 | 行为 |
+| --- | --- |
+| `GET /knowledge-bases/:id/evaluation-cases` | 返回 `{ "items": [...] }`，按创建时间倒序，最多 200 题 |
+| `POST /knowledge-bases/:id/evaluation-cases` | 创建问题，返回 201 与问题对象 |
+| `PUT /knowledge-bases/:id/evaluation-cases/:caseId` | 替换问题和规则，返回 200 与问题对象 |
+| `DELETE /knowledge-bases/:id/evaluation-cases/:caseId` | 删除问题，返回 204；历史运行快照保留 |
+
+创建和修改请求：
+
+```json
+{
+  "question": "未拆封产品签收后几天内可退货，需要提供什么？",
+  "expectedAnswer": "签收后 7 天内，提供订单号。",
+  "requiredKeywords": ["7", "订单号"],
+  "requireCitation": true
+}
+```
+
+返回对象追加 `id`、`knowledgeBaseId`、`createdAt`、`updatedAt`。问题去首尾空白后为 1–4000 字，
+参考答案最多 8000 字；关键词最多 20 个，每个去首尾空白后为 1–100 字，忽略大小写去重。
+省略关键词视为空数组，省略 `requireCitation` 为 false。参考答案只用于人工核对。
+每个知识库最多 200 题；超过上限返回 409 `EVALUATION_LIMIT`。编辑不能改变问题所属知识库。
+
+### 评测运行
+
+| 方法与路径 | 行为 |
+| --- | --- |
+| `POST /knowledge-bases/:id/evaluation-runs` | 异步创建，返回 202 与完整运行对象；重试返回同一运行 |
+| `GET /knowledge-bases/:id/evaluation-runs` | 返回 `{ "items": [...] }`，最近 50 次摘要，省略 cases/results |
+| `GET /knowledge-bases/:id/evaluation-runs/:runId` | 返回运行详情、问题快照和已完成题目的结果 |
+| `POST /knowledge-bases/:id/evaluation-runs/:runId/cancel` | 返回 200 与当前状态；重复取消或已结束运行保持原状态 |
+
+创建请求：
+
+```json
+{
+  "clientRequestId": "00000000-0000-4000-8000-000000000001",
+  "name": "基准配置",
+  "caseIds": ["00000000-0000-4000-8000-000000000002"],
+  "config": { "vectorTopN": 30, "rerankTopK": 5, "scoreThreshold": 0.3, "enableRerank": true }
+}
+```
+
+`clientRequestId` 必须是非零 UUID，同一知识库、用户、请求编号下，规范化后的名称、题目 id 集合、
+配置相同则返回原运行；不同则返回 409 `EVALUATION_REQUEST_CONFLICT`。空名称默认「回归评测」，最长 80 字。
+题目 id 不可重复，每次 1–20 题，必须全部属于当前知识库。配置要求 `vectorTopN` 为 1–100、
+`rerankTopK` 为 1–20 且不大于召回数量、`scoreThreshold` 为 0–1。
+同库同时最多 3 个 queued/running 运行，超过返回 409 `EVALUATION_LIMIT`。
+问题和配置在创建时保存快照，后续修改或删除测试问题不会改变已创建的运行。
+
+运行对象字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `id`, `knowledgeBaseId`, `clientRequestId`, `name` | 标识和运行名称 |
+| `status` | queued / running / completed / failed / cancelled |
+| `config` | 请求的检索配置快照，不修改知识库默认配置 |
+| `runtime` | `chatModel`、`embeddingModel`、`rerankModel`、`effectiveRerank`；执行前模型字段为空 |
+| `cases` | 详情包含完整问题快照，含 question、expectedAnswer、requiredKeywords、requireCitation |
+| `results` | 详情中的已完成题目结果；尚无结果时可省略 |
+| `total`, `completedCount` | 总题数、已有结果数；已有结果数包含调用失败 |
+| `errorMessage` | 运行级中断原因；正常运行为空 |
+| `createdAt`, `startedAt`, `finishedAt` | 创建、开始、结束时间；尚未开始/结束时为 null |
+
+每题结果包含 `caseId`、`answer`、`answerStatus`、`citations`、`rerankFallback`、`durationMs`、
+`rulePassed`、`missingKeywords`、`errorCode`、`errorMessage`。`answerStatus` 与聊天共用状态，
+引用只能来自本次检索进入 Prompt 的片段；失败时 `answerStatus`、`rulePassed` 为 null，答案为空，引用为空数组。
+
+- 配置了规则时，关键词按不区分大小写的字面子串检查，缺少的词写入 `missingKeywords`。
+  所有关键词满足、要求引用时存在引用且 `answerStatus=answered`，才返回 `rulePassed=true`。
+- 无关键词也不要求引用时，`rulePassed=null`，交由人工核对；参考答案不参与自动评分。
+- Provider 失败保留稳定的 `errorCode` 和用户消息，`rulePassed=null`，不得计作规则未通过。
+  一次运行的 `completed` 表示每题均尝试完成，可能仍有题目调用失败。
+- 后台按题顺序执行，每题总超时 90 秒；每 5 秒续租/检查取消。取消保留已完成结果，停止后续问题，
+  迟到结果不能覆盖取消状态。失联超过 2 分钟的 running 运行标记 failed，不自动重放外部调用。
+- 评测复用聊天生成流程，但不创建会话、消息或影响聊天质量统计。运行使用当时的知识库内容，
+  不冻结文档版本；历史结果和来源标识按运行保存。
+- 配置对比在客户端进行，只统计同一 caseId 且问题、参考答案、关键词规则、引用要求相同的共同样本。
+  规则通过、含引用回答、调用失败和耗时分别展示，不把规则通过率解释为事实正确率。
+
+评测写请求体上限 128 KiB。格式、字段或 UUID 不合法返回 `VALIDATION_ERROR`；不存在的测试问题/运行返回
+`RESOURCE_NOT_FOUND`，不可访问的知识库返回 `KNOWLEDGE_BASE_NOT_FOUND`，可读但角色不足返回 403。
+既有环境先执行 `021_quality_evaluations.sql`，再重启服务启用评测 worker。
 
 ## 系统诊断
 

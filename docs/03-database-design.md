@@ -265,6 +265,8 @@ CREATE TABLE chat_messages (
     rerank_fallback JSONB,
     feedback_rating VARCHAR(16),
     feedback_updated_at TIMESTAMP NULL,
+    feedback_reason VARCHAR(32) NOT NULL DEFAULT '',
+    feedback_comment TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMP DEFAULT now()
 );
 ```
@@ -276,6 +278,9 @@ CREATE TABLE chat_messages (
 `positive`、`negative`，并由 `chat_messages_feedback_rating_check` 约束；service
 另行限制只有当前用户可见会话中的 assistant 消息可以提交反馈。
 
+迁移 `021_quality_evaluations.sql` 增加 `feedback_reason`、`feedback_comment`。原因和说明为空字符串表示
+未提供详情，好评清空二者；service 校验原因枚举与说明最长 1000 字，质量反馈列表返回这些字段。
+
 允许 role：
 
 ```text
@@ -283,6 +288,59 @@ user
 assistant
 system
 ```
+
+## evaluation_cases 与 evaluation_runs
+
+迁移 `021_quality_evaluations.sql` 增加固定测试问题与持久化运行记录：
+
+```sql
+CREATE TABLE evaluation_cases (
+    id UUID PRIMARY KEY,
+    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+    created_by UUID NOT NULL REFERENCES users(id),
+    question TEXT NOT NULL,
+    expected_answer TEXT NOT NULL DEFAULT '',
+    required_keywords JSONB NOT NULL DEFAULT '[]',
+    require_citation BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE evaluation_runs (
+    id UUID PRIMARY KEY,
+    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+    created_by UUID NOT NULL REFERENCES users(id),
+    client_request_id UUID NOT NULL,
+    request_hash VARCHAR(64) NOT NULL,
+    name VARCHAR(80) NOT NULL,
+    status VARCHAR(20) NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
+    config JSONB NOT NULL,
+    cases JSONB NOT NULL,
+    results JSONB NOT NULL DEFAULT '[]',
+    runtime JSONB NOT NULL DEFAULT '{}',
+    error_message TEXT NOT NULL DEFAULT '',
+    lease_token UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX idx_evaluation_run_request
+    ON evaluation_runs(knowledge_base_id, created_by, client_request_id);
+CREATE INDEX idx_evaluation_cases_knowledge_base_id ON evaluation_cases(knowledge_base_id);
+CREATE INDEX idx_evaluation_runs_knowledge_base_id ON evaluation_runs(knowledge_base_id);
+CREATE INDEX idx_evaluation_runs_status ON evaluation_runs(status);
+```
+
+`cases` 保存完整问题快照而非外键引用，删除或编辑测试问题不改变历史评测。
+`request_hash` 保存规范化请求的 SHA-256，用于区别同键重试与复用编号提交不同内容。
+每库最多 200 个测试问题，同时最多 3 个 queued/running 运行；repository 先锁知识库行再检查计数并写入，
+避免并发提交越过上限。`results` 顺序保存每题回答、引用、规则判定、错误与耗时。
+
+worker 通过 `FOR UPDATE SKIP LOCKED` 领取运行并发放 `lease_token`。每 5 秒刷新 `updated_at`；
+结果写入必须同时匹配运行 id、lease token 和 running 状态，取消清除租约，禁止迟到写入。
+超过 2 分钟没有续租的运行标记 failed，不自动重放。知识库软删除后不可读取/领取并停止续租；
+永久删除依赖外键级联删除两张表中的数据。评测不写 `chat_sessions` 或 `chat_messages`。
 
 ## 索引
 

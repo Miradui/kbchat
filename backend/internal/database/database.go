@@ -87,6 +87,9 @@ func validateSchema(ctx context.Context, db *gorm.DB) error {
 			strings.Join(missingIndexes, ", "),
 		)
 	}
+	if !migrator.HasColumn(&model.ChatMessage{}, "feedback_reason") || !migrator.HasColumn(&model.ChatMessage{}, "feedback_comment") {
+		return fmt.Errorf("database schema incompatible: chat_messages missing feedback_reason/feedback_comment; apply migration 021 (migrations/021_quality_evaluations.sql)")
+	}
 	return nil
 }
 
@@ -104,6 +107,8 @@ func autoMigrateModels() []any {
 		&model.DocumentChunk{},
 		&model.ChatSession{},
 		&model.ChatMessage{},
+		&model.EvaluationCase{},
+		&model.EvaluationRun{},
 		&model.Activity{},
 	}
 }

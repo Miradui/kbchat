@@ -38,6 +38,8 @@ type Dependencies struct {
 	// Metrics is shared with the retrieval and chat services, which is the whole
 	// point: the diagnostics page reads what request handling recorded.
 	Metrics *observability.Recorder
+	// Only the server supplies this; router tests never spawn background workers.
+	WorkerContext context.Context
 }
 
 type redisPinger interface {
@@ -97,6 +99,7 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	documentService := service.NewDocumentService(cfg, documentRepo, chunkRepo, knowledgeBaseRepo, storageCleanupRepo, fileStorage)
 	retrievalService := retrieval.NewService(cfg, chunkRepo, knowledgeBaseRepo, embedder, reranker)
 	chatService := service.NewChatService(cfg, chatRepo, knowledgeBaseRepo, retrievalService, chatProvider, titleProvider)
+	evaluationService := service.NewEvaluationService(repository.NewEvaluationRepository(db), knowledgeBaseRepo, chatService)
 	globalSearchService := service.NewGlobalSearchService(globalSearchRepo)
 	homeService := service.NewHomeService(knowledgeBaseService, documentService, chatService)
 	activityService := service.NewActivityService(activityRepo)
@@ -116,6 +119,9 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	metrics = metrics.WithLogger(logger)
 	retrievalService.SetRecorder(metrics)
 	chatService.SetRecorder(metrics)
+	if deps.WorkerContext != nil {
+		go evaluationService.RunWorker(deps.WorkerContext, logger)
+	}
 
 	systemService := service.NewSystemService(cfg)
 	diagnosticsDeps := service.SystemDiagnosticsDeps{
@@ -143,6 +149,7 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	documentHandler := handler.NewDocumentHandler(documentService, cfg.MaxUploadSizeMB)
 	searchHandler := handler.NewSearchHandler(retrievalService)
 	chatHandler := handler.NewChatHandler(chatService)
+	evaluationHandler := handler.NewEvaluationHandler(evaluationService)
 	globalSearchHandler := handler.NewGlobalSearchHandler(globalSearchService)
 	homeHandler := handler.NewHomeHandler(homeService)
 	activityHandler := handler.NewActivityHandler(activityService)
@@ -253,6 +260,14 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	protected.GET("/chat/quality/overview", chatHandler.QualityOverview)
 	protected.GET("/chat/quality/negative-feedback", chatHandler.ListNegativeFeedback)
 	protected.GET("/chat/quality/knowledge-gaps", chatHandler.ListKnowledgeGaps)
+	protected.GET("/knowledge-bases/:id/evaluation-cases", evaluationHandler.ListCases)
+	protected.POST("/knowledge-bases/:id/evaluation-cases", evaluationHandler.SaveCase)
+	protected.PUT("/knowledge-bases/:id/evaluation-cases/:caseId", evaluationHandler.SaveCase)
+	protected.DELETE("/knowledge-bases/:id/evaluation-cases/:caseId", evaluationHandler.DeleteCase)
+	protected.GET("/knowledge-bases/:id/evaluation-runs", evaluationHandler.ListRuns)
+	protected.POST("/knowledge-bases/:id/evaluation-runs", evaluationHandler.CreateRun)
+	protected.GET("/knowledge-bases/:id/evaluation-runs/:runId", evaluationHandler.GetRun)
+	protected.POST("/knowledge-bases/:id/evaluation-runs/:runId/cancel", evaluationHandler.CancelRun)
 	protected.GET("/search", globalSearchHandler.Search)
 	protected.GET("/search/suggest", globalSearchHandler.Suggest)
 	protected.GET("/search/export", globalSearchHandler.Export)

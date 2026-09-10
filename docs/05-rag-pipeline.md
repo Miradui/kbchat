@@ -347,3 +347,31 @@ debug payload 仍然只来自当前用户拥有的知识库。知识库权限校
 ```
 
 旧 assistant 消息不会被覆盖或删除。新响应的 citations 只能来自本次重新检索进入 Prompt 的 chunks，不能复用旧 assistant 消息保存的 citations。
+
+## 回答质量回归评测
+
+评测按知识库保存固定问题与可选参考答案，后台逐题调用聊天的 `generateAnswerWithHooks` 共用路径：
+
+```text
+独立测试问题 + 本次检索配置快照
+-> 意图分类
+-> Query Embedding / pgvector TopN / Rerank TopK
+-> 应用本次 scoreThreshold
+-> Prompt / Chat Provider
+-> 回答与 citations
+-> 显式规则检查并保存结果
+```
+
+每题独立执行，不携带聊天历史；寒暄/普通问题继续遵循既有意图路由，不强制检索。
+`vectorTopN`、`rerankTopK`、`scoreThreshold`、`enableRerank` 只覆盖本次运行，不修改知识库默认值；
+显式阈值 0 必须保留。全局未启用 Rerank 时，运行记录的 `effectiveRerank=false`；
+Rerank 错误继续遵循 strict/fallback 配置，降级时保留原有 `rerankFallback`。
+
+参考答案不放入生成 Prompt，也不作为知识依据。关键词规则按不区分大小写的字面文本匹配，
+引用规则检查本轮合法 citations；只有回答状态为 answered 且所有已配置规则满足，才判规则通过。
+未配置自动规则时结果为待人工核对，模型或检索调用失败单独记录，不混入规则失败率。
+这些指标帮助比较检索配置，不等同于自动事实正确性评分。
+
+每题总超时 90 秒。后台队列保留运行与问题快照、实际模型名称、结果和耗时，
+切页、刷新不会中止运行；取消停止后续题目，失联运行标记中断而不自动重复模型调用。
+评测不产生聊天会话、消息或聊天质量统计。题目快照保持不变，知识内容使用执行当时可访问的文档。

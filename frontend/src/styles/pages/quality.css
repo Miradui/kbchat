@@ -1,4 +1,31 @@
 .quality-page { display: grid; gap: var(--s-5); margin: 0 auto; max-width: var(--home-max); }
+.evaluation-panel, .evaluation-cases, .evaluation-comparison { display: grid; gap: var(--s-5); min-width: 0; }
+.evaluation-case-dialog { max-height: calc(100dvh - var(--s-10)); overflow-y: auto; }
+.evaluation-checkbox, .evaluation-case-actions, .evaluation-running { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-3); }
+.evaluation-running { justify-content: space-between; }
+.evaluation-case { border-bottom: 1px solid var(--line); display: grid; gap: var(--s-2); grid-template-columns: minmax(0, 1fr) auto; padding-bottom: var(--s-3); }
+.evaluation-case > label { align-items: flex-start; display: flex; gap: var(--s-3); min-width: 0; }
+.evaluation-case strong { font-size: var(--t-body); overflow-wrap: anywhere; }
+.evaluation-case > p { color: var(--text-muted); font-size: var(--t-small); grid-column: 1; overflow-wrap: anywhere; padding-left: var(--s-8); }
+.evaluation-case > div { grid-column: 2; grid-row: 1 / 3; }
+.evaluation-config { display: grid; gap: var(--s-4); grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.evaluation-run-selectors, .evaluation-comparison__grid.has-baseline { display: grid; gap: var(--s-4); grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.evaluation-comparison__grid { display: grid; min-width: 0; }
+.evaluation-summary, .evaluation-answer { background: var(--surface-sunken); border: 1px solid var(--line); border-radius: var(--r-md); display: grid; align-content: start; gap: var(--s-3); min-width: 0; padding: var(--s-4); }
+.evaluation-summary h3, .evaluation-result h3 { font-size: var(--t-body); overflow-wrap: anywhere; }
+.evaluation-summary p, .evaluation-answer small { color: var(--text-muted); font-size: var(--t-small); line-height: var(--lh-normal); }
+.evaluation-summary dl { display: grid; gap: var(--s-3); grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.evaluation-summary dt { color: var(--text-muted); font-size: var(--t-small); }
+.evaluation-summary dd { color: var(--text); font-size: var(--t-lead); margin-top: var(--s-1); }
+.evaluation-result { border-top: 1px solid var(--line); display: grid; gap: var(--s-3); padding-top: var(--s-5); }
+.evaluation-result__reference { font-size: var(--t-small); line-height: var(--lh-normal); overflow-wrap: anywhere; white-space: pre-wrap; }
+.evaluation-answer__head { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-3); justify-content: space-between; }
+.evaluation-answer summary { color: var(--accent); cursor: pointer; font-size: var(--t-small); margin-bottom: var(--s-3); }
+.evaluation-answer__source { display: block; font-size: var(--t-small); margin-top: var(--s-2); overflow-wrap: anywhere; }
+@media (max-width: 980px) {
+  .evaluation-config { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .evaluation-run-selectors, .evaluation-comparison__grid.has-baseline { grid-template-columns: 1fr; }
+}
 .quality-page__header { margin: 0 0 var(--s-2); width: 100%; }
 .quality-filters { align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); display: flex; flex-wrap: wrap; gap: var(--s-4); padding: var(--s-5); }
 .quality-filters .ui-field { margin: 0; min-width: 150px; }

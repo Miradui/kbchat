@@ -829,8 +829,11 @@ describe('ChatPage', () => {
 
     await user.click(within(oldAnswer!).getByRole('button', { name: '标记回答有帮助' }));
     await user.click(within(newAnswer!).getByRole('button', { name: '标记回答没有帮助' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: '差评原因' }), 'missing_evidence');
+    await user.click(screen.getByRole('button', { name: '保存反馈' }));
 
     expect(setChatMessageFeedback).toHaveBeenCalledTimes(2);
+    expect(setChatMessageFeedback).toHaveBeenCalledWith(historicalAnswers[1].id, 'negative', { reason: 'missing_evidence', comment: '' });
     first.resolve({ messageId: historicalAnswers[0].id, rating: 'positive', updatedAt: '2026-08-17T00:00:00Z' });
     second.resolve({ messageId: historicalAnswers[1].id, rating: 'negative', updatedAt: '2026-08-17T00:00:01Z' });
   });

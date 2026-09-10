@@ -178,6 +178,19 @@
 2. 解析器和 Provider 的原始错误文本只进服务端日志和任务记录，不进 `errorCode` 也不进
    `errorMessage`。分类给用户，原文给日志。
 
+## 回归评测错误
+
+| Code | HTTP 状态 | 含义 |
+| --- | --- | --- |
+| `EVALUATION_LIMIT` | 409 | 同库已达 200 题或已有 3 个 queued/running 运行 |
+| `EVALUATION_REQUEST_CONFLICT` | 409 | 同一用户、知识库、请求编号被用于不同规范化请求 |
+| `EVALUATION_FAILED` | 每题结果字段 | 无可用稳定业务码的评测调用错误，使用通用用户消息 |
+
+题目、检索参数和反馈详情不合法仍用 `VALIDATION_ERROR`。评测中已知的 Provider 业务错误沿用
+`EMBEDDING_FAILED`、`RERANK_FAILED` 等稳定错误码，只写入该题 `errorCode/errorMessage`；
+该题的 `rulePassed=null`，与规则未通过区分。运行级中断以 status=failed 与 errorMessage 表达，
+外部调用不会因进程失联自动重放。
+
 ## AI 开发约束
 
 1. 不要返回 Go panic、SQL 错误或模型原始错误给前端。
@@ -189,4 +202,3 @@
    不要为了「信息更清楚」把无立场的情况改成 403。
 7. 403 的 `details` 必须带 `role`、`capability`、`requiredRole`，由
    `authz.ForbiddenCapability` 统一构造，不要在各处手写。
-

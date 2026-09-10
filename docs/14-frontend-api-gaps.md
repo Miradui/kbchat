@@ -7,7 +7,36 @@
 - **P1** — 明显影响体验或正确性，前端已做妥协
 - **P2** — 后续增强，当前不影响主流程
 
-当前记录的 G1–G21 均已闭环。G14 由前端 XHR 传输进度完成，不需要后端协议变更；G16、G19 已补齐后端端点及前端接入。G21 先记录缺口，再补齐服务端聚合筛选和前端接入。
+当前记录的 G1–G23 均已闭环。G14 由前端 XHR 传输进度完成，不需要后端协议变更；G16、G19 已补齐后端端点及前端接入。G21–G23 均先记录缺口，再实现后端与前端接入。
+
+## 2026-09-10 回答质量回归评测缺口（先记录，现已实现）
+
+### G22 差评缺少原因与说明（P1，已实现）
+
+现有反馈仅记录 positive/negative，无法区分不准确、缺少依据、答非所问和不完整。
+扩展 `POST /chat/messages/:messageId/feedback` 的可选 `reason`、`comment`，在消息反馈与负反馈列表返回；
+旧客户端仍可只提交 rating，好评清空差评原因。原因限定枚举，说明最长 1000 字，保持原会话写权限。
+
+### G23 测试问题、批量运行与配置对比缺少持久化（P1，已实现）
+
+目前检索测试只有单次结果，没有固定问题集和历史运行，无法比较修改前后效果。新增知识库作用域接口：
+
+- `GET/POST /knowledge-bases/:id/evaluation-cases`；`PUT/DELETE /knowledge-bases/:id/evaluation-cases/:caseId`。
+  保存问题、参考答案、必须包含的关键词和是否要求引用，可从差评或手工录入。
+- `GET/POST /knowledge-bases/:id/evaluation-runs`；`GET /knowledge-bases/:id/evaluation-runs/:runId`；
+  `POST /knowledge-bases/:id/evaluation-runs/:runId/cancel`。创建运行携带 `clientRequestId`，同键同内容返回同一运行，
+  不同内容返回冲突。单次最多 20 题，后台顺序执行，持久化题目快照、检索配置、实际模型、回答、引用与耗时。
+- 后台使用有租约的数据库队列；取消停止后续题目，失联运行记录中断，不自动重复调用模型。页面重载可继续查看状态。
+- 复用现有意图判断、检索、精排、Prompt 和回答 Provider；评测不写入真实聊天及其质量统计。
+  检索请求补充可选 `scoreThreshold` 覆盖值，评测参数仅作用于本次运行，不修改知识库默认配置。
+- 各端点复用知识库 `quality.read` 权限，运行同时要求 `chat.use`；每个资源核对其知识库归属，删除知识库级联清理评测数据。
+- 自动指标只包括显式关键词/引用规则、来源覆盖、调用失败和耗时；参考答案供人工对照，不声称自动判断事实正确。
+  配置对比只统计两次运行中题目和规则相同的共同样本，模型/精排有效配置随运行记录展示。
+
+落地：迁移 `021_quality_evaluations.sql`、`EvaluationHandler -> EvaluationService -> EvaluationRepository`，
+前端 `ChatFeedbackDialog` 与质量页 `EvaluationPanel`。每库最多 200 题、同时最多 3 个待执行/执行中的运行，
+列表提供最近 50 次运行；已保存运行保留独立问题快照。创建结果未知时，前端按当前账户与知识库保留原请求，
+刷新后继续核对同一请求编号，避免重复调用模型。
 
 ## 2026-09-10 会话查找与定位核对
 

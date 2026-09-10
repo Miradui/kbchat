@@ -88,9 +88,16 @@ type ChatMessageResponse struct {
 
 type SetChatMessageFeedbackRequest struct {
 	Rating string `json:"rating" binding:"required"`
+	ChatFeedbackDetails
+}
+
+type ChatFeedbackDetails struct {
+	Reason  string `json:"reason"`
+	Comment string `json:"comment"`
 }
 
 type ChatMessageFeedbackResponse struct {
+	ChatFeedbackDetails
 	MessageID string    `json:"messageId"`
 	Rating    string    `json:"rating"`
 	UpdatedAt time.Time `json:"updatedAt"`
@@ -133,6 +140,7 @@ type ChatQualityFeedbackQuery struct {
 }
 
 type ChatQualityFeedbackItemResponse struct {
+	ChatFeedbackDetails
 	MessageID         string                  `json:"messageId"`
 	SessionID         string                  `json:"sessionId"`
 	SessionTitle      string                  `json:"sessionTitle"`

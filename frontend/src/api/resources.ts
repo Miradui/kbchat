@@ -4,6 +4,7 @@ import type {
   BatchResultResponse,
   ChangePasswordInput,
   ChatFeedbackRating,
+  ChatFeedbackDetails,
   ChatMessageFeedback,
   ChatKnowledgeGapListResponse,
   ChatKnowledgeGapParams,
@@ -685,10 +686,11 @@ export function listChatMessages(sessionId: string): Promise<ChatMessageListResp
 export function setChatMessageFeedback(
   messageId: string,
   rating: ChatFeedbackRating,
+  details?: ChatFeedbackDetails,
 ): Promise<ChatMessageFeedback> {
   return apiRequest<ChatMessageFeedback>(`/chat/messages/${messageId}/feedback`, {
     method: 'POST',
-    body: { rating },
+    body: { rating, ...details },
   });
 }
 
@@ -864,3 +866,5 @@ function withQuery(path: string, params: Record<string, unknown>): string {
 export function getSystemDiagnostics(): Promise<SystemDiagnostics> {
   return apiRequest<SystemDiagnostics>('/system/diagnostics');
 }
+
+export { listEvaluationCases, saveEvaluationCase, deleteEvaluationCase, listEvaluationRuns, createEvaluationRun, getEvaluationRun, cancelEvaluationRun } from './evaluations';

@@ -642,7 +642,10 @@ export type ChatMessage = {
 
 export type ChatFeedbackRating = 'positive' | 'negative';
 
-export type ChatMessageFeedback = {
+export type ChatFeedbackReason = 'inaccurate' | 'missing_evidence' | 'irrelevant' | 'incomplete' | 'other';
+export type ChatFeedbackDetails = { reason?: ChatFeedbackReason | ''; comment?: string };
+
+export type ChatMessageFeedback = ChatFeedbackDetails & {
 	messageId: string;
 	rating: ChatFeedbackRating;
 	updatedAt: string;
@@ -688,7 +691,7 @@ export type ChatQualityFeedbackParams = ChatQualityOverviewParams & {
 	pageSize?: number;
 };
 
-export type ChatQualityFeedbackItem = {
+export type ChatQualityFeedbackItem = ChatFeedbackDetails & {
 	messageId: string;
 	sessionId: string;
 	sessionTitle: string;

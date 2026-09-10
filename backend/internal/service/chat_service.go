@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
@@ -353,10 +354,23 @@ func (s *ChatService) SetMessageFeedback(
 	ctx context.Context,
 	userID, messageID uuid.UUID,
 	rating string,
+	details ...dto.ChatFeedbackDetails,
 ) (*dto.ChatMessageFeedbackResponse, error) {
 	rating = strings.TrimSpace(rating)
 	if rating != "positive" && rating != "negative" {
 		return nil, apperror.Validation(map[string]any{"rating": "rating must be positive or negative"})
+	}
+	var feedbackDetails dto.ChatFeedbackDetails
+	if len(details) > 0 && rating == "negative" {
+		feedbackDetails = dto.ChatFeedbackDetails{Reason: strings.TrimSpace(details[0].Reason), Comment: strings.TrimSpace(details[0].Comment)}
+		switch feedbackDetails.Reason {
+		case "", "inaccurate", "missing_evidence", "irrelevant", "incomplete", "other":
+		default:
+			return nil, apperror.Validation(map[string]any{"reason": "unknown feedback reason"})
+		}
+		if utf8.RuneCountInString(feedbackDetails.Comment) > 1000 {
+			return nil, apperror.Validation(map[string]any{"comment": "comment must be at most 1000 characters"})
+		}
 	}
 	message, err := s.chats.FindMessageByIDAndOwner(ctx, messageID, userID, access.MemberRolesWith(access.CapFeedbackWrite))
 	if err != nil {
@@ -369,16 +383,17 @@ func (s *ChatService) SetMessageFeedback(
 		return nil, apperror.Validation(map[string]any{"messageId": "only assistant messages accept feedback"})
 	}
 	updatedAt := time.Now().UTC()
-	if err := s.chats.UpdateMessageFeedback(ctx, message.ID, rating, updatedAt); err != nil {
+	if err := s.chats.UpdateMessageFeedback(ctx, message.ID, rating, updatedAt, feedbackDetails.Reason, feedbackDetails.Comment); err != nil {
 		if errors.Is(err, repository.ErrChatMessageNotFound) {
 			return nil, apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
 		}
 		return nil, apperror.Internal(err)
 	}
 	return &dto.ChatMessageFeedbackResponse{
-		MessageID: message.ID.String(),
-		Rating:    rating,
-		UpdatedAt: updatedAt,
+		ChatFeedbackDetails: feedbackDetails,
+		MessageID:           message.ID.String(),
+		Rating:              rating,
+		UpdatedAt:           updatedAt,
 	}, nil
 }
 
@@ -721,17 +736,18 @@ func (s *ChatService) ListNegativeFeedback(
 			fallback = &stored
 		}
 		response.Items = append(response.Items, dto.ChatQualityFeedbackItemResponse{
-			MessageID:         items[i].MessageID.String(),
-			SessionID:         items[i].SessionID.String(),
-			SessionTitle:      items[i].SessionTitle,
-			KnowledgeBaseID:   items[i].KnowledgeBaseID.String(),
-			KnowledgeBaseName: items[i].KnowledgeBaseName,
-			Question:          items[i].Question,
-			Answer:            items[i].Answer,
-			Citations:         citations,
-			RerankFallback:    fallback,
-			CreatedAt:         items[i].CreatedAt,
-			FeedbackUpdatedAt: items[i].FeedbackUpdatedAt,
+			ChatFeedbackDetails: dto.ChatFeedbackDetails{Reason: items[i].Reason, Comment: items[i].Comment},
+			MessageID:           items[i].MessageID.String(),
+			SessionID:           items[i].SessionID.String(),
+			SessionTitle:        items[i].SessionTitle,
+			KnowledgeBaseID:     items[i].KnowledgeBaseID.String(),
+			KnowledgeBaseName:   items[i].KnowledgeBaseName,
+			Question:            items[i].Question,
+			Answer:              items[i].Answer,
+			Citations:           citations,
+			RerankFallback:      fallback,
+			CreatedAt:           items[i].CreatedAt,
+			FeedbackUpdatedAt:   items[i].FeedbackUpdatedAt,
 		})
 	}
 	return response, nil
@@ -1306,6 +1322,8 @@ type generatedChatAnswer struct {
 // citation rule: citations must come only from the chunks that went into this
 // turn's prompt, and a second code path is the obvious way for that to drift.
 type answerHooks struct {
+	// Evaluations supply a snapshot without mutating the knowledge base defaults.
+	retrievalConfig *dto.RetrievalConfig
 	// onCitations fires once retrieval has settled, before any answer text
 	// exists, because the citations are an input to the prompt rather than a
 	// product of the completion.
@@ -1433,9 +1451,12 @@ func (s *ChatService) generateAnswerWithHooks(
 	// per-request summary line can attribute the split between retrieval and
 	// generation without reading the aggregate.
 	retrievalStart := time.Now()
-	searchRes, err := s.retrieval.Search(ctx, userID, session.KnowledgeBaseID, dto.SearchRequest{
-		Query: retrievalQuery,
-	})
+	searchRequest := dto.SearchRequest{Query: retrievalQuery}
+	if override := hooks.retrievalConfig; override != nil {
+		searchRequest.VectorTopN, searchRequest.RerankTopK = override.VectorTopN, override.RerankTopK
+		searchRequest.EnableRerank, searchRequest.ScoreThreshold = &override.EnableRerank, &override.ScoreThreshold
+	}
+	searchRes, err := s.retrieval.Search(ctx, userID, session.KnowledgeBaseID, searchRequest)
 	timing.Retrieval = time.Since(retrievalStart)
 	if err != nil {
 		return generatedChatAnswer{}, err
@@ -1616,9 +1637,10 @@ func toChatMessageResponse(message *model.ChatMessage) dto.ChatMessageResponse {
 	var feedback *dto.ChatMessageFeedbackResponse
 	if message.FeedbackRating != nil && message.FeedbackUpdatedAt != nil {
 		feedback = &dto.ChatMessageFeedbackResponse{
-			MessageID: message.ID.String(),
-			Rating:    *message.FeedbackRating,
-			UpdatedAt: *message.FeedbackUpdatedAt,
+			ChatFeedbackDetails: dto.ChatFeedbackDetails{Reason: message.FeedbackReason, Comment: message.FeedbackComment},
+			MessageID:           message.ID.String(),
+			Rating:              *message.FeedbackRating,
+			UpdatedAt:           *message.FeedbackUpdatedAt,
 		}
 	}
 	return dto.ChatMessageResponse{

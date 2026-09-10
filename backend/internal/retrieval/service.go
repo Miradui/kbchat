@@ -88,6 +88,9 @@ func NewService(
 }
 
 func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.SearchRequest) (*dto.SearchResponse, error) {
+	if req.ScoreThreshold != nil && (*req.ScoreThreshold < 0 || *req.ScoreThreshold > 1) {
+		return nil, apperror.Validation(map[string]any{"scoreThreshold": "must be between 0 and 1"})
+	}
 	// Search is kb.search, not kb.read: a viewer may retrieve, and this is the same
 	// check the chat path makes before answering, so a member cannot reach through
 	// retrieval what they could not reach through chat.
@@ -215,11 +218,15 @@ func (s *Service) resolveSearchOptions(kb *model.KnowledgeBase, req dto.SearchRe
 	if !s.cfg.RerankEnabled {
 		enableRerank = false
 	}
+	threshold := kbConfig.ScoreThreshold
+	if req.ScoreThreshold != nil {
+		threshold = *req.ScoreThreshold
+	}
 
 	return searchOptions{
 		vectorTopN:     vectorTopN,
 		rerankTopK:     rerankTopK,
-		scoreThreshold: normalizedScoreThreshold(kbConfig.ScoreThreshold),
+		scoreThreshold: normalizedScoreThreshold(threshold),
 		enableRerank:   enableRerank,
 	}
 }

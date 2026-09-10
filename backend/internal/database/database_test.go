@@ -59,7 +59,9 @@ func TestValidateSchemaAcceptsChatFeedbackColumns(t *testing.T) {
 	if err := db.Exec(`CREATE TABLE chat_messages (
 		id TEXT PRIMARY KEY,
 		feedback_rating TEXT,
-		feedback_updated_at DATETIME
+		feedback_updated_at DATETIME,
+		feedback_reason TEXT,
+		feedback_comment TEXT
 	)`).Error; err != nil {
 		t.Fatalf("create chat_messages: %v", err)
 	}

@@ -226,6 +226,8 @@ type ChatMessage struct {
 	RerankFallback    datatypes.JSON `gorm:"type:jsonb" json:"rerankFallback"`
 	FeedbackRating    *string        `gorm:"size:16" json:"feedbackRating"`
 	FeedbackUpdatedAt *time.Time     `json:"feedbackUpdatedAt"`
+	FeedbackReason    string         `gorm:"size:32;not null;default:''" json:"feedbackReason"`
+	FeedbackComment   string         `gorm:"not null;default:''" json:"feedbackComment"`
 	// Intent, RetrievalQuery and RetrievalQueryNorm stay nullable so a
 	// pre-migration answer with no recorded intent remains distinguishable from
 	// one classified as empty. Quality metrics must exclude NULL rather than

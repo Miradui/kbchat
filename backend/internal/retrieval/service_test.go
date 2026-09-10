@@ -465,6 +465,31 @@ func TestSearchZeroThresholdFiltersNegativeScores(t *testing.T) {
 	}
 }
 
+func TestSearchRequestThresholdOverridesWithoutChangingKnowledgeBaseDefault(t *testing.T) {
+	kb := knowledgeBaseWithRetrievalConfig(t, dto.RetrievalConfig{
+		VectorTopN: 2, RerankTopK: 2, ScoreThreshold: 0.8, EnableRerank: false,
+	})
+	svc, _, _ := newTestServiceWithKB(config.Config{}, kb, []repository.SearchResult{
+		searchResult(uuid.New(), 0.9), searchResult(uuid.New(), 0),
+	}, nil, nil)
+	zero := 0.0
+	result, err := svc.Search(context.Background(), kb.OwnerID, kb.ID, dto.SearchRequest{Query: "policy", ScoreThreshold: &zero})
+	if err != nil || len(result.Items) != 2 {
+		t.Fatalf("explicit zero threshold lost: result=%+v, error=%v", result, err)
+	}
+	result, err = svc.Search(context.Background(), kb.OwnerID, kb.ID, dto.SearchRequest{Query: "policy"})
+	if err != nil || len(result.Items) != 1 {
+		t.Fatalf("request changed the saved threshold: result=%+v, error=%v", result, err)
+	}
+	for _, invalid := range []float64{-0.1, 1.1} {
+		_, err = svc.Search(context.Background(), kb.OwnerID, kb.ID, dto.SearchRequest{Query: "policy", ScoreThreshold: &invalid})
+		var app *apperror.Error
+		if !errors.As(err, &app) || app.Code != "VALIDATION_ERROR" {
+			t.Fatalf("invalid threshold %v was accepted: %v", invalid, err)
+		}
+	}
+}
+
 func TestSearchMalformedKnowledgeBaseConfigFallsBackAtomically(t *testing.T) {
 	kb := &model.KnowledgeBase{
 		ID:              uuid.New(),

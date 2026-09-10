@@ -1,6 +1,6 @@
 import { ExternalLink, RefreshCw, Repeat, SearchX, ServerCrash, ShieldAlert, ThumbsDown } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 
 import {
   getChatQualityOverview,
@@ -33,6 +33,9 @@ import { MetricStrip } from '../../components/ui/MetricStrip';
 import { Pagination } from '../../components/ui/Pagination';
 import { SegmentedControl } from '../../components/ui/SegmentedControl';
 import { AppShell } from '../../layouts/AppShell';
+import { EvaluationCaseDialog } from './EvaluationCaseDialog';
+import { EvaluationPanel } from './EvaluationPanel';
+import { chatFeedbackReasonLabel } from '../../utils/chatFeedback';
 
 const PAGE_SIZE = 10;
 
@@ -119,8 +122,11 @@ function gapPresentation(category: string): GapPresentation {
 }
 
 export function QualityPage({ sources = defaultSources }: { sources?: QualitySources }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get('tab') === 'evaluation' ? 'evaluation' : 'feedback';
+  const knowledgeBaseId = searchParams.get('knowledgeBaseId') || '';
   const [period, setPeriod] = useState<ChatQualityPeriod>('month');
-  const [knowledgeBaseId, setKnowledgeBaseId] = useState('');
+  const [caseDraft, setCaseDraft] = useState<ChatQualityFeedbackItem | null>(null);
   const [hasCitations, setHasCitations] = useState('all');
   const [page, setPage] = useState(1);
   const [gapCategory, setGapCategory] = useState<NonNullable<ChatKnowledgeGapParams['category']>>('all');
@@ -241,7 +247,7 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
   }
 
   function updateKnowledgeBase(value: string) {
-    setKnowledgeBaseId(value);
+    setSearchParams((current) => { const next = new URLSearchParams(current); if (value) next.set('knowledgeBaseId', value); else next.delete('knowledgeBaseId'); return next; });
     setPage(1);
     setGapPage(1);
   }
@@ -266,41 +272,47 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
             <h1>RAG 质量运营</h1>
             <p>从真实反馈定位回答问题、引用缺口和检索降级。</p>
           </div>
-          <Button
+          {activeTab === 'feedback' && <Button
             aria-label="刷新质量数据"
             leadingIcon={<RefreshCw aria-hidden="true" />}
             onClick={() => { reloadOverview(); reloadFeedback(); reloadGaps(); reloadKnowledgeBases(); }}
             variant="secondary"
           >
             刷新
-          </Button>
+          </Button>}
         </header>
 
+        <SegmentedControl label="质量视图" value={activeTab} options={[{ value: 'feedback', label: '反馈与缺口' }, { value: 'evaluation', label: '回归评测' }]}
+          onChange={(value) => setSearchParams((current) => { const next = new URLSearchParams(current); next.set('tab', value); return next; })} />
+
         <div className="quality-filters">
-          <SegmentedControl
+          {activeTab === 'feedback' && <SegmentedControl
             label="统计周期"
             onChange={updatePeriod}
             options={[{ value: 'month', label: '本月' }, { value: 'day', label: '今天' }]}
             value={period}
-          />
+          />}
           <Field label="知识库">
             <Select aria-label="质量知识库" onChange={(event) => updateKnowledgeBase(event.target.value)} value={knowledgeBaseId}>
               <option value="">全部知识库</option>
               {qualityKnowledgeBases.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </Select>
           </Field>
-          <Field label="引用筛选">
+          {activeTab === 'feedback' && <Field label="引用筛选">
             <Select aria-label="负反馈引用筛选" onChange={(event) => updateCitationFilter(event.target.value)} value={hasCitations}>
               <option value="all">全部负反馈</option>
               <option value="with">有引用</option>
               <option value="without">无引用</option>
             </Select>
-          </Field>
+          </Field>}
           {kbError && <span className="ui-inline-notice">{kbError}</span>}
           {selectedKnowledgeBase && <span className="ui-muted">当前：{selectedKnowledgeBase.name}</span>}
         </div>
 
-        <section aria-label="质量概览" className="ui-panel quality-overview">
+        {activeTab === 'evaluation' ? selectedKnowledgeBase
+          ? <EvaluationPanel key={selectedKnowledgeBase.id} knowledgeBase={selectedKnowledgeBase} />
+          : <EmptyState title="选择一个知识库开始评测" description="测试问题与运行记录按知识库保存。" />
+          : <><section aria-label="质量概览" className="ui-panel quality-overview">
           {overviewState.loading && !overview ? <LoadingSkeleton announce columns={5} compact rows={1} />
             : overviewState.error ? <ErrorState description={overviewState.error} onRetry={reloadOverview} title="质量概览加载失败" />
               : overview && <>
@@ -337,7 +349,7 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
               : !feedback || feedback.items.length === 0 ? <EmptyState description="当前周期没有符合筛选条件的负反馈。" title="还没有负反馈" />
                 : <>
                   <div className="quality-feedback__list">
-                    {feedback.items.map((item) => <FeedbackItem item={item} key={item.messageId} />)}
+                    {feedback.items.map((item) => <FeedbackItem item={item} key={item.messageId} onSave={() => setCaseDraft(item)} />)}
                   </div>
                   <Pagination onPageChange={setPage} page={feedback.page} pageSize={feedback.pageSize} total={feedback.total} />
                 </>}
@@ -371,7 +383,10 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
                   <Pagination onPageChange={setGapPage} page={gaps.page} pageSize={gaps.pageSize} total={gaps.total} />
                 </>}
         </section>
+        </>}
       </div>
+      {caseDraft && <EvaluationCaseDialog knowledgeBaseId={caseDraft.knowledgeBaseId} initial={{ question: caseDraft.question }} onClose={() => setCaseDraft(null)}
+        onSaved={() => setSearchParams({ knowledgeBaseId: caseDraft.knowledgeBaseId, tab: 'evaluation' })} />}
     </AppShell>
   );
 }
@@ -406,7 +421,7 @@ function formatPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
 
-function FeedbackItem({ item }: { item: ChatQualityFeedbackItem }) {
+function FeedbackItem({ item, onSave }: { item: ChatQualityFeedbackItem; onSave: () => void }) {
   return (
     <article className="quality-feedback__item">
       <div className="quality-feedback__item-head">
@@ -420,9 +435,11 @@ function FeedbackItem({ item }: { item: ChatQualityFeedbackItem }) {
         </Link>
       </div>
       <dl className="quality-feedback__content">
+        <div><dt>原因</dt><dd>{chatFeedbackReasonLabel(item.reason)}{item.comment && `：${item.comment}`}</dd></div>
         <div><dt>问题</dt><dd>{item.question || '未找到对应问题'}</dd></div>
         <div><dt>回答</dt><dd>{item.answer}</dd></div>
       </dl>
+      <div><Button disabled={!item.question} onClick={onSave} variant="secondary">保存为测试问题</Button></div>
       <div className="quality-feedback__evidence">
         <div className="quality-feedback__evidence-head">
           <strong>来源证据</strong>

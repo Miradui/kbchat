@@ -1,11 +1,12 @@
 package dto
 
 type SearchRequest struct {
-	Query        string `json:"query" binding:"required"`
-	VectorTopN   int    `json:"vectorTopN"`
-	RerankTopK   int    `json:"rerankTopK"`
-	EnableRerank *bool  `json:"enableRerank"`
-	Debug        bool   `json:"debug"`
+	Query          string   `json:"query" binding:"required"`
+	VectorTopN     int      `json:"vectorTopN"`
+	RerankTopK     int      `json:"rerankTopK"`
+	EnableRerank   *bool    `json:"enableRerank"`
+	ScoreThreshold *float64 `json:"scoreThreshold"`
+	Debug          bool     `json:"debug"`
 }
 
 type SearchResponse struct {
