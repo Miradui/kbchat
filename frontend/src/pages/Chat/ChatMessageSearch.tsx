@@ -74,10 +74,13 @@ export function useChatMessageSearch({ sessionId, messages, ready, targetMessage
     return () => window.removeEventListener('keydown', handleKey);
   }, [openSearch, sessionId]);
 
-  function close() {
+  function clear() {
     setOpen(false);
     setQuery('');
     setSelectedId(null);
+  }
+  function close() {
+    clear();
     if (targetExists) onLocate(targetMessageId, false);
     triggerRef.current?.focus({ preventScroll: true });
   }
@@ -86,7 +89,7 @@ export function useChatMessageSearch({ sessionId, messages, ready, targetMessage
   }
 
   return {
-    open, openSearch, close, query, inputRef, triggerRef, active, index, matches, move,
+    open, openSearch, close, clear, query, inputRef, triggerRef, active, index, matches, move,
     setQuery: (value: string) => { setQuery(value); setSelectedId(null); },
     locatedId: open && term ? active?.message.id : targetExists ? targetMessageId : undefined,
     missingTarget: Boolean(targetMessageId && ready && !targetExists),

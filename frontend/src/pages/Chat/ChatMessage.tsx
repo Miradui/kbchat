@@ -31,6 +31,7 @@ type MessageBubbleProps = {
   onRegenerate: (messageId: string) => void;
   feedbackSaving: boolean;
   onFeedback: (messageId: string, rating: ChatFeedbackRating) => void;
+  versionNavigation?: ReactNode;
   /** Recovery affordance rendered under this message, if it owns one. */
   recovery?: ReactNode;
   editing?: boolean;
@@ -59,6 +60,7 @@ export function MessageBubble({
   onRegenerate,
   feedbackSaving,
   onFeedback,
+  versionNavigation,
   recovery,
   editing = false,
   editDraft = '',
@@ -72,6 +74,8 @@ export function MessageBubble({
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const copiedTimerRef = useRef<number | null>(null);
+  const displayedMessageId = useRef(message.id);
+  displayedMessageId.current = message.id;
   const isAssistant = message.role === 'assistant';
   const notice = answerStatusNotice(message);
 
@@ -79,22 +83,30 @@ export function MessageBubble({
     if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current);
   }, []);
 
+  useEffect(() => {
+    setSourcesOpen(false);
+    setCopied(false);
+    setCopyError(false);
+    if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current);
+  }, [message.id]);
+
   async function copyMessage() {
     try {
       await copyText(message.content);
+      if (displayedMessageId.current !== message.id) return;
       setCopied(true);
       setCopyError(false);
       if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current);
       copiedTimerRef.current = window.setTimeout(() => setCopied(false), 1800);
     } catch {
-      setCopyError(true);
+      if (displayedMessageId.current === message.id) setCopyError(true);
     }
   }
 
   // Clicking an inline marker opens the source list and reveals that entry.
   useEffect(() => {
     if (focusedCitationIndex !== null) setSourcesOpen(true);
-  }, [focusedCitationIndex]);
+  }, [focusedCitationIndex, message.id]);
 
   return (
     <article aria-label={located ? '已定位消息' : undefined} className={`chat-msg chat-msg--${message.role}${located ? ' is-located' : ''}`} id={`chat-message-${message.id}`} tabIndex={-1}>
@@ -200,6 +212,8 @@ export function MessageBubble({
             >
               {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
             </IconButton>
+
+            {versionNavigation}
 
             <div aria-label="回答反馈" className="chat-msg__feedback" role="group">
               <IconButton

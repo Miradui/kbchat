@@ -27,6 +27,7 @@ import { downloadBlob } from '../../utils/download';
 import { formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
 import { ChatComposer } from './ChatComposer';
+import { ChatAnswerVersionNavigation } from './ChatAnswerVersionNavigation';
 import { ChatFeedbackDialog } from './ChatFeedbackDialog';
 import { ChatMessageSearch, useChatMessageSearch } from './ChatMessageSearch';
 import { ChatMarkdown } from './ChatMarkdown';
@@ -36,6 +37,7 @@ import { ChatSourcePreview } from './ChatSourcePreview';
 import type { ChatSessionScope } from './ChatSessionRail';
 import { useChatSessions } from './useChatSessions';
 import { useChatThread } from './useChatThread';
+import { useChatAnswerVersions } from './useChatAnswerVersions';
 import { useStreamAnnouncement } from './useStreamAnnouncement';
 
 /**
@@ -135,6 +137,30 @@ export function ChatPage() {
     sessionId, messages: thread.messages, targetMessageId, onLocate: locateMessage,
     ready: messagesReady,
   });
+  const answerVersions = useChatAnswerVersions(thread.messages, sessionId, messageSearch.locatedId);
+
+  function leaveMessageLocation() {
+    messageSearch.clear();
+    if (targetMessageId) setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete('messageId');
+      return next;
+    }, { replace: true });
+  }
+
+  function selectAnswerVersion(groupId: string, index: number) {
+    stickToBottomRef.current = false;
+    answerVersions.selectVersion(groupId, index);
+    leaveMessageLocation();
+    setFocusedCitation(null);
+    setSourcePreview(null);
+  }
+
+  function regenerateAnswer(messageId: string) {
+    if (sessionBusyRef.current) return;
+    leaveMessageLocation();
+    void thread.regenerate(messageId);
+  }
 
   useEffect(() => { setSourcePreview(null); }, [sourceScope]);
 
@@ -523,7 +549,7 @@ export function ChatPage() {
               )
             ) : (
               <>
-                {thread.messages.map((message) => (
+                {answerVersions.rows.map(({ id, message, versions, index }) => (
                   <MessageBubble
                     canRegenerate={
                       message.id === latestAssistantId
@@ -535,7 +561,7 @@ export function ChatPage() {
                     focusedCitationIndex={
                       focusedCitation?.messageId === message.id ? focusedCitation.index : null
                     }
-                    key={message.id}
+                    key={id}
                     located={messageSearch.locatedId === message.id}
                     knowledgeBaseId={activeKnowledgeBaseId || undefined}
                     onOpenCitation={openSource}
@@ -544,6 +570,10 @@ export function ChatPage() {
                     editing={editingMessageId === message.id}
                     editSaving={thread.editingId === message.id}
                     feedbackSaving={feedbackSavingIds.has(message.id)}
+                    versionNavigation={versions.length > 1 ? <ChatAnswerVersionNavigation
+                      index={index} count={versions.length} disabled={interactionLocked}
+                      onChange={(nextIndex) => selectAnswerVersion(id, nextIndex)}
+                    /> : undefined}
                     onFeedback={(messageId, rating) => { if (rating === 'negative') setFeedbackTarget(message); else void handleMessageFeedback(messageId, rating); }}
                     onEditDraftChange={setEditingDraft}
                     onStartEdit={(messageId, content) => {
@@ -569,9 +599,7 @@ export function ChatPage() {
                       });
                     }}
                     onFocusCitation={(messageId, index) => setFocusedCitation({ messageId, index })}
-                    onRegenerate={(id) => {
-                      if (!sessionBusyRef.current) void thread.regenerate(id);
-                    }}
+                    onRegenerate={regenerateAnswer}
                     recovery={
                       thread.regeneration?.messageId === message.id
                         ? (
@@ -581,9 +609,7 @@ export function ChatPage() {
                             onCheck={() => {
                               if (!sessionBusyRef.current) void thread.checkRegeneration();
                             }}
-                            onRegenerate={(messageId) => {
-                              if (!sessionBusyRef.current) void thread.regenerate(messageId);
-                            }}
+                            onRegenerate={regenerateAnswer}
                             thread={thread}
                           />
                         )

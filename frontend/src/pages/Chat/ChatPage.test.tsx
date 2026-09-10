@@ -234,6 +234,97 @@ async function submitWithAutomaticChecksPaused() {
 }
 
 describe('ChatPage', () => {
+  it('shows a regenerated answer as the latest version of one question, including after reload', async () => {
+    const user = userEvent.setup();
+    const question: ChatMessage = { ...historicalAnswers[0], id: 'question-versions', role: 'user', content: '请介绍自己', citations: [] };
+    vi.mocked(listChatMessages).mockResolvedValueOnce({ items: [question, historicalAnswers[0]] });
+    vi.mocked(regenerateChatMessage).mockResolvedValue({ message: historicalAnswers[1], rerankFallback: null });
+    const view = renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>, ['/chat/s1']);
+    await screen.findByText('旧回答');
+    await user.click(screen.getByRole('button', { name: '重新生成' }));
+    await screen.findByText('新回答');
+    expect(screen.queryByText('旧回答')).not.toBeInTheDocument();
+    expect(document.querySelectorAll('.chat-msg--assistant')).toHaveLength(1);
+    expect(screen.getByLabelText('第 2 版回答，共 2 版')).toBeInTheDocument();
+    expect(regenerateChatMessage).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('button', { name: '上一版回答' }));
+    expect(screen.getByText('旧回答')).toBeInTheDocument();
+    expect(screen.queryByText('新回答')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '下一版回答' })).toHaveFocus();
+    expect(screen.queryByRole('button', { name: '重新生成' })).not.toBeInTheDocument();
+    view.unmount();
+    vi.mocked(listChatMessages).mockResolvedValue({ items: [question, ...historicalAnswers] });
+    renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>, ['/chat/s1']);
+    await screen.findByText('新回答');
+    expect(screen.queryByText('旧回答')).not.toBeInTheDocument();
+    expect(document.querySelectorAll('.chat-msg--assistant')).toHaveLength(1);
+  });
+
+  it('keeps feedback, citations and copying attached to the selected answer version', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+    const question: ChatMessage = { ...historicalAnswers[0], id: 'question-versions', role: 'user', content: '政策是什么', citations: [] };
+    const original: ChatMessage = { ...historicalAnswers[0], feedback: { messageId: historicalAnswers[0].id, rating: 'positive', updatedAt: '' } };
+    vi.mocked(listChatMessages).mockResolvedValue({ items: [question, original, historicalAnswers[1]] });
+    vi.mocked(setChatMessageFeedback).mockImplementation(async (messageId, rating) => ({ messageId, rating, updatedAt: '' }));
+    renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>, ['/chat/s1']);
+    await screen.findByText('新回答');
+    await user.click(screen.getByRole('button', { name: '复制回答' }));
+    expect(writeText).toHaveBeenLastCalledWith('新回答');
+    await user.click(screen.getByRole('button', { name: '上一版回答' }));
+    expect(screen.getByRole('button', { name: '标记回答有帮助' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(screen.getByRole('button', { name: '复制回答' }));
+    expect(writeText).toHaveBeenLastCalledWith('旧回答');
+    await user.click(screen.getByRole('button', { name: '1 条来源' }));
+    expect(screen.getByText('旧制度依据')).toBeInTheDocument();
+    expect(screen.queryByText('新制度依据')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '下一版回答' }));
+    expect(screen.queryByText('旧制度依据')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '标记回答有帮助' })).toHaveAttribute('aria-pressed', 'false');
+    await user.click(screen.getByRole('button', { name: '标记回答有帮助' }));
+    expect(setChatMessageFeedback).toHaveBeenLastCalledWith(historicalAnswers[1].id, 'positive');
+    await user.click(screen.getByRole('button', { name: '1 条来源' }));
+    expect(screen.getByText('新制度依据')).toBeInTheDocument();
+  });
+
+  it('reveals an older answer version for deep links and search without displaying both versions', async () => {
+    const question: ChatMessage = { ...historicalAnswers[0], id: 'question-versions', role: 'user', content: '政策是什么', citations: [] };
+    vi.mocked(listChatMessages).mockResolvedValue({ items: [question, ...historicalAnswers] });
+    const user = userEvent.setup();
+    renderWithRouter(<><Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes><LocationProbe /></>, ['/chat/s1?messageId=assistant-old']);
+    const located = await screen.findByRole('article', { name: '已定位消息' });
+    expect(located).toHaveAttribute('id', 'chat-message-assistant-old');
+    expect(located).toHaveFocus();
+    expect(screen.queryByText('新回答')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '下一版回答' }));
+    expect(screen.getByText('新回答')).toBeInTheDocument();
+    expect(screen.getByLabelText('当前位置')).not.toHaveTextContent('messageId=');
+    await user.click(screen.getByRole('button', { name: '查找会话消息' }));
+    await user.type(screen.getByRole('textbox', { name: '查找消息关键词' }), '旧回答');
+    expect(screen.getByRole('article', { name: '已定位消息' })).toHaveAttribute('id', 'chat-message-assistant-old');
+    expect(screen.queryByText('新回答')).not.toBeInTheDocument();
+    expect(document.querySelectorAll('.chat-msg--assistant')).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: '关闭查找' }));
+    expect(screen.getByText('新回答')).toBeInTheDocument();
+  });
+
+  it('keeps answers to separate user questions separate and retains the old version on regeneration failure', async () => {
+    const question: ChatMessage = { ...historicalAnswers[0], id: 'question-1', role: 'user', content: '第一题', citations: [] };
+    const otherQuestion: ChatMessage = { ...question, id: 'question-2', content: '第二题' };
+    vi.mocked(listChatMessages).mockResolvedValue({ items: [question, historicalAnswers[0], otherQuestion, historicalAnswers[1]] });
+    vi.mocked(regenerateChatMessage).mockRejectedValue(new ApiError(500, { code: 'CHAT_COMPLETION_FAILED', message: '回答服务暂时不可用' }));
+    const user = userEvent.setup();
+    renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>, ['/chat/s1']);
+    await screen.findByText('新回答');
+    expect(screen.getByText('旧回答')).toBeInTheDocument();
+    expect(document.querySelectorAll('.chat-msg--assistant')).toHaveLength(2);
+    expect(screen.queryByRole('group', { name: '回答版本' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '重新生成' }));
+    await screen.findByText('回答生成失败，请稍后重试。');
+    expect(screen.getByText('新回答')).toBeInTheDocument();
+    expect(document.querySelectorAll('.chat-msg--assistant')).toHaveLength(2);
+  });
+
   it('finds literal text across messages, cycles results and preserves the question draft', async () => {
     const user = userEvent.setup();
     vi.mocked(listChatMessages).mockResolvedValue({ items: [

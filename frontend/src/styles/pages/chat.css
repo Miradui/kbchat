@@ -216,6 +216,8 @@
 }
 
 .chat-msg__foot { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.chat-msg__versions { align-items: center; color: var(--text-muted); display: inline-flex; font-size: var(--t-small); gap: var(--s-1); }
+.chat-msg__versions > span { font-variant-numeric: tabular-nums; text-align: center; white-space: nowrap; }
 .chat-msg__no-sources { color: var(--text-muted); font-size: var(--t-small); }
 /* The answer-status notice sits above the footer row, since a refusal can carry
    citations and would otherwise have nowhere to appear. Colour is never the only
