@@ -392,8 +392,8 @@ export function listGlobalDocuments(
   return apiRequest<GlobalDocumentListResponse>(withQuery('/documents', params), { signal });
 }
 
-export function getDocument(id: string): Promise<DocumentItem> {
-  return apiRequest<DocumentItem>(`/documents/${id}`);
+export function getDocument(id: string, signal?: AbortSignal): Promise<DocumentItem> {
+  return apiRequest<DocumentItem>(`/documents/${id}`, { signal });
 }
 
 export function getDocumentPreview(id: string): Promise<DocumentPreviewResponse> {

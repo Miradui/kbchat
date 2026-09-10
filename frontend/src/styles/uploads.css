@@ -1,0 +1,20 @@
+/* Global document import entry and task drawer. */
+.upload-tasks-button { gap: var(--s-2); }
+.upload-tasks-button__count { background: var(--accent-wash); border-radius: var(--r-pill); color: var(--accent); font-size: var(--t-micro); padding: var(--s-1) var(--s-2); }
+.upload-tasks { display: grid; gap: var(--s-6); }
+.upload-tasks__summary { background: var(--accent-wash); border: 1px solid var(--accent-line); border-radius: var(--r-md); display: grid; gap: var(--s-2); padding: var(--s-4); }
+.upload-tasks__summary strong { color: var(--accent); font-size: var(--t-lead); }
+.upload-tasks__summary p { color: var(--text-secondary); font-size: var(--t-small); line-height: var(--lh-normal); }
+.upload-tasks__group { display: grid; gap: var(--s-3); min-width: 0; }
+.upload-tasks__group > header { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-3); justify-content: space-between; }
+.upload-tasks__group h3 { font-size: var(--t-body); overflow-wrap: anywhere; }
+.upload-tasks__item { border: 1px solid var(--line); border-radius: var(--r-md); display: grid; gap: var(--s-3); min-width: 0; padding: var(--s-4); }
+.upload-tasks__item-title { align-items: flex-start; display: flex; gap: var(--s-3); justify-content: space-between; }
+.upload-tasks__item-title strong { font-size: var(--t-body); min-width: 0; overflow-wrap: anywhere; }
+.upload-tasks__item-title > :last-child { flex-shrink: 0; }
+.upload-tasks__item small, .upload-tasks__note { color: var(--text-muted); font-size: var(--t-small); }
+.upload-tasks__item > p { color: var(--text-secondary); font-size: var(--t-small); line-height: var(--lh-normal); }
+.upload-tasks__actions { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-3); }
+@media (max-width: 680px) {
+  .upload-tasks-button > span:first-of-type { display: none; }
+}

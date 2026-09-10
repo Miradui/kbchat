@@ -16,6 +16,7 @@ import { themeStore } from '../store/themeStore';
 import type { ThemeChoice } from '../store/themeStore';
 import { tokenStore } from '../store/tokenStore';
 import { AccountSettingsDialog } from './AccountSettingsDialog';
+import { UploadTasksButton } from '../pages/Documents/UploadTasksButton';
 
 export type { AppSection } from '../components/navigation/PrimaryNav';
 
@@ -373,6 +374,7 @@ export function AppShell({
             <kbd className="topbar__kbd">{shortcutLabel}</kbd>
           </button>
 
+          <UploadTasksButton />
           {topbarActions && <div className="topbar__actions">{topbarActions}</div>}
         </header>
 

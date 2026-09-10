@@ -421,9 +421,9 @@ describe('DocumentImportDialog', () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
     const file = new File(['policy'], 'policy.md', { type: 'text/markdown' });
-    const onReplace = vi.fn().mockRejectedValueOnce(new ApiError(500, {
-      code: 'INTERNAL_ERROR',
-      message: 'boom',
+    const onReplace = vi.fn().mockRejectedValueOnce(new ApiError(409, {
+      code: 'DOCUMENT_PROCESSING',
+      message: '文档正在处理中，请稍后重试',
       details: {},
     }));
     renderDialog({ onClose, onReplace, onUpload: vi.fn().mockRejectedValueOnce(duplicateError()) });
@@ -486,5 +486,36 @@ describe('DocumentImportDialog', () => {
     const row = (await screen.findByText('policy.md')).closest('article') as HTMLElement;
     expect(row).toHaveTextContent('上传失败');
     expect(within(row).queryByRole('button', { name: '替换原文档' })).not.toBeInTheDocument();
+  });
+
+  it('requires reconciliation after a duplicate replacement has an uncertain server result', async () => {
+    const user = userEvent.setup();
+    const file = new File(['policy'], 'policy.md', { type: 'text/markdown' });
+    const onReplace = vi.fn().mockRejectedValue(new ApiError(500, { code: 'INTERNAL_ERROR', message: 'unknown' }));
+    renderDialog({ onReplace, onUpload: vi.fn().mockRejectedValue(duplicateError()) });
+    await user.upload(screen.getByLabelText('选择文档文件'), file);
+    await user.click(screen.getByRole('button', { name: '开始导入' }));
+    await user.click(await screen.findByRole('button', { name: '替换原文档' }));
+    expect(await screen.findByText('结果待确认')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '替换原文档' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '保留两份' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '开始导入' })).toBeDisabled();
+    expect(onReplace).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not turn a committed replacement into a retry when refreshing the list fails', async () => {
+    const user = userEvent.setup();
+    const file = new File(['policy'], 'policy.md', { type: 'text/markdown' });
+    const onReplace = vi.fn().mockResolvedValue(documentFor(file));
+    const onClose = vi.fn();
+    renderDialog({ onClose, onReplace, onUpload: vi.fn().mockRejectedValue(duplicateError()), onBatchComplete: vi.fn().mockRejectedValue(new Error('read failed')) });
+    await user.upload(screen.getByLabelText('选择文档文件'), file);
+    await user.click(screen.getByRole('button', { name: '开始导入' }));
+    await user.click(await screen.findByRole('button', { name: '替换原文档' }));
+    expect(await screen.findByText('文档已上传，但列表刷新失败')).toBeInTheDocument();
+    expect(screen.getByText('已上传')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '替换原文档' })).not.toBeInTheDocument();
+    expect(onReplace).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalled();
   });
 });

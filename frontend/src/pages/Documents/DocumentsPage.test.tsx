@@ -577,7 +577,7 @@ describe('DocumentsPage', () => {
   });
 
   it('clears an operation error after switching to another knowledge base', async () => {
-    vi.mocked(uploadDocument).mockRejectedValue(new Error('offline'));
+    vi.mocked(uploadDocument).mockRejectedValue(new ApiError(400, { code: 'VALIDATION_ERROR', message: '上传失败' }));
     vi.mocked(getKnowledgeBase).mockImplementation((id) => Promise.resolve(
       id === secondKnowledgeBase.id ? secondKnowledgeBase : knowledgeBase,
     ));

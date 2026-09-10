@@ -1,4 +1,4 @@
-import { Square, Upload, X } from 'lucide-react';
+import { Minimize2, Square, Upload, X } from 'lucide-react';
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiError } from '../../api/client';
@@ -13,6 +13,7 @@ import type { DocumentDuplicateDetails, DocumentItem, SystemCapabilities } from 
 import { getErrorMessage } from '../../utils/errors';
 import { formatRelativeTime } from '../../utils/format';
 import { formatDocumentBytes } from './documentDisplay';
+import type { ImportSnapshot, ImportStatus } from './DocumentImportContext';
 
 /**
  * The accept attribute is a file-picker hint only; validateDocumentFile enforces
@@ -42,8 +43,6 @@ function extensionSummary(extensions: string[]): string {
  * telling someone "部分文档导入失败" when they simply have a decision to make would
  * misdescribe what happened.
  */
-type ImportStatus = 'pending' | 'uploading' | 'succeeded' | 'failed' | 'unconfirmed' | 'duplicate';
-
 type ImportItem = {
   error: string;
   file: File;
@@ -86,6 +85,10 @@ type DocumentImportDialogProps = {
   ) => Promise<DocumentItem>;
   onUploaded?: (document: DocumentItem) => void;
   open: boolean;
+  /** Hides the view while its upload queue remains mounted above the routes. */
+  minimized?: boolean;
+  onMinimize?: () => void;
+  onStateChange?: (snapshot: ImportSnapshot) => void;
 };
 
 export function DocumentImportDialog({
@@ -100,6 +103,9 @@ export function DocumentImportDialog({
   onReplace,
   onUploaded,
   open,
+  minimized = false,
+  onMinimize,
+  onStateChange,
 }: DocumentImportDialogProps) {
   const toast = useToast();
   const { upload } = useSystemCapabilities();
@@ -112,6 +118,7 @@ export function DocumentImportDialog({
   const [validationError, setValidationError] = useState('');
   const [uploading, setUploading] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [targetLocked, setTargetLocked] = useState(false);
 
   useEffect(() => {
     const opening = open && !wasOpenRef.current;
@@ -132,6 +139,7 @@ export function DocumentImportDialog({
     setValidationError('');
     setUploading(false);
     setConfirmDiscard(false);
+    setTargetLocked(false);
     setKnowledgeBaseId(
       fixedKnowledgeBaseId
       ?? (knowledgeBases.some((item) => item.id === initialKnowledgeBaseId)
@@ -153,10 +161,21 @@ export function DocumentImportDialog({
     [items],
   );
 
-  useUnsavedChangesWarning(open && items.length > 0);
+  useUnsavedChangesWarning(open && items.some((item) => item.status !== 'succeeded'));
+
+  const knowledgeBaseName = (fixedKnowledgeBaseId ? fixedKnowledgeBaseName : undefined) || knowledgeBases.find((item) => item.id === knowledgeBaseId)?.name || '目标知识库';
+  useEffect(() => {
+    onStateChange?.({
+      knowledgeBaseId,
+      knowledgeBaseName,
+      uploading,
+      items: items.map((item) => ({ key: item.key, name: item.file.name, size: item.file.size, status: item.status, progress: item.progress, error: item.error })),
+    });
+  }, [items, knowledgeBaseId, knowledgeBaseName, uploading, onStateChange]);
 
   function closeSafely() {
     if (uploading) {
+      onMinimize?.();
       return;
     }
     if (items.length > 0) {
@@ -214,7 +233,7 @@ export function DocumentImportDialog({
   }
 
   async function handleSubmit() {
-    if (uploading) {
+    if (uploading || operationRef.current) {
       return;
     }
     if (!knowledgeBaseId) {
@@ -231,12 +250,14 @@ export function DocumentImportDialog({
     operationRef.current = operation;
     uploadAbortRef.current = controller;
     setUploading(true);
+    setTargetLocked(true);
     setValidationError('');
     const uploadedDocuments: DocumentItem[] = [];
     let batchCompleteError: unknown;
     let hasFailure = false;
-    let hasDuplicate = false;
+    let hasDuplicate = items.some((item) => item.status === 'duplicate');
     let cancelled = false;
+    let hasUnconfirmed = items.some((item) => item.status === 'unconfirmed');
 
     for (const item of uploadCandidates) {
       if (operationRef.current !== operation) {
@@ -268,7 +289,7 @@ export function DocumentImportDialog({
           progress: 100,
           status: 'succeeded',
         }));
-        onUploaded?.(document);
+        try { onUploaded?.(document); } catch (error) { batchCompleteError = error; }
       } catch (error) {
         if (operationRef.current !== operation) {
           return;
@@ -295,6 +316,15 @@ export function DocumentImportDialog({
           }));
           continue;
         }
+        if (isUnconfirmedUpload(error)) {
+          hasUnconfirmed = true;
+          setItems((current) => updateImportItem(current, item.key, {
+            error: '上传结果未知，请先在文档列表确认。',
+            status: 'unconfirmed',
+          }));
+          // Stop this batch on connection uncertainty; do not pile up ambiguous writes.
+          break;
+        }
         hasFailure = true;
         setItems((current) => updateImportItem(current, item.key, {
           error: documentUploadErrorMessage(error),
@@ -307,7 +337,7 @@ export function DocumentImportDialog({
       return;
     }
     try {
-      if (uploadedDocuments.length > 0 || cancelled) {
+      if (uploadedDocuments.length > 0 || cancelled || hasUnconfirmed) {
         await onBatchComplete?.(uploadedDocuments);
       }
     } catch (error) {
@@ -323,7 +353,11 @@ export function DocumentImportDialog({
     if (cancelled) {
       setValidationError(batchCompleteError
         ? '上传已停止，但文档列表刷新失败。请手动刷新并确认文件是否已创建。'
-        : '上传已停止，结果可能已提交。文档列表已刷新，请确认未创建后再重新选择该文件。');
+        : '上传已停止，结果可能已提交。请先查看文档列表，确认未创建后再重新选择该文件。');
+      return;
+    }
+    if (hasUnconfirmed) {
+      setValidationError('上传结果待确认。请先查看文档列表，确认未创建后再重新选择该文件；其他待上传文件可以继续导入。');
       return;
     }
     if (hasFailure) {
@@ -361,7 +395,7 @@ export function DocumentImportDialog({
    * copy. Replace needs `onReplace` wired up; without it only `keep` is offered.
    */
   async function resolveDuplicate(item: ImportItem, choice: 'keep' | 'replace') {
-    if (uploading || !item.duplicate) return;
+    if (uploading || operationRef.current || !item.duplicate) return;
     const existingId = item.duplicate.existingDocumentId;
 
     const operation = Symbol('duplicate-resolution');
@@ -395,8 +429,13 @@ export function DocumentImportDialog({
         progress: 100,
         status: 'succeeded',
       }));
-      onUploaded?.(document);
-      await onBatchComplete?.([document]);
+      // Completion observers may fail independently of the committed upload.
+      try {
+        onUploaded?.(document);
+        await onBatchComplete?.([document]);
+      } catch (error) {
+        if (operationRef.current === operation) toast.error(getErrorMessage(error, '文档已上传，但列表刷新失败'));
+      }
       if (operationRef.current !== operation) return;
       toast.success(choice === 'replace' ? '已替换原文档，正在处理中。' : '已保留两份，正在处理中。');
       // Only the last outstanding row closes the dialog. `items` is the list as of the
@@ -409,12 +448,22 @@ export function DocumentImportDialog({
         setValidationError('还有文件与知识库中已有内容重复，请继续选择。');
         return;
       }
-      if (items.some((other) => other.key !== item.key && other.status === 'failed')) {
+      if (items.some((other) => other.key !== item.key && other.status !== 'succeeded')) {
         return;
       }
       onClose();
     } catch (error) {
       if (operationRef.current !== operation) return;
+      if (controller.signal.aborted || isUnconfirmedUpload(error)) {
+        setItems((current) => updateImportItem(current, item.key, {
+          duplicate: undefined,
+          error: '上传结果未知，请先在文档列表确认。',
+          status: 'unconfirmed',
+        }));
+        setValidationError('上传结果待确认，请先查看文档列表，确认未创建后再重新选择该文件。');
+        try { await onBatchComplete?.([]); } catch { /* The result stays unknown even when the list cannot refresh. */ }
+        return;
+      }
       setItems((current) => updateImportItem(current, item.key, {
         // The conflict details are kept so the row can offer the choice again
         // rather than dropping the user back to a bare failure.
@@ -433,9 +482,9 @@ export function DocumentImportDialog({
   return (
     <>
       <Dialog
-        description="选择目标知识库并确认文件后开始导入。文档将在后台处理，完成后即可用于问答。"
+        description={onMinimize ? '确认文件后开始导入，可收起窗口并切换页面。上传和处理进度可从顶部的上传任务查看。' : '选择目标知识库并确认文件后开始导入。文档将在后台处理，完成后即可用于问答。'}
         onClose={closeSafely}
-        open={open}
+        open={open && !minimized}
         title="导入文档"
       >
       <div className="doc-import">
@@ -451,7 +500,7 @@ export function DocumentImportDialog({
               aria-label="目标知识库"
               className="ui-select"
               data-autofocus
-              disabled={uploading || knowledgeBases.length === 0}
+              disabled={uploading || targetLocked || knowledgeBases.length === 0}
               onChange={(event) => {
                 setKnowledgeBaseId(event.target.value);
                 onKnowledgeBaseChange?.(event.target.value);
@@ -546,6 +595,7 @@ export function DocumentImportDialog({
         )}
 
         <div className="ui-dialog__actions">
+          {onMinimize && <Button leadingIcon={<Minimize2 aria-hidden="true" />} onClick={onMinimize} variant="ghost">{uploading ? '后台继续' : '收起窗口'}</Button>}
           {uploading ? (
             <Button
               leadingIcon={<Square aria-hidden="true" />}
@@ -716,4 +766,9 @@ function documentUploadErrorMessage(error: unknown): string {
     }
   }
   return getErrorMessage(error, '上传失败');
+}
+
+/** Only an explicit client/business rejection proves a non-idempotent upload failed. */
+function isUnconfirmedUpload(error: unknown): boolean {
+  return !(error instanceof ApiError) || error.status === 0 || error.status >= 500;
 }

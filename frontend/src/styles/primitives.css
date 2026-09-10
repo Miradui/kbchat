@@ -750,7 +750,7 @@ button.ui-metrics__item:not(:disabled):hover { background: var(--surface-hover);
   overflow: hidden;
   width: 100%;
 }
-.ui-progress__fill { background: var(--accent); height: 100%; transition: width var(--normal) var(--ease); }
+.ui-progress__fill { background: var(--accent); display: block; height: 100%; transition: width var(--normal) var(--ease); }
 .ui-progress__fill--warn { background: var(--warn); }
 .ui-progress__fill--danger { background: var(--danger); }
 

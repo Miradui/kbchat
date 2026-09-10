@@ -37,6 +37,7 @@ import { KnowledgeBaseLayout, KnowledgeBaseLoadFailure } from '../KnowledgeBase/
 import { useKnowledgeBase } from '../KnowledgeBase/useKnowledgeBase';
 import { DocumentDetailDrawer } from './DocumentDetailDrawer';
 import { DocumentImportDialog } from './DocumentImportDialog';
+import { useDocumentImports } from './DocumentImportContext';
 import { DocumentProgress } from './DocumentProgress';
 import { DocumentRecycleBinDrawer } from './DocumentRecycleBinDrawer';
 import {
@@ -103,11 +104,14 @@ function ScopedDocuments({ children }: { children: React.ReactNode }) {
 
 function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string }) {
   const toast = useToast();
+  const imports = useDocumentImports();
+  const observedImportVersion = useRef(imports?.changeVersion ?? 0);
   const mutation = useEntityMutation();
   const list = useDocumentList(scopeKnowledgeBaseId);
   const { items, total, counts, loading, error, filters, activeFilterCount, refresh, setFilter } = list;
 
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
+  const [knowledgeBasesLoaded, setKnowledgeBasesLoaded] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [importOpen, setImportOpen] = useState(false);
   const [recycleOpen, setRecycleOpen] = useState(false);
@@ -163,10 +167,24 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
   useEffect(() => setSearchDraft(filters.q), [filters.q]);
 
   useEffect(() => {
+    let active = true;
     void listKnowledgeBases({ pageSize: 100 })
-      .then((response) => setKnowledgeBases(response.items))
-      .catch(() => setKnowledgeBases([]));
+      .then((response) => { if (active) setKnowledgeBases(response.items); })
+      .catch(() => { if (active) setKnowledgeBases([]); })
+      .finally(() => { if (active) setKnowledgeBasesLoaded(true); });
+    return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (!imports?.changeVersion || observedImportVersion.current === imports.changeVersion) return;
+    observedImportVersion.current = imports.changeVersion;
+    void refresh();
+  }, [imports?.changeVersion, refresh]);
+
+  useEffect(() => {
+    const documents = imports?.lastBatch?.documents.filter((document) => !scopeKnowledgeBaseId || document.knowledgeBaseId === scopeKnowledgeBaseId) ?? [];
+    if (documents.length) watchImport(documents);
+  }, [imports?.lastBatch, scopeKnowledgeBaseId]);
 
   // `?documentId=` (and optional `?chunkId=`) opens the detail drawer. Citations
   // and global search both rely on this contract.
@@ -311,6 +329,16 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
   // Selection exists to drive the bulk bar, and every bulk action writes. Selecting a
   // read-only row would put it in a batch the server refuses as a whole.
   const allSelected = writableItems.length > 0 && writableItems.every((item) => selected.has(item.id));
+
+  useEffect(() => {
+    if (!imports || !importOpen || !knowledgeBasesLoaded) return;
+    imports.openImport({
+      fixedKnowledgeBaseId: scopeKnowledgeBaseId,
+      fixedKnowledgeBaseName: uploadTargets[0]?.name,
+      knowledgeBases: uploadTargets,
+    });
+    setImportOpen(false);
+  }, [imports?.openImport, importOpen, knowledgeBasesLoaded, scopeKnowledgeBaseId, uploadTargets]);
 
   return (
     <div className="doc-page">
@@ -758,7 +786,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
         <DocumentRecycleBinDrawer onChanged={() => void refresh()} onClose={() => setRecycleOpen(false)} />
       )}
 
-      <DocumentImportDialog
+      {!imports && <DocumentImportDialog
         fixedKnowledgeBaseId={scopeKnowledgeBaseId}
         fixedKnowledgeBaseName={uploadTargets[0]?.name}
         knowledgeBases={uploadTargets}
@@ -771,7 +799,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
         onReplace={replaceDocument}
         onUpload={scopeKnowledgeBaseId ? uploadDocument : uploadGlobalDocument}
         open={importOpen}
-      />
+      />}
     </div>
   );
 }
