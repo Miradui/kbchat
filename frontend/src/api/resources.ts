@@ -82,8 +82,18 @@ export function getCurrentUser(): Promise<User> {
 export function updateProfile(input: UpdateProfileInput): Promise<User> {
   return apiRequest<User>('/auth/me', {
     method: 'PUT',
-    body: { displayName: input.displayName, avatarUrl: input.avatarUrl ?? '' },
+    body: { displayName: input.displayName, ...(input.avatarUrl !== undefined ? { avatarUrl: input.avatarUrl } : {}) },
   });
+}
+
+export function uploadAvatar(file: File): Promise<User> {
+  const body = new FormData();
+  body.append('file', file);
+  return apiUploadRequest<User>('/auth/me/avatar', body);
+}
+
+export function removeAvatar(): Promise<User> {
+  return apiRequest<User>('/auth/me/avatar', { method: 'DELETE' });
 }
 
 export function changePassword(input: ChangePasswordInput): Promise<void> {

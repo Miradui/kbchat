@@ -24,6 +24,9 @@ export const defaultSystemCapabilities: SystemCapabilities = {
     maxPasswordBytes: DEFAULT_MAX_PASSWORD_BYTES,
     maxDisplayNameLength: 128,
     maxAvatarUrlLength: 512,
+    maxAvatarBytes: 2 * 1024 * 1024,
+    avatarSize: 256,
+    avatarContentTypes: ['image/png', 'image/jpeg'],
   },
 };
 

@@ -11,6 +11,7 @@ import {
   updateKnowledgeBasePermissions,
 } from '../../api/resources';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { UserAvatar } from '../../components/UserAvatar';
 import { useToast } from '../../components/feedback/ToastProvider';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { Button } from '../../components/ui/Button';
@@ -383,9 +384,7 @@ function UserInline({ user }: { user: UserSummary }) {
   const name = user.displayName || user.username;
   return (
     <span className="ui-user-inline">
-      <span className="ui-avatar">
-        {user.avatarUrl ? <img alt="" src={user.avatarUrl} /> : <span aria-hidden="true">{name.slice(0, 1)}</span>}
-      </span>
+      <UserAvatar url={user.avatarUrl} name={name} />
       <span>
         <strong>{name}</strong>
         <small>{user.username}</small>

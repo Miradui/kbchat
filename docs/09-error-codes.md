@@ -48,6 +48,10 @@
 | 404 | `TAG_NOT_FOUND` | 标签不存在 |
 | 409 | `TAG_NOT_EMPTY` | 标签仍被知识库引用 |
 | 404 | `USER_NOT_FOUND` | 用户不存在 |
+| 400 | `AVATAR_TOO_LARGE` | 头像图片不能超过 2 MB |
+| 400 | `INVALID_AVATAR` | 请选择有效的 PNG 或 JPG 图片，长宽均不能超过 4096 像素 |
+| 404 | `AVATAR_NOT_FOUND` | 头像不存在或已更新 |
+| 409 | `AVATAR_CHANGED` | 头像已更新，请刷新账户资料后重试 |
 | 404 | `MEMBER_NOT_FOUND` | 知识库成员不存在 |
 | 400 | `OWNER_MEMBER_IMMUTABLE` | 所有者成员权限不能通过成员接口修改 |
 | 400 | `INVALID_MEMBER_ROLE` | 成员角色不合法 |

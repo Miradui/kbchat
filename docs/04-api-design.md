@@ -78,9 +78,29 @@ UTF-8 编码检查 `account.maxPasswordBytes`，当前上限为 72 字节。
 ```
 
 - `displayName` 必填，两端空白会被去除，长度按 **Unicode 码点（Go rune）** 计，上限见 `GET /system/capabilities` 的 `account.maxDisplayNameLength`
-- `avatarUrl` 可为空字符串表示清除。非空时只接受 `http://`、`https://` 绝对地址，或以单个 `/` 开头的站内相对路径；`javascript:`、`data:` 以及 `//host` 协议相对地址一律返回 `VALIDATION_ERROR`。长度同样按 Unicode 码点计数
+- `avatarUrl` 省略或为 `null` 时保留当前头像；显式空字符串清除头像和缩略图。非空时兼容 `http://`、`https://` 绝对地址，或以单个 `/` 开头的站内相对路径；`javascript:`、`data:` 以及 `//host` 协议相对地址返回 `VALIDATION_ERROR`。长度同样按 Unicode 码点计数
+- `/api/v1/users/:id/avatar?v=...` 托管头像地址必须属于当前账户、使用合法版本 UUID；过期版本返回 `409 AVATAR_CHANGED`，名称和头像均不更新，避免旧表单覆盖新上传
 
 响应与 `GET /auth/me` 相同。
+
+### POST /auth/me/avatar
+
+上传当前账户头像，使用 `multipart/form-data` 的 `file` 字段。接受 PNG/JPEG，文件不超过 2 MiB，
+长宽均不超过 4096 像素；以后端实际解码格式为准，不信任扩展名或上传 Content-Type。
+服务端居中裁成 256×256 并重新编码为 PNG，仅保留缩略图，原始文件及元数据不保存。
+
+成功返回 `200` 及更新后的 `UserResponse`，`avatarUrl` 形如：
+
+```text
+/api/v1/users/<user UUID>/avatar?v=<version UUID>
+```
+
+每位用户只保留一个缩略图；替换图片及用户地址在同一事务中完成，不修改显示名称、密码或角色。
+超限返回 `400 AVATAR_TOO_LARGE`，损坏或不支持的图片返回 `400 INVALID_AVATAR`，不影响原头像。
+
+### DELETE /auth/me/avatar
+
+移除当前用户头像及缩略图，成功返回 `200` 和更新后的用户资料。重复移除仍成功。
 
 ### POST /auth/change-password
 
@@ -105,6 +125,14 @@ UTF-8 编码检查 `account.maxPasswordBytes`，当前上限为 72 字节。
 MVP 可由前端删除 token。后端接口返回成功即可。
 
 ## Users
+
+### GET /users/:id/avatar
+
+需要 JWT 鉴权，已登录用户可读取用户头像（与成员及用户搜索中的身份展示一致）。可选查询参数 `v`
+指定版本；不存在或版本已替换返回 `404 AVATAR_NOT_FOUND`。
+成功返回 `image/png`，附带版本 ETag、`Cache-Control: private, no-cache`、`Vary: Authorization`
+和 `X-Content-Type-Options: nosniff`；匹配 `If-None-Match` 时在鉴权后返回 `304`。
+浏览器须通过带 Authorization 的请求取得 Blob 后展示；外部头像地址不得附带本站 token。
 
 ### GET /users/search
 
@@ -151,7 +179,10 @@ limit=20
     "minPasswordLength": 8,
     "maxPasswordBytes": 72,
     "maxDisplayNameLength": 128,
-    "maxAvatarUrlLength": 512
+    "maxAvatarUrlLength": 512,
+    "maxAvatarBytes": 2097152,
+    "avatarSize": 256,
+    "avatarContentTypes": ["image/png", "image/jpeg"]
   }
 }
 ```
@@ -164,6 +195,7 @@ limit=20
 - `retrieval.*` 就是检索服务对 `vectorTopN` / `rerankTopK` 的硬上限
 - `account.minPasswordLength`、`account.maxDisplayNameLength` 与 `account.maxAvatarUrlLength` 按 Unicode 码点（Go rune）计；前端不能用 JavaScript `string.length` 或 HTML `maxLength` 代替
 - `account.maxPasswordBytes` 是密码 UTF-8 编码后的字节上限，与 bcrypt 的 72 字节硬限制同源；前端不能用 JavaScript `string.length` 或 HTML `maxLength` 代替
+- `account.maxAvatarBytes`、`account.avatarSize`、`account.avatarContentTypes` 是头像上传字节上限、标准边长和支持格式
 
 该接口只读，不反映单个知识库的 `retrievalConfig`。
 

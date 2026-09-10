@@ -297,7 +297,7 @@ func TestProfileAvatarLimitCountsUnicodeCodePoints(t *testing.T) {
 	valid := prefix + strings.Repeat("名", MaxAvatarURLLength-utf8.RuneCountInString(prefix))
 	if _, err := services.auth.UpdateProfile(ctx, user.ID, dto.UpdateProfileRequest{
 		DisplayName: "显示名称",
-		AvatarURL:   valid,
+		AvatarURL:   profileAvatarURL(valid),
 	}); err != nil {
 		t.Fatalf("expected %d-rune avatar URL to pass: %v", MaxAvatarURLLength, err)
 	}
@@ -305,7 +305,7 @@ func TestProfileAvatarLimitCountsUnicodeCodePoints(t *testing.T) {
 	tooLong := valid + "名"
 	_, err := services.auth.UpdateProfile(ctx, user.ID, dto.UpdateProfileRequest{
 		DisplayName: "显示名称",
-		AvatarURL:   tooLong,
+		AvatarURL:   profileAvatarURL(tooLong),
 	})
 	assertAppErrorCode(t, err, "VALIDATION_ERROR")
 }

@@ -166,7 +166,7 @@ func newAuthTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.UserAvatar{}); err != nil {
 		t.Fatalf("auto migrate: %v", err)
 	}
 	return db
@@ -185,7 +185,7 @@ func newConcurrentAuthTestDB(t *testing.T) *gorm.DB {
 	}
 	sqlDB.SetMaxOpenConns(4)
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&model.User{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.UserAvatar{}); err != nil {
 		t.Fatalf("auto migrate concurrent auth fixture: %v", err)
 	}
 	return db

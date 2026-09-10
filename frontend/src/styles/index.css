@@ -2,6 +2,7 @@
 @import './reset.css';
 @import './primitives.css';
 @import './app-shell.css';
+@import './account-settings.css';
 @import './uploads.css';
 @import './pages/auth.css';
 @import './pages/home.css';

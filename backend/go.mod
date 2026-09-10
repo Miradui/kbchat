@@ -15,6 +15,7 @@ require (
 	github.com/sashabaranov/go-openai v1.42.0
 	go.uber.org/zap v1.28.0
 	golang.org/x/crypto v0.55.0
+	golang.org/x/image v0.30.0
 	gorm.io/datatypes v1.2.7
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/driver/sqlite v1.6.0

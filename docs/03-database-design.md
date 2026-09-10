@@ -27,6 +27,23 @@ CREATE TABLE users (
 或 UTF-8 字节误算。密码明文不落库；登录和改密在进入 bcrypt 前按 UTF-8
 编码检查 72 字节上限。
 
+## user_avatars
+
+迁移 `022_user_avatars.sql` 为每位用户保留一张经过解码、居中裁剪和重新编码的 PNG 缩略图。
+原始上传不落库；256×256 缩略图与用户头像地址在同一事务中替换或移除。
+
+```sql
+CREATE TABLE user_avatars (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    version UUID NOT NULL,
+    data BYTEA NOT NULL CHECK (octet_length(data) <= 524288),
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+`users.avatar_url` 保存带版本的站内读取地址；旧版本读取返回 404。省略头像的资料保存仅修改显示名称，
+显式外部地址/清空会删除托管缩略图；旧托管地址提交返回冲突，不能移除较新的图片。
+
 ## knowledge_bases
 
 ```sql

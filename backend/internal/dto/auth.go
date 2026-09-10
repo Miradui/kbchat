@@ -19,8 +19,8 @@ type LoginResponse struct {
 }
 
 type UpdateProfileRequest struct {
-	DisplayName string `json:"displayName"`
-	AvatarURL   string `json:"avatarUrl"`
+	DisplayName string  `json:"displayName"`
+	AvatarURL   *string `json:"avatarUrl"`
 }
 
 type ChangePasswordRequest struct {

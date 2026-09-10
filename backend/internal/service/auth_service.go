@@ -78,19 +78,29 @@ func (s *AuthService) UpdateProfile(ctx context.Context, userID uuid.UUID, req d
 	if utf8.RuneCountInString(displayName) > MaxDisplayNameLength {
 		return nil, apperror.Validation(map[string]any{"displayName": "显示名称过长"})
 	}
-	avatarURL := strings.TrimSpace(req.AvatarURL)
-	if err := validateAvatarURL(avatarURL); err != nil {
-		return nil, err
+	var avatarURL *string
+	if req.AvatarURL != nil {
+		trimmed := strings.TrimSpace(*req.AvatarURL)
+		if err := validateAvatarURL(trimmed); err != nil {
+			return nil, err
+		}
+		if strings.HasPrefix(trimmed, "/api/v1/users/") {
+			prefix := "/api/v1/users/" + userID.String() + "/avatar?v="
+			version, err := uuid.Parse(strings.TrimPrefix(trimmed, prefix))
+			if err != nil || !strings.HasPrefix(trimmed, prefix) || trimmed != prefix+version.String() {
+				return nil, apperror.Validation(map[string]any{"avatarUrl": "请使用当前账户已上传的头像"})
+			}
+		}
+		avatarURL = &trimmed
 	}
 
 	if err := s.users.UpdateProfile(ctx, user.ID, displayName, avatarURL); err != nil {
+		if errors.Is(err, repository.ErrUserAvatarChanged) {
+			return nil, apperror.New(http.StatusConflict, "AVATAR_CHANGED", "头像已更新，请刷新账户资料后重试")
+		}
 		return nil, apperror.Internal(err)
 	}
-	user.DisplayName = displayName
-	user.AvatarURL = avatarURL
-
-	res := toUserResponse(user)
-	return &res, nil
+	return s.Me(ctx, userID)
 }
 
 // ChangePassword requires the current password even though the caller is already

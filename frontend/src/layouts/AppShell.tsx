@@ -1,4 +1,4 @@
-import { ChevronsUpDown, LogOut, Menu, Monitor, Moon, Search, Settings, Sun, UserRound, X } from 'lucide-react';
+import { ChevronsUpDown, LogOut, Menu, Monitor, Moon, Search, Settings, Sun, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -6,6 +6,7 @@ import type { NavigateFunction } from 'react-router-dom';
 
 import { getCurrentUser, logout } from '../api/resources';
 import { BrandMark } from '../components/BrandMark';
+import { UserAvatar } from '../components/UserAvatar';
 import { CommandPalette } from '../components/CommandPalette';
 import { PrimaryNav } from '../components/navigation/PrimaryNav';
 import type { AppSection } from '../components/navigation/PrimaryNav';
@@ -256,11 +257,7 @@ export function AppShell({
             width={200}
             trigger={(props) => (
               <button {...props} className="rail__user" type="button">
-                <span className="ui-avatar" aria-hidden="true">
-                  {userAvatarUrl
-                    ? <img alt="" src={userAvatarUrl} onError={() => setUserAvatarUrl('')} />
-                    : <UserRound size={13} />}
-                </span>
+                <UserAvatar url={userAvatarUrl} name={userName} />
                 <span className="rail__user-name" title={userName}>{userName}</span>
                 <ChevronsUpDown aria-hidden="true" />
               </button>

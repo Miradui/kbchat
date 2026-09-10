@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS user_avatars (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    version UUID NOT NULL,
+    data BYTEA NOT NULL CHECK (octet_length(data) <= 524288),
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

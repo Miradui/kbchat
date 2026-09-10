@@ -642,7 +642,7 @@ func TestAuthUpdateProfileValidatesAndPersists(t *testing.T) {
 
 	res, err := services.auth.UpdateProfile(ctx, user.ID, dto.UpdateProfileRequest{
 		DisplayName: "  产品团队  ",
-		AvatarURL:   "https://cdn.example.com/a.png",
+		AvatarURL:   profileAvatarURL("https://cdn.example.com/a.png"),
 	})
 	if err != nil {
 		t.Fatalf("update profile: %v", err)
@@ -680,7 +680,7 @@ func TestAuthUpdateProfileValidatesAndPersists(t *testing.T) {
 	for _, avatar := range []string{"javascript:alert(1)", "data:text/html,payload", "//evil.example.com/a.png"} {
 		_, err := services.auth.UpdateProfile(ctx, user.ID, dto.UpdateProfileRequest{
 			DisplayName: "owner",
-			AvatarURL:   avatar,
+			AvatarURL:   profileAvatarURL(avatar),
 		})
 		if err == nil {
 			t.Fatalf("expected avatar %q to be rejected", avatar)
@@ -691,7 +691,7 @@ func TestAuthUpdateProfileValidatesAndPersists(t *testing.T) {
 	for _, avatar := range []string{"", "/static/avatar.png", "http://example.com/a.png"} {
 		if _, err := services.auth.UpdateProfile(ctx, user.ID, dto.UpdateProfileRequest{
 			DisplayName: "owner",
-			AvatarURL:   avatar,
+			AvatarURL:   profileAvatarURL(avatar),
 		}); err != nil {
 			t.Fatalf("expected avatar %q to be accepted, got %v", avatar, err)
 		}
@@ -807,13 +807,10 @@ func TestAuthChangePasswordEnforcesBcryptUTF8ByteLimit(t *testing.T) {
 
 func TestAuthProfileSaveCannotRestoreAStalePasswordHash(t *testing.T) {
 	ctx := context.Background()
-	services := newWorkspaceTestServices(t)
-	services.db.Config.SkipDefaultTransaction = true
-	sqlDB, err := services.db.DB()
-	if err != nil {
-		t.Fatalf("get sql database: %v", err)
-	}
-	sqlDB.SetMaxOpenConns(1)
+	// Profile/avatar changes now share a transaction; use a shared database
+	// with multiple connections so the password can change while it is paused.
+	services := workspaceTestServices{db: newConcurrentAuthTestDB(t)}
+	services.auth = NewAuthService(config.Config{JWTSecret: strings.Repeat("test-secret-", 4), JWTExpiresIn: "24h"}, repository.NewUserRepository(services.db))
 
 	user := createWorkspaceUser(t, services.db, "owner")
 	currentPassword := "current-secret"
@@ -855,7 +852,7 @@ func TestAuthProfileSaveCannotRestoreAStalePasswordHash(t *testing.T) {
 	go func() {
 		profile, profileErr := services.auth.UpdateProfile(ctx, user.ID, dto.UpdateProfileRequest{
 			DisplayName: "Profile After Password Change",
-			AvatarURL:   "/avatar.png",
+			AvatarURL:   profileAvatarURL("/avatar.png"),
 		})
 		profileDone <- profileResult{profile: profile, err: profileErr}
 	}()
@@ -903,7 +900,10 @@ func TestSystemCapabilitiesReportAccountLimits(t *testing.T) {
 	if res.Account.MinPasswordLength != MinPasswordLength ||
 		res.Account.MaxPasswordBytes != auth.MaxPasswordBytes ||
 		res.Account.MaxDisplayNameLength != MaxDisplayNameLength ||
-		res.Account.MaxAvatarURLLength != MaxAvatarURLLength {
+		res.Account.MaxAvatarURLLength != MaxAvatarURLLength ||
+		res.Account.MaxAvatarBytes != MaxAvatarBytes ||
+		res.Account.AvatarSize != AvatarSize ||
+		strings.Join(res.Account.AvatarContentTypes, ",") != "image/png,image/jpeg" {
 		t.Fatalf("expected account limits to match the service constants, got %#v", res.Account)
 	}
 }

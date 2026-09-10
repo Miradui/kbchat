@@ -20,6 +20,8 @@ type UserRepository struct {
 // and verified it, so a stale password update must not overwrite the winner.
 var ErrUserPasswordChanged = errors.New("user password changed concurrently")
 
+var ErrUserAvatarChanged = errors.New("user avatar changed concurrently")
+
 func NewUserRepository(db *gorm.DB) *UserRepository {
 	return &UserRepository{db: db}
 }
@@ -49,22 +51,41 @@ func (r *UserRepository) Create(ctx context.Context, user *model.User) error {
 // UpdateProfile writes presentation fields only. It intentionally accepts
 // scalar values rather than a User snapshot so a stale profile form cannot
 // restore an older password hash.
-func (r *UserRepository) UpdateProfile(ctx context.Context, userID uuid.UUID, displayName, avatarURL string) error {
-	result := r.db.WithContext(ctx).
-		Model(&model.User{}).
-		Where("id = ?", userID).
-		Updates(map[string]any{
-			"display_name": displayName,
-			"avatar_url":   avatarURL,
-			"updated_at":   time.Now(),
-		})
-	if result.Error != nil {
-		return result.Error
+func (r *UserRepository) UpdateProfile(ctx context.Context, userID uuid.UUID, displayName string, avatarURL *string) error {
+	values := map[string]any{"display_name": displayName, "updated_at": time.Now()}
+	if avatarURL != nil {
+		values["avatar_url"] = *avatarURL
 	}
-	if result.RowsAffected != 1 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&model.User{}).Where("id = ?", userID).Updates(values)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		if avatarURL != nil {
+			// The user update locks the row before this check, serializing profile
+			// writes with avatar replacement. A stale URL rolls back both fields.
+			prefix := "/api/v1/users/" + userID.String() + "/avatar?v="
+			if strings.HasPrefix(*avatarURL, prefix) {
+				version, err := uuid.Parse(strings.TrimPrefix(*avatarURL, prefix))
+				if err != nil {
+					return err
+				}
+				var count int64
+				if err := tx.Model(&model.UserAvatar{}).Where("user_id = ? AND version = ?", userID, version).Count(&count).Error; err != nil {
+					return err
+				}
+				if count != 1 {
+					return ErrUserAvatarChanged
+				}
+				return nil
+			}
+			return tx.Where("user_id = ?", userID).Delete(&model.UserAvatar{}).Error
+		}
+		return nil
+	})
 }
 
 // UpdatePassword writes only the password hash and compares the hash that the

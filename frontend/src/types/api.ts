@@ -456,6 +456,9 @@ export type SystemCapabilities = {
     maxPasswordBytes: number;
     maxDisplayNameLength: number;
     maxAvatarUrlLength: number;
+    maxAvatarBytes?: number;
+    avatarSize?: number;
+    avatarContentTypes?: string[];
   };
 };
 

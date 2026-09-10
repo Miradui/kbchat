@@ -1,0 +1,20 @@
+.account-settings { max-width: 540px; }
+.account-settings > .ui-segmented { margin-bottom: var(--s-2); }
+.account-settings__status { display: grid; gap: var(--s-4); padding: var(--s-6) 0; }
+.account-settings__profile { display: grid; gap: var(--s-6); }
+.account-settings__avatar-section { display: grid; gap: var(--s-3); padding-bottom: var(--s-5); border-bottom: 1px solid var(--line); }
+.account-settings__avatar-row { display: flex; align-items: center; gap: var(--s-5); }
+.account-settings__avatar { height: calc(var(--s-8) * 3); width: calc(var(--s-8) * 3); font-size: var(--t-display); flex-shrink: 0; }
+.account-settings__avatar-info { min-width: 0; }
+.account-settings__avatar-info > p { margin: var(--s-2) 0 var(--s-3); font-size: var(--t-small); }
+.account-settings__avatar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
+.account-settings__avatar-draft { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s-3); padding: var(--s-3); border-radius: var(--r-sm); background: var(--accent-wash); }
+.account-settings__avatar-draft p { display: grid; gap: var(--s-1); min-width: 0; flex: 1; font-size: var(--t-small); }
+.account-settings__avatar-draft strong { color: var(--accent); }
+.account-settings__avatar-draft p > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-settings__footer { display: flex; justify-content: flex-end; padding-top: var(--s-3); border-top: 1px solid var(--line); }
+
+@media (max-width: 540px) {
+  .account-settings__avatar-row { align-items: flex-start; gap: var(--s-3); }
+  .account-settings__avatar { height: var(--s-16); width: var(--s-16); }
+}

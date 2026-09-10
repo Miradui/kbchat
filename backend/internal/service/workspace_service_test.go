@@ -52,6 +52,7 @@ func newWorkspaceTestServices(t *testing.T) workspaceTestServices {
 	}
 	if err := db.AutoMigrate(
 		&model.User{},
+		&model.UserAvatar{},
 		&model.KnowledgeBase{},
 		&model.KnowledgeBaseMember{},
 		&model.KnowledgeBaseCategory{},

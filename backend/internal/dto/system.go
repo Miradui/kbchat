@@ -13,10 +13,13 @@ type SystemRetrievalCapabilities struct {
 }
 
 type SystemAccountCapabilities struct {
-	MinPasswordLength    int `json:"minPasswordLength"`
-	MaxPasswordBytes     int `json:"maxPasswordBytes"`
-	MaxDisplayNameLength int `json:"maxDisplayNameLength"`
-	MaxAvatarURLLength   int `json:"maxAvatarUrlLength"`
+	MinPasswordLength    int      `json:"minPasswordLength"`
+	MaxPasswordBytes     int      `json:"maxPasswordBytes"`
+	MaxDisplayNameLength int      `json:"maxDisplayNameLength"`
+	MaxAvatarURLLength   int      `json:"maxAvatarUrlLength"`
+	MaxAvatarBytes       int      `json:"maxAvatarBytes"`
+	AvatarSize           int      `json:"avatarSize"`
+	AvatarContentTypes   []string `json:"avatarContentTypes"`
 }
 
 // SystemCapabilitiesResponse mirrors the server-side limits the frontend used to

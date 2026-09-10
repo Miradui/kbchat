@@ -38,6 +38,9 @@ func (s *SystemService) Capabilities() *dto.SystemCapabilitiesResponse {
 			MaxPasswordBytes:     auth.MaxPasswordBytes,
 			MaxDisplayNameLength: MaxDisplayNameLength,
 			MaxAvatarURLLength:   MaxAvatarURLLength,
+			MaxAvatarBytes:       MaxAvatarBytes,
+			AvatarSize:           AvatarSize,
+			AvatarContentTypes:   []string{"image/png", "image/jpeg"},
 		},
 	}
 }
