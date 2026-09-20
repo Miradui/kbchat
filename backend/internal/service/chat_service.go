@@ -1668,7 +1668,10 @@ func (s *ChatService) updateSessionTitleIfNeeded(ctx context.Context, session *m
 	}
 	titleCtx, cancel := context.WithTimeout(ctx, sessionTitleTimeout)
 	defer cancel()
-	title, err := generateSessionTitle(titleCtx, s.titleProvider, question)
+	title, titleUsage, err := generateSessionTitleWithUsage(titleCtx, s.titleProvider, question)
+	if titleUsage.Model != "" {
+		s.recordTitleUsage(ctx, session, titleUsage)
+	}
 	if err != nil || titleCtx.Err() != nil || shouldGenerateSessionTitle(title) || title == fallback {
 		return
 	}
@@ -1683,11 +1686,23 @@ func shouldGenerateSessionTitle(title string) bool {
 }
 
 func generateSessionTitle(ctx context.Context, provider titlecore.Provider, question string) (string, error) {
-	raw, err := provider.SummarizeTitle(ctx, buildSessionTitleMessages(question))
-	if err != nil {
-		return "", err
+	title, _, err := generateSessionTitleWithUsage(ctx, provider, question)
+	return title, err
+}
+
+func generateSessionTitleWithUsage(ctx context.Context, provider titlecore.Provider, question string) (string, titlecore.Usage, error) {
+	var raw string
+	var usage titlecore.Usage
+	var err error
+	if reporter, ok := provider.(titlecore.UsageProvider); ok {
+		raw, usage, err = reporter.SummarizeTitleWithUsage(ctx, buildSessionTitleMessages(question))
+	} else {
+		raw, err = provider.SummarizeTitle(ctx, buildSessionTitleMessages(question))
 	}
-	return cleanSessionTitle(raw), nil
+	if err != nil {
+		return "", usage, err
+	}
+	return cleanSessionTitle(raw), usage, nil
 }
 
 func buildSessionTitleMessages(question string) []titlecore.Message {
@@ -1842,6 +1857,9 @@ func (s *ChatService) recordUsage(ctx context.Context, userID uuid.UUID, session
 	if s.usage == nil || session == nil || usage.Model == "" {
 		return
 	}
+	if session.ID == uuid.Nil && purpose == "answer" {
+		purpose = "evaluation"
+	}
 	var prompt, completion, total *int
 	if usage.PromptTokens > 0 {
 		value := usage.PromptTokens
@@ -1856,6 +1874,26 @@ func (s *ChatService) recordUsage(ctx context.Context, userID uuid.UUID, session
 		total = &value
 	}
 	_ = s.usage.Create(ctx, &model.ModelUsageRecord{UserID: userID, KnowledgeBaseID: session.KnowledgeBaseID, SessionID: &session.ID, Purpose: purpose, Provider: "chat", Model: usage.Model, PromptTokens: prompt, CompletionTokens: completion, TotalTokens: total, LatencyMs: durationMillis(latency)})
+}
+
+func (s *ChatService) recordTitleUsage(ctx context.Context, session *model.ChatSession, usage titlecore.Usage) {
+	if s.usage == nil || session == nil || usage.Model == "" {
+		return
+	}
+	var prompt, completion, total *int
+	if usage.PromptTokens > 0 {
+		value := usage.PromptTokens
+		prompt = &value
+	}
+	if usage.CompletionTokens > 0 {
+		value := usage.CompletionTokens
+		completion = &value
+	}
+	if usage.TotalTokens > 0 {
+		value := usage.TotalTokens
+		total = &value
+	}
+	_ = s.usage.Create(ctx, &model.ModelUsageRecord{UserID: session.UserID, KnowledgeBaseID: session.KnowledgeBaseID, SessionID: &session.ID, Purpose: "title", Provider: "title", Model: usage.Model, PromptTokens: prompt, CompletionTokens: completion, TotalTokens: total})
 }
 
 func durationMillis(value time.Duration) *int64 {

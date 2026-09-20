@@ -10,3 +10,13 @@ type Message struct {
 type Provider interface {
 	SummarizeTitle(ctx context.Context, messages []Message) (string, error)
 }
+
+type Usage struct {
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+	Model            string
+}
+type UsageProvider interface {
+	SummarizeTitleWithUsage(context.Context, []Message) (string, Usage, error)
+}

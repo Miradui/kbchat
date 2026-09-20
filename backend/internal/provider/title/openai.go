@@ -31,8 +31,13 @@ func NewOpenAICompatibleProvider(cfg config.Config) *OpenAICompatibleProvider {
 }
 
 func (p *OpenAICompatibleProvider) SummarizeTitle(ctx context.Context, messages []titlecore.Message) (string, error) {
+	title, _, err := p.SummarizeTitleWithUsage(ctx, messages)
+	return title, err
+}
+
+func (p *OpenAICompatibleProvider) SummarizeTitleWithUsage(ctx context.Context, messages []titlecore.Message) (string, titlecore.Usage, error) {
 	if p.apiKey == "" {
-		return "", fmt.Errorf("TITLE_API_KEY is required")
+		return "", titlecore.Usage{}, fmt.Errorf("TITLE_API_KEY is required")
 	}
 
 	payloadMessages := make([]openai.ChatCompletionMessage, 0, len(messages))
@@ -48,10 +53,10 @@ func (p *OpenAICompatibleProvider) SummarizeTitle(ctx context.Context, messages 
 		Temperature: 0.1,
 	})
 	if err != nil {
-		return "", fmt.Errorf("title request failed: %w", err)
+		return "", titlecore.Usage{}, fmt.Errorf("title request failed: %w", err)
 	}
 	if len(response.Choices) == 0 {
-		return "", fmt.Errorf("title response has no choices")
+		return "", titlecore.Usage{}, fmt.Errorf("title response has no choices")
 	}
-	return response.Choices[0].Message.Content, nil
+	return response.Choices[0].Message.Content, titlecore.Usage{PromptTokens: response.Usage.PromptTokens, CompletionTokens: response.Usage.CompletionTokens, TotalTokens: response.Usage.TotalTokens, Model: response.Model}, nil
 }
