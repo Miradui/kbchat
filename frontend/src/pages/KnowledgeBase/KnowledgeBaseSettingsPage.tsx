@@ -7,6 +7,7 @@ import { canUnlessUnknown } from '../../utils/access';
 import { KnowledgeBaseLayout, KnowledgeBaseLoadFailure } from './KnowledgeBaseLayout';
 import { MembersPanel } from './MembersPanel';
 import { RetrievalConfigForm } from './RetrievalConfigForm';
+import { AnswerConfigForm } from './AnswerConfigForm';
 import { RetrievalTestPanel } from './RetrievalTestPanel';
 import { useKnowledgeBase } from './useKnowledgeBase';
 
@@ -49,6 +50,7 @@ function KnowledgeBaseSettings() {
       <div className="kb-settings">
         <div className="kb-settings__grid">
           <RetrievalConfigForm knowledgeBase={knowledgeBase} onUpdated={setKnowledgeBase} />
+          <AnswerConfigForm knowledgeBase={knowledgeBase} onUpdated={setKnowledgeBase} />
           {showMembers && <MembersPanel knowledgeBase={knowledgeBase} onVisibilityChange={handleVisibility} />}
         </div>
         <RetrievalTestPanel knowledgeBase={knowledgeBase} />

@@ -55,6 +55,7 @@ type KnowledgeBaseListItem struct {
 	CategoryID              *uuid.UUID
 	Visibility              string
 	RetrievalConfig         []byte
+	AnswerConfig            []byte
 	CreatedAt               time.Time
 	UpdatedAt               time.Time
 	DocumentCount           int64
@@ -97,6 +98,7 @@ func (r *KnowledgeBaseRepository) ListWorkspace(ctx context.Context, ownerID uui
 			knowledge_bases.category_id AS category_id,
 			knowledge_bases.visibility AS visibility,
 			knowledge_bases.retrieval_config AS retrieval_config,
+			knowledge_bases.answer_config AS answer_config,
 			knowledge_bases.created_at AS created_at,
 			knowledge_bases.updated_at AS updated_at,
 			COUNT(DISTINCT documents.id) AS document_count,

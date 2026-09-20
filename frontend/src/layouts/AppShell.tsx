@@ -47,6 +47,7 @@ const sectionLabels: Record<AppSection, string> = {
   documents: '文档',
   tags: '标签',
   search: '搜索',
+  'admin-users': '用户管理',
 };
 
 const themeOptions: Array<{ value: ThemeChoice; label: string; icon: typeof Sun }> = [

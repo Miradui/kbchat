@@ -1,5 +1,6 @@
 import {
   Activity,
+  ShieldCheck,
   FileText,
   Home,
   Library,
@@ -19,7 +20,8 @@ export type AppSection =
   | 'knowledge-bases'
   | 'documents'
   | 'tags'
-  | 'search';
+  | 'search'
+  | 'admin-users';
 
 type NavItem = { to: string; label: string; section: AppSection; icon: LucideIcon; systemAdminOnly?: boolean };
 
@@ -51,6 +53,7 @@ const groups: Array<{ label: string; items: NavItem[] }> = [
     label: '系统',
     items: [
       { to: '/diagnostics', label: '系统诊断', section: 'diagnostics', icon: Activity, systemAdminOnly: true },
+      { to: '/admin/users', label: '用户管理', section: 'admin-users', icon: ShieldCheck, systemAdminOnly: true },
     ],
   },
 ];

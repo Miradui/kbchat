@@ -17,12 +17,21 @@ type RetrievalConfig struct {
 	EnableKeyword bool `json:"enableKeyword"`
 }
 
+type AnswerConfig struct {
+	SystemPromptAddition  string   `json:"systemPromptAddition"`
+	AnswerLanguage        string   `json:"answerLanguage"`
+	AllowGeneralKnowledge bool     `json:"allowGeneralKnowledge"`
+	Model                 string   `json:"model"`
+	Temperature           *float64 `json:"temperature"`
+}
+
 type KnowledgeBaseRequest struct {
 	Name            string           `json:"name" binding:"required"`
 	Description     string           `json:"description"`
 	CategoryID      *uuid.UUID       `json:"categoryId"`
 	Visibility      string           `json:"visibility"`
 	RetrievalConfig *RetrievalConfig `json:"retrievalConfig"`
+	AnswerConfig    *AnswerConfig    `json:"answerConfig"`
 	TagIDs          *[]uuid.UUID     `json:"tagIds,omitempty"`
 }
 
@@ -33,6 +42,7 @@ type KnowledgeBaseResponse struct {
 	CategoryID              *string                    `json:"categoryId"`
 	Visibility              string                     `json:"visibility"`
 	RetrievalConfig         RetrievalConfig            `json:"retrievalConfig"`
+	AnswerConfig            AnswerConfig               `json:"answerConfig"`
 	CreatedAt               time.Time                  `json:"createdAt"`
 	UpdatedAt               time.Time                  `json:"updatedAt"`
 	DocumentCount           int64                      `json:"documentCount,omitempty"`

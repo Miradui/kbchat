@@ -13,6 +13,8 @@
 
 ## 扩展
 
+迁移 025 为 `users` 增加 `status`、`last_login_at`、`created_by`；迁移 026 新增 `model_usage_records` 保存模型调用用途、模型名、token 和延迟；迁移 027 为 `knowledge_bases` 增加 `answer_config`。
+
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
@@ -449,3 +451,6 @@ CREATE INDEX idx_kb_tag_bindings_tag_id ON knowledge_base_tag_bindings (tag_id);
 3. citations 保存在 assistant 消息的 `citations` 字段。
 4. 不要创建多租户相关表。
 5. 不要把文件二进制内容写入数据库。
+## 迁移 025–027
+
+迁移 025 为 `users` 增加 `status`、`last_login_at`、`created_by`；迁移 026 新增 `model_usage_records` 保存模型调用用途、模型名、token 和延迟；迁移 027 为 `knowledge_bases` 增加 `answer_config`。

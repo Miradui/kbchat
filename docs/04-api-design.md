@@ -181,6 +181,16 @@ limit=20
 
 ## System
 
+### Admin users
+
+系统管理员专用接口位于 `/admin/users`，支持分页搜索、创建账号、修改显示名/状态、一次性重置密码和切换系统管理员角色。禁用账号会在后续请求的认证中间件中立即失效；不能禁用或降级自己，也不能撤销最后一位启用的管理员。
+
+`GET /admin/users` 支持 `q`、`status`、`role`、`page`、`pageSize`。创建和重置密码响应中的密码只返回一次。非管理员统一返回 `SYSTEM_ADMIN_REQUIRED`。
+
+### GET /chat/quality/usage
+
+需要质量读取权限。`knowledgeBaseId` 可选，`from` / `to` 使用 RFC3339，`groupBy` 为 `day`、`knowledgeBase`、`user` 或 `model`，默认最近 7 天按日聚合。返回 prompt、completion、total token 和调用次数；Provider 未返回 usage 时 token 字段保持空值并不会估算。
+
 ### GET /system/capabilities
 
 返回前端需要遵守的服务端限制，避免前端复刻常量后与服务端配置脱钩。需要登录。

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
@@ -25,6 +26,8 @@ var defaultRetrievalConfig = dto.RetrievalConfig{
 	EnableRerank:   true,
 	EnableKeyword:  true,
 }
+
+var defaultAnswerConfig = dto.AnswerConfig{AnswerLanguage: "auto", AllowGeneralKnowledge: false}
 
 type KnowledgeBaseService struct {
 	repo        *repository.KnowledgeBaseRepository
@@ -76,6 +79,14 @@ func (s *KnowledgeBaseService) Create(ctx context.Context, ownerID uuid.UUID, re
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
+	answerConfig, err := normalizeAnswerConfig(req.AnswerConfig)
+	if err != nil {
+		return nil, err
+	}
+	answerJSON, err := json.Marshal(answerConfig)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
 
 	kb := &model.KnowledgeBase{
 		Name:            req.Name,
@@ -85,6 +96,7 @@ func (s *KnowledgeBaseService) Create(ctx context.Context, ownerID uuid.UUID, re
 		CategoryID:      req.CategoryID,
 		Visibility:      normalizedVisibility(req.Visibility),
 		RetrievalConfig: datatypes.JSON(configJSON),
+		AnswerConfig:    datatypes.JSON(answerJSON),
 	}
 	if err := s.ensureCategoryOwner(ctx, ownerID, kb.CategoryID); err != nil {
 		return nil, err
@@ -253,6 +265,14 @@ func (s *KnowledgeBaseService) Update(ctx context.Context, ownerID, id uuid.UUID
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
+	answerConfig, err := normalizeAnswerConfig(req.AnswerConfig)
+	if err != nil {
+		return nil, err
+	}
+	answerJSON, err := json.Marshal(answerConfig)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
 	visibility := normalizedVisibility(req.Visibility)
 	if err := validateVisibility(visibility); err != nil {
 		return nil, err
@@ -271,6 +291,7 @@ func (s *KnowledgeBaseService) Update(ctx context.Context, ownerID, id uuid.UUID
 	kb.CategoryID = req.CategoryID
 	kb.Visibility = visibility
 	kb.RetrievalConfig = datatypes.JSON(configJSON)
+	kb.AnswerConfig = datatypes.JSON(answerJSON)
 	if err := s.repo.Update(ctx, kb); err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -842,6 +863,27 @@ func defaultConfig(config *dto.RetrievalConfig) dto.RetrievalConfig {
 	return *config
 }
 
+func normalizeAnswerConfig(config *dto.AnswerConfig) (dto.AnswerConfig, error) {
+	result := defaultAnswerConfig
+	if config != nil {
+		result = *config
+	}
+	result.SystemPromptAddition = strings.TrimSpace(result.SystemPromptAddition)
+	if utf8.RuneCountInString(result.SystemPromptAddition) > 2000 {
+		return result, apperror.Validation(map[string]any{"answerConfig": "系统提示补充不能超过 2000 个字符"})
+	}
+	if result.AnswerLanguage == "" {
+		result.AnswerLanguage = "auto"
+	}
+	if result.AnswerLanguage != "auto" && result.AnswerLanguage != "zh" && result.AnswerLanguage != "en" {
+		return result, apperror.Validation(map[string]any{"answerConfig.answerLanguage": "回答语言必须是 auto、zh 或 en"})
+	}
+	if result.Temperature != nil && (*result.Temperature < 0 || *result.Temperature > 1) {
+		return result, apperror.Validation(map[string]any{"answerConfig.temperature": "温度必须在 0 到 1 之间"})
+	}
+	return result, nil
+}
+
 // capabilityStrings renders a role's capabilities for the wire.
 //
 // Returns an empty slice rather than nil so the JSON field is `[]`; a client
@@ -860,6 +902,10 @@ func toKnowledgeBaseResponse(kb *model.KnowledgeBase, tags []model.KnowledgeBase
 	if len(kb.RetrievalConfig) > 0 {
 		_ = json.Unmarshal(kb.RetrievalConfig, &config)
 	}
+	answerConfig := defaultAnswerConfig
+	if len(kb.AnswerConfig) > 0 {
+		_ = json.Unmarshal(kb.AnswerConfig, &answerConfig)
+	}
 	var categoryID *string
 	if kb.CategoryID != nil {
 		value := kb.CategoryID.String()
@@ -877,6 +923,7 @@ func toKnowledgeBaseResponse(kb *model.KnowledgeBase, tags []model.KnowledgeBase
 		CategoryID:      categoryID,
 		Visibility:      visibility,
 		RetrievalConfig: config,
+		AnswerConfig:    answerConfig,
 		CreatedAt:       kb.CreatedAt,
 		UpdatedAt:       kb.UpdatedAt,
 		UpdatedBy:       toKnowledgeBaseUserSummary(kb.UpdatedBy, &kb.Owner),
@@ -890,6 +937,10 @@ func toWorkspaceKnowledgeBaseResponse(item *repository.KnowledgeBaseListItem, ta
 	config := defaultRetrievalConfig
 	if len(item.RetrievalConfig) > 0 {
 		_ = json.Unmarshal(item.RetrievalConfig, &config)
+	}
+	answerConfig := defaultAnswerConfig
+	if len(item.AnswerConfig) > 0 {
+		_ = json.Unmarshal(item.AnswerConfig, &answerConfig)
 	}
 	var categoryID *string
 	if item.CategoryID != nil {
@@ -912,6 +963,7 @@ func toWorkspaceKnowledgeBaseResponse(item *repository.KnowledgeBaseListItem, ta
 		CategoryID:              categoryID,
 		Visibility:              visibility,
 		RetrievalConfig:         config,
+		AnswerConfig:            answerConfig,
 		CreatedAt:               item.CreatedAt,
 		UpdatedAt:               item.UpdatedAt,
 		DocumentCount:           item.DocumentCount,

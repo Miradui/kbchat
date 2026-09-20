@@ -42,6 +42,9 @@
 | 404 | `DOCUMENT_FILE_NOT_FOUND` | 文档原始文件不存在 |
 | 400 | `DOCUMENT_TYPE_UNSUPPORTED` | 不支持的文档类型 |
 | 400 | `DOCUMENT_PREVIEW_FAILED` | 文档内容无法解析，无法在线预览 |
+| 403 | `SYSTEM_ADMIN_REQUIRED` | 需要系统管理员权限 |
+| 409 | `LAST_ADMIN_REQUIRED` | 不能撤销最后一位系统管理员 |
+| 400 | `ADMIN_SELF_MUTATION` | 不能禁用或降级自己的管理员账号 |
 | 400 | `FILE_TOO_LARGE_FOR_PREVIEW` | 文档过大，无法在线预览 |
 | 409 | `DOCUMENT_DUPLICATE_CONTENT` | 知识库中已存在内容相同的文档 |
 | 409 | `DOCUMENT_ALREADY_SUPERSEDED` | 该文档已被替换，请替换最新版本 |

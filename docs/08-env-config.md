@@ -4,6 +4,10 @@
 
 进程环境变量优先于磁盘中的 `.env`。因此容器、systemd 或命令行注入的值可以可靠覆盖本地文件；`.env` 只为尚未设置的变量提供默认值。
 
+## P4–P6 配置
+
+`CHAT_ALLOWED_MODELS` 是可选的逗号分隔回答模型白名单；`MODEL_PRICING` 可选地提供按百万 token 的 prompt/completion 价格 JSON，用于质量页成本估算。
+
 ## .env.example
 
 ```env
@@ -196,3 +200,6 @@ fallback
 5. 程序和 `.env.example` 默认开启 Rerank，标准 RAG 启动必须配置可用的 `RERANK_*`。仅在明确调试无 Rerank Provider 的向量降级路径时，才显式设置 `RERANK_ENABLED=false`。
 6. `CHAT_HISTORY_LIMIT` 不要设置过大，避免上下文成本失控；需要长记忆时应另行设计摘要机制。
 7. 会话标题摘要必须使用 `TITLE_*` 独立模型配置，不要复用 `CHAT_*`。
+### P4–P6 配置
+
+`CHAT_ALLOWED_MODELS` 是可选的逗号分隔回答模型白名单；`MODEL_PRICING` 可选地提供按百万 token 的 prompt/completion 价格 JSON，用于质量页成本估算。

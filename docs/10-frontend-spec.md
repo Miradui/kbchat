@@ -164,6 +164,8 @@
 
 ## 文档管理页
 
+系统管理员可在 `/admin/users` 管理账号；普通用户看不到导航入口，直接访问会回到首页。创建/重置密码结果只在当前弹窗显示一次。
+
 `/documents` 与 `/knowledge-bases/:id/documents` **由同一个组件渲染**，差别只有外壳和作用域：前者是全局台账，后者嵌在知识库上下文中并把知识库筛选钉死。
 
 1. 两个路由的数据源使用同一查询面：`GET /documents` 与 `GET /knowledge-bases/:id/documents` 支持相同的 `q`、`status`、`fileType`、`sort`、`page`、`pageSize`，后者只把 `knowledgeBaseId` 固定为路径值。筛选、排序和分页必须由服务端执行，不得把全量结果拉到浏览器再过滤。

@@ -16,6 +16,7 @@
 
 - 2026-09-20：功能优化计划 P2 限流与 Redis 落地完成。新增 Lua 原子固定窗口计数、可信代理链 IP 解析、open / closed 故障策略、登录与聊天路由接线、版本化 float32 query embedding 缓存，以及相应进程内诊断指标。前端统一解析 `Retry-After`，登录表单和聊天输入区就地展示 429，发送受限时恢复问题。后端全量 test、vet、build 与前端生产构建通过；P2 前端定向测试通过。真实 Redis 停机演练、真实 Provider 调用计数和浏览器复验未执行。
 - 2026-09-20：功能优化计划 P3 DOCX 解析完成。新增基于 `encoding/xml` 的 OOXML 解析器，支持正文、Heading 1–6、编号/项目列表、GFM 表格与合并单元格空值，忽略页眉页脚、批注和删除修订；上传按扩展名与 ZIP 魔数校验，预览返回解析文本，前端补充 DOCX MIME、图标与能力提示。后端全量 test 与前端文档页定向测试、生产构建通过；真实 DOCX 上传/worker/浏览器端到端复验待集成环境执行。
+- 2026-09-20：功能优化计划 P4–P6 已接入。P4 提供管理员用户管理、禁用账号即时失效、一次性密码与最后管理员保护；P5 提供可选 Provider usage、`model_usage_records` 和质量页 token 汇总；P6 提供知识库回答配置与回答提示词扩展。P4–P6 的迁移和真实 Provider/部署复验待集成环境执行。
 - 2026-09-20：功能优化计划 P1 混合检索完成。新增 `internal/document/lexer`（中文 bigram + 精确词元分词，索引与查询共用）、`document_chunks.search_vector` 与 GIN 索引、HNSW 替换 ivfflat（迁移 024，`cmd/migrate` 新增 `-timeout`）、`cmd/reindex-keywords` 回填 CLI、`ChunkRepository.SearchByKeyword`、retrieval 的 RRF 融合与 `keywordStage` / `fusionStage` debug、`retrievalConfig.enableKeyword`、`KEYWORD_SEARCH_ENABLED`、capabilities 的 `keywordSearchEnabled`，以及检索配置表单、检索测试面板和评测面板的开关与展示。关闭关键词召回时行为与旧版一致，既有 retrieval 测试未改动即通过。本地数据库尚未执行 024，也未运行回填；后端 vet / 全量 test / build 与前端 tsc、生产构建、路由分包检查通过。详见下表与 [功能优化计划](17-improvement-plan.md)。
 
 - 2026-09-14：I11 时间修复完成，业务时间统一使用 `timestamptz`。应用会话和自动时间保持 UTC、微秒精度，移除自定义 timestamp 编码；启动检查会提示未迁移的旧列。已执行 023，保持旧值原有的 UTC 解释，不批量校正历史偏差。真实 PostgreSQL、业务接口和前端时间格式化检查通过，详情见下表。
@@ -27,7 +28,7 @@
 
 ### 功能优化计划（2026-09-20）
 
-- 六个改进阶段的目标、设计要点、涉及改动、测试与验收见 [功能优化计划](17-improvement-plan.md)。P1 混合检索、P2 限流与 Redis、P3 DOCX 解析已完成；下一阶段从用户管理、Token 用量统计和按知识库回答配置中按计划推进。
+- 六个改进阶段的目标、设计要点、涉及改动、测试与验收见 [功能优化计划](17-improvement-plan.md)。P1–P6 均已完成代码接入；仍需在部署环境执行 025–027 迁移、真实 Provider usage/模型覆盖和浏览器复验。
 
 ## 验证记录与边界
 
