@@ -30,6 +30,7 @@ type SystemCapabilitiesResponse struct {
 	// KeywordSearchEnabled mirrors KEYWORD_SEARCH_ENABLED so the retrieval form
 	// can explain why a knowledge base's enableKeyword has no effect.
 	KeywordSearchEnabled bool                        `json:"keywordSearchEnabled"`
+	ChatModels           []string                    `json:"chatModels"`
 	Upload               SystemUploadCapabilities    `json:"upload"`
 	Retrieval            SystemRetrievalCapabilities `json:"retrieval"`
 	Account              SystemAccountCapabilities   `json:"account"`

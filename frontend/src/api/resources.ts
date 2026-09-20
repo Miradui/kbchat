@@ -1,6 +1,9 @@
 import { ApiError, apiBlobRequest, apiEventStream, apiRequest, apiUploadRequest } from './client';
 import type {
   ActivityListResponse,
+  AdminUser,
+  AdminUserCreateInput,
+  AdminUserListResponse,
   BatchResultResponse,
   ChangePasswordInput,
   ChatFeedbackRating,
@@ -13,6 +16,7 @@ import type {
   ChatQualityFeedbackParams,
   ChatQualityOverview,
   ChatQualityOverviewParams,
+  ChatUsageResponse,
   ChatSession,
   ChatSessionListParams,
   Citation,
@@ -353,6 +357,26 @@ export function updateKnowledgeBasePermissions(
 
 export function searchUsers(q: string, limit = 20): Promise<UserSearchResponse> {
   return apiRequest<UserSearchResponse>(withQuery('/users/search', { q, limit }));
+}
+
+export function listAdminUsers(params: { q?: string; status?: string; role?: string; page?: number; pageSize?: number } = {}): Promise<AdminUserListResponse> {
+  return apiRequest<AdminUserListResponse>(withQuery('/admin/users', params));
+}
+
+export function createAdminUser(input: AdminUserCreateInput): Promise<{ user: AdminUser; initialPassword: string }> {
+  return apiRequest<{ user: AdminUser; initialPassword: string }>('/admin/users', { method: 'POST', body: input });
+}
+
+export function updateAdminUser(id: string, input: { displayName: string; status: string }): Promise<AdminUser> {
+  return apiRequest<AdminUser>(`/admin/users/${id}`, { method: 'PUT', body: input });
+}
+
+export function resetAdminUserPassword(id: string): Promise<{ user: AdminUser; password: string }> {
+  return apiRequest<{ user: AdminUser; password: string }>(`/admin/users/${id}/reset-password`, { method: 'POST' });
+}
+
+export function updateAdminUserRole(id: string, role: string): Promise<AdminUser> {
+  return apiRequest<AdminUser>(`/admin/users/${id}/role`, { method: 'PUT', body: { role } });
 }
 
 export function addKnowledgeBaseMember(
@@ -708,6 +732,10 @@ export function getChatQualityOverview(
   params: ChatQualityOverviewParams = {},
 ): Promise<ChatQualityOverview> {
   return apiRequest<ChatQualityOverview>(withQuery('/chat/quality/overview', params));
+}
+
+export function getChatUsage(params: { knowledgeBaseId?: string; from?: string; to?: string; groupBy?: string } = {}): Promise<ChatUsageResponse> {
+  return apiRequest<ChatUsageResponse>(withQuery('/chat/quality/usage', params));
 }
 
 export function listNegativeChatFeedback(

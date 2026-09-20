@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -273,6 +274,40 @@ func (h *ChatHandler) QualityOverview(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, res)
+}
+
+func (h *ChatHandler) Usage(c *gin.Context) {
+	userID, ok := currentUserIDOrError(c)
+	if !ok {
+		return
+	}
+	var kbID *uuid.UUID
+	if raw := c.Query("knowledgeBaseId"); raw != "" {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			RespondError(c, apperror.Validation(map[string]any{"knowledgeBaseId": "知识库 ID 不合法"}))
+			return
+		}
+		kbID = &parsed
+	}
+	from, to := parseUsageTime(c.Query("from")), parseUsageTime(c.Query("to"))
+	res, err := h.chats.GetChatUsage(c.Request.Context(), userID, dto.ChatUsageQuery{KnowledgeBaseID: kbID, From: from, To: to, GroupBy: c.Query("groupBy")})
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+func parseUsageTime(value string) time.Time {
+	if value == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
 }
 
 func (h *ChatHandler) ListNegativeFeedback(c *gin.Context) {

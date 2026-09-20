@@ -12,6 +12,7 @@ import { DEFAULT_MAX_PASSWORD_BYTES } from '../utils/password';
 export const defaultSystemCapabilities: SystemCapabilities = {
   rerankEnabled: false,
   keywordSearchEnabled: true,
+  chatModels: [],
   upload: {
     maxFileBytes: 50 * 1024 * 1024,
     allowedExtensions: ['txt', 'md', 'pdf', 'docx'],

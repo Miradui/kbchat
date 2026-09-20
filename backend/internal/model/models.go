@@ -10,14 +10,40 @@ import (
 )
 
 type User struct {
-	ID           uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
-	Username     string    `gorm:"size:64;uniqueIndex;not null" json:"username"`
-	PasswordHash string    `gorm:"not null" json:"-"`
-	DisplayName  string    `gorm:"size:128" json:"displayName"`
-	AvatarURL    string    `json:"avatarUrl"`
-	Role         string    `gorm:"size:32;default:user" json:"role"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	ID           uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	Username     string     `gorm:"size:64;uniqueIndex;not null" json:"username"`
+	PasswordHash string     `gorm:"not null" json:"-"`
+	DisplayName  string     `gorm:"size:128" json:"displayName"`
+	AvatarURL    string     `json:"avatarUrl"`
+	Role         string     `gorm:"size:32;default:user" json:"role"`
+	Status       string     `gorm:"size:16;not null;default:active;index" json:"status"`
+	LastLoginAt  *time.Time `json:"lastLoginAt"`
+	CreatedByID  *uuid.UUID `gorm:"type:uuid;index" json:"createdById"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	UpdatedAt    time.Time  `json:"updatedAt"`
+}
+
+type ModelUsageRecord struct {
+	ID               uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	UserID           uuid.UUID  `gorm:"type:uuid;not null;index" json:"userId"`
+	KnowledgeBaseID  uuid.UUID  `gorm:"type:uuid;not null;index" json:"knowledgeBaseId"`
+	SessionID        *uuid.UUID `gorm:"type:uuid;index" json:"sessionId"`
+	MessageID        *uuid.UUID `gorm:"type:uuid;index" json:"messageId"`
+	Purpose          string     `gorm:"size:32;not null" json:"purpose"`
+	Provider         string     `gorm:"size:64;not null" json:"provider"`
+	Model            string     `gorm:"size:128;not null" json:"model"`
+	PromptTokens     *int       `json:"promptTokens"`
+	CompletionTokens *int       `json:"completionTokens"`
+	TotalTokens      *int       `json:"totalTokens"`
+	LatencyMs        *int64     `json:"latencyMs"`
+	CreatedAt        time.Time  `gorm:"index" json:"createdAt"`
+}
+
+func (r *ModelUsageRecord) BeforeCreate(_ *gorm.DB) error {
+	if r.ID == uuid.Nil {
+		r.ID = uuid.New()
+	}
+	return nil
 }
 
 func (u *User) BeforeCreate(_ *gorm.DB) error {
@@ -39,6 +65,7 @@ type KnowledgeBase struct {
 	Category        *KnowledgeBaseCategory `gorm:"foreignKey:CategoryID" json:"-"`
 	Visibility      string                 `gorm:"size:32;default:private;not null" json:"visibility"`
 	RetrievalConfig datatypes.JSON         `gorm:"type:jsonb;default:'{\"vectorTopN\":30,\"rerankTopK\":5,\"scoreThreshold\":0.3,\"enableRerank\":true}'" json:"retrievalConfig"`
+	AnswerConfig    datatypes.JSON         `gorm:"type:jsonb;default:'{\"answerLanguage\":\"auto\",\"allowGeneralKnowledge\":false,\"model\":\"\"}'" json:"answerConfig"`
 	CreatedAt       time.Time              `json:"createdAt"`
 	UpdatedAt       time.Time              `json:"updatedAt"`
 	DeletedAt       gorm.DeletedAt         `gorm:"index" json:"-"`
@@ -280,6 +307,9 @@ func (kb *KnowledgeBase) BeforeCreate(_ *gorm.DB) error {
 	}
 	if len(kb.RetrievalConfig) == 0 {
 		kb.RetrievalConfig = datatypes.JSON([]byte(`{"vectorTopN":30,"rerankTopK":5,"scoreThreshold":0.3,"enableRerank":true}`))
+	}
+	if len(kb.AnswerConfig) == 0 {
+		kb.AnswerConfig = datatypes.JSON([]byte(`{"answerLanguage":"auto","allowGeneralKnowledge":false,"model":""}`))
 	}
 	if kb.UpdatedByID == nil && kb.OwnerID != uuid.Nil {
 		kb.UpdatedByID = &kb.OwnerID

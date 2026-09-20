@@ -39,6 +39,7 @@ type ChatService struct {
 	titleProvider  titlecore.Provider
 	activities     *ActivityRecorder
 	metrics        *observability.Recorder
+	usage          *repository.ModelUsageRepository
 }
 
 // SetActivityRecorder wires the workspace timeline. Optional; see the
@@ -52,6 +53,8 @@ func (s *ChatService) SetActivityRecorder(recorder *ActivityRecorder) {
 func (s *ChatService) SetRecorder(recorder *observability.Recorder) {
 	s.metrics = recorder
 }
+
+func (s *ChatService) SetUsageRepository(repo *repository.ModelUsageRepository) { s.usage = repo }
 
 const (
 	chatIntentConversation  = "conversation"
@@ -458,6 +461,49 @@ func (s *ChatService) GetQualityOverview(
 		PositiveRate:            positiveRate,
 		WithoutCitationsRate:    withoutCitationsRate,
 	}, nil
+}
+
+func (s *ChatService) GetChatUsage(ctx context.Context, userID uuid.UUID, query dto.ChatUsageQuery) (*dto.ChatUsageResponse, error) {
+	if s.usage == nil {
+		return nil, apperror.New(http.StatusNotImplemented, "USAGE_NOT_CONFIGURED", "用量统计尚未配置")
+	}
+	if query.GroupBy == "" {
+		query.GroupBy = "day"
+	}
+	if query.GroupBy != "day" && query.GroupBy != "knowledgeBase" && query.GroupBy != "user" && query.GroupBy != "model" {
+		return nil, apperror.Validation(map[string]any{"groupBy": "groupBy 必须是 day、knowledgeBase、user 或 model"})
+	}
+	if query.To.IsZero() {
+		query.To = time.Now().UTC()
+	}
+	if query.From.IsZero() {
+		query.From = query.To.Add(-7 * 24 * time.Hour)
+	}
+	if query.From.After(query.To) {
+		return nil, apperror.Validation(map[string]any{"from": "起始时间不能晚于结束时间"})
+	}
+	if query.KnowledgeBaseID != nil {
+		if err := s.validateQualityKnowledgeBase(ctx, userID, query.KnowledgeBaseID); err != nil {
+			return nil, err
+		}
+	}
+	ids := []uuid.UUID{}
+	if query.KnowledgeBaseID != nil {
+		ids = append(ids, *query.KnowledgeBaseID)
+	}
+	rows, err := s.usage.Aggregate(ctx, userID, ids, query.From, query.To, query.GroupBy)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	items := make([]dto.ChatUsageAggregate, 0, len(rows))
+	var prompt, completion, total int64
+	for _, row := range rows {
+		items = append(items, dto.ChatUsageAggregate{GroupKey: row.GroupKey, PromptTokens: row.PromptTokens, CompletionTokens: row.CompletionTokens, TotalTokens: row.TotalTokens, Calls: row.Calls})
+		prompt += row.PromptTokens
+		completion += row.CompletionTokens
+		total += row.TotalTokens
+	}
+	return &dto.ChatUsageResponse{From: query.From, To: query.To, GroupBy: query.GroupBy, Items: items, TotalPrompt: prompt, TotalCompletion: completion, TotalTokens: total}, nil
 }
 
 // ChatKnowledgeGapCategoryAll requests both categories in one page.
@@ -1342,9 +1388,41 @@ func (s *ChatService) generateAnswer(ctx context.Context, userID uuid.UUID, sess
 // genuinely streamed. A non-streaming provider's single synthetic delta arrives
 // only once the whole completion is done, so counting it would record generation
 // time under a metric operators read as "time until the user sees something".
-func (s *ChatService) complete(ctx context.Context, messages []chatcore.Message, onDelta func(string) error) (string, time.Duration, error) {
+func (s *ChatService) complete(ctx context.Context, messages []chatcore.Message, onDelta func(string) error) (string, time.Duration, chatcore.Usage, error) {
+	return s.completeWithOptions(ctx, messages, onDelta, chatcore.Options{})
+}
+
+func (s *ChatService) completeWithOptions(ctx context.Context, messages []chatcore.Message, onDelta func(string) error, options chatcore.Options) (string, time.Duration, chatcore.Usage, error) {
 	start := time.Now()
 	if onDelta != nil {
+		if reporter, ok := s.chatProvider.(chatcore.StreamingOptionsProvider); ok {
+			var firstToken time.Duration
+			started := false
+			answer, usage, err := reporter.ChatStreamWithOptions(ctx, messages, func(delta string) error {
+				if !started {
+					started = true
+					firstToken = time.Since(start)
+					s.metrics.ObserveDuration(observability.MetricChatFirstToken, firstToken)
+				}
+				return onDelta(delta)
+			}, options)
+			s.metrics.RecordProviderResult(observability.ProviderChat, err)
+			return answer, firstToken, usage, err
+		}
+		if reporter, ok := s.chatProvider.(chatcore.StreamingUsageProvider); ok {
+			var firstToken time.Duration
+			started := false
+			answer, usage, err := reporter.ChatStreamWithUsage(ctx, messages, func(delta string) error {
+				if !started {
+					started = true
+					firstToken = time.Since(start)
+					s.metrics.ObserveDuration(observability.MetricChatFirstToken, firstToken)
+				}
+				return onDelta(delta)
+			})
+			s.metrics.RecordProviderResult(observability.ProviderChat, err)
+			return answer, firstToken, usage, err
+		}
 		if streamer, ok := s.chatProvider.(chatcore.StreamingProvider); ok {
 			var firstToken time.Duration
 			observedFirstToken := false
@@ -1359,22 +1437,31 @@ func (s *ChatService) complete(ctx context.Context, messages []chatcore.Message,
 				return onDelta(delta)
 			})
 			s.metrics.RecordProviderResult(observability.ProviderChat, err)
-			return answer, firstToken, err
+			return answer, firstToken, chatcore.Usage{}, err
 		}
 	}
-	answer, err := s.chatProvider.Chat(ctx, messages)
+	var answer string
+	var usage chatcore.Usage
+	var err error
+	if reporter, ok := s.chatProvider.(chatcore.OptionsProvider); ok {
+		answer, usage, err = reporter.ChatWithOptions(ctx, messages, options)
+	} else if reporter, ok := s.chatProvider.(chatcore.UsageProvider); ok {
+		answer, usage, err = reporter.ChatWithUsage(ctx, messages)
+	} else {
+		answer, err = s.chatProvider.Chat(ctx, messages)
+	}
 	s.metrics.RecordProviderResult(observability.ProviderChat, err)
 	if err != nil {
-		return "", 0, err
+		return "", 0, usage, err
 	}
 	// A non-streaming provider still has to look like a stream to the client, so
 	// the whole answer is delivered as a single delta.
 	if onDelta != nil && answer != "" {
 		if err := onDelta(answer); err != nil {
-			return "", 0, err
+			return "", 0, usage, err
 		}
 	}
-	return answer, 0, nil
+	return answer, 0, usage, nil
 }
 
 func (s *ChatService) generateAnswerWithHooks(
@@ -1399,8 +1486,9 @@ func (s *ChatService) generateAnswerWithHooks(
 	// break when the provider is down, so its outcome is recorded too. Without
 	// this the diagnostics page would report zero provider failures during an
 	// outage that fails every question before generation is even reached.
-	intent, err := classifyChatIntent(ctx, s.chatProvider, question, history, s.cfg.ChatHistoryLimit)
+	intent, intentUsage, err := classifyChatIntentWithUsage(ctx, s.chatProvider, question, history, s.cfg.ChatHistoryLimit)
 	s.metrics.RecordProviderResult(observability.ProviderChat, err)
+	s.recordUsage(ctx, userID, session, "intent", intentUsage, time.Since(generationStart))
 	if err != nil {
 		return generatedChatAnswer{}, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "回答生成失败，请稍后重试", err)
 	}
@@ -1415,7 +1503,8 @@ func (s *ChatService) generateAnswerWithHooks(
 				return generatedChatAnswer{}, err
 			}
 		}
-		answer, firstToken, err := s.complete(ctx, buildConversationAnswerMessages(question, history, s.cfg.ChatHistoryLimit), hooks.onDelta)
+		answer, firstToken, usage, err := s.complete(ctx, buildConversationAnswerMessages(question, history, s.cfg.ChatHistoryLimit), hooks.onDelta)
+		s.recordUsage(ctx, userID, session, "answer", usage, time.Since(generationStart))
 		timing.FirstToken = firstToken
 		if err != nil {
 			return generatedChatAnswer{}, chatCompletionError(err)
@@ -1476,6 +1565,10 @@ func (s *ChatService) generateAnswerWithHooks(
 	// is a real statement about the knowledge base rather than a failure.
 	answerStatus := AnswerStatusNoBasis
 	if len(searchRes.Items) > 0 {
+		answerConfig := dto.AnswerConfig{AnswerLanguage: "auto"}
+		if kb, fetchErr := s.knowledgeBases.FindByID(ctx, session.KnowledgeBaseID); fetchErr == nil && kb != nil && len(kb.AnswerConfig) > 0 {
+			_ = json.Unmarshal(kb.AnswerConfig, &answerConfig)
+		}
 		var firstToken time.Duration
 		// Streamed through the gate so the marker is never shown to the user. The
 		// gate holds back at most the marker's own length before deciding.
@@ -1484,7 +1577,8 @@ func (s *ChatService) generateAnswerWithHooks(
 		if hooks.onDelta != nil {
 			streamHook = gate.write
 		}
-		answer, firstToken, err = s.complete(ctx, buildAnswerMessages(question, searchRes.Items, history, s.cfg.ChatHistoryLimit), streamHook)
+		answer, firstToken, usage, err := s.completeWithOptions(ctx, buildAnswerMessagesWithConfig(question, searchRes.Items, history, s.cfg.ChatHistoryLimit, answerConfig), streamHook, chatcore.Options{Model: answerConfig.Model, Temperature: answerConfig.Temperature})
+		s.recordUsage(ctx, userID, session, "answer", usage, time.Since(generationStart))
 		timing.FirstToken = firstToken
 		if err != nil {
 			return generatedChatAnswer{}, chatCompletionError(err)
@@ -1694,6 +1788,10 @@ func citationsFromSearch(items []dto.SearchResultResponse) []dto.CitationRespons
 }
 
 func systemPrompt() string {
+	return systemPromptForConfig(dto.AnswerConfig{AnswerLanguage: "auto"})
+}
+
+func systemPromptForConfig(config dto.AnswerConfig) string {
 	rules := []string{
 		"你是企业知识库问答助手。",
 		"只能基于提供的知识片段回答问题。",
@@ -1703,15 +1801,68 @@ func systemPrompt() string {
 		"如果知识片段不足以回答，请明确说明无法从当前知识库确认。",
 		"不要编造事实，不要编造引用来源。",
 	}
+	if config.AllowGeneralKnowledge {
+		rules[1] = "优先基于知识片段回答，片段不足时可补充常识并明确标注。"
+	}
+	if addition := strings.TrimSpace(config.SystemPromptAddition); addition != "" {
+		rules = append(rules, "知识库回答补充要求：\n"+addition)
+	}
+	if config.AnswerLanguage == "zh" {
+		rules = append(rules, "请使用中文回答。")
+	}
+	if config.AnswerLanguage == "en" {
+		rules = append(rules, "Please answer in English.")
+	}
 	return strings.Join(append(rules, refusalPromptRules()...), "\n")
 }
 
 func classifyChatIntent(ctx context.Context, provider chatcore.Provider, question string, history []model.ChatMessage, historyLimit int) (chatIntentDecision, error) {
-	raw, err := provider.Chat(ctx, buildIntentClassificationMessages(question, history, historyLimit))
-	if err != nil {
-		return chatIntentDecision{}, err
+	decision, _, err := classifyChatIntentWithUsage(ctx, provider, question, history, historyLimit)
+	return decision, err
+}
+
+func classifyChatIntentWithUsage(ctx context.Context, provider chatcore.Provider, question string, history []model.ChatMessage, historyLimit int) (chatIntentDecision, chatcore.Usage, error) {
+	var raw string
+	var usage chatcore.Usage
+	var err error
+	messages := buildIntentClassificationMessages(question, history, historyLimit)
+	if reporter, ok := provider.(chatcore.UsageProvider); ok {
+		raw, usage, err = reporter.ChatWithUsage(ctx, messages)
+	} else {
+		raw, err = provider.Chat(ctx, messages)
 	}
-	return parseChatIntentOutput(raw, question), nil
+	if err != nil {
+		return chatIntentDecision{}, usage, err
+	}
+	return parseChatIntentOutput(raw, question), usage, nil
+}
+
+func (s *ChatService) recordUsage(ctx context.Context, userID uuid.UUID, session *model.ChatSession, purpose string, usage chatcore.Usage, latency time.Duration) {
+	if s.usage == nil || session == nil || usage.Model == "" {
+		return
+	}
+	var prompt, completion, total *int
+	if usage.PromptTokens > 0 {
+		value := usage.PromptTokens
+		prompt = &value
+	}
+	if usage.CompletionTokens > 0 {
+		value := usage.CompletionTokens
+		completion = &value
+	}
+	if usage.TotalTokens > 0 {
+		value := usage.TotalTokens
+		total = &value
+	}
+	_ = s.usage.Create(ctx, &model.ModelUsageRecord{UserID: userID, KnowledgeBaseID: session.KnowledgeBaseID, SessionID: &session.ID, Purpose: purpose, Provider: "chat", Model: usage.Model, PromptTokens: prompt, CompletionTokens: completion, TotalTokens: total, LatencyMs: durationMillis(latency)})
+}
+
+func durationMillis(value time.Duration) *int64 {
+	if value <= 0 {
+		return nil
+	}
+	ms := value.Milliseconds()
+	return &ms
 }
 
 func buildIntentClassificationMessages(question string, history []model.ChatMessage, historyLimit int) []chatcore.Message {
@@ -1796,8 +1947,12 @@ func extractJSONObject(raw string) string {
 }
 
 func buildAnswerMessages(question string, items []dto.SearchResultResponse, history []model.ChatMessage, historyLimit int) []chatcore.Message {
+	return buildAnswerMessagesWithConfig(question, items, history, historyLimit, dto.AnswerConfig{AnswerLanguage: "auto"})
+}
+
+func buildAnswerMessagesWithConfig(question string, items []dto.SearchResultResponse, history []model.ChatMessage, historyLimit int, config dto.AnswerConfig) []chatcore.Message {
 	messages := []chatcore.Message{
-		{Role: "system", Content: systemPrompt()},
+		{Role: "system", Content: systemPromptForConfig(config)},
 	}
 	messages = append(messages, recentChatHistory(history, historyLimit)...)
 	messages = append(messages, chatcore.Message{

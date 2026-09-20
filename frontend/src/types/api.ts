@@ -10,7 +10,13 @@ export type User = {
   displayName: string;
   avatarUrl?: string;
   role?: string;
+  status?: 'active' | 'disabled' | string;
+  lastLoginAt?: string | null;
 };
+
+export type AdminUser = User & { status: 'active' | 'disabled'; createdAt: string };
+export type AdminUserListResponse = { items: AdminUser[]; total: number; page: number; pageSize: number };
+export type AdminUserCreateInput = { username: string; displayName?: string; password?: string };
 
 export type LoginResponse = {
   token: string;
@@ -24,6 +30,13 @@ export type RetrievalConfig = {
   enableRerank: boolean;
   enableKeyword: boolean;
 };
+export type AnswerConfig = {
+  systemPromptAddition: string;
+  answerLanguage: 'auto' | 'zh' | 'en';
+  allowGeneralKnowledge: boolean;
+  model: string;
+  temperature?: number | null;
+};
 
 export type KnowledgeBase = {
   id: string;
@@ -32,6 +45,7 @@ export type KnowledgeBase = {
   categoryId?: string | null;
   visibility?: 'private' | 'public';
   retrievalConfig: RetrievalConfig;
+  answerConfig: AnswerConfig;
   createdAt: string;
   updatedAt: string;
   documentCount?: number;
@@ -71,6 +85,7 @@ export type KnowledgeBaseInput = {
   categoryId?: string | null;
   visibility?: 'private' | 'public';
   retrievalConfig?: RetrievalConfig;
+  answerConfig?: AnswerConfig;
   tagIds?: string[];
 };
 
@@ -445,6 +460,7 @@ export type GlobalDocumentListResponse = {
 export type SystemCapabilities = {
   rerankEnabled: boolean;
   keywordSearchEnabled: boolean;
+  chatModels?: string[];
   upload: {
     maxFileBytes: number;
     allowedExtensions: string[];
@@ -717,6 +733,12 @@ export type ChatQualityOverview = {
 	positiveRate: number;
 	/** withoutCitationsCount / knowledgeAnswerCount, or 0 when there are none. */
 	withoutCitationsRate: number;
+};
+
+export type ChatUsageResponse = {
+  from: string; to: string; groupBy: string;
+  totalPromptTokens: number; totalCompletionTokens: number; totalTokens: number;
+  items: Array<{ groupKey: string; promptTokens: number; completionTokens: number; totalTokens: number; calls: number }>;
 };
 
 export type ChatQualityFeedbackParams = ChatQualityOverviewParams & {

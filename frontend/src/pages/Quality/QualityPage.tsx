@@ -4,6 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 
 import {
   getChatQualityOverview,
+  getChatUsage,
   listChatKnowledgeGaps,
   listKnowledgeBases,
   listNegativeChatFeedback,
@@ -18,6 +19,7 @@ import type {
   ChatQualityOverview,
   ChatQualityOverviewParams,
   ChatQualityPeriod,
+  ChatUsageResponse,
   KnowledgeBase,
 } from '../../types/api';
 import { canUnlessUnknown } from '../../utils/access';
@@ -125,7 +127,7 @@ function gapPresentation(category: string): GapPresentation {
 export function QualityPage({ sources = defaultSources }: { sources?: QualitySources }) {
   const { user } = useCurrentUser();
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab = searchParams.get('tab') === 'evaluation' ? 'evaluation' : 'feedback';
+  const activeTab = searchParams.get('tab') === 'evaluation' ? 'evaluation' : searchParams.get('tab') === 'usage' ? 'usage' : 'feedback';
   const knowledgeBaseId = searchParams.get('knowledgeBaseId') || '';
   const [period, setPeriod] = useState<ChatQualityPeriod>('month');
   const [caseDraft, setCaseDraft] = useState<ChatQualityFeedbackItem | null>(null);
@@ -137,6 +139,8 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
   const [feedback, setFeedback] = useState<ChatQualityFeedbackListResponse | null>(null);
   const [gaps, setGaps] = useState<ChatKnowledgeGapListResponse | null>(null);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
+  const [usage, setUsage] = useState<ChatUsageResponse | null>(null);
+  const [usageError, setUsageError] = useState('');
   const [overviewState, setOverviewState] = useState<LoadState>({ loading: true, error: '' });
   const [feedbackState, setFeedbackState] = useState<LoadState>({ loading: true, error: '' });
   const [gapState, setGapState] = useState<LoadState>({ loading: true, error: '' });
@@ -227,6 +231,11 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
   useEffect(() => { reloadOverview(); }, [reloadOverview]);
   useEffect(() => { reloadFeedback(); }, [reloadFeedback]);
   useEffect(() => { reloadGaps(); }, [reloadGaps]);
+  useEffect(() => {
+    if (activeTab !== 'usage') return;
+    setUsageError('');
+    void getChatUsage({ groupBy: 'day', ...(knowledgeBaseId ? { knowledgeBaseId } : {}) }).then(setUsage).catch((error) => setUsageError(getErrorMessage(error, '用量统计加载失败')));
+  }, [activeTab, knowledgeBaseId]);
 
   // Only bases the caller can read quality data for. The unfiltered view already
   // aggregates exactly these, so offering the others would turn the filter into the
@@ -284,7 +293,7 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
           </Button>}
         </header>
 
-        <SegmentedControl label="质量视图" value={activeTab} options={[{ value: 'feedback', label: '反馈与缺口' }, { value: 'evaluation', label: '回归评测' }]}
+        <SegmentedControl label="质量视图" value={activeTab} options={[{ value: 'feedback', label: '反馈与缺口' }, { value: 'usage', label: '用量统计' }, { value: 'evaluation', label: '回归评测' }]}
           onChange={(value) => setSearchParams((current) => { const next = new URLSearchParams(current); next.set('tab', value); return next; })} />
 
         <div className="quality-filters">
@@ -311,7 +320,7 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
           {selectedKnowledgeBase && <span className="ui-muted">当前：{selectedKnowledgeBase.name}</span>}
         </div>
 
-        {activeTab === 'evaluation' ? selectedKnowledgeBase
+        {activeTab === 'usage' ? <UsagePanel error={usageError} usage={usage} /> : activeTab === 'evaluation' ? selectedKnowledgeBase
           ? <EvaluationPanel key={selectedKnowledgeBase.id} knowledgeBase={selectedKnowledgeBase} />
           : <EmptyState title="选择一个知识库开始评测" description="测试问题与运行记录按知识库保存。" />
           : <><section aria-label="质量概览" className="ui-panel quality-overview">
@@ -391,6 +400,16 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
         onSaved={() => setSearchParams({ knowledgeBaseId: caseDraft.knowledgeBaseId, tab: 'evaluation' })} />}
     </AppShell>
   );
+}
+
+function UsagePanel({ usage, error }: { usage: ChatUsageResponse | null; error: string }) {
+  return <section aria-label="模型用量" className="ui-panel quality-overview">
+    <div className="ui-panel__head"><div><h2>模型用量</h2><span className="ui-panel__head-note">最近 7 天，按天汇总；Provider 未返回 usage 的调用不会估算</span></div></div>
+    {error ? <ErrorState description={error} title="用量统计加载失败" /> : !usage ? <LoadingSkeleton announce columns={4} rows={2} /> : <>
+      <MetricStrip label="用量总计" metrics={[{ key: 'prompt', label: 'Prompt tokens', value: usage.totalPromptTokens }, { key: 'completion', label: 'Completion tokens', value: usage.totalCompletionTokens }, { key: 'total', label: 'Total tokens', value: usage.totalTokens }]} />
+      <div className="ui-table-wrap"><table className="ui-table"><thead><tr><th>日期</th><th>Prompt</th><th>Completion</th><th>Total</th><th>调用次数</th></tr></thead><tbody>{usage.items.map((item) => <tr key={item.groupKey}><td>{item.groupKey}</td><td>{item.promptTokens}</td><td>{item.completionTokens}</td><td>{item.totalTokens}</td><td>{item.calls}</td></tr>)}</tbody></table></div>
+    </>}
+  </section>;
 }
 
 /**

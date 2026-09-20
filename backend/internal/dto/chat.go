@@ -15,6 +15,31 @@ type UpdateChatSessionRequest struct {
 	Title string `json:"title" binding:"required"`
 }
 
+type ChatUsageQuery struct {
+	KnowledgeBaseID *uuid.UUID
+	From            time.Time
+	To              time.Time
+	GroupBy         string
+}
+
+type ChatUsageAggregate struct {
+	GroupKey         string `json:"groupKey"`
+	PromptTokens     int64  `json:"promptTokens"`
+	CompletionTokens int64  `json:"completionTokens"`
+	TotalTokens      int64  `json:"totalTokens"`
+	Calls            int64  `json:"calls"`
+}
+
+type ChatUsageResponse struct {
+	From        time.Time            `json:"from"`
+	To          time.Time            `json:"to"`
+	GroupBy     string               `json:"groupBy"`
+	Items       []ChatUsageAggregate `json:"items"`
+	TotalPrompt int64                `json:"totalPromptTokens"`
+	TotalCompletion int64            `json:"totalCompletionTokens"`
+	TotalTokens int64                `json:"totalTokens"`
+}
+
 // ChatSessionListQuery drives GET /api/v1/chat/sessions. Archived defaults to
 // false so the rail keeps showing active sessions when no filter is sent.
 type ChatSessionListQuery struct {

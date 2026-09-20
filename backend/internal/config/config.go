@@ -77,6 +77,7 @@ type Config struct {
 	ChatBaseURL             string
 	ChatAPIKey              string
 	ChatModel               string
+	ChatAllowedModels       []string
 	TitleBaseURL            string
 	TitleAPIKey             string
 	TitleModel              string
@@ -140,6 +141,7 @@ func Load() Config {
 		ChatBaseURL:             normalizedBaseURL(getEnv("CHAT_BASE_URL", getEnv("OPENAI_BASE_URL", defaultChatBaseURL))),
 		ChatAPIKey:              getEnv("CHAT_API_KEY", getEnv("OPENAI_API_KEY", "")),
 		ChatModel:               getEnv("CHAT_MODEL", defaultChatModel),
+		ChatAllowedModels:       splitCommaSeparated(getEnv("CHAT_ALLOWED_MODELS", "")),
 		TitleBaseURL:            normalizedBaseURL(getEnv("TITLE_BASE_URL", defaultTitleBaseURL)),
 		TitleAPIKey:             getEnv("TITLE_API_KEY", ""),
 		TitleModel:              getEnv("TITLE_MODEL", defaultTitleModel),

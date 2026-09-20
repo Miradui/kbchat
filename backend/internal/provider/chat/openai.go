@@ -62,22 +62,39 @@ type chatMessage struct {
 }
 
 func (p *OpenAICompatibleProvider) Chat(ctx context.Context, messages []chatcore.Message) (string, error) {
+	answer, _, err := p.ChatWithUsage(ctx, messages)
+	return answer, err
+}
+
+func (p *OpenAICompatibleProvider) ChatWithUsage(ctx context.Context, messages []chatcore.Message) (string, chatcore.Usage, error) {
+	return p.ChatWithOptions(ctx, messages, chatcore.Options{})
+}
+
+func (p *OpenAICompatibleProvider) ChatWithOptions(ctx context.Context, messages []chatcore.Message, options chatcore.Options) (string, chatcore.Usage, error) {
 	if p.apiKey == "" {
-		return "", fmt.Errorf("CHAT_API_KEY is required")
+		return "", chatcore.Usage{}, fmt.Errorf("CHAT_API_KEY is required")
 	}
 
+	model := p.model
+	if options.Model != "" {
+		model = options.Model
+	}
+	temperature := float32(0.2)
+	if options.Temperature != nil {
+		temperature = float32(*options.Temperature)
+	}
 	response, err := p.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
-		Model:       p.model,
+		Model:       model,
 		Messages:    toOpenAIMessages(messages),
-		Temperature: 0.2,
+		Temperature: temperature,
 	})
 	if err != nil {
-		return "", fmt.Errorf("chat request failed: %w", err)
+		return "", chatcore.Usage{}, fmt.Errorf("chat request failed: %w", err)
 	}
 	if len(response.Choices) == 0 {
-		return "", fmt.Errorf("chat response has no choices")
+		return "", chatcore.Usage{}, fmt.Errorf("chat response has no choices")
 	}
-	return response.Choices[0].Message.Content, nil
+	return response.Choices[0].Message.Content, chatcore.Usage{PromptTokens: response.Usage.PromptTokens, CompletionTokens: response.Usage.CompletionTokens, TotalTokens: response.Usage.TotalTokens, Model: response.Model}, nil
 }
 
 func (p *OpenAICompatibleProvider) ChatStream(
@@ -85,44 +102,84 @@ func (p *OpenAICompatibleProvider) ChatStream(
 	messages []chatcore.Message,
 	onDelta func(string) error,
 ) (string, error) {
+	answer, _, err := p.ChatStreamWithUsage(ctx, messages, onDelta)
+	return answer, err
+}
+
+func (p *OpenAICompatibleProvider) ChatStreamWithUsage(
+	ctx context.Context,
+	messages []chatcore.Message,
+	onDelta func(string) error,
+) (string, chatcore.Usage, error) {
+	return p.ChatStreamWithOptions(ctx, messages, onDelta, chatcore.Options{})
+}
+
+func (p *OpenAICompatibleProvider) ChatStreamWithOptions(
+	ctx context.Context,
+	messages []chatcore.Message,
+	onDelta func(string) error,
+	options chatcore.Options,
+) (string, chatcore.Usage, error) {
 	if p.apiKey == "" {
-		return "", fmt.Errorf("CHAT_API_KEY is required")
+		return "", chatcore.Usage{}, fmt.Errorf("CHAT_API_KEY is required")
 	}
 
+	model := p.model
+	if options.Model != "" {
+		model = options.Model
+	}
+	temperature := float32(0.2)
+	if options.Temperature != nil {
+		temperature = float32(*options.Temperature)
+	}
 	tracker := &streamResponseTracker{}
 	client := newClient(p.apiKey, p.baseURL, &trackingDoer{client: p.streamClient, tracker: tracker})
 	stream, err := client.CreateChatCompletionStream(ctx, openai.ChatCompletionRequest{
-		Model:       p.model,
-		Messages:    toOpenAIMessages(messages),
-		Temperature: 0.2,
+		Model:         model,
+		Messages:      toOpenAIMessages(messages),
+		Temperature:   temperature,
+		StreamOptions: &openai.StreamOptions{IncludeUsage: true},
 	})
 	if err != nil {
 		if streamUnsupportedError(err) {
-			return p.blockingFallback(ctx, messages, onDelta)
+			answer, usage, fallbackErr := p.ChatWithUsage(ctx, messages)
+			if fallbackErr == nil && onDelta != nil {
+				fallbackErr = onDelta(answer)
+			}
+			return answer, usage, fallbackErr
 		}
-		return "", fmt.Errorf("chat request failed: %w", err)
+		return "", chatcore.Usage{}, fmt.Errorf("chat request failed: %w", err)
 	}
 	defer stream.Close()
 
 	if tracker.isJSON() {
 		_, recvErr := stream.Recv()
 		if recvErr != nil && !errors.Is(recvErr, io.EOF) {
-			return "", fmt.Errorf("decode chat response: %w", recvErr)
+			return "", chatcore.Usage{}, fmt.Errorf("decode chat response: %w", recvErr)
 		}
 		return emitBlockingJSON(tracker.bodyBytes(), onDelta)
 	}
 
 	var answer strings.Builder
+	usage := chatcore.Usage{Model: model}
 	for {
 		response, recvErr := stream.Recv()
 		if errors.Is(recvErr, io.EOF) {
 			if !tracker.doneSeen() {
-				return "", fmt.Errorf("chat stream ended before [DONE]")
+				return "", chatcore.Usage{}, fmt.Errorf("chat stream ended before [DONE]")
 			}
 			break
 		}
 		if recvErr != nil {
-			return "", fmt.Errorf("decode chat stream data: %w", recvErr)
+			return "", chatcore.Usage{}, fmt.Errorf("decode chat stream data: %w", recvErr)
+		}
+		if response.Usage != nil {
+			usage.PromptTokens = response.Usage.PromptTokens
+			usage.CompletionTokens = response.Usage.CompletionTokens
+			usage.TotalTokens = response.Usage.TotalTokens
+		}
+		if response.Model != "" {
+			usage.Model = response.Model
 		}
 		for _, choice := range response.Choices {
 			delta := choice.Delta.Content
@@ -132,16 +189,16 @@ func (p *OpenAICompatibleProvider) ChatStream(
 			answer.WriteString(delta)
 			if onDelta != nil {
 				if err := onDelta(delta); err != nil {
-					return "", err
+					return "", chatcore.Usage{}, err
 				}
 			}
 		}
 	}
 
 	if answer.Len() == 0 {
-		return "", fmt.Errorf("chat response has no choices")
+		return "", chatcore.Usage{}, fmt.Errorf("chat response has no choices")
 	}
-	return answer.String(), nil
+	return answer.String(), usage, nil
 }
 
 func toOpenAIMessages(messages []chatcore.Message) []openai.ChatCompletionMessage {
@@ -190,21 +247,21 @@ func (p *OpenAICompatibleProvider) blockingFallback(
 	return answer, nil
 }
 
-func emitBlockingJSON(body []byte, onDelta func(string) error) (string, error) {
+func emitBlockingJSON(body []byte, onDelta func(string) error) (string, chatcore.Usage, error) {
 	var response openai.ChatCompletionResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		return "", fmt.Errorf("decode chat response: %w", err)
+		return "", chatcore.Usage{}, fmt.Errorf("decode chat response: %w", err)
 	}
 	if len(response.Choices) == 0 || response.Choices[0].Message.Content == "" {
-		return "", fmt.Errorf("chat response has no choices")
+		return "", chatcore.Usage{}, fmt.Errorf("chat response has no choices")
 	}
 	answer := response.Choices[0].Message.Content
 	if onDelta != nil {
 		if err := onDelta(answer); err != nil {
-			return "", err
+			return "", chatcore.Usage{}, err
 		}
 	}
-	return answer, nil
+	return answer, chatcore.Usage{PromptTokens: response.Usage.PromptTokens, CompletionTokens: response.Usage.CompletionTokens, TotalTokens: response.Usage.TotalTokens, Model: response.Model}, nil
 }
 
 type trackingDoer struct {

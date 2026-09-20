@@ -11,6 +11,27 @@ type Provider interface {
 	Chat(ctx context.Context, messages []Message) (string, error)
 }
 
+type Usage struct {
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+	Model            string
+}
+
+type Options struct {
+	Model       string
+	Temperature *float64
+}
+type OptionsProvider interface {
+	ChatWithOptions(context.Context, []Message, Options) (string, Usage, error)
+}
+
+// UsageProvider is optional so existing provider fakes remain source
+// compatible. Services record usage only when a provider implements it.
+type UsageProvider interface {
+	ChatWithUsage(ctx context.Context, messages []Message) (string, Usage, error)
+}
+
 // StreamingProvider is an optional capability on top of Provider.
 //
 // It is a separate interface rather than a wider Provider so that every existing
@@ -29,4 +50,14 @@ type StreamingProvider interface {
 	// A non-nil error from onDelta aborts the call and is returned as-is, which
 	// is how a disconnected client stops generation.
 	ChatStream(ctx context.Context, messages []Message, onDelta func(string) error) (string, error)
+}
+
+type StreamingUsageProvider interface {
+	StreamingProvider
+	ChatStreamWithUsage(ctx context.Context, messages []Message, onDelta func(string) error) (string, Usage, error)
+}
+
+type StreamingOptionsProvider interface {
+	StreamingUsageProvider
+	ChatStreamWithOptions(context.Context, []Message, func(string) error, Options) (string, Usage, error)
 }
