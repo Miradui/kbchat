@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -35,6 +36,10 @@ func (s *AuthService) Login(ctx context.Context, req dto.LoginRequest) (*dto.Log
 	if user == nil || !auth.CheckPassword(user.PasswordHash, req.Password) {
 		return nil, apperror.New(http.StatusUnauthorized, "UNAUTHORIZED", "用户名或密码错误")
 	}
+	if user.Status == "disabled" {
+		return nil, apperror.New(http.StatusUnauthorized, "UNAUTHORIZED", "用户名或密码错误")
+	}
+	_ = s.users.TouchLastLogin(ctx, user.ID, time.Now())
 
 	token, err := auth.GenerateToken(s.cfg, user.ID, user.Role)
 	if err != nil {

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -11,9 +12,13 @@ import (
 	"kbchat/backend/internal/config"
 )
 
+type UserStatusChecker interface {
+	IsActive(context.Context, uuid.UUID) (bool, error)
+}
+
 const CurrentUserIDKey = "currentUserID"
 
-func AuthRequired(cfg config.Config) gin.HandlerFunc {
+func AuthRequired(cfg config.Config, checkers ...UserStatusChecker) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
 		tokenString := strings.TrimPrefix(header, "Bearer ")
@@ -35,6 +40,14 @@ func AuthRequired(cfg config.Config) gin.HandlerFunc {
 			respondUnauthorized(c)
 			c.Abort()
 			return
+		}
+		if len(checkers) > 0 && checkers[0] != nil {
+			active, statusErr := checkers[0].IsActive(c.Request.Context(), userID)
+			if statusErr == nil && !active {
+				respondUnauthorized(c)
+				c.Abort()
+				return
+			}
 		}
 
 		c.Set(CurrentUserIDKey, userID)

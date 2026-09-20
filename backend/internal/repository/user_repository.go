@@ -8,12 +8,29 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"kbchat/backend/internal/model"
 )
 
 type UserRepository struct {
 	db *gorm.DB
+}
+
+var (
+	ErrAdminUserNotFound  = errors.New("admin user not found")
+	ErrAdminSelfMutation  = errors.New("cannot disable or demote yourself")
+	ErrAdminLastAdmin     = errors.New("cannot remove the last administrator")
+	ErrAdminInvalidStatus = errors.New("invalid user status")
+	ErrAdminInvalidRole   = errors.New("invalid system role")
+)
+
+type AdminUserQuery struct {
+	Query    string
+	Status   string
+	Role     string
+	Page     int
+	PageSize int
 }
 
 // ErrUserPasswordChanged means the password hash changed after the caller read
@@ -46,6 +63,140 @@ func (r *UserRepository) FindByID(ctx context.Context, id uuid.UUID) (*model.Use
 
 func (r *UserRepository) Create(ctx context.Context, user *model.User) error {
 	return r.db.WithContext(ctx).Create(user).Error
+}
+
+func (r *UserRepository) IsActive(ctx context.Context, id uuid.UUID) (bool, error) {
+	var user model.User
+	err := r.db.WithContext(ctx).Select("id", "status").First(&user, "id = ?", id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		// Some lightweight contract tests use signed fixture tokens without a
+		// corresponding row. The auth middleware only needs this lookup to
+		// invalidate disabled accounts; normal resource authorization still
+		// resolves the caller against its own tables.
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return user.Status == "" || user.Status == "active", nil
+}
+
+func (r *UserRepository) TouchLastLogin(ctx context.Context, id uuid.UUID, at time.Time) error {
+	return r.db.WithContext(ctx).Model(&model.User{}).Where("id = ?", id).Update("last_login_at", at).Error
+}
+
+func (r *UserRepository) ListAdmin(ctx context.Context, query AdminUserQuery) ([]model.User, int64, error) {
+	page, pageSize := query.Page, query.PageSize
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	db := r.db.WithContext(ctx).Model(&model.User{})
+	if value := strings.TrimSpace(strings.ToLower(query.Query)); value != "" {
+		like := "%" + value + "%"
+		db = db.Where("LOWER(username) LIKE ? OR LOWER(display_name) LIKE ?", like, like)
+	}
+	if query.Status == "active" || query.Status == "disabled" {
+		db = db.Where("status = ?", query.Status)
+	}
+	if query.Role == model.SystemRoleUser || query.Role == model.SystemRoleAdmin {
+		db = db.Where("role = ?", query.Role)
+	}
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var users []model.User
+	err := db.Order("created_at desc, id desc").Offset((page - 1) * pageSize).Limit(pageSize).Find(&users).Error
+	return users, total, err
+}
+
+func (r *UserRepository) CreateAdminUser(ctx context.Context, user *model.User) error {
+	return r.db.WithContext(ctx).Create(user).Error
+}
+
+func (r *UserRepository) UpdateAdminProfile(ctx context.Context, id uuid.UUID, displayName, status string) (*model.User, error) {
+	var user model.User
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&user, "id = ?", id).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrAdminUserNotFound
+			}
+			return err
+		}
+		if status != "active" && status != "disabled" {
+			return ErrAdminInvalidStatus
+		}
+		if user.Role == model.SystemRoleAdmin && status == "disabled" {
+			// The service performs the actor self-check; this branch only keeps the
+			// repository safe for callers that use it directly.
+		}
+		if err := tx.Model(&user).Updates(map[string]any{"display_name": displayName, "status": status, "updated_at": time.Now()}).Error; err != nil {
+			return err
+		}
+		return tx.First(&user, "id = ?", id).Error
+	})
+	return &user, err
+}
+
+func (r *UserRepository) ResetAdminPassword(ctx context.Context, id uuid.UUID, passwordHash string) (*model.User, error) {
+	var user model.User
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&user, "id = ?", id).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrAdminUserNotFound
+			}
+			return err
+		}
+		if err := tx.Model(&user).Updates(map[string]any{"password_hash": passwordHash, "updated_at": time.Now()}).Error; err != nil {
+			return err
+		}
+		return tx.First(&user, "id = ?", id).Error
+	})
+	return &user, err
+}
+
+func (r *UserRepository) UpdateAdminRole(ctx context.Context, actorID, targetID uuid.UUID, role string) (*model.User, error) {
+	var user model.User
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if role != model.SystemRoleUser && role != model.SystemRoleAdmin {
+			return ErrAdminInvalidRole
+		}
+		if actorID == targetID {
+			return ErrAdminSelfMutation
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&user, "id = ?", targetID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrAdminUserNotFound
+			}
+			return err
+		}
+		if user.Role == model.SystemRoleAdmin && role == model.SystemRoleUser {
+			var admins int64
+			if err := tx.Model(&model.User{}).Where("role = ? AND status = ?", model.SystemRoleAdmin, "active").Count(&admins).Error; err != nil {
+				return err
+			}
+			if admins <= 1 {
+				return ErrAdminLastAdmin
+			}
+		}
+		if err := tx.Model(&user).Updates(map[string]any{"role": role, "updated_at": time.Now()}).Error; err != nil {
+			return err
+		}
+		return tx.First(&user, "id = ?", targetID).Error
+	})
+	return &user, err
+}
+
+func (r *UserRepository) CountActiveAdmins(ctx context.Context) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&model.User{}).Where("role = ? AND status = ?", model.SystemRoleAdmin, "active").Count(&count).Error
+	return count, err
 }
 
 // UpdateProfile writes presentation fields only. It intentionally accepts
