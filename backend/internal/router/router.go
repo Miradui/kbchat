@@ -99,6 +99,7 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	authService := service.NewAuthService(cfg, userRepo)
 	userService := service.NewUserService(userRepo)
 	knowledgeBaseService := service.NewKnowledgeBaseService(knowledgeBaseRepo, knowledgeBaseCategoryRepo, knowledgeBaseFavoriteRepo, knowledgeBaseViewRepo, knowledgeBaseWorkspacePreferenceRepo, knowledgeBaseTagRepo, knowledgeBaseTagBindingRepo, knowledgeBaseMemberRepo, userRepo)
+	knowledgeBaseService.SetChatAllowedModels(cfg.ChatAllowedModels)
 	knowledgeBaseCategoryService := service.NewKnowledgeBaseCategoryService(knowledgeBaseCategoryRepo, knowledgeBaseRepo)
 	knowledgeBaseTagService := service.NewKnowledgeBaseTagService(knowledgeBaseTagRepo, knowledgeBaseTagBindingRepo)
 	documentService := service.NewDocumentService(cfg, documentRepo, chunkRepo, knowledgeBaseRepo, storageCleanupRepo, fileStorage)

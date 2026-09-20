@@ -30,16 +30,21 @@ var defaultRetrievalConfig = dto.RetrievalConfig{
 var defaultAnswerConfig = dto.AnswerConfig{AnswerLanguage: "auto", AllowGeneralKnowledge: false}
 
 type KnowledgeBaseService struct {
-	repo        *repository.KnowledgeBaseRepository
-	categories  *repository.KnowledgeBaseCategoryRepository
-	favorites   *repository.KnowledgeBaseFavoriteRepository
-	views       *repository.KnowledgeBaseViewRepository
-	preferences *repository.KnowledgeBaseWorkspacePreferenceRepository
-	tags        *repository.KnowledgeBaseTagRepository
-	tagBindings *repository.KnowledgeBaseTagBindingRepository
-	members     *repository.KnowledgeBaseMemberRepository
-	users       *repository.UserRepository
-	activities  *ActivityRecorder
+	repo              *repository.KnowledgeBaseRepository
+	categories        *repository.KnowledgeBaseCategoryRepository
+	favorites         *repository.KnowledgeBaseFavoriteRepository
+	views             *repository.KnowledgeBaseViewRepository
+	preferences       *repository.KnowledgeBaseWorkspacePreferenceRepository
+	tags              *repository.KnowledgeBaseTagRepository
+	tagBindings       *repository.KnowledgeBaseTagBindingRepository
+	members           *repository.KnowledgeBaseMemberRepository
+	users             *repository.UserRepository
+	activities        *ActivityRecorder
+	chatAllowedModels []string
+}
+
+func (s *KnowledgeBaseService) SetChatAllowedModels(models []string) {
+	s.chatAllowedModels = append([]string(nil), models...)
 }
 
 // SetActivityRecorder wires the workspace timeline. It is optional on purpose:
@@ -79,7 +84,7 @@ func (s *KnowledgeBaseService) Create(ctx context.Context, ownerID uuid.UUID, re
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
-	answerConfig, err := normalizeAnswerConfig(req.AnswerConfig)
+	answerConfig, err := s.normalizeAnswerConfig(req.AnswerConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +270,7 @@ func (s *KnowledgeBaseService) Update(ctx context.Context, ownerID, id uuid.UUID
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
-	answerConfig, err := normalizeAnswerConfig(req.AnswerConfig)
+	answerConfig, err := s.normalizeAnswerConfig(req.AnswerConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -863,7 +868,7 @@ func defaultConfig(config *dto.RetrievalConfig) dto.RetrievalConfig {
 	return *config
 }
 
-func normalizeAnswerConfig(config *dto.AnswerConfig) (dto.AnswerConfig, error) {
+func (s *KnowledgeBaseService) normalizeAnswerConfig(config *dto.AnswerConfig) (dto.AnswerConfig, error) {
 	result := defaultAnswerConfig
 	if config != nil {
 		result = *config
@@ -880,6 +885,18 @@ func normalizeAnswerConfig(config *dto.AnswerConfig) (dto.AnswerConfig, error) {
 	}
 	if result.Temperature != nil && (*result.Temperature < 0 || *result.Temperature > 1) {
 		return result, apperror.Validation(map[string]any{"answerConfig.temperature": "温度必须在 0 到 1 之间"})
+	}
+	if result.Model != "" && len(s.chatAllowedModels) > 0 {
+		allowed := false
+		for _, model := range s.chatAllowedModels {
+			if model == result.Model {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return result, apperror.Validation(map[string]any{"answerConfig.model": "回答模型不在允许列表中"})
+		}
 	}
 	return result, nil
 }
