@@ -1577,7 +1577,8 @@ func (s *ChatService) generateAnswerWithHooks(
 		if hooks.onDelta != nil {
 			streamHook = gate.write
 		}
-		answer, firstToken, usage, err := s.completeWithOptions(ctx, buildAnswerMessagesWithConfig(question, searchRes.Items, history, s.cfg.ChatHistoryLimit, answerConfig), streamHook, chatcore.Options{Model: answerConfig.Model, Temperature: answerConfig.Temperature})
+		var usage chatcore.Usage
+		answer, firstToken, usage, err = s.completeWithOptions(ctx, buildAnswerMessagesWithConfig(question, searchRes.Items, history, s.cfg.ChatHistoryLimit, answerConfig), streamHook, chatcore.Options{Model: answerConfig.Model, Temperature: answerConfig.Temperature})
 		s.recordUsage(ctx, userID, session, "answer", usage, time.Since(generationStart))
 		timing.FirstToken = firstToken
 		if err != nil {
