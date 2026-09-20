@@ -117,6 +117,23 @@ func validateSchema(ctx context.Context, db *gorm.DB) error {
 	if !migrator.HasColumn(&model.ChatMessage{}, "feedback_reason") || !migrator.HasColumn(&model.ChatMessage{}, "feedback_comment") {
 		return fmt.Errorf("database schema incompatible: chat_messages missing feedback_reason/feedback_comment; apply migration 021 (migrations/021_quality_evaluations.sql)")
 	}
+	if db.Dialector.Name() == "postgres" {
+		for _, required := range []struct {
+			model     any
+			column    string
+			migration string
+		}{
+			{&model.User{}, "status", "025_user_status_and_admin.sql"},
+			{&model.KnowledgeBase{}, "answer_config", "027_kb_answer_config.sql"},
+		} {
+			if !migrator.HasColumn(required.model, required.column) {
+				return fmt.Errorf("database schema incompatible: missing %s; apply migration %s", required.column, required.migration)
+			}
+		}
+		if !migrator.HasTable(&model.ModelUsageRecord{}) {
+			return fmt.Errorf("database schema incompatible: missing model_usage_records; apply migration 026_model_usage_records.sql")
+		}
+	}
 	return validateTimestampSchema(ctx, db)
 }
 
