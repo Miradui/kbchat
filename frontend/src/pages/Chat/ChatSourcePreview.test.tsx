@@ -35,6 +35,26 @@ beforeEach(() => {
 });
 
 describe('ChatSourcePreview', () => {
+  it('lets viewers read a PDF citation without attempting a forbidden file download', async () => {
+    render(<ChatSourcePreview canDownload={false} citation={citation} index={1} knowledgeBaseId="kb1" onClose={vi.fn()} />);
+    expect(await screen.findByText('可阅读上方引用内容；下载原始文件需要编辑者及以上权限。')).toBeInTheDocument();
+    expect(screen.getByText(citation.content)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '下载原文' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(downloadDocument).not.toHaveBeenCalled();
+  });
+
+  it('removes a downloaded PDF immediately when download permission is revoked', async () => {
+    const view = render(<ChatSourcePreview canDownload citation={citation} index={1} knowledgeBaseId="kb1" onClose={vi.fn()} />);
+    await screen.findByTitle('原文：手册.pdf');
+    view.rerender(<ChatSourcePreview canDownload={false} citation={citation} index={1} knowledgeBaseId="kb1" onClose={vi.fn()} />);
+    expect(screen.queryByTitle('原文：手册.pdf')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '下载原文' })).not.toBeInTheDocument();
+    await screen.findByText('可阅读上方引用内容；下载原始文件需要编辑者及以上权限。');
+    expect(downloadDocument).toHaveBeenCalledTimes(1);
+    expect(revokeUrl).toHaveBeenCalledWith('blob:source-preview');
+  });
+
   it('loads an authenticated PDF at its cited page and revokes the blob on close', async () => {
     const user = userEvent.setup();
     const view = render(<ChatSourcePreview citation={citation} index={1} knowledgeBaseId="kb1" onClose={vi.fn()} />);

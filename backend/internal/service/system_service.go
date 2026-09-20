@@ -24,7 +24,8 @@ func (s *SystemService) Capabilities() *dto.SystemCapabilitiesResponse {
 	copy(extensions, AllowedDocumentExtensions)
 
 	return &dto.SystemCapabilitiesResponse{
-		RerankEnabled: s.cfg.RerankEnabled,
+		RerankEnabled:        s.cfg.RerankEnabled,
+		KeywordSearchEnabled: s.cfg.KeywordSearchEnabled,
 		Upload: dto.SystemUploadCapabilities{
 			MaxFileBytes:      int64(s.cfg.MaxUploadSizeMB) * 1024 * 1024,
 			AllowedExtensions: extensions,

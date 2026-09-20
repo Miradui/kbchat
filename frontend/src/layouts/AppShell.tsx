@@ -13,6 +13,7 @@ import type { AppSection } from '../components/navigation/PrimaryNav';
 import { IconButton } from '../components/ui/IconButton';
 import { Popover } from '../components/ui/Popover';
 import { useMediaQuery } from '../hooks/useMediaQuery';
+import { useCurrentUser } from '../hooks/useCurrentUser';
 import { currentUserStore } from '../store/currentUserStore';
 import { themeStore } from '../store/themeStore';
 import type { ThemeChoice } from '../store/themeStore';
@@ -75,16 +76,6 @@ export function finishLocalLogout(
   navigate('/login', { replace: true });
 }
 
-async function requestCurrentUser() {
-  try {
-    const user = await getCurrentUser();
-    if (user) return user;
-  } catch {
-    // The shell stays usable; the API client handles auth failures.
-  }
-  return { id: '', username: '当前用户', displayName: '当前用户' };
-}
-
 function getFocusable(container: HTMLElement): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>(
     'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])',
@@ -96,12 +87,13 @@ export function AppShell({
   breadcrumbs,
   topbarActions,
   flush = false,
-  currentUserRequest = requestCurrentUser,
+  currentUserRequest = getCurrentUser,
   logoutRequest = logout,
   children,
 }: AppShellProps) {
   const location = useLocation();
   const navigate = useNavigate();
+  const { user: currentUser } = useCurrentUser(currentUserRequest);
   const isMobile = useMediaQuery('(max-width: 980px)');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -132,21 +124,9 @@ export function AppShell({
   }, [isMobile]);
 
   useEffect(() => {
-    let active = true;
-    void currentUserStore.load(currentUserRequest)
-      .then((user) => {
-        if (active) {
-          setUserName(user.displayName.trim() || user.username);
-          setUserAvatarUrl(user.avatarUrl?.trim() ?? '');
-        }
-      })
-      .catch(() => {
-        // Handled by the API client.
-      });
-    return () => {
-      active = false;
-    };
-  }, [currentUserRequest]);
+    setUserName(currentUser ? currentUser.displayName.trim() || currentUser.username : '当前用户');
+    setUserAvatarUrl(currentUser?.avatarUrl?.trim() ?? '');
+  }, [currentUser]);
 
   // Global palette shortcut.
   useEffect(() => {
@@ -248,7 +228,7 @@ export function AppShell({
           )}
         </div>
 
-        <PrimaryNav active={active} onNavigate={() => setDrawerOpen(false)} />
+        <PrimaryNav active={active} canViewDiagnostics={currentUser?.role === 'admin'} onNavigate={() => setDrawerOpen(false)} />
 
         <div className="rail__foot">
           <Popover

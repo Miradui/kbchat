@@ -223,7 +223,7 @@ func newStatusFixture(t *testing.T) statusFixture {
 		if err := db.Create(&user).Error; err != nil {
 			t.Fatalf("create %s: %v", username, err)
 		}
-		token, err := auth.GenerateToken(cfg, user.ID)
+		token, err := auth.GenerateToken(cfg, user.ID, user.Role)
 		if err != nil {
 			t.Fatalf("generate token for %s: %v", username, err)
 		}

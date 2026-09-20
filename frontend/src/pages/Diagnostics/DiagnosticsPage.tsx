@@ -2,6 +2,8 @@ import { RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { getSystemDiagnostics } from '../../api/resources';
+import { Link } from 'react-router-dom';
+import { useCurrentUser } from '../../hooks/useCurrentUser';
 import type { BadgeTone } from '../../components/ui/Badge';
 import type {
   SystemDependencyState,
@@ -151,6 +153,24 @@ function latencyRow(metric: SystemLatencyMetric) {
 }
 
 export function DiagnosticsPage({ sources = defaultSources }: { sources?: DiagnosticsSources }) {
+  const { user, loading, error, reload } = useCurrentUser();
+  if (loading || error || user?.role !== 'admin') {
+    return (
+      <AppShell active="diagnostics" breadcrumbs={[{ label: '系统诊断' }]}>
+        <h1>系统诊断</h1>
+        {loading ? <LoadingSkeleton announce columns={3} rows={4} />
+          : error ? <ErrorState title="无法确认访问权限" description={error} onRetry={reload} />
+            : <>
+              <ErrorState title="需要系统管理员权限" description="当前账号无法查看系统诊断。请联系系统管理员处理服务问题。" />
+              <Link className="ui-button ui-button--secondary" to="/home">返回首页</Link>
+            </>}
+      </AppShell>
+    );
+  }
+  return <DiagnosticsContent key={user.id} sources={sources} onForbidden={reload} />;
+}
+
+function DiagnosticsContent({ sources, onForbidden }: { sources: DiagnosticsSources; onForbidden: () => void }) {
   const [diagnostics, setDiagnostics] = useState<SystemDiagnostics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -164,11 +184,17 @@ export function DiagnosticsPage({ sources = defaultSources }: { sources?: Diagno
       const response = await sources.loadDiagnostics();
       if (requestRef.current === request) setDiagnostics(response);
     } catch (loadError) {
-      if (requestRef.current === request) setError(getErrorMessage(loadError, '无法加载系统诊断数据'));
+      if (requestRef.current === request) {
+        if ((loadError as { code?: string } | null)?.code === 'SYSTEM_ADMIN_REQUIRED') {
+          setDiagnostics(null);
+          onForbidden();
+        }
+        setError(getErrorMessage(loadError, '无法加载系统诊断数据'));
+      }
     } finally {
       if (requestRef.current === request) setLoading(false);
     }
-  }, [sources]);
+  }, [sources, onForbidden]);
 
   useEffect(() => {
     void reload();
@@ -178,6 +204,8 @@ export function DiagnosticsPage({ sources = defaultSources }: { sources?: Diagno
   const documents = diagnostics?.queues.documents;
   const cleanup = diagnostics?.queues.cleanup;
   const fallbackEntries = Object.entries(diagnostics?.rerankFallbacks ?? {});
+  const rateLimitTriggers = diagnostics?.rateLimitTriggers ?? {};
+  const embeddingCache = diagnostics?.embeddingCache;
 
   return (
     <AppShell active="diagnostics" breadcrumbs={[{ label: '系统诊断' }]}>
@@ -255,6 +283,40 @@ export function DiagnosticsPage({ sources = defaultSources }: { sources?: Diagno
                       {`对象清理队列：待处理 ${cleanup.backlog} · 重试中 ${cleanup.retrying} · 已锁定 ${cleanup.locked} · 最老等待 ${formatDuration(cleanup.oldestPendingSeconds)}`}
                     </p>
                   )}
+                </section>
+
+                <section aria-label="当前进程指标" className="ui-panel diagnostics-section diagnostics-runtime">
+                  <h2>当前进程指标</h2>
+                  <p className="ui-muted">限流与查询向量缓存统计随服务重启归零。</p>
+                  <MetricStrip label="限流触发次数" metrics={[
+                    {
+                      key: 'login-rate-limit',
+                      label: '登录限流',
+                      value: rateLimitTriggers.login ?? 0,
+                      tone: (rateLimitTriggers.login ?? 0) > 0 ? 'warn' : 'default',
+                    },
+                    {
+                      key: 'chat-rate-limit',
+                      label: '聊天限流',
+                      value: rateLimitTriggers.chat ?? 0,
+                      tone: (rateLimitTriggers.chat ?? 0) > 0 ? 'warn' : 'default',
+                    },
+                  ]} />
+                  <MetricStrip label="查询向量缓存指标" metrics={[
+                    { key: 'embedding-cache-hits', label: '缓存命中', value: embeddingCache?.hits ?? 0 },
+                    { key: 'embedding-cache-misses', label: '缓存未命中', value: embeddingCache?.misses ?? 0 },
+                    {
+                      key: 'embedding-cache-errors',
+                      label: '缓存错误',
+                      value: embeddingCache?.errors ?? 0,
+                      tone: (embeddingCache?.errors ?? 0) > 0 ? 'danger' : 'default',
+                    },
+                    {
+                      key: 'embedding-cache-hit-rate',
+                      label: '缓存命中率',
+                      value: formatRate(embeddingCache?.hitRate ?? null),
+                    },
+                  ]} />
                 </section>
 
                 <section aria-label="模型 Provider" className="ui-panel diagnostics-section diagnostics-providers">

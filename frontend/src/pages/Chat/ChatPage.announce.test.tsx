@@ -17,6 +17,7 @@ import type { ChatMessage, ChatSession, KnowledgeBase } from '../../types/api';
 import { ChatPage } from './ChatPage';
 
 vi.mock('../../api/resources', () => ({
+  getCurrentUser: vi.fn().mockResolvedValue({ id: 'user1', username: 'fixture', displayName: '测试用户', role: 'user' }),
   archiveChatSession: vi.fn(),
   createChatSession: vi.fn(),
   deleteChatSession: vi.fn(),

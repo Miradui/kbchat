@@ -36,7 +36,7 @@ func (s *AuthService) Login(ctx context.Context, req dto.LoginRequest) (*dto.Log
 		return nil, apperror.New(http.StatusUnauthorized, "UNAUTHORIZED", "用户名或密码错误")
 	}
 
-	token, err := auth.GenerateToken(s.cfg, user.ID)
+	token, err := auth.GenerateToken(s.cfg, user.ID, user.Role)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}

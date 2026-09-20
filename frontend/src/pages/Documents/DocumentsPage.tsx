@@ -1,4 +1,4 @@
-import { Ban, FileText, MessageSquareText, PencilLine, RotateCw, Search, Trash2, Upload, X } from 'lucide-react';
+import { Ban, FileText, FileType, MessageSquareText, PencilLine, RotateCw, Search, Trash2, Upload, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
@@ -547,7 +547,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
                 : <Link className="ui-button ui-button--primary" to="/knowledge-bases?intent=create"><span>先新建知识库</span></Link>}
             description={activeFilterCount > 0
               ? '调整筛选条件后再试。'
-              : '导入 txt、md 或 pdf，处理完成后即可用于问答。'}
+              : '导入 txt、md、pdf 或 docx，处理完成后即可用于问答。'}
             title={activeFilterCount > 0 ? '没有匹配的文档' : '还没有文档'}
           />
         ) : (
@@ -592,7 +592,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
                       </td>
                       <td data-label="文件名">
                         <button className="doc-name" onClick={() => openDetail(document.id)} type="button">
-                          <FileText aria-hidden="true" />
+                          {document.fileType.toLowerCase() === 'docx' ? <FileType aria-hidden="true" /> : <FileText aria-hidden="true" />}
                           <span className="ui-truncate">{document.filename}</span>
                         </button>
                       </td>
@@ -815,7 +815,7 @@ type RenameDocumentDialogProps = {
 /**
  * The extension is fixed: `fileType` is derived from it at upload and selects the
  * parser used on the next reprocess, so the server rejects a rename that changes
- * it. Only the stem is editable here. See docs/14-frontend-api-gaps.md G7.
+ * it. Only the stem is editable here. See docs/04-api-design.md (PUT /documents/:id).
  */
 function RenameDocumentDialog({ busy, error, filename, onCancel, onSubmit }: RenameDocumentDialogProps) {
   const separator = filename.lastIndexOf('.');

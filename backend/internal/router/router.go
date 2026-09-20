@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"kbchat/backend/internal/cache"
 	"kbchat/backend/internal/config"
 	"kbchat/backend/internal/handler"
 	"kbchat/backend/internal/middleware"
@@ -35,6 +36,10 @@ type Dependencies struct {
 	// with one connection pool, and so the probe checks the client the
 	// application actually uses.
 	Redis redisPinger
+	// RateLimiter and EmbeddingCache share the server's Redis client but remain
+	// explicit dependencies so router tests can substitute either concern.
+	RateLimiter    cache.RateLimiter
+	EmbeddingCache *cache.EmbeddingCache
 	// Metrics is shared with the retrieval and chat services, which is the whole
 	// point: the diagnostics page reads what request handling recorded.
 	Metrics *observability.Recorder
@@ -98,6 +103,9 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	knowledgeBaseTagService := service.NewKnowledgeBaseTagService(knowledgeBaseTagRepo, knowledgeBaseTagBindingRepo)
 	documentService := service.NewDocumentService(cfg, documentRepo, chunkRepo, knowledgeBaseRepo, storageCleanupRepo, fileStorage)
 	retrievalService := retrieval.NewService(cfg, chunkRepo, knowledgeBaseRepo, embedder, reranker)
+	if deps.EmbeddingCache != nil {
+		retrievalService.SetEmbeddingCache(deps.EmbeddingCache)
+	}
 	chatService := service.NewChatService(cfg, chatRepo, knowledgeBaseRepo, retrievalService, chatProvider, titleProvider)
 	evaluationService := service.NewEvaluationService(repository.NewEvaluationRepository(db), knowledgeBaseRepo, chatService)
 	globalSearchService := service.NewGlobalSearchService(globalSearchRepo)
@@ -154,6 +162,7 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	homeHandler := handler.NewHomeHandler(homeService)
 	activityHandler := handler.NewActivityHandler(activityService)
 	systemHandler := handler.NewSystemHandler(systemService)
+	systemAdmins := service.NewSystemAdminService(userRepo)
 
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -166,7 +175,34 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	v1.GET("/healthz", systemHandler.Health)
 
 	authRoutes := v1.Group("/auth")
-	authRoutes.POST("/login", authHandler.Login)
+	loginHandlers := []gin.HandlerFunc{authHandler.Login}
+	var chatRateLimit gin.HandlerFunc
+	if cfg.RateLimitEnabled {
+		clientIPResolver, err := middleware.NewClientIPResolver(cfg.TrustedProxyCIDRs)
+		if err != nil {
+			panic(err)
+		}
+		loginRateLimit := middleware.RateLimit(deps.RateLimiter, middleware.RateLimitOptions{
+			Scope:       middleware.RateLimitScopeLogin,
+			Limit:       cfg.RateLimitLoginPerMinute,
+			Window:      time.Minute,
+			FailureMode: middleware.NormalizeRateLimitFailureMode(cfg.RateLimitFailureMode),
+			Key:         clientIPResolver.Key,
+			Logger:      logger,
+			Recorder:    metrics,
+		})
+		loginHandlers = append([]gin.HandlerFunc{loginRateLimit}, loginHandlers...)
+		chatRateLimit = middleware.RateLimit(deps.RateLimiter, middleware.RateLimitOptions{
+			Scope:       middleware.RateLimitScopeChat,
+			Limit:       cfg.RateLimitChatPerMinute,
+			Window:      time.Minute,
+			FailureMode: middleware.NormalizeRateLimitFailureMode(cfg.RateLimitFailureMode),
+			Key:         middleware.CurrentUserKey,
+			Logger:      logger,
+			Recorder:    metrics,
+		})
+	}
+	authRoutes.POST("/login", loginHandlers...)
 
 	protected := v1.Group("")
 	protected.Use(middleware.AuthRequired(cfg))
@@ -179,11 +215,7 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	protected.POST("/auth/logout", authHandler.Logout)
 	protected.GET("/users/search", userHandler.Search)
 	protected.GET("/system/capabilities", systemHandler.Capabilities)
-	// Authenticated but not admin-gated: the JWT carries no role claim and no role
-	// middleware exists, so gating on admin would lock every current deployment
-	// out of its own diagnostics. Tracked as a P2 follow-up; the payload is
-	// constrained accordingly and carries no secrets or endpoints.
-	protected.GET("/system/diagnostics", systemHandler.Diagnostics)
+	protected.GET("/system/diagnostics", handler.RequireSystemAdmin(systemAdmins), systemHandler.Diagnostics)
 	protected.GET("/home/summary", homeHandler.Summary)
 	protected.GET("/activities", activityHandler.List)
 	protected.GET("/knowledge-base-categories", knowledgeBaseCategoryHandler.List)
@@ -254,10 +286,10 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	protected.POST("/chat/sessions/:id/restore", chatHandler.RestoreSession)
 	protected.POST("/chat/sessions/:id/unarchive", chatHandler.UnarchiveSession)
 	protected.GET("/chat/sessions/:id/messages", chatHandler.ListMessages)
-	protected.POST("/chat/sessions/:id/messages", chatHandler.SendMessage)
-	protected.POST("/chat/sessions/:id/messages/stream", chatHandler.SendMessageStream)
+	registerChatWriteRoute(protected, "/chat/sessions/:id/messages", chatRateLimit, chatHandler.SendMessage)
+	registerChatWriteRoute(protected, "/chat/sessions/:id/messages/stream", chatRateLimit, chatHandler.SendMessageStream)
 	protected.PUT("/chat/sessions/:id/messages/:messageId/edit", chatHandler.EditMessage)
-	protected.POST("/chat/sessions/:id/messages/:messageId/regenerate", chatHandler.RegenerateMessage)
+	registerChatWriteRoute(protected, "/chat/sessions/:id/messages/:messageId/regenerate", chatRateLimit, chatHandler.RegenerateMessage)
 	protected.GET("/chat/sessions/:id/export", chatHandler.ExportSession)
 	protected.POST("/chat/messages/:messageId/feedback", chatHandler.SetMessageFeedback)
 	protected.GET("/chat/quality/overview", chatHandler.QualityOverview)
@@ -276,6 +308,14 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	protected.GET("/search/export", globalSearchHandler.Export)
 
 	return r
+}
+
+func registerChatWriteRoute(group *gin.RouterGroup, path string, rateLimit gin.HandlerFunc, handler gin.HandlerFunc) {
+	if rateLimit == nil {
+		group.POST(path, handler)
+		return
+	}
+	group.POST(path, rateLimit, handler)
 }
 
 func newRerankProvider(cfg config.Config) rerank.Provider {

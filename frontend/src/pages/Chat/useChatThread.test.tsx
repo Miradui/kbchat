@@ -316,6 +316,51 @@ describe('useChatThread send reconciliation', () => {
     expect(pendingChatRequestStore.get(session.id)).toBeNull();
   });
 
+  it('routes a send 429 to the composer instead of the failed-answer state', async () => {
+    resourceMocks.sendChatMessageStream.mockRejectedValue(
+      new ApiError(429, {
+        code: 'RATE_LIMITED',
+        message: '请求过于频繁，请稍后重试',
+        details: { retryAfter: 14 },
+      }),
+    );
+
+    const { result } = renderThread();
+    await settleEffects();
+
+    await act(async () => {
+      await result.current.send('问题');
+    });
+
+    expect(result.current.rateLimitError).toBe('请求过于频繁，请 14 秒后再试');
+    expect(result.current.rateLimitedQuestion).toBe('问题');
+    expect(result.current.failedSend).toBeNull();
+    expect(result.current.unconfirmedSend).toBeNull();
+    expect(pendingChatRequestStore.get(session.id)).toBeNull();
+  });
+
+  it('routes a regenerate 429 to the composer and clears recovery storage', async () => {
+    resourceMocks.regenerateChatMessage.mockRejectedValue(
+      new ApiError(429, {
+        code: 'RATE_LIMITED',
+        message: '请求过于频繁，请稍后重试',
+        details: { retryAfter: 8 },
+      }),
+    );
+
+    const { result } = renderThread();
+    await settleEffects();
+
+    await act(async () => {
+      await result.current.regenerate('assistant-message-1');
+    });
+
+    expect(result.current.rateLimitError).toBe('请求过于频繁，请 8 秒后再试');
+    expect(result.current.rateLimitedQuestion).toBeNull();
+    expect(result.current.regeneration).toBeNull();
+    expect(window.localStorage.getItem(`rag.chat.pending-regeneration:${session.id}`)).toBeNull();
+  });
+
   it('treats an explicit chat generation failure as definitive', async () => {
     resourceMocks.sendChatMessageStream.mockRejectedValue(
       new ApiError(500, { code: 'CHAT_COMPLETION_FAILED', message: '生成失败' }),

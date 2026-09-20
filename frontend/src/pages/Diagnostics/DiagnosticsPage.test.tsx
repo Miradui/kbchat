@@ -1,16 +1,24 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithRouter } from '../../test/render';
 import type { SystemDiagnostics } from '../../types/api';
 import { DiagnosticsPage } from './DiagnosticsPage';
+import { getCurrentUser } from '../../api/resources';
+import { currentUserStore } from '../../store/currentUserStore';
+import { tokenStore } from '../../store/tokenStore';
 
 vi.mock('../../api/resources', () => ({
-  getCurrentUser: vi.fn().mockResolvedValue({ id: 'user-1', username: 'admin', displayName: '管理员' }),
+  getCurrentUser: vi.fn(),
   getSystemDiagnostics: vi.fn(),
   logout: vi.fn().mockResolvedValue(undefined),
 }));
+
+beforeEach(() => {
+  currentUserStore.clear();
+  vi.mocked(getCurrentUser).mockReset().mockResolvedValue({ id: 'user-1', username: 'admin', displayName: '管理员', role: 'admin' });
+});
 
 function diagnostics(overrides: Partial<SystemDiagnostics> = {}): SystemDiagnostics {
   return {
@@ -41,6 +49,8 @@ function diagnostics(overrides: Partial<SystemDiagnostics> = {}): SystemDiagnost
       { metric: 'chat_first_token', count: 40, sampleCount: 40, p50Ms: 420, p95Ms: 900, maxMs: 1500 },
     ],
     rerankFallbacks: {},
+    rateLimitTriggers: { login: 3, chat: 7 },
+    embeddingCache: { hits: 8, misses: 2, errors: 1, hitRate: 0.8 },
     metricsSinceRestart: true,
     ...overrides,
   };
@@ -54,6 +64,42 @@ async function renderPage(payload: SystemDiagnostics) {
 }
 
 describe('DiagnosticsPage', () => {
+  it('does not request diagnostics for an ordinary user opening the URL directly', async () => {
+    vi.mocked(getCurrentUser).mockResolvedValue({ id: 'ordinary', username: 'reader', displayName: '普通用户', role: 'user' });
+    const loadDiagnostics = vi.fn();
+    renderWithRouter(<DiagnosticsPage sources={{ loadDiagnostics }} />);
+    expect(await screen.findByRole('heading', { name: '需要系统管理员权限' })).toBeInTheDocument();
+    expect(loadDiagnostics).not.toHaveBeenCalled();
+    expect(screen.queryByRole('link', { name: '系统诊断' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '返回首页' })).toHaveAttribute('href', '/home');
+  });
+
+  it('does not expose diagnostics when the current account cannot be checked', async () => {
+    vi.mocked(getCurrentUser).mockRejectedValue(new Error('account unavailable'));
+    const loadDiagnostics = vi.fn();
+    renderWithRouter(<DiagnosticsPage sources={{ loadDiagnostics }} />);
+    expect(await screen.findByRole('heading', { name: '无法确认访问权限' })).toBeInTheDocument();
+    expect(loadDiagnostics).not.toHaveBeenCalled();
+  });
+
+  it('clears diagnostics after the backend reports an administrator revocation', async () => {
+    const loadDiagnostics = await renderPage(diagnostics());
+    vi.mocked(getCurrentUser).mockResolvedValue({ id: 'user-1', username: 'admin', displayName: '原管理员', role: 'user' });
+    loadDiagnostics.mockRejectedValueOnce({ code: 'SYSTEM_ADMIN_REQUIRED', message: '此操作需要系统管理员权限' });
+    await userEvent.click(screen.getByRole('button', { name: '刷新诊断数据' }));
+    expect(await screen.findByRole('heading', { name: '需要系统管理员权限' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('依赖状态')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '系统诊断' })).not.toBeInTheDocument();
+  });
+
+  it('hides the previous administrator data when another account signs in', async () => {
+    await renderPage(diagnostics());
+    vi.mocked(getCurrentUser).mockResolvedValue({ id: 'user-2', username: 'reader', displayName: '普通用户', role: 'user' });
+    act(() => tokenStore.setToken('ordinary-account-token'));
+    expect(screen.queryByLabelText('依赖状态')).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '需要系统管理员权限' })).toBeInTheDocument();
+  });
+
   it('renders dependency, queue, provider and latency state', async () => {
     await renderPage(diagnostics());
 
@@ -70,6 +116,18 @@ describe('DiagnosticsPage', () => {
     expect(within(queues).getByText('近 24 小时失败率')).toBeInTheDocument();
     expect(within(queues).getByText('20%')).toBeInTheDocument();
     expect(within(queues).getByText(/对象清理队列：待处理 3/)).toBeInTheDocument();
+
+    const runtime = screen.getByLabelText('当前进程指标');
+    const rateLimits = within(runtime).getByLabelText('限流触发次数');
+    expect(within(rateLimits).getByText('登录限流')).toBeInTheDocument();
+    expect(within(rateLimits).getByText('聊天限流')).toBeInTheDocument();
+    expect(within(rateLimits).getByText('3')).toBeInTheDocument();
+    expect(within(rateLimits).getByText('7')).toBeInTheDocument();
+    const cache = within(runtime).getByLabelText('查询向量缓存指标');
+    expect(within(cache).getByText('缓存命中')).toBeInTheDocument();
+    expect(within(cache).getByText('缓存未命中')).toBeInTheDocument();
+    expect(within(cache).getByText('缓存错误')).toBeInTheDocument();
+    expect(within(cache).getByText('80%')).toBeInTheDocument();
 
     const providers = screen.getByLabelText('模型 Provider');
     expect(within(providers).getByText('对话模型')).toBeInTheDocument();
@@ -158,6 +216,20 @@ describe('DiagnosticsPage', () => {
     const latency = await screen.findByLabelText('调用耗时');
     expect(within(latency).getByText(/重排服务不可用 4 次/)).toBeInTheDocument();
     expect(within(latency).queryByText(/provider_unavailable/)).not.toBeInTheDocument();
+  });
+
+  it('shows 暂无数据 when no embedding cache hit rate has been observed', async () => {
+    await renderPage(diagnostics({
+      rateLimitTriggers: {},
+      embeddingCache: { hits: 0, misses: 0, errors: 2, hitRate: null },
+    }));
+
+    const runtime = await screen.findByLabelText('当前进程指标');
+    const rateLimits = within(runtime).getByLabelText('限流触发次数');
+    expect(within(rateLimits).getAllByText('0')).toHaveLength(2);
+    const cache = within(runtime).getByLabelText('查询向量缓存指标');
+    expect(within(cache).getByText('暂无数据')).toBeInTheDocument();
+    expect(within(cache).queryByText(/NaN/)).not.toBeInTheDocument();
   });
 
   it('re-requests diagnostics on refresh', async () => {

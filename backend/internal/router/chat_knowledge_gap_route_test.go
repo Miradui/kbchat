@@ -15,7 +15,7 @@ import (
 
 func TestKnowledgeGapsRejectsInvalidContractParameters(t *testing.T) {
 	cfg := config.Config{AppEnv: "test", ServerPort: "0", JWTSecret: "this-is-a-long-router-test-secret-1234", JWTExpiresIn: "1h"}
-	token, err := auth.GenerateToken(cfg, uuid.New())
+	token, err := auth.GenerateToken(cfg, uuid.New(), "user")
 	if err != nil {
 		t.Fatalf("generate quality token: %v", err)
 	}

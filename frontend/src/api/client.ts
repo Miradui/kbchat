@@ -6,15 +6,31 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api/v1';
 export class ApiError extends Error {
   code: string;
   details: Record<string, unknown>;
+  retryAfterSeconds: number | null;
   status: number;
 
-  constructor(status: number, error: APIError) {
-    super(error.message);
+  constructor(status: number, error: APIError, retryAfter?: string | number | null) {
+    const retryAfterSeconds = parseRetryAfter(retryAfter)
+      ?? parseRetryAfter(readRetryAfterDetail(error.details));
+    super(isRateLimited(status, error.code)
+      ? formatRateLimitMessage(retryAfterSeconds)
+      : error.message);
     this.name = 'ApiError';
     this.status = status;
     this.code = error.code;
     this.details = error.details ?? {};
+    this.retryAfterSeconds = retryAfterSeconds;
   }
+}
+
+export function isRateLimitError(error: unknown): error is ApiError {
+  return error instanceof ApiError && isRateLimited(error.status, error.code);
+}
+
+export function formatRateLimitMessage(retryAfterSeconds: number | null = null): string {
+  return retryAfterSeconds === null
+    ? '请求过于频繁，请稍后再试'
+    : `请求过于频繁，请 ${retryAfterSeconds} 秒后再试`;
 }
 
 type RequestOptions = Omit<RequestInit, 'body'> & {
@@ -110,7 +126,11 @@ export function apiUploadRequest<T>(
       handleUnauthorized(xhr.status, redirectOnUnauthorized, authRevision, onUnauthorized);
 
       if (xhr.status < 200 || xhr.status >= 300) {
-        rejectOnce(new ApiError(xhr.status, readXHRError(xhr)));
+        rejectOnce(new ApiError(
+          xhr.status,
+          readXHRError(xhr),
+          xhr.getResponseHeader('Retry-After'),
+        ));
         return;
       }
 
@@ -248,7 +268,7 @@ async function request(path: string, options: RequestOptions = {}): Promise<Resp
 
   if (!response.ok) {
     const error = await readError(response);
-    throw new ApiError(response.status, error);
+    throw new ApiError(response.status, error, response.headers.get('Retry-After'));
   }
 
   return response;
@@ -318,4 +338,29 @@ async function readError(response: Response): Promise<APIError> {
       details: {},
     };
   }
+}
+
+function isRateLimited(status: number, code: string): boolean {
+  return status === 429 || code === 'RATE_LIMITED';
+}
+
+function readRetryAfterDetail(details: Record<string, unknown> | undefined): unknown {
+  return details?.retryAfter;
+}
+
+function parseRetryAfter(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value >= 0 ? Math.max(1, Math.ceil(value)) : null;
+  }
+  if (typeof value !== 'string') return null;
+
+  const normalized = value.trim();
+  if (!normalized) return null;
+  if (/^\d+(?:\.\d+)?$/.test(normalized)) {
+    return Math.max(1, Math.ceil(Number(normalized)));
+  }
+
+  const retryAt = Date.parse(normalized);
+  if (Number.isNaN(retryAt)) return null;
+  return Math.max(1, Math.ceil((retryAt - Date.now()) / 1000));
 }

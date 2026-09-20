@@ -17,13 +17,18 @@ func TestRecorderNilReceiverIsSafe(t *testing.T) {
 	recorder.ObserveSince(MetricRetrieval, time.Now())
 	recorder.RecordProviderResult(ProviderChat, errors.New("boom"))
 	recorder.RecordRerankFallback("provider_unavailable")
+	recorder.RecordRateLimitTrigger(RateLimitScopeLogin)
+	recorder.RecordEmbeddingCacheResult(EmbeddingCacheResultHit)
 
 	snapshot := recorder.Snapshot()
-	if snapshot.Durations == nil || snapshot.Providers == nil || snapshot.RerankFallbacks == nil {
+	if snapshot.Durations == nil || snapshot.Providers == nil || snapshot.RerankFallbacks == nil || snapshot.RateLimitTriggers == nil {
 		t.Fatalf("nil recorder must return empty maps, got %#v", snapshot)
 	}
-	if len(snapshot.Durations) != 0 || len(snapshot.Providers) != 0 || len(snapshot.RerankFallbacks) != 0 {
+	if len(snapshot.Durations) != 0 || len(snapshot.Providers) != 0 || len(snapshot.RerankFallbacks) != 0 || len(snapshot.RateLimitTriggers) != 0 {
 		t.Fatalf("nil recorder must report nothing, got %#v", snapshot)
+	}
+	if snapshot.EmbeddingCacheResult != (EmbeddingCacheStats{}) {
+		t.Fatalf("nil recorder must report zero cache metrics, got %#v", snapshot.EmbeddingCacheResult)
 	}
 }
 
@@ -134,6 +139,36 @@ func TestRecorderCountsRerankFallbacksByReason(t *testing.T) {
 	}
 }
 
+func TestRecorderCountsRateLimitTriggersByKnownScope(t *testing.T) {
+	recorder := NewRecorder()
+	recorder.RecordRateLimitTrigger(RateLimitScopeLogin)
+	recorder.RecordRateLimitTrigger(RateLimitScopeLogin)
+	recorder.RecordRateLimitTrigger(RateLimitScopeChat)
+	recorder.RecordRateLimitTrigger("attacker-controlled-scope")
+
+	triggers := recorder.Snapshot().RateLimitTriggers
+	if triggers[RateLimitScopeLogin] != 2 || triggers[RateLimitScopeChat] != 1 {
+		t.Fatalf("unexpected rate-limit trigger counts: %#v", triggers)
+	}
+	if len(triggers) != 2 {
+		t.Fatalf("unknown scope must not create a counter: %#v", triggers)
+	}
+}
+
+func TestRecorderCountsEmbeddingCacheOutcomes(t *testing.T) {
+	recorder := NewRecorder()
+	recorder.RecordEmbeddingCacheResult(EmbeddingCacheResultHit)
+	recorder.RecordEmbeddingCacheResult(EmbeddingCacheResultHit)
+	recorder.RecordEmbeddingCacheResult(EmbeddingCacheResultMiss)
+	recorder.RecordEmbeddingCacheResult(EmbeddingCacheResultError)
+	recorder.RecordEmbeddingCacheResult("unknown")
+
+	stats := recorder.Snapshot().EmbeddingCacheResult
+	if stats.Hits != 2 || stats.Misses != 1 || stats.Errors != 1 {
+		t.Fatalf("unexpected embedding-cache counts: %#v", stats)
+	}
+}
+
 // TestRecorderIsSafeForConcurrentUse is meaningful under -race, which the
 // verification step runs. The chat and retrieval paths record from many
 // in-flight requests at once.
@@ -151,6 +186,8 @@ func TestRecorderIsSafeForConcurrentUse(t *testing.T) {
 				recorder.ObserveDuration(MetricRetrieval, time.Duration(j)*time.Millisecond)
 				recorder.RecordProviderResult(ProviderChat, nil)
 				recorder.RecordRerankFallback("provider_unavailable")
+				recorder.RecordRateLimitTrigger(RateLimitScopeChat)
+				recorder.RecordEmbeddingCacheResult(EmbeddingCacheResultHit)
 				recorder.Snapshot()
 			}
 		}(i)
@@ -163,6 +200,12 @@ func TestRecorderIsSafeForConcurrentUse(t *testing.T) {
 	}
 	if snapshot.Providers[ProviderChat].SuccessCount != uint64(workers*perWorker) {
 		t.Fatalf("lost provider results: %#v", snapshot.Providers[ProviderChat])
+	}
+	if snapshot.RateLimitTriggers[RateLimitScopeChat] != uint64(workers*perWorker) {
+		t.Fatalf("lost rate-limit triggers: %#v", snapshot.RateLimitTriggers)
+	}
+	if snapshot.EmbeddingCacheResult.Hits != uint64(workers*perWorker) {
+		t.Fatalf("lost embedding-cache results: %#v", snapshot.EmbeddingCacheResult)
 	}
 }
 

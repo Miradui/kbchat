@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Copy, FileText, Pencil, RotateCw, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react';
+import { Check, ChevronDown, Copy, FileText, FileType, Pencil, RotateCw, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
@@ -311,17 +311,17 @@ export function CitationCard({ citation, focused, index, knowledgeBaseId, onOpen
         */}
         {onOpen ? (
           <button aria-label={`打开来源：${citation.filename}，${pageLabel}`} className="chat-source__link" onClick={onOpen} type="button">
-            <FileText aria-hidden="true" />
+            {citation.filename.toLowerCase().endsWith('.docx') ? <FileType aria-hidden="true" /> : <FileText aria-hidden="true" />}
             <span className="ui-truncate" title={citation.filename}>{citation.filename}</span>
           </button>
         ) : href ? (
           <Link aria-label={`打开来源：${citation.filename}，${pageLabel}`} className="chat-source__link" to={href}>
-            <FileText aria-hidden="true" />
+            {citation.filename.toLowerCase().endsWith('.docx') ? <FileType aria-hidden="true" /> : <FileText aria-hidden="true" />}
             <span className="ui-truncate" title={citation.filename}>{citation.filename}</span>
           </Link>
         ) : (
           <span className="chat-source__link">
-            <FileText aria-hidden="true" />
+            {citation.filename.toLowerCase().endsWith('.docx') ? <FileType aria-hidden="true" /> : <FileText aria-hidden="true" />}
             <span className="ui-truncate" title={citation.filename}>{citation.filename}</span>
           </span>
         )}

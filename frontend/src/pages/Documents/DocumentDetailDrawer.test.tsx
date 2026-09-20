@@ -8,6 +8,7 @@ import {
   downloadDocument,
   getDocument,
   getDocumentPreview,
+  getKnowledgeBase,
   listDocumentChunks,
   reprocessDocument,
 } from '../../api/resources';
@@ -20,6 +21,7 @@ vi.mock('../../api/resources', () => ({
   downloadDocument: vi.fn(),
   getDocument: vi.fn(),
   getDocumentPreview: vi.fn(),
+  getKnowledgeBase: vi.fn().mockResolvedValue({ id: 'kb1', capabilities: ['document.download', 'content.write'] }),
   listDocumentChunks: vi.fn(),
   reprocessDocument: vi.fn(),
 }));
@@ -85,6 +87,7 @@ function DocumentScopeHarness() {
 }
 
 beforeEach(() => {
+  vi.mocked(getKnowledgeBase).mockReset().mockResolvedValue({ id: 'kb1', capabilities: ['document.download', 'content.write'] } as Awaited<ReturnType<typeof getKnowledgeBase>>);
   vi.mocked(deleteDocument).mockReset().mockResolvedValue(undefined);
   vi.mocked(downloadDocument).mockReset().mockResolvedValue(new Blob(['document']));
   vi.mocked(getDocument).mockReset().mockResolvedValue(document);
@@ -102,6 +105,29 @@ beforeEach(() => {
 });
 
 describe('DocumentDetailDrawer', () => {
+  it('keeps PDF text readable for a viewer without fetching the original or offering writes', async () => {
+    vi.mocked(getKnowledgeBase).mockResolvedValue({ id: 'kb1', capabilities: ['document.read'] } as Awaited<ReturnType<typeof getKnowledgeBase>>);
+    vi.mocked(getDocumentPreview).mockResolvedValue({ id: document.id, filename: document.filename, fileType: 'pdf', contentType: 'application/pdf', kind: 'file', downloadUrl: '/documents/doc1/download' });
+    vi.mocked(listDocumentChunks).mockResolvedValue({ items: [sourceChunk], total: 1, page: 1, pageSize: 20 });
+    renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
+    expect(await screen.findByText('可阅读下方内容片段；下载原始文件需要编辑者及以上权限。')).toBeInTheDocument();
+    expect(await screen.findByText(sourceChunk.content)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '下载', exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '重新处理' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '删除', exact: true })).not.toBeInTheDocument();
+    expect(downloadDocument).not.toHaveBeenCalled();
+  });
+
+  it('hides document actions when the knowledge-base permission lookup fails', async () => {
+    vi.mocked(getKnowledgeBase).mockRejectedValue(new Error('permission lookup unavailable'));
+    vi.mocked(listDocumentChunks).mockResolvedValue({ items: [sourceChunk], total: 1, page: 1, pageSize: 20 });
+    renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
+    expect(await screen.findByText('暂时无法确认文档操作权限，请重新打开文档重试。')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '下载', exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '重新处理' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '删除', exact: true })).not.toBeInTheDocument();
+  });
+
   it('closes from the backdrop but not from clicks inside the panel', async () => {
     vi.mocked(listDocumentChunks).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
     const onClose = vi.fn();

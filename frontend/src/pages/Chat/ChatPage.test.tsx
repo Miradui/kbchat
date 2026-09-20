@@ -30,6 +30,7 @@ import type { ChatMessage, ChatSession, KnowledgeBase } from '../../types/api';
 import { ChatPage } from './ChatPage';
 
 vi.mock('../../api/resources', () => ({
+  getCurrentUser: vi.fn().mockResolvedValue({ id: 'user1', username: 'fixture', displayName: '测试用户', role: 'user' }),
   archiveChatSession: vi.fn(),
   createChatSession: vi.fn(),
   deleteChatSession: vi.fn(),
@@ -2274,6 +2275,38 @@ describe('ChatPage', () => {
       content: '如何报销？',
       clientRequestId: expect.any(String),
     }), expect.any(Object), expect.any(AbortSignal));
+  });
+
+  it('shows a send rate limit at the composer and restores the question', async () => {
+    vi.mocked(sendChatMessage).mockRejectedValue(new ApiError(429, {
+      code: 'RATE_LIMITED',
+      message: '请求过于频繁，请稍后重试',
+      details: { retryAfter: 19 },
+    }));
+    const user = userEvent.setup();
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
+      </Routes>,
+      ['/chat/s1'],
+    );
+
+    const input = await screen.findByRole('textbox', { name: '输入问题' });
+    await waitFor(() => expect(input).toBeEnabled());
+    await user.type(input, '如何报销？');
+    await user.click(screen.getByRole('button', { name: '发送' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveClass('chat-composer__error');
+    expect(alert).toHaveTextContent('请求过于频繁，请 19 秒后再试');
+    await waitFor(() => expect(input).toHaveValue('如何报销？'));
+    expect(input).toHaveAccessibleDescription('请求过于频繁，请 19 秒后再试');
+    expect(within(screen.getByRole('region', { name: '问答会话' })).queryByText('回答生成失败')).not.toBeInTheDocument();
+    expect(document.querySelector('.ui-toast')).toBeNull();
+
+    await user.type(input, '补充');
+    expect(screen.queryByText('请求过于频繁，请 19 秒后再试')).not.toBeInTheDocument();
   });
 
   it('requires reconciliation before retrying an unknown network outcome', async () => {

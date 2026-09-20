@@ -23,6 +23,7 @@ var defaultRetrievalConfig = dto.RetrievalConfig{
 	RerankTopK:     5,
 	ScoreThreshold: 0.3,
 	EnableRerank:   true,
+	EnableKeyword:  true,
 }
 
 type KnowledgeBaseService struct {

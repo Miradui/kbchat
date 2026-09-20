@@ -8,10 +8,9 @@ import "strings"
 // A marker is used instead of reading the prose because heuristics on refusal
 // wording are wrong in both directions: "根据资料，X 不适用于 Y" is a real answer that
 // reads like a refusal, and a refusal can be phrased without any keyword at all.
-// The marker is verified against the configured provider -- see
-// docs/12-handoff.md -- but it remains a request the model can ignore, so a
-// missing marker is always treated as answered. This under-reports refusals and
-// never invents one.
+// Provider compliance is model-dependent; see docs/05-rag-pipeline.md.
+// A missing marker is always treated as answered, so refusal counts are a lower
+// bound and are not inferred from the answer's prose.
 const refusalMarker = "[[NO_ANSWER]]"
 
 // refusalPromptRules are appended to the knowledge-answer system prompt.

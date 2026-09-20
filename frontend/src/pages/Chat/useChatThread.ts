@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { ApiError } from '../../api/client';
+import { ApiError, isRateLimitError } from '../../api/client';
 import {
   createChatSession,
   editChatMessage,
@@ -51,6 +51,11 @@ export type RegenerationState = {
   checking: boolean;
 };
 
+type RateLimitNotice = {
+  message: string;
+  question: string | null;
+};
+
 type UseChatThreadOptions = {
   sessionId?: string;
   draftKnowledgeBaseId?: string;
@@ -90,6 +95,7 @@ export function useChatThread({
   const [streamingAnswer, setStreamingAnswer] = useState('');
   const [streamingCitations, setStreamingCitations] = useState<Citation[]>([]);
   const [stoppedStream, setStoppedStream] = useState<StoppedStream | null>(null);
+  const [rateLimitNotice, setRateLimitNotice] = useState<RateLimitNotice | null>(null);
 
   const activeSessionRef = useRef<string | undefined>(sessionId);
   const mountedRef = useRef(true);
@@ -219,6 +225,7 @@ export function useChatThread({
     setStreamingAnswer('');
     setStreamingCitations([]);
     setStoppedStream(null);
+    setRateLimitNotice(null);
     streamingAnswerRef.current = '';
     streamingCitationsRef.current = [];
     regenerateTokenRef.current = null;
@@ -344,6 +351,7 @@ export function useChatThread({
     setStreamingAnswer('');
     setStreamingCitations([]);
     setStoppedStream(null);
+    setRateLimitNotice(null);
     streamingAnswerRef.current = '';
     streamingCitationsRef.current = [];
     cancelRequestedRef.current = null;
@@ -378,7 +386,7 @@ export function useChatThread({
       // Streaming changes only how the answer arrives, not the contract: the
       // pending request is still recorded before the write, and a failure below
       // still lands in the same "unknown result" reconciliation.
-      // See docs/14-frontend-api-gaps.md G2.
+      // See docs/04-api-design.md (POST /chat/sessions/:id/messages/stream).
       const isCurrent = () => mountedRef.current
         && sendTokenRef.current === token
         && activeSessionRef.current === targetSessionId;
@@ -463,7 +471,10 @@ export function useChatThread({
       streamingAnswerRef.current = '';
       streamingCitationsRef.current = [];
 
-      if (caught instanceof ApiError && isDefinitiveSendFailure(caught)) {
+      if (isRateLimitError(caught)) {
+        pendingChatRequestStore.clear(targetSessionId, clientRequestId);
+        setRateLimitNotice({ message: caught.message, question });
+      } else if (caught instanceof ApiError && isDefinitiveSendFailure(caught)) {
         // The server rejected it outright, so the id is safe to discard.
         pendingChatRequestStore.clear(targetSessionId, clientRequestId);
         setFailedSend({ question, message: getErrorMessage(caught, '回答生成失败，请稍后重试。') });
@@ -583,6 +594,7 @@ export function useChatThread({
     setRegeneratingId(messageId);
     setRegeneration(null);
     setRerankFallback(null);
+    setRateLimitNotice(null);
 
     try {
       const response = await regenerateChatMessage(targetSessionId, messageId);
@@ -601,19 +613,25 @@ export function useChatThread({
       setLoadError('');
       onSessionsChanged();
     } catch (caught) {
-      const definitive = caught instanceof ApiError && isDefinitiveSendFailure(caught);
+      const rateLimited = isRateLimitError(caught);
+      const definitive = rateLimited || (caught instanceof ApiError && isDefinitiveSendFailure(caught));
       if (definitive) pendingRegenerationStore.clear(targetSessionId, messageId);
       if (mountedRef.current && activeSessionRef.current === targetSessionId && regenerateTokenRef.current === token) {
-        setRegeneration({
-          messageId,
-          kind: definitive ? 'failed' : 'unconfirmed',
-          message: definitive
-            ? getErrorMessage(caught, '重新生成失败')
-            : '重新生成结果还没确认。',
-          baselineMessageIds,
-          autoChecksDone: 0,
-          checking: false,
-        });
+        if (rateLimited) {
+          setRateLimitNotice({ message: caught.message, question: null });
+          setRegeneration(null);
+        } else {
+          setRegeneration({
+            messageId,
+            kind: definitive ? 'failed' : 'unconfirmed',
+            message: definitive
+              ? getErrorMessage(caught, '重新生成失败')
+              : '重新生成结果还没确认。',
+            baselineMessageIds,
+            autoChecksDone: 0,
+            checking: false,
+          });
+        }
       }
     } finally {
       if (regenerateTokenRef.current === token) {
@@ -786,6 +804,8 @@ export function useChatThread({
     streamingAnswer,
     streamingCitations,
     stoppedStream,
+    rateLimitError: rateLimitNotice?.message ?? '',
+    rateLimitedQuestion: rateLimitNotice?.question ?? null,
     reload: () => (sessionId ? loadThread(sessionId) : Promise.resolve()),
     send,
     cancelSend,
@@ -796,6 +816,7 @@ export function useChatThread({
     hasPendingWrite,
     updateMessageFeedback,
     dismissFailedSend: () => setFailedSend(null),
+    dismissRateLimitError: () => setRateLimitNotice(null),
   };
 }
 

@@ -121,7 +121,7 @@ func TestNewRerankProviderUsesDisabledProviderWhenDisabled(t *testing.T) {
 
 func TestDocumentChunksRejectInvalidChunkID(t *testing.T) {
 	cfg := config.Config{AppEnv: "test", ServerPort: "0", JWTSecret: "this-is-a-long-router-test-secret-1234", JWTExpiresIn: "1h"}
-	token, err := auth.GenerateToken(cfg, uuid.New())
+	token, err := auth.GenerateToken(cfg, uuid.New(), "user")
 	if err != nil {
 		t.Fatalf("generate chunk query token: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestDocumentChunksRejectInvalidChunkID(t *testing.T) {
 
 func TestGlobalSearchRejectsInvalidContractParameters(t *testing.T) {
 	cfg := config.Config{AppEnv: "test", ServerPort: "0", JWTSecret: "this-is-a-long-router-test-secret-1234", JWTExpiresIn: "1h"}
-	token, err := auth.GenerateToken(cfg, uuid.New())
+	token, err := auth.GenerateToken(cfg, uuid.New(), "user")
 	if err != nil {
 		t.Fatalf("generate search token: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestGlobalSearchRejectsInvalidContractParameters(t *testing.T) {
 
 func TestSendChatMessageRequiresUUIDClientRequestID(t *testing.T) {
 	cfg := config.Config{AppEnv: "test", ServerPort: "0", JWTSecret: "this-is-a-long-router-test-secret-1234", JWTExpiresIn: "1h"}
-	token, err := auth.GenerateToken(cfg, uuid.New())
+	token, err := auth.GenerateToken(cfg, uuid.New(), "user")
 	if err != nil {
 		t.Fatalf("generate chat token: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestArchiveChatSessionReturnsArchivedSession(t *testing.T) {
 	if err := db.Create(&session).Error; err != nil {
 		t.Fatalf("create archive test session: %v", err)
 	}
-	token, err := auth.GenerateToken(cfg, user.ID)
+	token, err := auth.GenerateToken(cfg, user.ID, user.Role)
 	if err != nil {
 		t.Fatalf("generate archive test token: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestFeedbackAndExportEndpointsReturnHTTPContracts(t *testing.T) {
 	if err := db.Create(&message).Error; err != nil {
 		t.Fatalf("create gap contract message: %v", err)
 	}
-	token, err := auth.GenerateToken(cfg, user.ID)
+	token, err := auth.GenerateToken(cfg, user.ID, user.Role)
 	if err != nil {
 		t.Fatalf("generate gap contract token: %v", err)
 	}

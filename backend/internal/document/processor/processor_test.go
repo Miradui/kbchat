@@ -18,6 +18,7 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
+	"kbchat/backend/internal/document/lexer"
 	"kbchat/backend/internal/document/parser"
 	"kbchat/backend/internal/document/splitter"
 	"kbchat/backend/internal/model"
@@ -364,6 +365,35 @@ func TestProcessPublishesTerminalStatusWithChunks(t *testing.T) {
 	}
 	if job.Status != "completed" {
 		t.Fatalf("expected job completion to publish with chunks, got %q", job.Status)
+	}
+}
+
+func TestProcessPublishesKeywordSearchVectorWithChunks(t *testing.T) {
+	fixture := newProcessorTestFixture(t, "txt")
+	processor := New(
+		fixture.documents,
+		fixture.chunks,
+		structuredParser{document: parser.ParsedDocument{
+			FileType: "txt",
+			Segments: []parser.Segment{{Content: "错误码 E-4021"}},
+		}},
+		splitter.New(100, 10),
+		cardinalityEmbedder{},
+	)
+
+	if err := processor.Process(context.Background(), &fixture.job); err != nil {
+		t.Fatalf("process document: %v", err)
+	}
+	chunks, err := fixture.chunks.ListByDocument(context.Background(), fixture.document.ID)
+	if err != nil || len(chunks) != 1 {
+		t.Fatalf("expected one published chunk, got %d err=%v", len(chunks), err)
+	}
+	want := model.SearchVector(lexer.TSVector(lexer.Tokenize("错误码 E-4021")))
+	if chunks[0].SearchVector != want {
+		t.Fatalf("expected search vector %q, got %q", want, chunks[0].SearchVector)
+	}
+	if !strings.Contains(string(chunks[0].SearchVector), "'e-4021'") || !strings.Contains(string(chunks[0].SearchVector), "'错误'") {
+		t.Fatalf("expected lexemes for both the code and the CJK bigram, got %q", chunks[0].SearchVector)
 	}
 }
 

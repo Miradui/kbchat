@@ -23,6 +23,7 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   txt: 'text/plain',
   md: 'text/markdown',
   pdf: 'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 };
 
 function acceptAttribute(extensions: string[]): string {

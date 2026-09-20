@@ -21,7 +21,7 @@ export type AppSection =
   | 'tags'
   | 'search';
 
-type NavItem = { to: string; label: string; section: AppSection; icon: LucideIcon };
+type NavItem = { to: string; label: string; section: AppSection; icon: LucideIcon; systemAdminOnly?: boolean };
 
 /**
  * Every section has its own top-level entry.
@@ -50,17 +50,22 @@ const groups: Array<{ label: string; items: NavItem[] }> = [
   {
     label: '系统',
     items: [
-      { to: '/diagnostics', label: '系统诊断', section: 'diagnostics', icon: Activity },
+      { to: '/diagnostics', label: '系统诊断', section: 'diagnostics', icon: Activity, systemAdminOnly: true },
     ],
   },
 ];
 
 type PrimaryNavProps = {
   active: AppSection;
+  canViewDiagnostics: boolean;
   onNavigate: () => void;
 };
 
-export function PrimaryNav({ active, onNavigate }: PrimaryNavProps) {
+export function PrimaryNav({ active, canViewDiagnostics, onNavigate }: PrimaryNavProps) {
+  const visibleGroups = groups.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => !item.systemAdminOnly || canViewDiagnostics),
+  })).filter((group) => group.items.length > 0);
   return (
     <>
       <Link className="rail__cta" onClick={onNavigate} to="/chat">
@@ -68,7 +73,7 @@ export function PrimaryNav({ active, onNavigate }: PrimaryNavProps) {
         <span>新建对话</span>
       </Link>
       <nav aria-label="主导航" className="rail__nav">
-        {groups.map((group) => (
+        {visibleGroups.map((group) => (
           <div className="rail__group" key={group.label}>
             <p className="rail__group-label">{group.label}</p>
             {group.items.map(({ to, label, section, icon: Icon }) => (

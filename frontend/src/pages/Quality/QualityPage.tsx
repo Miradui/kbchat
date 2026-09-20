@@ -33,6 +33,7 @@ import { MetricStrip } from '../../components/ui/MetricStrip';
 import { Pagination } from '../../components/ui/Pagination';
 import { SegmentedControl } from '../../components/ui/SegmentedControl';
 import { AppShell } from '../../layouts/AppShell';
+import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { EvaluationCaseDialog } from './EvaluationCaseDialog';
 import { EvaluationPanel } from './EvaluationPanel';
 import { chatFeedbackReasonLabel } from '../../utils/chatFeedback';
@@ -122,6 +123,7 @@ function gapPresentation(category: string): GapPresentation {
 }
 
 export function QualityPage({ sources = defaultSources }: { sources?: QualitySources }) {
+  const { user } = useCurrentUser();
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = searchParams.get('tab') === 'evaluation' ? 'evaluation' : 'feedback';
   const knowledgeBaseId = searchParams.get('knowledgeBaseId') || '';
@@ -378,7 +380,7 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
               : !gaps || gaps.items.length === 0 ? <EmptyState description={gapEmptyDescription(gapCategory)} title="没有发现知识缺口" />
                 : <>
                   <div className="quality-gaps__list">
-                    {gaps.items.map((item) => <KnowledgeGapItem item={item} key={gapKey(item)} />)}
+                    {gaps.items.map((item) => <KnowledgeGapItem item={item} canViewDiagnostics={user?.role === 'admin'} key={gapKey(item)} />)}
                   </div>
                   <Pagination onPageChange={setGapPage} page={gaps.page} pageSize={gaps.pageSize} total={gaps.total} />
                 </>}
@@ -464,7 +466,7 @@ function FeedbackItem({ item, onSave }: { item: ChatQualityFeedbackItem; onSave:
   );
 }
 
-function KnowledgeGapItem({ item }: { item: ChatKnowledgeGapItem }) {
+function KnowledgeGapItem({ item, canViewDiagnostics }: { item: ChatKnowledgeGapItem; canViewDiagnostics: boolean }) {
   const isCluster = item.category === 'repeated_rewrite';
   const presentation = gapPresentation(item.category);
   const Icon = presentation.icon;
@@ -489,7 +491,9 @@ function KnowledgeGapItem({ item }: { item: ChatKnowledgeGapItem }) {
           <div><dt>检索式</dt><dd>{item.retrievalQuery}</dd></div>
         )}
       </dl>
-      <p className="ui-muted quality-gaps__advice">{presentation.advice}</p>
+      <p className="ui-muted quality-gaps__advice">{item.category === 'retrieval_failed' && !canViewDiagnostics
+        ? '检索服务当时不可用，请联系系统管理员检查服务状态，恢复后重试。'
+        : presentation.advice}</p>
       <div className="quality-gaps__meta">
         {isCluster
           ? <>
@@ -500,7 +504,7 @@ function KnowledgeGapItem({ item }: { item: ChatKnowledgeGapItem }) {
         <span className="ui-muted">
           首次 {formatRelativeTime(item.firstSeenAt)}
         </span>
-        {presentation.action && (
+        {presentation.action && (item.category !== 'retrieval_failed' || canViewDiagnostics) && (
           <Link className="ui-button ui-button--link" to={presentation.action.to(item)}>
             {presentation.action.label} <ExternalLink aria-hidden="true" />
           </Link>

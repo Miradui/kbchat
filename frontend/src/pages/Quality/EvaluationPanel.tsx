@@ -239,6 +239,8 @@ export function EvaluationPanel({ knowledgeBase }: { knowledgeBase: KnowledgeBas
         </div>
         <label className="evaluation-checkbox"><Checkbox disabled={formLocked} checked={config.enableRerank} onChange={(event) => setConfig({ ...config, enableRerank: event.target.checked })} />使用精排</label>
         {!capabilities.rerankEnabled && config.enableRerank && <p className="ui-muted">当前环境未启用精排，本次运行会记录实际生效状态。</p>}
+        <label className="evaluation-checkbox"><Checkbox disabled={formLocked} checked={config.enableKeyword ?? true} onChange={(event) => setConfig({ ...config, enableKeyword: event.target.checked })} />使用关键词召回</label>
+        {!capabilities.keywordSearchEnabled && config.enableKeyword && <p className="ui-muted">当前环境未启用关键词召回（KEYWORD_SEARCH_ENABLED=false），本次运行只使用向量召回。</p>}
         {pending && !creating && <p>上次创建结果待确认。继续操作会复用原请求编号，已创建的运行会直接返回。</p>}
         {createError && <p className="ui-inline-error" role="alert">{createError}</p>}
         <div><Button disabled={!storageKey || (!selected.length && !pending)} loading={creating} type="submit" variant="primary">{pending ? '继续确认本次评测' : `批量重测（${selected.length} 题）`}</Button></div>

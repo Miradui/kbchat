@@ -85,6 +85,12 @@ DATABASE_URL=postgres://rag:replace-with-db-password@127.0.0.1:5432/rag?sslmode=
 REDIS_ADDR=127.0.0.1:6379
 REDIS_PASSWORD=replace-with-redis-password
 REDIS_DB=0
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_LOGIN_PER_MINUTE=10
+RATE_LIMIT_CHAT_PER_MINUTE=30
+RATE_LIMIT_FAILURE_MODE=open
+TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128
+EMBEDDING_CACHE_TTL=24h
 
 JWT_SECRET=replace-with-at-least-32-random-bytes
 JWT_EXPIRES_IN=24h
@@ -148,6 +154,8 @@ sudo chmod 0640 /etc/rag/rag.env
 - `EMBEDDING_DIMENSION` 必须保持为 `1536`，除非已经执行对应 schema migration 并重建全部 embedding。
 - `RERANK_FAILURE_MODE=strict` 会在 Rerank Provider 失败时终止本次检索；`fallback` 会降级为 vector topK。
 - 如果暂时没有 Rerank Provider，可以显式设置 `RERANK_ENABLED=false`，但检索质量会下降且 `rerankScore` 为空。
+- 同机 Nginx 反代时只信任 loopback CIDR。若 Nginx 与 backend 分属容器或主机，应把 `TRUSTED_PROXY_CIDRS` 改成 backend 实际看到的代理网段；不要为省事信任 `0.0.0.0/0` 或 `::/0`。
+- `RATE_LIMIT_FAILURE_MODE=open` 在 Redis 故障时保持业务可用并写 warning；安全要求优先的部署可改为 `closed`，此时登录和回答生成接口返回 503。query embedding 缓存始终自动降级到 Provider。
 - 生产服务器的项目目录中不要保留 `.env`。配置加载器会用项目内 `.env` 覆盖进程环境变量。
 
 ## 5. 启动 PostgreSQL 和 Redis
@@ -219,6 +227,8 @@ go build -trimpath -o bin/rag-server ./cmd/server
 go build -trimpath -o bin/rag-doctor ./cmd/doctor
 go build -trimpath -o bin/rag-migrate ./cmd/migrate
 go build -trimpath -o bin/rag-seed ./cmd/seed
+go build -trimpath -o bin/rag-bootstrap-admin ./cmd/bootstrap-admin
+go build -trimpath -o bin/rag-reindex-keywords ./cmd/reindex-keywords
 ```
 
 ### 6.2 构建前端
@@ -292,18 +302,44 @@ cd /opt/rag/app/backend
 
 指定单文件不会检查它的前置 migration 是否已经执行。在补齐正式的 schema migration 版本表之前，仍需按顺序逐个执行，且部署记录必须明确保存已执行到哪个 migration。
 
-### 7.4 初始化管理员
-
-首次部署可以创建管理员账号。不要使用默认密码 `123456`：
+升级到 `timestamptz` 时，确认 001–022 已执行，备份数据库并停止旧版 backend 和 worker，再执行：
 
 ```bash
-SEED_USERNAME=admin \
-SEED_PASSWORD='replace-with-strong-password' \
-SEED_DISPLAY_NAME='Administrator' \
-./bin/rag-seed
+./bin/rag-migrate -migration 023_timestamps_with_time_zone.sql
 ```
 
-账号已存在时，seed 命令不会覆盖密码。
+023 仅处理连接 `current_schema()` 下已知业务表的无时区时间列，按表合并 `ALTER COLUMN`，使用 `AT TIME ZONE 'UTC'` 保持现有时间含义；已是 `timestamptz` 的列跳过，可重复执行。这是类型升级，不自动修正历史时间偏差。迁移需要表锁，宜安排维护窗口；单文件事务失败会回滚，命令当前总超时为 30 秒，大库应提前评估耗时。
+
+核对记录数、时间值、默认值和索引后启动新版 backend。新版启动检查发现旧时间列会报错并提示 023；`AutoMigrate` 只创建缺失表，不会代替这次类型迁移。其他 schema 或环境须按自己的连接配置与迁移记录分别升级。
+
+升级到混合检索（迁移 024）时，确认 001–023 已执行，在维护窗口内执行：
+
+```bash
+./bin/rag-migrate -migration 024_hybrid_search.sql -timeout 30m
+./bin/rag-reindex-keywords
+```
+
+024 为 `document_chunks` 增加 `search_vector tsvector` 列与 GIN 索引，并用 HNSW 索引替换 ivfflat 向量索引，可重复执行。构建 HNSW 索引会读取整张表，`-timeout` 应按数据量放宽（默认 30 秒只适合空库或小库），并可为会话提高 `maintenance_work_mem`。迁移完成后 `rag-reindex-keywords` 按主键分批回填已有 chunk 的关键词索引，每批独立提交，可中断后重跑；回填期间旧 chunk 继续参与向量召回，只是暂不参与关键词召回。新版 backend 可在回填进行时启动。`-batch` 控制每批数量（默认 200），`-timeout` 默认 1 小时。
+
+### 7.4 初始化系统管理员
+
+先执行数据库迁移，再通过 CLI 指定首位系统管理员。新部署可直接创建账号，密码至少 8 个字符、最多 72 个 UTF-8 字节：
+
+```bash
+BOOTSTRAP_ADMIN_PASSWORD='replace-with-strong-password' \
+BOOTSTRAP_ADMIN_DISPLAY_NAME='Administrator' \
+./bin/rag-bootstrap-admin -username admin -create
+```
+
+已有账号的环境使用提升命令，保留原有 ID、密码和资料：
+
+```bash
+./bin/rag-bootstrap-admin -username admin
+```
+
+将 `admin` 替换为操作者明确选定的用户名。同一管理员重复执行返回 `unchanged`；已有其他管理员则拒绝给第二个账号授予权限。`-create` 不覆盖现有普通用户；缺少该选项时不自动创建账号。并发初始化通过数据库事务锁保证只有首位成功。日志只记录用户名与动作，不记录密码。
+
+`rag-seed` 只创建普通系统用户，默认名字 `admin` 不代表管理员身份。初始化命令没有默认用户名、默认密码或公开 HTTP 入口；它也不代替 SQL 迁移。诊断接口只允许数据库中当前 `role=admin` 的账号，知识库成员 `manager` 和拥有者仍是独立权限。新 token 携带角色快照，既有 token 按数据库当前角色判定，无需通过重新登录才能生效。
 
 ## 8. 使用 systemd 运行后端
 
@@ -403,6 +439,8 @@ sudo systemctl reload nginx
 
 如果调整 `MAX_UPLOAD_SIZE_MB`，同时调整 Nginx 的 `client_max_body_size`。
 
+登录 IP 限流依赖 `X-Forwarded-For` 与 `TRUSTED_PROXY_CIDRS` 同时正确。上面的配置适用于 Nginx 与 backend 同机、Nginx 直连 `127.0.0.1:8080`；若中间还有负载均衡器，逐跳核对代理链和可信网段。
+
 ## 10. 上线验证
 
 ### 10.1 基础设施
@@ -445,6 +483,8 @@ curl -fsS https://rag.example.com/api/v1/healthz
 6. 发起一次聊天，确认回答和 citations 正常。
 7. 启用 Rerank 时，确认未出现非预期的 `rerankFallback`。
 8. 直接刷新 `/knowledge-bases`、`/documents`、`/chat`，确认没有 Nginx 404。
+9. 在隔离的验收 IP 连续提交 11 次错误登录，第 11 次确认返回 429 且带 `Retry-After`；等待窗口结束后确认可重新请求。
+10. 对同一个问题执行两次检索，再以系统管理员打开诊断页，确认 query embedding cache 的命中数增加且第二次没有新增 Embedding Provider 成功计数。
 
 ## 11. 日常发布流程
 
@@ -517,11 +557,16 @@ try_files $uri $uri/ /index.html;
 
 确认 Provider 实现的是 OpenAI-compatible `/rerank` 接口，并返回 `results[].index` 以及 `relevance_score` 或 `score`。根据业务要求选择 `RERANK_FAILURE_MODE=strict` 或 `fallback`。
 
+### 登录或聊天返回 RATE_LIMIT_UNAVAILABLE
+
+这表示 `RATE_LIMIT_FAILURE_MODE=closed` 且 Redis 计数不可用。检查 `REDIS_ADDR`、认证、网络和 Redis 日志；恢复后无需清理 PostgreSQL。需要优先恢复业务时可临时切换为 `open` 并重启 backend，同时保留 warning 告警。
+
 ## 14. 安全检查清单
 
 - [ ] PostgreSQL 和 Redis 未暴露到公网。
 - [ ] Compose 默认密码已替换。
 - [ ] Redis 已启用认证，且 `REDIS_PASSWORD` 已配置。
+- [ ] `TRUSTED_PROXY_CIDRS` 只包含实际反向代理地址，未信任公网全网段。
 - [ ] `JWT_SECRET` 使用足够长的随机值。
 - [ ] 未使用默认 seed 密码。
 - [ ] `/etc/rag/rag.env` 权限为 `0640` 或更严格。
@@ -531,16 +576,16 @@ try_files $uri $uri/ /index.html;
 - [ ] Provider API Key 未出现在日志、仓库或构建产物中。
 - [ ] 防火墙只开放 80、443 和必要的运维端口。
 
-## 15. 当前未提供的能力
+## 15. 生产部署待补齐事项
 
-以下内容尚未在仓库中实现：
+以下生产部署配套尚未实现或完成验证：
 
 - backend、frontend 的 Dockerfile。
 - 完整生产 Docker Compose。
 - Nginx/Caddy 配置文件和自动 TLS。
 - migration 版本跟踪表。
 - 依赖就绪探针。
-- 对象存储和多实例上传文件共享。
+- 多实例任务领取与共享上传存储的部署验证；本地 / 私有 MinIO 存储已实现。
 - 自动化发布、滚动升级和一键回滚。
 
 在这些能力补齐前，不应宣称当前仓库支持完整的一键容器化生产部署。

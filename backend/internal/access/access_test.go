@@ -22,7 +22,7 @@ func TestEveryCapabilityHasAMinimumRole(t *testing.T) {
 }
 
 // Locks the matrix itself. Every row is a product decision recorded in
-// plans/2026-08-31-permissions-and-collaboration-v1.md, so a change here should
+// docs/04-api-design.md (permission matrix), so a change here should
 // require editing this table on purpose rather than passing quietly.
 func TestMinRoleMatrix(t *testing.T) {
 	want := map[Capability]Role{

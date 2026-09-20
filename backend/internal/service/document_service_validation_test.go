@@ -1,8 +1,11 @@
 package service
 
 import (
+	"archive/zip"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
@@ -65,5 +68,48 @@ func TestValidateFileAcceptsPDFSignature(t *testing.T) {
 
 	if err := service.validateFile(file); err != nil {
 		t.Fatalf("expected a PDF signature to pass upload validation: %v", err)
+	}
+}
+
+func TestValidateFileRequiresDOCXZipSignature(t *testing.T) {
+	service := &DocumentService{cfg: config.Config{MaxUploadSizeMB: 1}}
+	for _, content := range []string{"not a zip"} {
+		file := createUploadFile(t, "document.docx", content)
+		err := service.validateFile(file)
+		var appErr *apperror.Error
+		if !errors.As(err, &appErr) || appErr.Code != "DOCUMENT_TYPE_UNSUPPORTED" {
+			t.Fatalf("expected DOCX magic validation error for %q, got %v", content, err)
+		}
+	}
+	if err := service.validateFile(createUploadFile(t, "document.docx", "PK\x03\x04zip payload")); err != nil {
+		t.Fatalf("expected ZIP magic to pass upload signature validation, got %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "valid.docx")
+	output, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := zip.NewWriter(output)
+	entry, err := archive.Create("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := entry.Write([]byte("<w:document xmlns:w=\"urn:test\"><w:body/></w:document>")); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := output.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := createUploadFile(t, "valid.docx", string(data))
+	if err := service.validateFile(file); err != nil {
+		t.Fatalf("expected valid DOCX ZIP signature to pass, got %v", err)
 	}
 }

@@ -23,7 +23,7 @@ type RetrievalConfigFormProps = {
  */
 export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfigFormProps) {
   const toast = useToast();
-  const { retrieval, rerankEnabled } = useSystemCapabilities();
+  const { retrieval, rerankEnabled, keywordSearchEnabled } = useSystemCapabilities();
   const vectorId = useId();
   const rerankId = useId();
   const thresholdId = useId();
@@ -44,11 +44,11 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
 
   useEffect(() => setConfig(knowledgeBase.retrievalConfig), [knowledgeBase.retrievalConfig]);
 
-  const dirty = (['vectorTopN', 'rerankTopK', 'scoreThreshold', 'enableRerank'] as const)
+  const dirty = (['vectorTopN', 'rerankTopK', 'scoreThreshold', 'enableRerank', 'enableKeyword'] as const)
     .some((key) => config[key] !== knowledgeBase.retrievalConfig[key]);
 
   // Bounds published by GET /system/capabilities, applied here so the user sees
-  // the clamp before submitting. See docs/14-frontend-api-gaps.md G6.
+  // the clamp before submitting. See docs/04-api-design.md (GET /system/capabilities).
   const vectorTopN = clamp(config.vectorTopN, 1, retrieval.maxVectorTopN);
   const rerankTopK = clamp(config.rerankTopK, 1, Math.min(retrieval.maxRerankTopK, vectorTopN));
 
@@ -69,6 +69,7 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
           rerankTopK,
           scoreThreshold: clamp(config.scoreThreshold, 0, 1),
           enableRerank: config.enableRerank,
+          enableKeyword: config.enableKeyword,
         },
         tagIds: knowledgeBase.tags?.map((tag) => tag.id) ?? [],
       });
@@ -152,15 +153,34 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
           </label>
 
           {/*
-            Says up front that the server has no rerank provider wired, instead of
-            waiting for a `rerankFallback` to come back from a query the user
-            already ran. See docs/14-frontend-api-gaps.md G6.
+            Reports that reranking is disabled by the server before a search runs.
+            See docs/04-api-design.md (GET /system/capabilities).
           */}
           {!rerankEnabled && config.enableRerank && (
             <p className="ui-inline-notice" role="status">
               <TriangleAlert aria-hidden="true" size={14} />
               <span>服务端当前未启用精排（RERANK_ENABLED=false），该开关会保存但暂不生效，检索将按向量相关度排序。</span>
             </p>
+          )}
+
+          <label className="ui-switch-row">
+            <Checkbox
+              checked={config.enableKeyword}
+              disabled={!editable || saving}
+              onChange={(event) => setConfig({ ...config, enableKeyword: event.target.checked })}
+            />
+            <span>启用关键词召回。在向量召回之外按精确词元（型号、错误码、专有名词）匹配片段，两路结果融合后再精排。</span>
+          </label>
+
+          {!keywordSearchEnabled && config.enableKeyword && (
+            <p className="ui-inline-notice" role="status">
+              <TriangleAlert aria-hidden="true" size={14} />
+              <span>服务端当前未启用关键词召回（KEYWORD_SEARCH_ENABLED=false），该开关会保存但暂不生效，检索只使用向量召回。</span>
+            </p>
+          )}
+
+          {config.enableKeyword && !config.enableRerank && (
+            <p className="ui-field__hint">关键词召回开启且未精排时，最低相关度按两路融合分（0 到 1）过滤：只在一路排第一约为 0.5，两路都靠前才接近 1。</p>
           )}
 
           {error && <p className="ui-inline-error" role="alert">{error}</p>}

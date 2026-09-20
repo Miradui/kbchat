@@ -13,6 +13,8 @@ type ChatComposerProps = {
   placeholder: string;
   /** Shown under the input, e.g. why sending is unavailable. */
   hint?: string;
+  /** A recoverable request error shown next to the input. */
+  error?: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
   onCancel: () => void;
@@ -28,12 +30,15 @@ export function ChatComposer({
   sending,
   placeholder,
   hint,
+  error,
   onChange,
   onSubmit,
   onCancel,
 }: ChatComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const hintId = useId();
+  const errorId = useId();
+  const describedBy = [hint ? hintId : '', error ? errorId : ''].filter(Boolean).join(' ') || undefined;
 
   useEffect(() => {
     const element = ref.current;
@@ -60,7 +65,7 @@ export function ChatComposer({
     <form className="chat-composer" onSubmit={submit}>
       <div className="chat-composer__box">
         <textarea
-          aria-describedby={hint ? hintId : undefined}
+          aria-describedby={describedBy}
           aria-label="输入问题"
           className="chat-composer__input"
           disabled={disabled}
@@ -99,6 +104,16 @@ export function ChatComposer({
         </div>
       </div>
       {hint && <p className="chat-composer__note" id={hintId}>{hint}</p>}
+      {error && (
+        <p
+          aria-live="assertive"
+          className="chat-composer__error ui-inline-error"
+          id={errorId}
+          role="alert"
+        >
+          {error}
+        </p>
+      )}
     </form>
   );
 }

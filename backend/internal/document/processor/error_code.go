@@ -14,7 +14,7 @@ import (
 // value here without the migration makes every write of it fail.
 const (
 	// ErrorCodeUnsupportedType is part of the closed set but ClassifyError never
-	// returns it: upload validation rejects unsupported extensions with a 400
+	// returns it: upload validation rejects unsupported extensions or file magic with a 400
 	// before a document row exists, so processing never sees one. It stays defined
 	// so the Go side and the CHECK constraint list the same values.
 	ErrorCodeUnsupportedType = "unsupported_type"

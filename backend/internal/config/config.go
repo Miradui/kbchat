@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -17,6 +18,11 @@ const (
 	defaultDatabaseURL             = "postgres://rag:rag@localhost:5432/rag?sslmode=disable"
 	defaultRedisAddr               = "localhost:6379"
 	defaultRedisDB                 = 0
+	defaultRateLimitEnabled        = true
+	defaultRateLimitLoginPerMinute = 10
+	defaultRateLimitChatPerMinute  = 30
+	defaultRateLimitFailureMode    = "open"
+	defaultEmbeddingCacheTTL       = 24 * time.Hour
 	defaultJWTExpiresIn            = "24h"
 	defaultModelProvider           = "openai_compatible"
 	defaultChatBaseURL             = "https://api.openai.com/v1"
@@ -38,6 +44,7 @@ const (
 	defaultRerankTopK              = 5
 	defaultScoreThreshold          = 0.3
 	defaultRerankEnabled           = true
+	defaultKeywordSearchEnabled    = true
 	defaultChatHistoryLimit        = 10
 	defaultWorkerConcurrency       = 2
 	defaultWorkerMaxRetries        = 3
@@ -51,40 +58,49 @@ const (
 )
 
 type Config struct {
-	AppEnv             string
-	ServerPort         string
-	CORSAllowedOrigins []string
-	DatabaseURL        string
-	RedisAddr          string
-	RedisPassword      string
-	RedisDB            int
-	JWTSecret          string
-	JWTExpiresIn       string
-	ModelProvider      string
-	ChatBaseURL        string
-	ChatAPIKey         string
-	ChatModel          string
-	TitleBaseURL       string
-	TitleAPIKey        string
-	TitleModel         string
-	EmbeddingBaseURL   string
-	EmbeddingAPIKey    string
-	EmbeddingModel     string
-	EmbeddingDimension int
-	RerankEnabled      bool
-	RerankBaseURL      string
-	RerankAPIKey       string
-	RerankModel        string
-	RerankFailureMode  string
-	StorageProvider    string
-	UploadDir          string
-	MinIOEndpoint      string
-	MinIOAccessKey     string
-	MinIOSecretKey     string
-	MinIOBucket        string
-	MinIORegion        string
-	MinIOUseSSL        bool
-	MaxUploadSizeMB    int
+	AppEnv                  string
+	ServerPort              string
+	CORSAllowedOrigins      []string
+	DatabaseURL             string
+	RedisAddr               string
+	RedisPassword           string
+	RedisDB                 int
+	RateLimitEnabled        bool
+	RateLimitLoginPerMinute int
+	RateLimitChatPerMinute  int
+	RateLimitFailureMode    string
+	TrustedProxyCIDRs       []string
+	EmbeddingCacheTTL       time.Duration
+	JWTSecret               string
+	JWTExpiresIn            string
+	ModelProvider           string
+	ChatBaseURL             string
+	ChatAPIKey              string
+	ChatModel               string
+	TitleBaseURL            string
+	TitleAPIKey             string
+	TitleModel              string
+	EmbeddingBaseURL        string
+	EmbeddingAPIKey         string
+	EmbeddingModel          string
+	EmbeddingDimension      int
+	RerankEnabled           bool
+	// KeywordSearchEnabled is the global switch for the keyword recall stage; a
+	// knowledge base cannot turn it on when this is false, mirroring RerankEnabled.
+	KeywordSearchEnabled bool
+	RerankBaseURL        string
+	RerankAPIKey         string
+	RerankModel          string
+	RerankFailureMode    string
+	StorageProvider      string
+	UploadDir            string
+	MinIOEndpoint        string
+	MinIOAccessKey       string
+	MinIOSecretKey       string
+	MinIOBucket          string
+	MinIORegion          string
+	MinIOUseSSL          bool
+	MaxUploadSizeMB      int
 	// StaleDocumentAfterDays is how long a processed document goes without being
 	// updated before the UI flags it as possibly out of date. 0 disables the flag.
 	// A document is never deleted or down-weighted in retrieval for being stale:
@@ -112,6 +128,12 @@ func Load() Config {
 		RedisAddr:               getEnv("REDIS_ADDR", defaultRedisAddr),
 		RedisPassword:           getEnv("REDIS_PASSWORD", ""),
 		RedisDB:                 getEnvInt("REDIS_DB", defaultRedisDB),
+		RateLimitEnabled:        getEnvBool("RATE_LIMIT_ENABLED", defaultRateLimitEnabled),
+		RateLimitLoginPerMinute: getEnvInt("RATE_LIMIT_LOGIN_PER_MINUTE", defaultRateLimitLoginPerMinute),
+		RateLimitChatPerMinute:  getEnvInt("RATE_LIMIT_CHAT_PER_MINUTE", defaultRateLimitChatPerMinute),
+		RateLimitFailureMode:    strings.ToLower(strings.TrimSpace(getEnv("RATE_LIMIT_FAILURE_MODE", defaultRateLimitFailureMode))),
+		TrustedProxyCIDRs:       splitCommaSeparated(getEnv("TRUSTED_PROXY_CIDRS", "")),
+		EmbeddingCacheTTL:       getEnvDuration("EMBEDDING_CACHE_TTL", defaultEmbeddingCacheTTL),
 		JWTSecret:               getEnv("JWT_SECRET", ""),
 		JWTExpiresIn:            getEnv("JWT_EXPIRES_IN", defaultJWTExpiresIn),
 		ModelProvider:           getEnv("MODEL_PROVIDER", defaultModelProvider),
@@ -126,6 +148,7 @@ func Load() Config {
 		EmbeddingModel:          getEnv("EMBEDDING_MODEL", defaultEmbeddingModel),
 		EmbeddingDimension:      getEnvInt("EMBEDDING_DIMENSION", defaultEmbeddingDimension),
 		RerankEnabled:           getEnvBool("RERANK_ENABLED", getEnvBool("ENABLE_RERANK", defaultRerankEnabled)),
+		KeywordSearchEnabled:    getEnvBool("KEYWORD_SEARCH_ENABLED", defaultKeywordSearchEnabled),
 		RerankBaseURL:           normalizedBaseURL(getEnv("RERANK_BASE_URL", getEnv("OPENAI_BASE_URL", defaultRerankBaseURL))),
 		RerankAPIKey:            getEnv("RERANK_API_KEY", getEnv("OPENAI_API_KEY", "")),
 		RerankModel:             getEnv("RERANK_MODEL", defaultRerankModel),
@@ -164,7 +187,33 @@ func (c Config) Validate() error {
 	if c.StaleDocumentAfterDays < 0 {
 		return fmt.Errorf("STALE_DOCUMENT_AFTER_DAYS must not be negative")
 	}
+	if err := validateRateLimitConfig(c); err != nil {
+		return err
+	}
+	if c.RedisAddr != "" && c.EmbeddingCacheTTL <= 0 {
+		return fmt.Errorf("EMBEDDING_CACHE_TTL must be greater than zero")
+	}
 	return validateStorageConfig(c)
+}
+
+func validateRateLimitConfig(c Config) error {
+	if c.RateLimitEnabled {
+		if c.RateLimitLoginPerMinute <= 0 {
+			return fmt.Errorf("RATE_LIMIT_LOGIN_PER_MINUTE must be greater than zero")
+		}
+		if c.RateLimitChatPerMinute <= 0 {
+			return fmt.Errorf("RATE_LIMIT_CHAT_PER_MINUTE must be greater than zero")
+		}
+	}
+	if c.RateLimitFailureMode != "" && c.RateLimitFailureMode != "open" && c.RateLimitFailureMode != "closed" {
+		return fmt.Errorf("RATE_LIMIT_FAILURE_MODE must be open or closed")
+	}
+	for _, value := range c.TrustedProxyCIDRs {
+		if _, _, err := net.ParseCIDR(value); err != nil {
+			return fmt.Errorf("TRUSTED_PROXY_CIDRS contains invalid CIDR %q", value)
+		}
+	}
+	return nil
 }
 
 func validateStorageConfig(c Config) error {

@@ -1,5 +1,5 @@
-// Package observability collects per-process request timings and dependency
-// outcomes for the diagnostics endpoint.
+// Package observability collects per-process request timings, dependency
+// outcomes and operational counters for the diagnostics endpoint.
 //
 // Everything here is deliberately in-memory and bounded: the values are one to
 // three per chat request, so a row per value would add write amplification to
@@ -23,6 +23,7 @@ const (
 	MetricRetrieval      = "retrieval"
 	MetricEmbedding      = "embedding"
 	MetricRerank         = "rerank"
+	MetricKeyword        = "keyword"
 	MetricChatFirstToken = "chat_first_token"
 	MetricChatGeneration = "chat_generation"
 )
@@ -33,6 +34,22 @@ const (
 	ProviderEmbedding = "embedding"
 	ProviderRerank    = "rerank"
 	ProviderTitle     = "title"
+)
+
+// Rate-limit scopes are deliberately a closed set. Keeping the recorder's
+// counter keys bounded prevents an attacker-controlled identifier from turning
+// process metrics into an unbounded map.
+const (
+	RateLimitScopeLogin = "login"
+	RateLimitScopeChat  = "chat"
+)
+
+// Embedding-cache outcomes are recorded separately so an unavailable cache is
+// visible without treating the provider fallback as a genuine cache miss.
+const (
+	EmbeddingCacheResultHit   = "hit"
+	EmbeddingCacheResultMiss  = "miss"
+	EmbeddingCacheResultError = "error"
 )
 
 // sampleCapacity is the per-metric ring size. It covers a meaningful recent
@@ -79,20 +96,23 @@ type providerHealth struct {
 // concurrent use and is a no-op on a nil receiver, so instrumentation can be
 // added to call paths whose existing tests construct services without one.
 type Recorder struct {
-	mu        sync.Mutex
-	durations map[string]*durationRing
-	providers map[string]*providerHealth
-	fallbacks map[string]uint64
-	now       func() time.Time
-	logger    *zap.Logger
+	mu                   sync.Mutex
+	durations            map[string]*durationRing
+	providers            map[string]*providerHealth
+	fallbacks            map[string]uint64
+	rateLimitTriggers    map[string]uint64
+	embeddingCacheResult EmbeddingCacheStats
+	now                  func() time.Time
+	logger               *zap.Logger
 }
 
 func NewRecorder() *Recorder {
 	return &Recorder{
-		durations: map[string]*durationRing{},
-		providers: map[string]*providerHealth{},
-		fallbacks: map[string]uint64{},
-		now:       time.Now,
+		durations:         map[string]*durationRing{},
+		providers:         map[string]*providerHealth{},
+		fallbacks:         map[string]uint64{},
+		rateLimitTriggers: map[string]uint64{},
+		now:               time.Now,
 	}
 }
 
@@ -230,6 +250,43 @@ func (r *Recorder) RecordRerankFallback(reason string) {
 	r.fallbacks[reason]++
 }
 
+// RecordRateLimitTrigger counts a request rejected because its fixed-window
+// limit was exhausted. Unknown scopes are ignored to keep the key set bounded
+// and to avoid publishing caller-controlled values through diagnostics.
+func (r *Recorder) RecordRateLimitTrigger(scope string) {
+	if r == nil {
+		return
+	}
+	switch scope {
+	case RateLimitScopeLogin, RateLimitScopeChat:
+	default:
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rateLimitTriggers[scope]++
+}
+
+// RecordEmbeddingCacheResult counts query-embedding cache activity. Hit and
+// miss describe lookups; error may describe a failed read or write. Errors are
+// distinct from misses because they indicate degraded Redis operation while a
+// miss is an expected part of normal traffic.
+func (r *Recorder) RecordEmbeddingCacheResult(result string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch result {
+	case EmbeddingCacheResultHit:
+		r.embeddingCacheResult.Hits++
+	case EmbeddingCacheResultMiss:
+		r.embeddingCacheResult.Misses++
+	case EmbeddingCacheResultError:
+		r.embeddingCacheResult.Errors++
+	}
+}
+
 func (r *Recorder) clock() time.Time {
 	if r.now != nil {
 		return r.now()
@@ -272,12 +329,23 @@ type ProviderStats struct {
 	RecentFailureCount int
 }
 
+// EmbeddingCacheStats contains lifetime counts since process start. HitRate is
+// derived by the diagnostics service so this value stays an exact integer
+// snapshot and callers can choose how to represent an empty denominator.
+type EmbeddingCacheStats struct {
+	Hits   uint64
+	Misses uint64
+	Errors uint64
+}
+
 // Snapshot is a point-in-time copy. It holds no references into the recorder,
 // so callers can read it without holding the lock.
 type Snapshot struct {
-	Durations       map[string]DurationStats
-	Providers       map[string]ProviderStats
-	RerankFallbacks map[string]uint64
+	Durations            map[string]DurationStats
+	Providers            map[string]ProviderStats
+	RerankFallbacks      map[string]uint64
+	RateLimitTriggers    map[string]uint64
+	EmbeddingCacheResult EmbeddingCacheStats
 }
 
 // Snapshot returns the current figures. A nil receiver yields empty maps rather
@@ -285,9 +353,10 @@ type Snapshot struct {
 // traffic" before ranging over the result.
 func (r *Recorder) Snapshot() Snapshot {
 	snapshot := Snapshot{
-		Durations:       map[string]DurationStats{},
-		Providers:       map[string]ProviderStats{},
-		RerankFallbacks: map[string]uint64{},
+		Durations:         map[string]DurationStats{},
+		Providers:         map[string]ProviderStats{},
+		RerankFallbacks:   map[string]uint64{},
+		RateLimitTriggers: map[string]uint64{},
 	}
 	if r == nil {
 		return snapshot
@@ -318,6 +387,10 @@ func (r *Recorder) Snapshot() Snapshot {
 	for reason, count := range r.fallbacks {
 		snapshot.RerankFallbacks[reason] = count
 	}
+	for scope, count := range r.rateLimitTriggers {
+		snapshot.RateLimitTriggers[scope] = count
+	}
+	snapshot.EmbeddingCacheResult = r.embeddingCacheResult
 	return snapshot
 }
 

@@ -10,7 +10,7 @@ import (
 
 // HomeSummaryItemLimit is how many rows each home list carries. The server owns
 // this number so the workspace no longer has to guess a pageSize per section.
-// See docs/14-frontend-api-gaps.md G17.
+// See docs/04-api-design.md (GET /home/summary).
 const HomeSummaryItemLimit = 5
 
 // HomeService composes the existing services rather than querying directly, so

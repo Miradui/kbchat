@@ -14,6 +14,7 @@
 -> 文本切片
 -> status=embedding
 -> 按批次生成 Embedding，并持久化 50-95 的真实处理进度
+-> 按 chunk 内容生成关键词词元（search_vector）
 -> 写入 document_chunks
 -> 原子发布 chunks，status=completed，progress=100
 ```
@@ -47,18 +48,21 @@ MVP 支持：
 txt
 md
 pdf
+docx
 ```
 
 解析产物按来源格式保留必要边界：
 
 1. TXT 和 Markdown 必须是有效 UTF-8；非法字节直接返回解析错误，不做静默字符替换。两者各产生普通文本 segment；Markdown 语法保持原样，交给切片阶段解释。
 2. PDF 按物理页产生 segment，页码从 1 开始；空白页可以跳过，但后续非空页必须保留原物理页码，不能重新编号。
+   字体编码按页解析，不跨页复用同名资源；只解码实际文本操作数，布局换行直接写为 Unicode 换行，避免中文子集字体把换行解码为字形。支持 `Tj`、`TJ` 以及单引号、双引号文本操作符的换行语义。
 3. 当前 PDF 解析只提取可读取文本，不包含 OCR、版面树、跨栏阅读顺序修复或表格重建。
+4. DOCX 读取 OOXML 的 `word/document.xml`、`word/styles.xml` 和可选的 `word/numbering.xml`，只提取正文段落、Heading 1–6、列表和表格；输出为 Markdown segment 交给同一切片器。页眉页脚、批注、修订删除内容、图片、公式、文本框和 OCR 不进入索引。合并单元格只保留左上角值，其余单元格留空。
+5. DOCX 必须是扩展名为 `.docx` 且具有 ZIP 魔数的 OOXML 包；`.doc`、损坏 ZIP 和加密文档会进入 `corrupt_file` 失败分类。预览接口返回解析后的文本，不还原版式。
 
 后续版本支持：
 
 ```text
-docx
 xlsx
 pptx
 html
@@ -113,7 +117,10 @@ tokenCount
 pageNumber
 metadata
 embedding
+searchVector
 ```
+
+`searchVector` 是 `content`（含切片阶段加入的标题前缀）经 `internal/document/lexer` 分词后的 tsvector 字面量，与 `embedding` 在同一发布事务中写入；分词规则见“混合召回与融合”。
 
 metadata 至少包含：
 
@@ -133,7 +140,7 @@ pageNumber（仅有物理页概念时）
 
 规范化阶段不得在 Markdown 结构识别前对整个 segment 执行 `TrimSpace`，否则会破坏文件首行的 fence/list/code 缩进语义。空白清理应在 block 边界内执行，并同步调整上述 normalized offset。
 
-chunk 顺序必须稳定，`chunkIndex` 跨所有 segment 从 0 开始递增。当前 MVP 不做 OCR、通用文档 AST、PDF 版面树、PDF 表格重建、跨页 chunk 或 docx 解析。
+chunk 顺序必须稳定，`chunkIndex` 跨所有 segment 从 0 开始递增。当前 MVP 不做 OCR、通用文档 AST、PDF 版面树、PDF 表格重建或跨页 chunk。
 
 Processor 必须先完成全部 Embedding 批次并验证每批返回向量数量，再在单个数据库事务中替换该文档的旧 chunks。任一 Provider 调用或数量校验失败时，不得留下部分新索引，也不得删除原有完整索引。
 
@@ -147,8 +154,11 @@ Processor 成功替换 chunks 后不单独写入文档终态；worker 必须在�
 用户当前问题
 -> 读取当前会话最近历史消息
 -> 改写为独立检索问题
--> Query Embedding
--> pgvector TopN 粗召回
+-> 规范化独立问题并查询 Redis embedding cache
+-> cache miss / error 时调用 Query Embedding Provider 并回填缓存
+-> pgvector TopN 向量召回
+-> 关键词 TopN 召回（enableKeyword=true 时）
+-> RRF 融合并截断到 TopN
 -> Rerank 精排
 -> TopK chunks
 -> Prompt 组装（系统约束 + 最近历史 + 本轮 TopK chunks）
@@ -164,8 +174,49 @@ vectorTopN=30
 rerankTopK=5
 scoreThreshold=0.3
 enableRerank=true
+enableKeyword=true
 chatHistoryLimit=10
 ```
+
+query embedding 缓存键包含 `EMBEDDING_MODEL` 与规范化问题的 SHA-256；规范化会折叠首尾和连续 Unicode 空白，并把同一文本传给 Provider，避免缓存键与实际向量输入不一致。值使用版本化 float32 二进制格式，默认 TTL 为 `24h`。命中时跳过 Embedding Provider 调用；Redis 读取、解码或写入失败只记录 cache error 并继续走 Provider，不改变召回、Rerank、阈值或 citations 规则。
+
+## 混合召回与融合
+
+纯向量召回对型号、错误码、专有名词等精确词元的召回不稳定，关键词召回用来补上这一类漏召。两路召回都限定在当前知识库的已发布 chunks 内，并遵守相同的软删除与所有权约束。
+
+### 分词
+
+索引和查询共用 `backend/internal/document/lexer.Tokenize`，PostgreSQL 自带的文本解析器不参与，避免它把连字符编码、版本号或 CJK 连续串按不同规则再次拆分：
+
+1. 字母、数字统一小写。ASCII/拉丁字母与数字由 `-`、`_`、`.` 连接的串作为一个词元（`e-4021`、`v1.2.3`、`bge_m3`），同时也拆出各部分（`e`、`4021`），任一写法都能命中；结尾的连接符会去掉（`abc.` 索引为 `abc`）。
+2. 汉字、日文假名、韩文按字二元组（bigram）切分：`企业知识库` -> `企业 业知 知识 识库`；单个 CJK 字符单独成词。
+3. 其余空白、标点、符号只作分隔。超过 64 字节的词元（base64、长 hash、无分隔 URL）直接丢弃，避免膨胀索引。
+
+索引侧把词元按出现顺序渲染为带位置的 tsvector 字面量（`'知识':1 '识库':2`），以 `::tsvector` 写入 `document_chunks.search_vector`。查询侧把去重后的词元用 `|` 连接为 tsquery 字面量（`'知识' | '识库'`），以 `::tsquery` 参与 `@@` 匹配；查询没有产生任何词元时关键词阶段直接返回空，不查询数据库。
+
+### 关键词召回
+
+`SELECT ... ts_rank_cd(search_vector, query, 32) AS keyword_score WHERE search_vector @@ query ORDER BY keyword_score DESC, id ASC LIMIT vectorTopN`。归一化参数 32 使 `keywordScore` 落在 [0, 1)。返回结果的 `vectorScore` 为 0，表示该阶段没有计算向量距离。
+
+### RRF 融合
+
+向量列表与关键词列表按 Reciprocal Rank Fusion 合并，常数 `k=60`：
+
+```text
+fusionScore = Σ 1 / (k + rank_i)    其中 rank_i 为该 chunk 在第 i 路中的 1-based 名次
+```
+
+结果再除以 `2 / (k + 1)` 归一化，使两路都排第一的 chunk 得分为 1，只在一路排第一的 chunk 得分为 0.5。融合后按分数降序，分数相同时依次按向量名次、关键词名次、chunkId 排序，保证顺序确定；再截断到 `vectorTopN` 作为 Rerank 的输入。同一 chunk 在两路都出现时以向量侧记录为基础并带上 `keywordScore`。
+
+### 阈值语义
+
+1. Rerank 成功：仍按 `rerankScore >= scoreThreshold` 过滤，与关键词召回是否开启无关。
+2. Rerank 关闭或 fallback、关键词召回关闭：按 `vectorScore >= scoreThreshold` 过滤，行为与引入混合召回之前完全一致。
+3. Rerank 关闭或 fallback、关键词召回开启：按归一化 `fusionScore >= scoreThreshold` 过滤，因为只由关键词召回找到的 chunk 没有可比的向量分。此时阈值等价于名次截断：默认 0.3 允许单路约前 40 名进入，0.5 以上要求至少两路都命中或一路第一。
+
+### 开关
+
+`enableKeyword` 保存在知识库 `retrievalConfig`，默认 `true`；搜索接口可按请求覆盖，Chat 与评测复用知识库配置（评测运行的配置快照包含该字段）。`KEYWORD_SEARCH_ENABLED=false` 为全局关闭，此时关键词阶段不执行、融合阶段跳过，`fusionScore` 不产生。关闭关键词召回时整条链路的行为、分数与响应字段含义都与旧版一致。
 
 ## 多轮上下文规则
 
@@ -216,15 +267,17 @@ chatHistoryLimit=10
 3. 召回数量使用 `vectorTopN`。
 4. 相似度分数返回为 `vectorScore`。
 5. `vectorTopN` 最大为 `100`；最终 `rerankTopK` 最大为 `20`，且不得大于本轮 `vectorTopN`。
+6. 向量索引为 HNSW；查询在事务内 `SET LOCAL hnsw.ef_search = max(40, vectorTopN)`，保证索引扫描返回的候选不少于请求数量。
+7. 关键词召回使用相同的知识库、软删除和已发布约束，见“混合召回与融合”。
 
 ## Rerank 约束
 
-1. Rerank 输入只能是向量召回的 TopN chunks。
+1. Rerank 输入只能是本轮召回的 TopN chunks：关键词召回开启时为融合后的 TopN，关闭时为向量召回的 TopN。
 2. Rerank 输出必须映射回原始 chunk。
 3. 最终结果按 `rerankScore` 降序排序。
 4. 进入 Prompt 的 chunks 数量为 `rerankTopK`。
 5. citations 只能来自进入 Prompt 的 chunks。
-6. Rerank 成功时按 `rerankScore >= scoreThreshold` 过滤；关闭或 fallback 时按 `vectorScore >= scoreThreshold` 过滤。
+6. Rerank 成功时按 `rerankScore >= scoreThreshold` 过滤；关闭或 fallback 时按 `vectorScore`（关键词召回关闭）或 `fusionScore`（关键词召回开启）过滤，见“混合召回与融合”的阈值语义。
 
 ## Rerank Provider 与失败策略
 
@@ -303,14 +356,24 @@ content: ...
 }
 ```
 
+## 模型拒答识别
+
+知识型问题已有引用时，模型仍可能因问题内容本身拒答。system prompt 要求这类回答在第一行输出 `[[NO_ANSWER]]`；知识片段不足由 `no_basis` 表达，不使用该标记。
+
+1. 只识别回答开头的标记，剥离后再返回正文；流式回答也在首段识别并移除标记，避免内部标记出现在客户端。
+2. 识别到标记时记录 `answerStatus=model_refused`；识别不到时按 `answered` 处理，不用“无法回答”等正文关键词猜测拒答。
+3. 模型可能不遵从标记要求，所以拒答数量只表示已识别到的下限。更换 Provider、模型或提示模板后的表现不能从旧验证结果推断；具体实测范围见 `12-handoff.md`。
+4. 回答状态与历史数据口径见 `04-api-design.md` 的聊天消息和知识缺口接口；实现入口为 `backend/internal/service/chat_refusal.go`。
+
 ## AI 开发约束
 
-1. 不要跳过 Rerank 直接把向量召回结果给 LLM。
+1. 不要跳过 Rerank 直接把召回结果给 LLM。
 2. 不要把未进入 Prompt 的 chunk 放入 citations。
 3. 不要跨知识库检索。
 4. 不要在模型失败时伪造回答。
 5. Rerank 失败默认返回 `RERANK_FAILED`；只有配置 `RERANK_FAILURE_MODE=fallback` 时才允许降级为 vector topK，并必须显式标记 fallback。
 6. 不要把完整无限历史直接塞进 Prompt；必须受 `CHAT_HISTORY_LIMIT` 控制。
+7. 索引与查询必须使用同一个 `lexer.Tokenize`；修改分词规则后必须重跑 `reindex-keywords`，不得让新查询词元与旧索引词元不一致。
 
 ## 检索 Debug Payload
 
@@ -320,9 +383,11 @@ content: ...
 
 1. `query`：当前检索 query；当前搜索接口没有改写步骤，因此不返回 `rewrittenQuery`。
 2. `vectorStage`：pgvector TopN 原始召回 chunks，包含 `chunkId`、`documentId`、`filename`、`pageNumber`、`content`、`vectorScore`、`rank`。
-3. `rerankStage`：Rerank 输入和输出映射，包含 `chunkId`、`pageNumber`、`rerankScore`、`rank`；`status` 为 `completed`、`disabled` 或 `fallback`。
-4. `finalStage`：最终返回给用户或进入 Prompt 的 chunks，包含 `chunkId`、`pageNumber`、`vectorScore`、`rerankScore`、`rank`。
-5. `rerankFallback`：沿用普通响应中的 fallback 语义；未 fallback 时为 `null`。
+3. `keywordStage`：关键词 TopN 原始召回 chunks，字段同上但分数为 `keywordScore`；`status` 为 `completed` 或 `disabled`。
+4. `fusionStage`：RRF 融合后的精排输入，包含 `chunkId`、`pageNumber`、`vectorRank`、`keywordRank`、`fusionScore`、`vectorScore`、`keywordScore`、`rank`；`status` 为 `completed`，关键词召回关闭时为 `skipped` 且顺序等于 `vectorStage`。
+5. `rerankStage`：Rerank 输入和输出映射，包含 `chunkId`、`pageNumber`、`rerankScore`、`rank`；`status` 为 `completed`、`disabled` 或 `fallback`。
+6. `finalStage`：最终返回给用户或进入 Prompt 的 chunks，包含 `chunkId`、`pageNumber`、`vectorScore`、`keywordScore`、`fusionScore`、`rerankScore`、`rank`。
+7. `rerankFallback`：沿用普通响应中的 fallback 语义；未 fallback 时为 `null`。
 
 debug payload 仍然只来自当前用户拥有的知识库。知识库权限校验必须先通过 `knowledge_bases.owner_id`，chunk 检索必须限定当前 knowledge base。
 

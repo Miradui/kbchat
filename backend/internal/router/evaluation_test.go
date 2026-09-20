@@ -29,11 +29,11 @@ func TestEvaluationHTTPContractsAndAccess(t *testing.T) {
 	if err := db.Create(&kb).Error; err != nil {
 		t.Fatal(err)
 	}
-	token, err := auth.GenerateToken(cfg, owner.ID)
+	token, err := auth.GenerateToken(cfg, owner.ID, owner.Role)
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherToken, err := auth.GenerateToken(cfg, uuid.New())
+	otherToken, err := auth.GenerateToken(cfg, uuid.New(), "user")
 	if err != nil {
 		t.Fatal(err)
 	}

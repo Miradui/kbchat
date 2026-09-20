@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"kbchat/backend/internal/document/lexer"
 	"kbchat/backend/internal/model"
 )
 
@@ -132,6 +133,98 @@ func TestChunkRepositorySearchByVectorUsesPublishedChunksDuringReprocessing(t *t
 	}
 	if !strings.Contains(query, "documents.knowledge_base_id") {
 		t.Fatalf("expected document ownership to be constrained by knowledge base, got %q", trace.query)
+	}
+}
+
+func TestChunkRepositorySearchByKeywordScopesToPublishedChunksOfKnowledgeBase(t *testing.T) {
+	fixture := newChunkRepositoryTestFixture(t)
+	trace := &queryTraceLogger{Interface: logger.Default.LogMode(logger.Silent)}
+	repository := NewChunkRepository(fixture.repository.db.Session(&gorm.Session{
+		DryRun: true,
+		Logger: trace,
+	}))
+
+	if _, err := repository.SearchByKeyword(context.Background(), fixture.documentA.KnowledgeBaseID, "错误码 E-4021", 5); err != nil && !errors.Is(err, gorm.ErrDryRunModeUnsupported) {
+		t.Fatalf("build keyword search query: %v", err)
+	}
+
+	query := strings.ToLower(trace.query)
+	for _, want := range []string{
+		"documents.deleted_at is null",
+		"documents.knowledge_base_id",
+		"document_chunks.knowledge_base_id",
+		"search_vector @@",
+		"ts_rank_cd(",
+		"'错误' | '误码' | 'e-4021' | 'e' | '4021'",
+	} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("expected keyword query to contain %q, got %q", want, trace.query)
+		}
+	}
+	if strings.Contains(query, "documents.status") {
+		t.Fatalf("expected published chunks to remain searchable across document processing states, got %q", trace.query)
+	}
+}
+
+func TestChunkRepositorySearchByKeywordWithoutLexemesReturnsNothingWithoutQuerying(t *testing.T) {
+	fixture := newChunkRepositoryTestFixture(t)
+	trace := &queryTraceLogger{Interface: logger.Default.LogMode(logger.Silent)}
+	repository := NewChunkRepository(fixture.repository.db.Session(&gorm.Session{Logger: trace}))
+
+	results, err := repository.SearchByKeyword(context.Background(), fixture.documentA.KnowledgeBaseID, "。。。", 5)
+	if err != nil {
+		t.Fatalf("keyword search: %v", err)
+	}
+	if results == nil || len(results) != 0 {
+		t.Fatalf("expected empty non-nil result, got %#v", results)
+	}
+	if trace.query != "" {
+		t.Fatalf("expected no SQL for a query without lexemes, got %q", trace.query)
+	}
+}
+
+func TestChunkRepositoryReindexKeywordsFillsEveryChunkInBatches(t *testing.T) {
+	fixture := newChunkRepositoryTestFixture(t)
+	ctx := context.Background()
+	contents := []string{"知识库检索", "error code E-4021", "", "第三段 mixed 文本", "last"}
+	seed := make([]model.DocumentChunk, 0, len(contents))
+	for i, content := range contents {
+		document := fixture.documentA
+		if i%2 == 1 {
+			document = fixture.documentB
+		}
+		seed = append(seed, fixture.chunk(document, i, content))
+	}
+	if err := fixture.repository.CreateBatch(ctx, seed); err != nil {
+		t.Fatalf("seed chunks: %v", err)
+	}
+	if err := fixture.repository.db.Model(&model.DocumentChunk{}).Where("1 = 1").UpdateColumn("search_vector", nil).Error; err != nil {
+		t.Fatalf("clear search vectors: %v", err)
+	}
+
+	var progress []int
+	done, err := fixture.repository.ReindexKeywords(ctx, 2, func(done int) { progress = append(progress, done) })
+	if err != nil {
+		t.Fatalf("reindex keywords: %v", err)
+	}
+	if done != len(contents) {
+		t.Fatalf("expected %d chunks reindexed, got %d", len(contents), done)
+	}
+	if len(progress) != 3 || progress[2] != len(contents) {
+		t.Fatalf("expected three batch progress callbacks ending at %d, got %v", len(contents), progress)
+	}
+
+	for _, document := range []model.Document{fixture.documentA, fixture.documentB} {
+		stored, err := fixture.repository.ListByDocument(ctx, document.ID)
+		if err != nil {
+			t.Fatalf("list chunks: %v", err)
+		}
+		for _, chunk := range stored {
+			want := model.SearchVector(lexer.TSVector(lexer.Tokenize(chunk.Content)))
+			if chunk.SearchVector != want {
+				t.Fatalf("chunk %q: expected search vector %q, got %q", chunk.Content, want, chunk.SearchVector)
+			}
+		}
 	}
 }
 

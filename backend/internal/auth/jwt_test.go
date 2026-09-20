@@ -10,11 +10,29 @@ import (
 	"kbchat/backend/internal/config"
 )
 
+func TestTokenCarriesTheSystemRoleSnapshot(t *testing.T) {
+	cfg := config.Config{JWTSecret: "this-is-a-long-role-claim-test-secret-123", JWTExpiresIn: "1h"}
+	for _, role := range []string{"user", "admin", ""} {
+		userID := uuid.New()
+		token, err := GenerateToken(cfg, userID, role)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claims, err := ParseToken(cfg, token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if claims.UserID != userID.String() || claims.Role != role {
+			t.Fatal("token lost the user or role snapshot")
+		}
+	}
+}
+
 func TestGenerateTokenRejectsUnsafeJWTSecret(t *testing.T) {
 	_, err := GenerateToken(config.Config{
 		JWTSecret:    "replace-with-local-secret",
 		JWTExpiresIn: "1h",
-	}, uuid.New())
+	}, uuid.New(), "user")
 	if err == nil {
 		t.Fatal("expected token generation to reject the legacy fallback secret")
 	}
@@ -24,7 +42,7 @@ func TestParseTokenRejectsUnsafeJWTSecret(t *testing.T) {
 	token, err := GenerateToken(config.Config{
 		JWTSecret:    "this-is-a-long-random-test-secret-123456",
 		JWTExpiresIn: "1h",
-	}, uuid.New())
+	}, uuid.New(), "user")
 	if err != nil {
 		t.Fatalf("generate token: %v", err)
 	}

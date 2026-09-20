@@ -1,0 +1,47 @@
+.pdf-preview { border: 1px solid var(--line); border-radius: var(--r-sm); display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.pdf-preview__toolbar { align-items: center; background: var(--surface); border-bottom: 1px solid var(--line); display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: var(--s-2); justify-content: space-between; padding: var(--s-2); }
+.pdf-preview__controls { align-items: center; display: flex; gap: var(--s-1); font-size: var(--t-small); white-space: nowrap; }
+.pdf-preview__page-count { font-variant-numeric: tabular-nums; }
+.pdf-preview__viewport { background: var(--surface-sunken); flex: 1; max-height: min(60dvh, calc(var(--s-20) * 7)); min-height: calc(var(--s-20) * 3); overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.pdf-preview__viewport:focus-visible { outline: 2px solid var(--line-focus); outline-offset: -2px; }
+.pdf-preview__notice { color: var(--text-muted); display: grid; font-size: var(--t-small); gap: var(--s-3); justify-items: start; padding: var(--s-4); }
+.pdf-preview__page { color-scheme: only light; margin-inline: auto; position: relative; }
+.pdf-preview__page canvas { display: block; }
+
+/* TextLayer layout contract adapted from PDF.js (Mozilla Foundation,
+   Apache-2.0: https://www.apache.org/licenses/LICENSE-2.0). Keep it scoped to
+   our renderer instead of importing the entire PDF viewer's global UI CSS. */
+.pdf-preview__text-layer {
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+  caret-color: CanvasText;
+  color-scheme: only light;
+  forced-color-adjust: none;
+  inset: 0;
+  letter-spacing: normal;
+  line-height: 1;
+  overflow: clip;
+  position: absolute;
+  text-align: initial;
+  text-size-adjust: none;
+  -webkit-text-size-adjust: none;
+  transform-origin: 0 0;
+  word-spacing: normal;
+}
+.pdf-preview__text-layer :is(span, br) { color: transparent; cursor: text; position: absolute; transform-origin: 0 0; user-select: text; -webkit-user-select: text; white-space: pre; }
+.pdf-preview__text-layer > :not(.markedContent),
+.pdf-preview__text-layer .markedContent span:not(.markedContent) {
+  --font-height: 0;
+  --scale-x: 1;
+  --rotate: 0deg;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.pdf-preview__text-layer .markedContent { display: contents; }
+.pdf-preview__text-layer ::selection { background: var(--accent-wash); color: transparent; }
+.pdf-preview__text-layer[data-main-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
+.pdf-preview__text-layer[data-main-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }
+.pdf-preview__text-layer[data-main-rotation="270"] { transform: rotate(270deg) translateX(-100%); }

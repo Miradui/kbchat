@@ -12,6 +12,12 @@
 Authorization: Bearer <token>
 ```
 
+## 时间格式
+
+时间字段使用 RFC 3339，包含 `Z` 或明确的时区偏移。数据库使用 `timestamptz` 保存时刻，应用会话时区为 UTC；前端按浏览器时区格式化，不额外手动加减小时。例如 `2026-09-14T14:22:13Z` 在北京时间显示为 `2026-09-14 22:22:13`。迁移 023 保持旧时间当前按 UTC 读取时的含义，API 字段和格式不变。
+
+历史记录未做批量校正；修复后的新增时间及后续写入的更新时间遵循此约定，详见[数据库时间约定](03-database-design.md#时间约定)。
+
 ## 通用错误响应
 
 ```json
@@ -21,6 +27,19 @@ Authorization: Bearer <token>
   "details": {}
 }
 ```
+
+限流响应沿用同一结构。真正超过窗口限额时返回 `429 RATE_LIMITED`，HTTP
+`Retry-After` 与 `details.retryAfter` 都是向上取整后的剩余秒数：
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 42
+Content-Type: application/json
+
+{"code":"RATE_LIMITED","message":"请求过于频繁，请稍后重试","details":{"retryAfter":42}}
+```
+
+Redis 故障且 `RATE_LIMIT_FAILURE_MODE=closed` 时返回 `503 RATE_LIMIT_UNAVAILABLE`；这不是一次真实超限，不设置 `Retry-After`。`open` 模式放行并记录 warning。
 
 ## Auth
 
@@ -51,6 +70,8 @@ Authorization: Bearer <token>
 
 密码字段不做 trim，只有真正的空字符串才视为未填写；非空密码在认证前按
 UTF-8 编码检查 `account.maxPasswordBytes`，当前上限为 72 字节。
+
+登录按客户端 IP 使用一分钟固定窗口限流，默认每分钟 10 次，成功与失败请求都会计数。只有直连来源属于 `TRUSTED_PROXY_CIDRS` 时才读取 `X-Forwarded-For`；其余请求始终使用 TCP 对端地址，避免伪造代理头绕过限流。
 
 ### GET /auth/me
 
@@ -167,9 +188,10 @@ limit=20
 ```json
 {
   "rerankEnabled": false,
+  "keywordSearchEnabled": true,
   "upload": {
     "maxFileBytes": 52428800,
-    "allowedExtensions": ["txt", "md", "pdf"]
+    "allowedExtensions": ["txt", "md", "pdf", "docx"]
   },
   "retrieval": {
     "maxVectorTopN": 100,
@@ -190,6 +212,7 @@ limit=20
 各字段与请求路径实际执行的限制同源：
 
 - `rerankEnabled` 来自 `RERANK_ENABLED`
+- `keywordSearchEnabled` 来自 `KEYWORD_SEARCH_ENABLED`，为 `false` 时知识库的 `enableKeyword` 会保存但不生效
 - `upload.maxFileBytes` 来自 `MAX_UPLOAD_SIZE_MB`
 - `upload.allowedExtensions` 就是文档上传校验使用的白名单
 - `retrieval.*` 就是检索服务对 `vectorTopN` / `rerankTopK` 的硬上限
@@ -471,7 +494,8 @@ map 生成，改代码不改表就会与实现不一致；`internal/access/capab
     "vectorTopN": 30,
     "rerankTopK": 5,
     "scoreThreshold": 0.3,
-    "enableRerank": true
+    "enableRerank": true,
+    "enableKeyword": true
   },
   "updatedBy": {
     "id": "uuid",
@@ -785,7 +809,8 @@ manager
     "vectorTopN": 30,
     "rerankTopK": 5,
     "scoreThreshold": 0.3,
-    "enableRerank": true
+    "enableRerank": true,
+    "enableKeyword": true
   }
 }
 ```
@@ -1041,7 +1066,8 @@ Content-Disposition: attachment
 
 预览原始上传文件。需要所属知识库的 `document.read`。
 
-`txt` / `md` 返回文本内容；`pdf` 和其他文件返回文件预览元信息，前端可使用 `downloadUrl` 打开浏览器/PDF 预览。文本预览当前限制为 1MB，超出返回 `FILE_TOO_LARGE_FOR_PREVIEW`。
+`txt` / `md` / `docx` 返回文本内容；`pdf` 和其他文件返回文件预览元信息，前端可使用 `downloadUrl` 打开浏览器/PDF 预览。DOCX 内容是解析后的 Markdown 形态纯文本，不还原版式；文本预览当前限制为 1MB，超出返回 `FILE_TOO_LARGE_FOR_PREVIEW`。
+DOCX 包损坏或加密导致解析失败时返回 `DOCUMENT_PREVIEW_FAILED`；上传处理任务则记录 `corrupt_file` 错误码。
 
 ```json
 {
@@ -1293,6 +1319,7 @@ limit=10
   "vectorTopN": 30,
   "rerankTopK": 5,
   "enableRerank": true,
+  "enableKeyword": true,
   "debug": false
 }
 ```
@@ -1309,6 +1336,7 @@ limit=10
       "content": "相关片段",
       "pageNumber": 4,
       "vectorScore": 0.78,
+      "keywordScore": 0.42,
       "rerankScore": 0.91
     }
   ],
@@ -1316,13 +1344,15 @@ limit=10
 }
 ```
 
-结果必须按 `rerankScore` 降序排列。若关闭 Rerank，`rerankScore` 可为空，结果按向量召回顺序截断到 `rerankTopK`。
+结果必须按 `rerankScore` 降序排列。若关闭 Rerank，`rerankScore` 可为空，结果按进入精排的候选顺序截断到 `rerankTopK`。
 
-未传 `vectorTopN`、`rerankTopK` 或 `enableRerank` 时，使用当前知识库持久化的 `retrievalConfig`；环境变量仅作为知识库配置缺失时的默认值。服务端限制 `vectorTopN<=100`、`rerankTopK<=20`，并保证 `rerankTopK<=vectorTopN`。
+`keywordScore` 是关键词召回阶段的 `ts_rank_cd` 归一化分（0–1）；关键词召回未返回该 chunk 或未启用时为 `null`。仅由关键词召回找到的 chunk `vectorScore` 为 `0`。
+
+未传 `vectorTopN`、`rerankTopK`、`enableRerank` 或 `enableKeyword` 时，使用当前知识库持久化的 `retrievalConfig`；环境变量仅作为知识库配置缺失时的默认值。`KEYWORD_SEARCH_ENABLED=false` 时无论知识库或请求如何设置都不执行关键词召回，与 `RERANK_ENABLED` 的全局开关语义一致。服务端限制 `vectorTopN<=100`、`rerankTopK<=20`，并保证 `rerankTopK<=vectorTopN`；关键词召回同样最多取 `vectorTopN` 条，融合后再截断到 `vectorTopN`。
 
 可选 `scoreThreshold` 为 0–1 的数值，包含显式的 0；省略或 null 使用知识库配置。覆盖值只作用于当前请求，不修改知识库；越界返回 `VALIDATION_ERROR`。
 
-最终结果必须应用本次生效的 `scoreThreshold`：Rerank 成功时使用 `rerankScore` 判断，Rerank 关闭或 fallback 时使用 `vectorScore` 判断。未达到阈值的 chunk 不得进入 `items`、Prompt 或 citations。
+最终结果必须应用本次生效的 `scoreThreshold`：Rerank 成功时使用 `rerankScore` 判断；Rerank 关闭或 fallback 时，关键词召回关闭使用 `vectorScore` 判断，关键词召回开启使用融合分 `fusionScore` 判断（见 [RAG 规范](05-rag-pipeline.md)“混合召回与融合”）。未达到阈值的 chunk 不得进入 `items`、Prompt 或 citations。
 
 `debug` 默认为 `false`。当 `debug=true` 时，响应增加 `debug`，用于检索调试面板；普通响应不包含该字段，避免响应体过大。
 
@@ -1344,18 +1374,49 @@ limit=10
         }
       ]
     },
+    "keywordStage": {
+      "status": "completed|disabled",
+      "items": [
+        {
+          "chunkId": "uuid",
+          "documentId": "uuid",
+          "filename": "财务制度.pdf",
+          "pageNumber": 4,
+          "content": "相关片段",
+          "keywordScore": 0.42,
+          "rank": 1
+        }
+      ]
+    },
+    "fusionStage": {
+      "status": "completed|skipped",
+      "items": [
+        {
+          "chunkId": "uuid",
+          "pageNumber": 4,
+          "vectorRank": 1,
+          "keywordRank": 1,
+          "fusionScore": 1,
+          "vectorScore": 0.78,
+          "keywordScore": 0.42,
+          "rank": 1
+        }
+      ]
+    },
     "rerankStage": {
       "status": "completed|disabled|fallback",
       "input": [{ "chunkId": "uuid", "rank": 1 }],
       "output": [{ "chunkId": "uuid", "rerankScore": 0.91, "rank": 1 }]
     },
     "finalStage": {
-      "items": [{ "chunkId": "uuid", "vectorScore": 0.78, "rerankScore": 0.91, "rank": 1 }]
+      "items": [{ "chunkId": "uuid", "vectorScore": 0.78, "keywordScore": 0.42, "fusionScore": 1, "rerankScore": 0.91, "rank": 1 }]
     },
     "rerankFallback": null
   }
 }
 ```
+
+`keywordStage` 是关键词召回的原始结果，按 `keywordScore` 降序；关键词召回未启用时 `status=disabled` 且 `items=[]`。`fusionStage` 是两路召回的 RRF 融合结果，即精排的输入；`vectorRank` / `keywordRank` 为该 chunk 在各自召回列表中的 1-based 名次，缺席一路为 `null`。关键词召回未启用时 `status=skipped`，`items` 与 `vectorStage` 顺序一致且 `fusionScore=0`。`finalStage` 的 `keywordScore` 与 `fusionScore` 在对应阶段没有分数时为 `null`。
 
 默认 `RERANK_FAILURE_MODE=strict`，Rerank 失败返回：
 
@@ -1615,6 +1676,8 @@ assistant 消息为 `{ "messageId", "rating", "reason", "comment", "updatedAt" }
 
 ### POST /chat/sessions/:id/messages
 
+本接口、流式版本和 regenerate 共用按当前用户 ID 的一分钟固定窗口，默认合计每分钟 30 次。鉴权先于用户限流，因此无效 token 仍返回 401；超限响应遵循上面的 `429 RATE_LIMITED` 契约。
+
 聊天接口必须读取当前会话最近历史消息。服务端会先调用 Chat Provider 做意图分类，模型必须返回 `intent` 和 `standaloneQuery`，程序再根据分类结果执行路由。
 
 意图分类输出：
@@ -1737,7 +1800,7 @@ event: done
 data: { …与阻塞接口相同的响应体… }
 ```
 
-**事件顺序是 `citations` → `delta`* → `done`**，而不是缺口文档最初建议的 `delta` → `citations` → `done`。原因是物理上的：citations 来自进入 prompt 的 chunks，是生成的**输入**而非产物，检索一结束就已经确定。把它压到最后只是把服务端已经掌握的信息扣住不发，而先发它能让前端在首个 token 之前就把来源渲染出来，并明确区分「还在检索」和「已在生成」两个阶段。
+**事件顺序是 `citations` → `delta`* → `done`**。citations 来自进入 Prompt 的 chunks，在检索结束时已经确定；先发送来源，再发送正文，可让前端在首个 token 到达前展示依据，并区分检索与生成阶段。
 
 - `citations` 恰好发送一次。conversation 意图不检索，此时发送空数组而不是不发 —— 「这个回答没有来源」同样是客户端需要的信息
 - 知识库中无足够依据时，那句固定的拒答文本也会作为 delta 发出，客户端不会一直等到 `done` 才看到内容
@@ -2062,7 +2125,7 @@ MVP 语义：
   "clientRequestId": "00000000-0000-4000-8000-000000000001",
   "name": "基准配置",
   "caseIds": ["00000000-0000-4000-8000-000000000002"],
-  "config": { "vectorTopN": 30, "rerankTopK": 5, "scoreThreshold": 0.3, "enableRerank": true }
+  "config": { "vectorTopN": 30, "rerankTopK": 5, "scoreThreshold": 0.3, "enableRerank": true, "enableKeyword": true }
 }
 ```
 
@@ -2110,7 +2173,7 @@ MVP 语义：
 ## 系统诊断
 
 两个接口：`GET /healthz`（含 `/api/v1/healthz`，无需认证）与
-`GET /api/v1/system/diagnostics`（需要认证）。
+`GET /api/v1/system/diagnostics`（需要登录且当前系统角色为 `admin`）。
 
 ### 不返回什么
 
@@ -2151,11 +2214,9 @@ Kubernetes livenessProbe 重启容器，而重启 API 不会让 Redis 恢复，�
 
 ### GET /api/v1/system/diagnostics
 
-始终返回 `200`。依赖挂掉是答案本身，不是错误：这里返回 `500` 只会让调用方显示一个通用
-错误页，正是运维来这里想绕开的东西。调用方通过 `status` 判断。
+通过管理员鉴权后，依赖故障仍返回 `200`，调用方通过响应中的 `status` 判断依赖状态。鉴权先于全部诊断探针：无有效登录或账号已删除返回 `401 UNAUTHORIZED`，普通用户及未知系统角色返回 `403 SYSTEM_ADMIN_REQUIRED`，管理员身份查询失败或超过 2 秒返回脱敏的 `500 INTERNAL_ERROR`，不继续执行诊断。
 
-`status` 取所有依赖状态里最差的一个。`not_configured` 不会拉低 `status`——刻意不部署
-Redis 的环境是健康的，把它算成降级会让这个字段无法用于告警。
+`status` 取所有依赖状态里最差的一个。`not_configured` 不会拉低整体状态；标准部署会配置 Redis，因为限流和 query embedding 缓存都使用它。
 
 ```json
 {
@@ -2187,6 +2248,8 @@ Redis 的环境是健康的，把它算成降级会让这个字段无法用于�
     { "metric": "retrieval", "count": 128, "sampleCount": 128, "p50Ms": 120, "p95Ms": 300, "maxMs": 800 }
   ],
   "rerankFallbacks": { "provider_unavailable": 4 },
+  "rateLimitTriggers": { "login": 3, "chat": 7 },
+  "embeddingCache": { "hits": 80, "misses": 20, "errors": 1, "hitRate": 0.8 },
   "metricsSinceRestart": true
 }
 ```
@@ -2203,6 +2266,8 @@ Redis 的环境是健康的，把它算成降级会让这个字段无法用于�
 - `recentFailureRate` 在窗口内没有已完成任务时为 `null`。`null` 与 `0` 是不同的答案，
   前端显示"暂无数据"而不是 0%。
 - `failureWindowHours` 固定为 24，按 `updated_at` 统计 `completed` 与 `failed`。
+- `rateLimitTriggers` 只统计真正返回 429 的请求，Redis 故障导致的 closed 拒绝不计入；键固定为 `login` / `chat`，未触发的键可缺省。
+- `embeddingCache.hitRate = hits / (hits + misses)`；缓存错误单独计数，不进入分母。进程尚未发生缓存查询时为 `null`。
 
 ### Provider 为什么不做探测
 
@@ -2222,19 +2287,22 @@ OpenAI 兼容接口里没有免费的 ping。为了检查而发一次 completion
 
 ### 指标是进程内的
 
-`latency` 与 `rerankFallbacks` 存在固定容量的进程内环形缓冲里（每个指标 512 个样本），
-服务重启后归零，多实例部署下每个实例各报自己的数据。分位数用 nearest-rank，
+`latency`、`rerankFallbacks`、`rateLimitTriggers` 与 `embeddingCache` 都是进程内指标（耗时每项最多保留 512 个样本），服务重启后归零，多实例部署下每个实例各报自己的数据。分位数用 nearest-rank，
 `sampleCount` 是实际参与计算的样本数，会小于 `count`。
 
 这是刻意的取舍：把每次检索和生成都写库会给热路径加一次写入，并需要一张随流量无限增长
 的表。持久化留给日志。`metricsSinceRestart` 恒为 `true`，留作未来接入持久化存储时不破
 坏契约的开关。前端明确写出这一点，而不是暗示它是历史全量数据。
 
-### 认证但未按角色限制
+### 系统管理员鉴权与初始化
 
-`/api/v1/system/diagnostics` 只要求登录，没有管理员校验。JWT 里没有角色声明，代码里也
-没有角色中间件，唯一的种子用户是 `role: "user"`，加管理员校验会把现有部署全部锁在自己
-的诊断之外。作为 P2 待办记录在改进路线图里。这也是响应体口径如此保守的原因之一。
+系统角色取自 `users.role`，仅精确值 `admin` 可访问诊断。知识库 `manager` 或 `owner` 不等同于系统管理员；系统管理员也不能绕过知识库权限与会话归属校验。
+
+登录签发的 JWT 带 `role` 快照，但诊断中间件每次请求查询数据库中的当前角色。因此提升、降权和删除账号立即影响已有 token；旧版不带 `role` 的有效 token 仍可登录，并按数据库角色授权。前端通过当前用户接口控制诊断入口，普通用户直达诊断页面显示权限说明，不请求诊断内容；客户端显示不替代服务端鉴权。
+
+首位管理员仅通过运维 CLI 初始化：`go run ./cmd/bootstrap-admin -username <现有账号>` 保留原密码与资料并提升指定用户。新部署需设置 `BOOTSTRAP_ADMIN_PASSWORD`，再显式加 `-create` 创建账号。已有其他管理员时拒绝初始化，重复指定同一管理员不修改数据；`cmd/seed` 仍只创建普通用户。无公开 HTTP 初始化接口、默认管理员密码或自动授予首位登录者权限。步骤见 [部署指南](13-deployment.md#74-初始化系统管理员)。
+
+`GET /api/v1/system/capabilities` 仍对普通登录用户可用，`/healthz` 及 `/api/v1/healthz` 仍无需登录；密钥、部署拓扑和原始错误的响应保护约束保持适用。
 
 ## AI 开发约束
 

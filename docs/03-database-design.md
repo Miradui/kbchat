@@ -2,6 +2,15 @@
 
 数据库使用 PostgreSQL，向量能力使用 pgvector。
 
+## 时间约定
+
+- 所有业务时间字段使用 `TIMESTAMPTZ` 表示绝对时刻，包括创建、更新、软删除、任务锁定和调度时间。PostgreSQL 保存时刻，不保留输入时区名称。
+- 数据库连接入口 `database.Open` 将每条应用连接的会话时区固定为 UTC，使 `now()` 默认值和 SQL 时间转换采用同一约定；GORM 自动生成的时间使用 UTC 和微秒精度。
+- Go 模型继续使用 `time.Time`、`*time.Time` 和 `gorm.DeletedAt`，由 GORM 的 PostgreSQL 方言映射为 `timestamptz`；原生 pgx 驱动处理带不同时区的参数，无需自定义时间编码。
+- API 时间携带 `Z` 或明确的时区偏移，前端按浏览器时区显示；数据库中的 UTC 数值不等于用户本地钟面时间。
+- 旧库先执行 `023_timestamps_with_time_zone.sql`：使用 `USING 列名 AT TIME ZONE 'UTC'` 将无时区字段转为 `TIMESTAMPTZ`，保持旧值当前按 UTC 读取时的含义，不额外校正历史偏差。已有 `TIMESTAMPTZ` 字段跳过，重复执行不会再次换算时间。
+- 启动检查会拒绝仍有无时区业务时间字段的 PostgreSQL schema，并提示执行 023；启动期 `AutoMigrate` 不负责修改已有列类型。全新数据库按顺序执行全部迁移，001–022 保留历史定义，以下示例展示 023 后的结构。升级与备份步骤见 [部署指南](13-deployment.md#73-已有数据库)。
+
 ## 扩展
 
 ```sql
@@ -18,14 +27,18 @@ CREATE TABLE users (
     display_name VARCHAR(128),
     avatar_url TEXT,
     role VARCHAR(32) DEFAULT 'user',
-    created_at TIMESTAMP DEFAULT now(),
-    updated_at TIMESTAMP DEFAULT now()
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
 );
 ```
 
 资料字段的接口上限按 Unicode 码点（Go rune）计数，不能按 UTF-16 code unit
 或 UTF-8 字节误算。密码明文不落库；登录和改密在进入 bcrypt 前按 UTF-8
 编码检查 72 字节上限。
+
+`users.role` 是系统角色：`user` 为普通用户，`admin` 为系统管理员；与知识库成员的 `viewer` / `editor` / `manager` 以及 `owner_id` 无关。系统管理员可以读取系统诊断，但不会因此取得其他用户知识库或会话的访问权。未知系统角色不能访问诊断。
+
+首位系统管理员通过 `cmd/bootstrap-admin` 显式指定账号初始化，事务级 PostgreSQL advisory lock 串行化首次创建或提升。同名管理员重复执行不修改数据，已有其他管理员时拒绝继续初始化。复用已有 `users.role` 字段，无需新 schema 迁移；具体命令见 [部署指南](13-deployment.md#74-初始化系统管理员)。
 
 ## user_avatars
 
@@ -37,7 +50,7 @@ CREATE TABLE user_avatars (
     user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     version UUID NOT NULL,
     data BYTEA NOT NULL CHECK (octet_length(data) <= 524288),
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
@@ -61,9 +74,9 @@ CREATE TABLE knowledge_bases (
       "scoreThreshold": 0.3,
       "enableRerank": true
     }',
-    created_at TIMESTAMP DEFAULT now(),
-    updated_at TIMESTAMP DEFAULT now(),
-    deleted_at TIMESTAMP NULL
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    deleted_at TIMESTAMPTZ NULL
 );
 ```
 
@@ -78,8 +91,8 @@ CREATE TABLE knowledge_base_categories (
     parent_id UUID REFERENCES knowledge_base_categories(id) ON DELETE RESTRICT,
     name VARCHAR(128) NOT NULL,
     sort_order INT DEFAULT 0,
-    created_at TIMESTAMP DEFAULT now(),
-    updated_at TIMESTAMP DEFAULT now()
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
 );
 ```
 
@@ -91,7 +104,7 @@ CREATE TABLE knowledge_base_categories (
 CREATE TABLE knowledge_base_favorites (
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
-    created_at TIMESTAMP DEFAULT now(),
+    created_at TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (user_id, knowledge_base_id)
 );
 ```
@@ -105,7 +118,7 @@ CREATE TABLE knowledge_base_view_events (
     id UUID PRIMARY KEY,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
-    viewed_at TIMESTAMP NOT NULL DEFAULT now()
+    viewed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 
@@ -118,8 +131,8 @@ CREATE TABLE knowledge_base_members (
     knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     role VARCHAR(32) NOT NULL,
-    created_at TIMESTAMP DEFAULT now(),
-    updated_at TIMESTAMP DEFAULT now(),
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (knowledge_base_id, user_id),
     CONSTRAINT knowledge_base_members_role_check CHECK (role IN ('manager', 'member'))
 );
@@ -137,8 +150,8 @@ CREATE TABLE knowledge_base_workspace_preferences (
     sort VARCHAR(32) NOT NULL DEFAULT 'updatedAt_desc',
     visibility VARCHAR(32) NOT NULL DEFAULT 'all',
     expanded_category_ids JSONB NOT NULL DEFAULT '[]',
-    created_at TIMESTAMP NOT NULL DEFAULT now(),
-    updated_at TIMESTAMP NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 
@@ -157,9 +170,9 @@ CREATE TABLE documents (
     storage_path TEXT NOT NULL,
     status VARCHAR(32) DEFAULT 'uploaded',
     error_message TEXT,
-    created_at TIMESTAMP DEFAULT now(),
-    updated_at TIMESTAMP DEFAULT now(),
-    deleted_at TIMESTAMP NULL
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    deleted_at TIMESTAMPTZ NULL
 );
 ```
 
@@ -187,11 +200,14 @@ CREATE TABLE document_chunks (
     page_number INT,
     metadata JSONB,
     embedding vector(1536),
-    created_at TIMESTAMP DEFAULT now()
+    search_vector tsvector,
+    created_at TIMESTAMPTZ DEFAULT now()
 );
 ```
 
-`embedding vector(1536)` 是当前 MVP 默认值，必须与 `EMBEDDING_DIMENSION=1536` 保持一致。当前 Qwen3 Embedding 模型需要在 Provider 调用时显式请求输出 1536 维，以兼容 pgvector ivfflat 索引限制。更换 embedding 模型维度时，必须新增数据库 migration 修改向量维度并重建索引。
+`embedding vector(1536)` 是当前 MVP 默认值，必须与 `EMBEDDING_DIMENSION=1536` 保持一致。当前 Qwen3 Embedding 模型需要在 Provider 调用时显式请求输出 1536 维。更换 embedding 模型维度时，必须新增数据库 migration 修改向量维度并重建索引。
+
+`search_vector` 是关键词召回使用的词元索引（迁移 024 引入）。它由后端 `internal/document/lexer` 生成 tsvector 字面量并以 `::tsvector` 写入，不是 `to_tsvector()` 对 `content` 的解析结果，因此不依赖任何 PostgreSQL 中文分词扩展；索引与查询必须使用同一分词器。该列在 chunk 发布事务中与 `embedding` 一起写入；迁移 024 之前发布的 chunk 该列为 `NULL`，需运行 `go run ./cmd/reindex-keywords` 回填，回填前这些 chunk 只参与向量召回。分词规则变更后同样需要重跑回填。
 
 `document_chunks(document_id, knowledge_base_id)` 通过复合外键引用 `documents(id, knowledge_base_id)`；chunk 的冗余知识库字段必须与所属文档一致。检索同时校验两侧 `knowledge_base_id`，不得只信任 chunk 冗余字段。
 
@@ -209,9 +225,9 @@ CREATE TABLE document_jobs (
     status VARCHAR(32) DEFAULT 'pending',
     retry_count INT DEFAULT 0,
     error_message TEXT,
-    locked_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT now(),
-    updated_at TIMESTAMP DEFAULT now()
+    locked_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
 );
 ```
 
@@ -237,12 +253,12 @@ CREATE TABLE storage_cleanup_jobs (
     id UUID PRIMARY KEY,
     storage_path TEXT NOT NULL UNIQUE,
     retry_count INT NOT NULL DEFAULT 0,
-    next_attempt_at TIMESTAMP NULL,
-    locked_at TIMESTAMP NULL,
+    next_attempt_at TIMESTAMPTZ NULL,
+    locked_at TIMESTAMPTZ NULL,
     lease_token UUID NULL,
     last_error TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMP NOT NULL DEFAULT now(),
-    updated_at TIMESTAMP NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 
@@ -260,10 +276,10 @@ CREATE TABLE chat_sessions (
     user_id UUID NOT NULL REFERENCES users(id),
     knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
     title VARCHAR(255),
-    created_at TIMESTAMP DEFAULT now(),
-    updated_at TIMESTAMP DEFAULT now(),
-    archived_at TIMESTAMP NULL,
-    deleted_at TIMESTAMP NULL
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    archived_at TIMESTAMPTZ NULL,
+    deleted_at TIMESTAMPTZ NULL
 );
 ```
 
@@ -281,10 +297,10 @@ CREATE TABLE chat_messages (
     client_request_id UUID,
     rerank_fallback JSONB,
     feedback_rating VARCHAR(16),
-    feedback_updated_at TIMESTAMP NULL,
+    feedback_updated_at TIMESTAMPTZ NULL,
     feedback_reason VARCHAR(32) NOT NULL DEFAULT '',
     feedback_comment TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMP DEFAULT now()
+    created_at TIMESTAMPTZ DEFAULT now()
 );
 ```
 
@@ -388,11 +404,17 @@ CREATE INDEX idx_chat_sessions_kb_id ON chat_sessions (knowledge_base_id);
 CREATE INDEX idx_chat_sessions_archived_at ON chat_sessions (archived_at);
 CREATE INDEX idx_chat_sessions_deleted_at ON chat_sessions (deleted_at);
 
-CREATE INDEX idx_chunks_embedding
+CREATE INDEX idx_chunks_embedding_hnsw
 ON document_chunks
-USING ivfflat (embedding vector_cosine_ops)
-WITH (lists = 100);
+USING hnsw (embedding vector_cosine_ops)
+WITH (m = 16, ef_construction = 64);
+
+CREATE INDEX idx_chunks_search_vector
+ON document_chunks
+USING gin (search_vector);
 ```
+
+向量索引自迁移 024 起为 HNSW，替换了早期的 `idx_chunks_embedding`（ivfflat）；HNSW 不需要在数据到位后重建，增量写入后的召回率更稳定。查询时后端在事务内 `SET LOCAL hnsw.ef_search = max(40, vectorTopN)`，保证 HNSW 至少返回请求数量的候选。全新数据库依次执行 001–024 时，早期迁移创建的 ivfflat 索引会在 024 中被删除，空表上的代价可以忽略。
 
 ## P1 Tag Extension
 
@@ -401,8 +423,8 @@ CREATE TABLE knowledge_base_tags (
     id UUID PRIMARY KEY,
     owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name VARCHAR(64) NOT NULL,
-    created_at TIMESTAMP DEFAULT now(),
-    updated_at TIMESTAMP DEFAULT now()
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE UNIQUE INDEX uk_kb_tags_owner_name
@@ -411,7 +433,7 @@ ON knowledge_base_tags (owner_id, name);
 CREATE TABLE knowledge_base_tag_bindings (
     knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
     tag_id UUID NOT NULL REFERENCES knowledge_base_tags(id) ON DELETE CASCADE,
-    created_at TIMESTAMP DEFAULT now(),
+    created_at TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (knowledge_base_id, tag_id)
 );
 

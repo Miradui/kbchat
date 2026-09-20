@@ -55,6 +55,7 @@ const defaultRetrievalConfig: RetrievalConfig = {
   rerankTopK: 5,
   scoreThreshold: 0.3,
   enableRerank: true,
+  enableKeyword: true,
 };
 
 const emptyForm: KnowledgeBaseFormState = {

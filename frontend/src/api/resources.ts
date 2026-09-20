@@ -119,7 +119,7 @@ export function getHomeSummary(period: 'day' | 'month' = 'month'): Promise<HomeS
 /**
  * Recorded workspace events, newest first. Unlike a merge of the three lists,
  * this includes things that no longer exist: deletes, restores and membership
- * changes. See docs/14-frontend-api-gaps.md G18.
+ * changes. See docs/04-api-design.md (GET /activities).
  */
 export function listActivities(limit = 20): Promise<ActivityListResponse> {
   return apiRequest<ActivityListResponse>(withQuery('/activities', { limit }));
@@ -753,7 +753,7 @@ export type ChatStreamHandlers = {
  * **A rejection never means the write definitely failed.** Nothing is persisted
  * until generation finishes, but a connection that drops after the server
  * committed still rejects here, so callers must reconcile by `clientRequestId`
- * rather than assume. See docs/14-frontend-api-gaps.md G2.
+ * rather than assume. See docs/04-api-design.md (POST /chat/sessions/:id/messages/stream).
  */
 export async function sendChatMessageStream(
   sessionId: string,

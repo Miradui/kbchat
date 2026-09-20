@@ -369,7 +369,7 @@ function SearchResultRow({ item }: { item: GlobalSearchResult }) {
  * which is exactly what `String.prototype.slice` takes, so they are used as-is —
  * no re-matching on the client, which used to miss whatever the server matched
  * under a different tokenisation or case-folding rule.
- * See docs/14-frontend-api-gaps.md G9.
+ * See docs/04-api-design.md (GET /search).
  */
 function highlight(text: string, highlights: SearchHighlight[] | undefined, field: string): ReactNode {
   const ranges = (highlights ?? [])

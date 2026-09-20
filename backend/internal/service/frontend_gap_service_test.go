@@ -427,11 +427,14 @@ func TestScopedDocumentListMatchesGlobalQuerySurface(t *testing.T) {
 
 // G6: capabilities must report the same limits the request path enforces.
 func TestSystemCapabilitiesReportEnforcedLimits(t *testing.T) {
-	cfg := config.Config{RerankEnabled: true, MaxUploadSizeMB: 50}
+	cfg := config.Config{RerankEnabled: true, KeywordSearchEnabled: true, MaxUploadSizeMB: 50}
 	res := NewSystemService(cfg).Capabilities()
 
 	if !res.RerankEnabled {
 		t.Fatalf("expected rerankEnabled to follow config, got %#v", res)
+	}
+	if !res.KeywordSearchEnabled {
+		t.Fatalf("expected keywordSearchEnabled to follow config, got %#v", res)
 	}
 	if res.Upload.MaxFileBytes != 50*1024*1024 {
 		t.Fatalf("expected upload limit derived from MaxUploadSizeMB, got %d", res.Upload.MaxFileBytes)
@@ -457,6 +460,9 @@ func TestSystemCapabilitiesReportEnforcedLimits(t *testing.T) {
 	disabled := NewSystemService(config.Config{RerankEnabled: false, MaxUploadSizeMB: 10}).Capabilities()
 	if disabled.RerankEnabled {
 		t.Fatalf("expected rerankEnabled false, got %#v", disabled)
+	}
+	if disabled.KeywordSearchEnabled {
+		t.Fatalf("expected keywordSearchEnabled false, got %#v", disabled)
 	}
 	if disabled.Upload.MaxFileBytes != 10*1024*1024 {
 		t.Fatalf("expected upload limit to track config, got %d", disabled.Upload.MaxFileBytes)

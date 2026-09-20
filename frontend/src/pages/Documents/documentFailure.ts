@@ -19,7 +19,7 @@ export type DocumentFailureCopy = {
 const FAILURES: Record<DocumentErrorCode, DocumentFailureCopy> = {
   unsupported_type: {
     reason: '文件格式不受支持。',
-    advice: '转换成 TXT、Markdown 或 PDF 后重新上传。',
+    advice: '转换成 TXT、Markdown、PDF 或 DOCX 后重新上传。',
     retryable: false,
   },
   corrupt_file: {

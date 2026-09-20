@@ -3,6 +3,7 @@ package retrieval
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"kbchat/backend/internal/access"
 	"kbchat/backend/internal/apperror"
 	"kbchat/backend/internal/authz"
+	"kbchat/backend/internal/cache"
 	"kbchat/backend/internal/config"
 	"kbchat/backend/internal/dto"
 	"kbchat/backend/internal/embedding"
@@ -40,10 +42,12 @@ type searchOptions struct {
 	rerankTopK     int
 	scoreThreshold float64
 	enableRerank   bool
+	enableKeyword  bool
 }
 
 type chunkSearcher interface {
 	SearchByVector(ctx context.Context, kbID uuid.UUID, vector []float32, limit int) ([]repository.SearchResult, error)
+	SearchByKeyword(ctx context.Context, kbID uuid.UUID, query string, limit int) ([]repository.SearchResult, error)
 }
 
 // knowledgeBaseFinder is what the authorization decision needs. It matches
@@ -54,6 +58,11 @@ type knowledgeBaseFinder interface {
 	FindMemberRole(ctx context.Context, kbID, userID uuid.UUID) (string, error)
 }
 
+type queryEmbeddingCache interface {
+	Get(ctx context.Context, model, query string) ([]float32, bool, error)
+	Set(ctx context.Context, model, query string, vector []float32, ttl time.Duration) error
+}
+
 type Service struct {
 	cfg            config.Config
 	chunks         chunkSearcher
@@ -61,6 +70,7 @@ type Service struct {
 	embedder       embedding.Provider
 	reranker       rerank.Provider
 	metrics        *observability.Recorder
+	embeddingCache queryEmbeddingCache
 }
 
 // SetRecorder wires retrieval timings and provider outcomes into the diagnostics
@@ -69,6 +79,13 @@ type Service struct {
 // nil-safe, so an unset one simply records nothing.
 func (s *Service) SetRecorder(recorder *observability.Recorder) {
 	s.metrics = recorder
+}
+
+// SetEmbeddingCache wires the optional Redis-backed query cache. Retrieval
+// remains usable when it is absent or unavailable; failures are recorded and
+// the provider remains the source of truth.
+func (s *Service) SetEmbeddingCache(embeddingCache queryEmbeddingCache) {
+	s.embeddingCache = embeddingCache
 }
 
 func NewService(
@@ -107,39 +124,66 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 	// measure of how often callers pass bad IDs.
 	retrievalStart := time.Now()
 
-	embeddingStart := time.Now()
-	embeddings, err := s.embedder.EmbedTexts(ctx, []string{req.Query})
-	s.metrics.RecordProviderResult(observability.ProviderEmbedding, err)
-	if err == nil {
-		s.metrics.ObserveSince(observability.MetricEmbedding, embeddingStart)
-	}
+	queryVector, err := s.queryEmbedding(ctx, req.Query)
 	if err != nil {
 		return nil, apperror.Wrap(500, "EMBEDDING_FAILED", "知识检索暂时不可用，请稍后重试", err)
 	}
-	if len(embeddings) != 1 {
-		return nil, apperror.New(500, "EMBEDDING_FAILED", "知识检索暂时不可用，请稍后重试")
-	}
 
-	candidates, err := s.chunks.SearchByVector(ctx, kbID, embeddings[0], options.vectorTopN)
+	vectorCandidates, err := s.chunks.SearchByVector(ctx, kbID, queryVector, options.vectorTopN)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
+	vectorCandidates = limitSearchResults(vectorCandidates, options.vectorTopN)
 
-	vectorCandidates := limitSearchResults(candidates, options.vectorTopN)
-	candidates = vectorCandidates
+	// Keyword recall runs after the vector stage rather than concurrently: the
+	// two queries share the same pool and the keyword one is cheap, so the
+	// simpler sequential code is not worth trading for a goroutine here.
+	keywordCandidates := []repository.SearchResult{}
+	keywordStageStatus := "disabled"
+	fusionStageStatus := "skipped"
+	var fused []fusedCandidate
+	if options.enableKeyword {
+		keywordStart := time.Now()
+		keywordCandidates, err = s.chunks.SearchByKeyword(ctx, kbID, req.Query, options.vectorTopN)
+		if err != nil {
+			return nil, apperror.Internal(err)
+		}
+		s.metrics.ObserveSince(observability.MetricKeyword, keywordStart)
+		keywordCandidates = limitSearchResults(keywordCandidates, options.vectorTopN)
+		keywordStageStatus = "completed"
+		fusionStageStatus = "completed"
+		fused = fuseByReciprocalRank(vectorCandidates, keywordCandidates, options.vectorTopN)
+	} else {
+		fused = fuseByReciprocalRank(vectorCandidates, nil, options.vectorTopN)
+		for i := range fused {
+			fused[i].FusionScore = nil
+		}
+	}
+	rerankInput := searchResultsOf(fused)
+
+	// Without a successful Rerank the threshold has to be applied to whatever
+	// score ordered the list. That is the vector score when keyword recall is
+	// off (unchanged behavior) and the normalized fusion score when it is on,
+	// because a keyword-only chunk has no vector score to compare.
+	thresholdScore := scoreVector
+	if options.enableKeyword {
+		thresholdScore = scoreFusion
+	}
+
+	candidates := rerankInput
 	rerankCandidates := []repository.SearchResult{}
 	rerankStageStatus := "disabled"
 	var rerankFallback *dto.RerankFallbackResponse
 	if options.enableRerank {
 		rerankStart := time.Now()
-		rerankCandidates, err = s.rerank(ctx, req.Query, vectorCandidates, 0)
+		rerankCandidates, err = s.rerank(ctx, req.Query, rerankInput, 0)
 		s.metrics.RecordProviderResult(observability.ProviderRerank, err)
 		if err == nil {
 			s.metrics.ObserveSince(observability.MetricRerank, rerankStart)
 		}
 		if err != nil {
 			if s.cfg.RerankFailureMode == rerankFailureModeFallback {
-				candidates = filterSearchResults(vectorCandidates, options.scoreThreshold, false)
+				candidates = filterSearchResults(rerankInput, options.scoreThreshold, thresholdScore)
 				candidates = fallbackVectorTopK(candidates, options.rerankTopK)
 				rerankStageStatus = "fallback"
 				rerankFallback = &dto.RerankFallbackResponse{
@@ -152,24 +196,25 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 			}
 		} else {
 			rerankStageStatus = "completed"
-			candidates = filterSearchResults(rerankCandidates, options.scoreThreshold, true)
+			candidates = filterSearchResults(rerankCandidates, options.scoreThreshold, scoreRerank)
 			candidates = limitSearchResults(candidates, options.rerankTopK)
 		}
 	} else {
-		candidates = filterSearchResults(vectorCandidates, options.scoreThreshold, false)
+		candidates = filterSearchResults(rerankInput, options.scoreThreshold, thresholdScore)
 		candidates = limitSearchResults(candidates, options.rerankTopK)
 	}
 
 	items := make([]dto.SearchResultResponse, 0, len(candidates))
 	for _, item := range candidates {
 		items = append(items, dto.SearchResultResponse{
-			ChunkID:     item.ChunkID.String(),
-			DocumentID:  item.DocumentID.String(),
-			Filename:    item.Filename,
-			Content:     item.Content,
-			PageNumber:  item.PageNumber,
-			VectorScore: item.VectorScore,
-			RerankScore: item.RerankScore,
+			ChunkID:      item.ChunkID.String(),
+			DocumentID:   item.DocumentID.String(),
+			Filename:     item.Filename,
+			Content:      item.Content,
+			PageNumber:   item.PageNumber,
+			VectorScore:  item.VectorScore,
+			KeywordScore: item.KeywordScore,
+			RerankScore:  item.RerankScore,
 		})
 	}
 
@@ -177,9 +222,58 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 
 	res := &dto.SearchResponse{Items: items, RerankFallback: rerankFallback}
 	if req.Debug {
-		res.Debug = buildSearchDebugResponse(req.Query, vectorCandidates, rerankCandidates, candidates, rerankStageStatus, rerankFallback)
+		res.Debug = buildSearchDebugResponse(searchDebugInput{
+			query:              req.Query,
+			vectorCandidates:   vectorCandidates,
+			keywordCandidates:  keywordCandidates,
+			keywordStageStatus: keywordStageStatus,
+			fused:              fused,
+			fusionStageStatus:  fusionStageStatus,
+			rerankInput:        rerankInput,
+			rerankCandidates:   rerankCandidates,
+			rerankStageStatus:  rerankStageStatus,
+			finalCandidates:    candidates,
+			rerankFallback:     rerankFallback,
+		})
 	}
 	return res, nil
+}
+
+func (s *Service) queryEmbedding(ctx context.Context, query string) ([]float32, error) {
+	normalizedQuery := cache.NormalizeEmbeddingQuery(query)
+	if s.embeddingCache != nil {
+		vector, hit, err := s.embeddingCache.Get(ctx, s.cfg.EmbeddingModel, normalizedQuery)
+		switch {
+		case err != nil:
+			s.metrics.RecordEmbeddingCacheResult(observability.EmbeddingCacheResultError)
+		case hit:
+			s.metrics.RecordEmbeddingCacheResult(observability.EmbeddingCacheResultHit)
+			return vector, nil
+		default:
+			s.metrics.RecordEmbeddingCacheResult(observability.EmbeddingCacheResultMiss)
+		}
+	}
+
+	embeddingStart := time.Now()
+	embeddings, err := s.embedder.EmbedTexts(ctx, []string{normalizedQuery})
+	s.metrics.RecordProviderResult(observability.ProviderEmbedding, err)
+	if err == nil {
+		s.metrics.ObserveSince(observability.MetricEmbedding, embeddingStart)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(embeddings) != 1 || len(embeddings[0]) == 0 {
+		return nil, fmt.Errorf("embedding provider returned %d vectors", len(embeddings))
+	}
+
+	vector := embeddings[0]
+	if s.embeddingCache != nil {
+		if err := s.embeddingCache.Set(ctx, s.cfg.EmbeddingModel, normalizedQuery, vector, s.cfg.EmbeddingCacheTTL); err != nil {
+			s.metrics.RecordEmbeddingCacheResult(observability.EmbeddingCacheResultError)
+		}
+	}
+	return vector, nil
 }
 
 func (s *Service) resolveSearchOptions(kb *model.KnowledgeBase, req dto.SearchRequest) searchOptions {
@@ -188,6 +282,7 @@ func (s *Service) resolveSearchOptions(kb *model.KnowledgeBase, req dto.SearchRe
 		RerankTopK:     positiveOrDefault(s.cfg.RerankTopK, defaultRerankTopK),
 		ScoreThreshold: normalizedScoreThreshold(s.cfg.ScoreThreshold),
 		EnableRerank:   s.cfg.RerankEnabled,
+		EnableKeyword:  s.cfg.KeywordSearchEnabled,
 	}
 	if len(kb.RetrievalConfig) > 0 {
 		storedConfig := kbConfig
@@ -218,6 +313,13 @@ func (s *Service) resolveSearchOptions(kb *model.KnowledgeBase, req dto.SearchRe
 	if !s.cfg.RerankEnabled {
 		enableRerank = false
 	}
+	enableKeyword := kbConfig.EnableKeyword
+	if req.EnableKeyword != nil {
+		enableKeyword = *req.EnableKeyword
+	}
+	if !s.cfg.KeywordSearchEnabled {
+		enableKeyword = false
+	}
 	threshold := kbConfig.ScoreThreshold
 	if req.ScoreThreshold != nil {
 		threshold = *req.ScoreThreshold
@@ -228,6 +330,7 @@ func (s *Service) resolveSearchOptions(kb *model.KnowledgeBase, req dto.SearchRe
 		rerankTopK:     rerankTopK,
 		scoreThreshold: normalizedScoreThreshold(threshold),
 		enableRerank:   enableRerank,
+		enableKeyword:  enableKeyword,
 	}
 }
 
@@ -309,15 +412,36 @@ func limitSearchResults(candidates []repository.SearchResult, topK int) []reposi
 	return candidates
 }
 
-func filterSearchResults(candidates []repository.SearchResult, threshold float64, useRerankScore bool) []repository.SearchResult {
+// thresholdScoreKind selects which score scoreThreshold is compared against.
+type thresholdScoreKind int
+
+const (
+	scoreVector thresholdScoreKind = iota
+	scoreFusion
+	scoreRerank
+)
+
+// filterSearchResults keeps the candidates whose selected score reaches the
+// threshold. A candidate lacking the selected score is dropped: it cannot be
+// shown to have met the bar, and passing it through would let an unscored
+// chunk into the prompt.
+func filterSearchResults(candidates []repository.SearchResult, threshold float64, kind thresholdScoreKind) []repository.SearchResult {
 	filtered := make([]repository.SearchResult, 0, len(candidates))
 	for _, candidate := range candidates {
-		score := candidate.VectorScore
-		if useRerankScore {
+		var score float64
+		switch kind {
+		case scoreRerank:
 			if candidate.RerankScore == nil {
 				continue
 			}
 			score = *candidate.RerankScore
+		case scoreFusion:
+			if candidate.FusionScore == nil {
+				continue
+			}
+			score = *candidate.FusionScore
+		default:
+			score = candidate.VectorScore
 		}
 		if score >= threshold {
 			filtered = append(filtered, candidate)
@@ -326,30 +450,86 @@ func filterSearchResults(candidates []repository.SearchResult, threshold float64
 	return filtered
 }
 
-func buildSearchDebugResponse(
-	query string,
-	vectorCandidates []repository.SearchResult,
-	rerankCandidates []repository.SearchResult,
-	finalCandidates []repository.SearchResult,
-	rerankStageStatus string,
-	rerankFallback *dto.RerankFallbackResponse,
-) *dto.SearchDebugResponse {
+type searchDebugInput struct {
+	query              string
+	vectorCandidates   []repository.SearchResult
+	keywordCandidates  []repository.SearchResult
+	keywordStageStatus string
+	fused              []fusedCandidate
+	fusionStageStatus  string
+	rerankInput        []repository.SearchResult
+	rerankCandidates   []repository.SearchResult
+	rerankStageStatus  string
+	finalCandidates    []repository.SearchResult
+	rerankFallback     *dto.RerankFallbackResponse
+}
+
+func buildSearchDebugResponse(in searchDebugInput) *dto.SearchDebugResponse {
 	return &dto.SearchDebugResponse{
-		Query: query,
+		Query: in.query,
 		VectorStage: dto.SearchDebugVectorStage{
 			Status: "completed",
-			Items:  toDebugVectorItems(vectorCandidates),
+			Items:  toDebugVectorItems(in.vectorCandidates),
+		},
+		KeywordStage: dto.SearchDebugKeywordStage{
+			Status: in.keywordStageStatus,
+			Items:  toDebugKeywordItems(in.keywordCandidates),
+		},
+		FusionStage: dto.SearchDebugFusionStage{
+			Status: in.fusionStageStatus,
+			Items:  toDebugFusionItems(in.fused),
 		},
 		RerankStage: dto.SearchDebugRerankStage{
-			Status: rerankStageStatus,
-			Input:  toDebugRerankInput(vectorCandidates),
-			Output: toDebugRerankOutput(rerankCandidates),
+			Status: in.rerankStageStatus,
+			Input:  toDebugRerankInput(in.rerankInput),
+			Output: toDebugRerankOutput(in.rerankCandidates),
 		},
 		FinalStage: dto.SearchDebugFinalStage{
-			Items: toDebugFinalItems(finalCandidates),
+			Items: toDebugFinalItems(in.finalCandidates),
 		},
-		RerankFallback: rerankFallback,
+		RerankFallback: in.rerankFallback,
 	}
+}
+
+func toDebugKeywordItems(candidates []repository.SearchResult) []dto.SearchDebugKeywordItem {
+	items := make([]dto.SearchDebugKeywordItem, 0, len(candidates))
+	for i, candidate := range candidates {
+		score := 0.0
+		if candidate.KeywordScore != nil {
+			score = *candidate.KeywordScore
+		}
+		items = append(items, dto.SearchDebugKeywordItem{
+			ChunkID:      candidate.ChunkID.String(),
+			DocumentID:   candidate.DocumentID.String(),
+			Filename:     candidate.Filename,
+			PageNumber:   candidate.PageNumber,
+			Content:      candidate.Content,
+			KeywordScore: score,
+			Rank:         i + 1,
+		})
+	}
+	return items
+}
+
+func toDebugFusionItems(candidates []fusedCandidate) []dto.SearchDebugFusionItem {
+	items := make([]dto.SearchDebugFusionItem, 0, len(candidates))
+	for i, candidate := range candidates {
+		score := 0.0
+		if candidate.FusionScore != nil {
+			score = *candidate.FusionScore
+		}
+		items = append(items, dto.SearchDebugFusionItem{
+			ChunkID:      candidate.ChunkID.String(),
+			PageNumber:   candidate.PageNumber,
+			VectorRank:   candidate.VectorRank,
+			KeywordRank:  candidate.KeywordRank,
+			FusionScore:  score,
+			VectorScore:  candidate.VectorScore,
+			KeywordScore: candidate.KeywordScore,
+			Rank:         i + 1,
+		})
+	}
+	return items
 }
 
 func toDebugVectorItems(candidates []repository.SearchResult) []dto.SearchDebugVectorItem {
@@ -397,11 +577,13 @@ func toDebugFinalItems(candidates []repository.SearchResult) []dto.SearchDebugFi
 	items := make([]dto.SearchDebugFinalItem, 0, len(candidates))
 	for i, candidate := range candidates {
 		items = append(items, dto.SearchDebugFinalItem{
-			ChunkID:     candidate.ChunkID.String(),
-			PageNumber:  candidate.PageNumber,
-			VectorScore: candidate.VectorScore,
-			RerankScore: candidate.RerankScore,
-			Rank:        i + 1,
+			ChunkID:      candidate.ChunkID.String(),
+			PageNumber:   candidate.PageNumber,
+			VectorScore:  candidate.VectorScore,
+			KeywordScore: candidate.KeywordScore,
+			FusionScore:  candidate.FusionScore,
+			RerankScore:  candidate.RerankScore,
+			Rank:         i + 1,
 		})
 	}
 	return items

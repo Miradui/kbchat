@@ -197,7 +197,7 @@ func (s *ChatService) UpdateSession(ctx context.Context, userID, sessionID uuid.
 }
 
 // DeleteSession soft deletes and keeps the messages, matching the knowledge base
-// and document recycle bins. See docs/14-frontend-api-gaps.md G15.
+// and document recycle bins. See docs/04-api-design.md (DELETE /chat/sessions/:id).
 func (s *ChatService) DeleteSession(ctx context.Context, userID, sessionID uuid.UUID) error {
 	session, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
@@ -927,7 +927,7 @@ type ChatStreamSink interface {
 // clientRequestId up in the message list: absent means it is safe to resend with
 // the same id. The alternative — storing the partial text — would put a
 // truncated answer into the history that every later turn would then read as
-// context. See docs/14-frontend-api-gaps.md G2.
+// context. See docs/04-api-design.md (POST /chat/sessions/:id/messages/stream).
 func (s *ChatService) SendMessageStream(
 	ctx context.Context,
 	userID, sessionID uuid.UUID,
@@ -1455,6 +1455,7 @@ func (s *ChatService) generateAnswerWithHooks(
 	if override := hooks.retrievalConfig; override != nil {
 		searchRequest.VectorTopN, searchRequest.RerankTopK = override.VectorTopN, override.RerankTopK
 		searchRequest.EnableRerank, searchRequest.ScoreThreshold = &override.EnableRerank, &override.ScoreThreshold
+		searchRequest.EnableKeyword = &override.EnableKeyword
 	}
 	searchRes, err := s.retrieval.Search(ctx, userID, session.KnowledgeBaseID, searchRequest)
 	timing.Retrieval = time.Since(retrievalStart)

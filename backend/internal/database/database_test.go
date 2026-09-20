@@ -6,10 +6,53 @@ import (
 	"strings"
 	"testing"
 
+	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 	"kbchat/backend/internal/model"
 )
+
+func TestPostgresConnectionUsesUTCWithoutLosingOtherOptions(t *testing.T) {
+	cfg, err := postgresConnectionConfig("postgres://example:example@localhost/example?TimeZone=Asia%2FShanghai&timezone=Europe%2FLondon&search_path=time_checks&application_name=rag")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RuntimeParams["timezone"] != "UTC" {
+		t.Fatalf("expected UTC session, got %#v", cfg.RuntimeParams)
+	}
+	if _, exists := cfg.RuntimeParams["TimeZone"]; exists {
+		t.Fatal("a differently cased timezone option survived normalization")
+	}
+	if cfg.RuntimeParams["search_path"] != "time_checks" || cfg.RuntimeParams["application_name"] != "rag" {
+		t.Fatal("unrelated connection options were lost")
+	}
+}
+
+func TestPostgresModelTimesUseTimestamptz(t *testing.T) {
+	db, err := gorm.Open(postgres.Open("host=localhost user=test dbname=test sslmode=disable"), &gorm.Config{DisableAutomaticPing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	for _, item := range timestampSchemaModels() {
+		statement := &gorm.Statement{DB: db}
+		if err := statement.Parse(item); err != nil {
+			t.Fatal(err)
+		}
+		for _, field := range statement.Schema.Fields {
+			if field.DataType == schema.Time {
+				if actual := db.Dialector.DataTypeOf(field); actual != "timestamptz" {
+					t.Errorf("%s.%s maps to %s instead of timestamptz", statement.Schema.Table, field.DBName, actual)
+				}
+			}
+		}
+	}
+}
 
 func TestAutoMigrateModelsIncludeOperationalTables(t *testing.T) {
 	required := map[reflect.Type]bool{

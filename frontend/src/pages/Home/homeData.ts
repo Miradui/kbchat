@@ -23,7 +23,7 @@ const defaultSources: HomeSources = {
  * One request behind five regions.
  *
  * `GET /home/summary` replaced the four concurrent list calls plus a pageSize
- * guess (see docs/14-frontend-api-gaps.md G17). The page still renders each
+ * guess (see docs/04-api-design.md, GET /home/summary). The page still renders each
  * region with its own loading and retry state, so the loaders coalesce: calls
  * made while a request is in flight share it, which turns the five regions
  * mounting together into a single request.

@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
@@ -17,12 +20,36 @@ func Open(cfg config.Config) (*gorm.DB, error) {
 		return nil, fmt.Errorf("DATABASE_URL is required")
 	}
 
-	db, err := gorm.Open(postgres.Open(cfg.DatabaseURL), &gorm.Config{})
+	connConfig, err := postgresConnectionConfig(cfg.DatabaseURL)
 	if err != nil {
+		return nil, err
+	}
+	sqlDB := stdlib.OpenDB(*connConfig)
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{
+		NowFunc: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) },
+	})
+	if err != nil {
+		_ = sqlDB.Close()
 		return nil, err
 	}
 
 	return db, nil
+}
+
+func postgresConnectionConfig(dsn string) (*pgx.ConnConfig, error) {
+	cfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	// SQL defaults and casts must use the same UTC convention as bound times.
+	// PostgreSQL accepts differently cased names; retain only one timezone key.
+	for key := range cfg.RuntimeParams {
+		if strings.EqualFold(key, "timezone") {
+			delete(cfg.RuntimeParams, key)
+		}
+	}
+	cfg.RuntimeParams["timezone"] = "UTC"
+	return cfg, nil
 }
 
 func AutoMigrate(ctx context.Context, db *gorm.DB) error {
@@ -90,7 +117,7 @@ func validateSchema(ctx context.Context, db *gorm.DB) error {
 	if !migrator.HasColumn(&model.ChatMessage{}, "feedback_reason") || !migrator.HasColumn(&model.ChatMessage{}, "feedback_comment") {
 		return fmt.Errorf("database schema incompatible: chat_messages missing feedback_reason/feedback_comment; apply migration 021 (migrations/021_quality_evaluations.sql)")
 	}
-	return nil
+	return validateTimestampSchema(ctx, db)
 }
 
 func autoMigrateModels() []any {

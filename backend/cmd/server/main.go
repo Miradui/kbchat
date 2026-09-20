@@ -42,6 +42,7 @@ func main() {
 	}
 
 	redisClient := cache.Open(cfg)
+	defer func() { _ = redisClient.Close() }()
 	if err := cache.Ping(ctx, redisClient); err != nil {
 		log.Warn("redis ping failed", zap.Error(err))
 	} else {
@@ -81,9 +82,11 @@ func main() {
 	// The same Redis client the application uses is handed to the router so the
 	// diagnostics probe checks the real connection pool rather than a second one.
 	r := router.NewWithStorageAndDependencies(cfg, db, log, fileStorage, router.Dependencies{
-		Redis:         redisClient,
-		Metrics:       observability.NewRecorder(),
-		WorkerContext: workerCtx,
+		Redis:          redisClient,
+		RateLimiter:    cache.NewFixedWindowRateLimiter(redisClient),
+		EmbeddingCache: cache.NewEmbeddingCache(redisClient),
+		Metrics:        observability.NewRecorder(),
+		WorkerContext:  workerCtx,
 	})
 
 	server := &http.Server{

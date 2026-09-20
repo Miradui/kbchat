@@ -74,4 +74,13 @@ describe('ChatComposer', () => {
     expect(props.onCancel).toHaveBeenCalledOnce();
     expect(props.onSubmit).not.toHaveBeenCalled();
   });
+
+  it('associates a rate limit error with the input and announces it', () => {
+    const { input } = renderComposer({ error: '请求过于频繁，请 12 秒后再试' });
+
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('请求过于频繁，请 12 秒后再试');
+    expect(alert).toHaveAttribute('aria-live', 'assertive');
+    expect(input).toHaveAccessibleDescription('请求过于频繁，请 12 秒后再试');
+  });
 });

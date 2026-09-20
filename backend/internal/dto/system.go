@@ -26,10 +26,13 @@ type SystemAccountCapabilities struct {
 // hardcode. Every value comes from the same constant or config entry the request
 // path enforces, so the two cannot drift.
 type SystemCapabilitiesResponse struct {
-	RerankEnabled bool                        `json:"rerankEnabled"`
-	Upload        SystemUploadCapabilities    `json:"upload"`
-	Retrieval     SystemRetrievalCapabilities `json:"retrieval"`
-	Account       SystemAccountCapabilities   `json:"account"`
+	RerankEnabled bool `json:"rerankEnabled"`
+	// KeywordSearchEnabled mirrors KEYWORD_SEARCH_ENABLED so the retrieval form
+	// can explain why a knowledge base's enableKeyword has no effect.
+	KeywordSearchEnabled bool                        `json:"keywordSearchEnabled"`
+	Upload               SystemUploadCapabilities    `json:"upload"`
+	Retrieval            SystemRetrievalCapabilities `json:"retrieval"`
+	Account              SystemAccountCapabilities   `json:"account"`
 }
 
 // Dependency and overall status values.
@@ -118,21 +121,33 @@ type SystemLatencyMetric struct {
 	MaxMs       int64  `json:"maxMs"`
 }
 
+// SystemEmbeddingCacheMetrics summarizes query-embedding cache lookups since
+// process start. HitRate is null until at least one hit or miss has been
+// observed; cache errors do not enter its denominator.
+type SystemEmbeddingCacheMetrics struct {
+	Hits    uint64   `json:"hits"`
+	Misses  uint64   `json:"misses"`
+	Errors  uint64   `json:"errors"`
+	HitRate *float64 `json:"hitRate"`
+}
+
 // SystemDiagnosticsResponse is the diagnostics payload.
 //
-// Latency and RerankFallbacks are per-process and reset when the server
-// restarts, which the UI states explicitly rather than implying a durable
-// history. Status is the worst of the dependency statuses, so a caller can gate
-// on one field.
+// Latency, fallbacks, rate limits and cache metrics are per-process and reset
+// when the server restarts, which the UI states explicitly rather than implying
+// a durable history. Status is the worst of the dependency statuses, so a caller
+// can gate on one field.
 type SystemDiagnosticsResponse struct {
-	Status          string                   `json:"status"`
-	CheckedAt       time.Time                `json:"checkedAt"`
-	Env             string                   `json:"env"`
-	Dependencies    []SystemDependencyStatus `json:"dependencies"`
-	Queues          SystemQueuesStatus       `json:"queues"`
-	Providers       []SystemProviderStatus   `json:"providers"`
-	Latency         []SystemLatencyMetric    `json:"latency"`
-	RerankFallbacks map[string]uint64        `json:"rerankFallbacks"`
+	Status            string                      `json:"status"`
+	CheckedAt         time.Time                   `json:"checkedAt"`
+	Env               string                      `json:"env"`
+	Dependencies      []SystemDependencyStatus    `json:"dependencies"`
+	Queues            SystemQueuesStatus          `json:"queues"`
+	Providers         []SystemProviderStatus      `json:"providers"`
+	Latency           []SystemLatencyMetric       `json:"latency"`
+	RerankFallbacks   map[string]uint64           `json:"rerankFallbacks"`
+	RateLimitTriggers map[string]uint64           `json:"rateLimitTriggers"`
+	EmbeddingCache    SystemEmbeddingCacheMetrics `json:"embeddingCache"`
 	// MetricsSinceRestart is always true today. It exists so a future durable
 	// metrics store can say otherwise without a breaking contract change.
 	MetricsSinceRestart bool `json:"metricsSinceRestart"`

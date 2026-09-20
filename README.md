@@ -9,13 +9,14 @@
 ## 已有功能
 
 - **知识管理**：知识库、树形分类、多标签、收藏、最近浏览、批量操作与回收站。
-- **文档处理**：TXT、Markdown、PDF 上传，后台任务进度，重复内容提示、版本替换、预览、下载、重新处理和内容片段定位。
-- **检索与问答**：pgvector 召回、Rerank 精排、多轮问答、流式输出、首问自动命名、回答版本切换、原文引用和会话导出。
+- **文档处理**：TXT、Markdown、PDF、DOCX 上传，后台任务进度，重复内容提示、版本替换、预览、下载、重新处理和内容片段定位。
+- **检索与问答**：pgvector 向量召回与关键词召回融合、Rerank 精排、多轮问答、流式输出、首问自动命名、回答版本切换、原文引用和会话导出。
 - **搜索**：跨知识库查找名称、文件和内容片段，支持键盘建议、命令面板（`Ctrl+K` / `⌘K`）与 CSV 导出。
 - **质量运营**：回答反馈、知识缺口、测试问题集、批量回归评测、运行记录和配置对比。
 - **账户与协作**：资料与密码设置、头像上传、知识库所有者 / 管理员 / 编辑成员 / 只读成员，以及系统诊断。
+- **运行保护**：Redis 登录 IP / 聊天用户限流、query embedding 缓存，以及缓存命中率和限流触发诊断。
 
-公开/私有标记目前用于展示；将知识库设为公开不会自动授予其他用户访问权限。多租户、SSO、复杂 RBAC、审计日志、DOCX 解析及非 MinIO 的对象存储不在当前范围内。
+公开/私有标记目前用于展示；将知识库设为公开不会自动授予其他用户访问权限。多租户、SSO、复杂 RBAC、审计日志及非 MinIO 的对象存储不在当前范围内。DOCX 仅解析正文、标题、列表和表格文本，不处理图片、公式、文本框、OCR 或旧式 `.doc`。
 
 ## 本地启动
 
@@ -41,6 +42,7 @@ Compose 只启动 PostgreSQL / pgvector 和 Redis；前后端在下面分别启�
 | 配置 | 用途 |
 | --- | --- |
 | `DATABASE_URL`、`REDIS_ADDR` | 数据库与缓存；使用现有服务时修改连接地址 |
+| `RATE_LIMIT_*`、`TRUSTED_PROXY_CIDRS`、`EMBEDDING_CACHE_TTL` | 登录 / 聊天限流、可信反向代理和查询向量缓存 |
 | `JWT_SECRET` | 替换占位值，使用密码学安全随机源生成至少 32 字节的密钥 |
 | `CHAT_BASE_URL`、`CHAT_API_KEY`、`CHAT_MODEL` | 对话及检索意图处理 |
 | `EMBEDDING_BASE_URL`、`EMBEDDING_API_KEY`、`EMBEDDING_MODEL` | 文档和问题向量化，输出维度必须为 `1536` |
@@ -58,13 +60,18 @@ cd backend
 go mod download
 go run ./cmd/migrate
 go run ./cmd/seed
+go run ./cmd/bootstrap-admin -username admin
 go run ./cmd/doctor
 go run ./cmd/server
 ```
 
 默认 API 地址为 `http://127.0.0.1:8080/api/v1`，健康检查为 `http://127.0.0.1:8080/healthz`。
 
-本地默认账号为 `admin` / `123456`。新环境可在运行 seed 前通过 `SEED_USERNAME`、`SEED_PASSWORD`、`SEED_DISPLAY_NAME` 设置初始账号；生产环境应设置强密码。seed 遇到同名账号会跳过，不会重置其密码。
+seed 创建普通系统用户，本地默认账号为 `admin` / `123456`；账号名称本身不赋予管理员权限。可在运行 seed 前通过 `SEED_USERNAME`、`SEED_PASSWORD`、`SEED_DISPLAY_NAME` 设置账号，遇到同名账号会跳过且不重置密码。
+
+`bootstrap-admin -username admin` 将明确指定的现有账号提升为首位系统管理员，保留密码与资料；使用自定义 seed 用户名时替换命令中的 `admin`。同一管理员重复执行不会修改账号，已有其他管理员时拒绝再初始化。诊断接口仅系统管理员可用，知识库协作角色独立判定。
+
+生产首次部署可跳过 seed，直接创建首位管理员：在进程环境中设置 `BOOTSTRAP_ADMIN_PASSWORD` 为强密码，可选设置 `BOOTSTRAP_ADMIN_DISPLAY_NAME`，再运行 `go run ./cmd/bootstrap-admin -username <指定账号> -create`。密码至少 8 个字符、最多 72 个 UTF-8 字节；命令不会覆盖现有普通账号。初始化只在运维 CLI 提供，详见 [部署指南](docs/13-deployment.md#74-初始化系统管理员)。
 
 文档处理、评测和存储清理任务随后端进程运行。处理并发及重试由 `WORKER_CONCURRENCY`、`WORKER_MAX_RETRIES`、`WORKER_RETRY_DELAY` 等参数控制。
 
@@ -85,15 +92,17 @@ npm run dev -- --host 127.0.0.1 --port 5173
 ## 检索与存储约定
 
 ```text
-上传 → 解析 → 切片 → Embedding → pgvector
-提问 → 意图识别与问题改写 → 向量召回 → Rerank → Prompt → 流式回答与引用
+上传 → 解析 → 切片 → Embedding + 关键词词元 → pgvector
+提问 → 意图识别与问题改写 → 向量召回 + 关键词召回 → RRF 融合 → Rerank → Prompt → 流式回答与引用
 ```
 
 - 默认召回 `30` 条、精排保留 `5` 条，最低相关度 `0.3`。历史对话帮助理解追问，事实依据来自本轮进入 Prompt 的片段。
+- 关键词召回默认开启（`KEYWORD_SEARCH_ENABLED`，知识库可单独关闭），用后端分词器生成中文二元组与精确词元，不依赖 PostgreSQL 中文分词扩展；升级到迁移 `024` 后需运行一次 `go run ./cmd/reindex-keywords` 回填既有片段。
 - 引用只允许来自实际进入 Prompt 的最终片段。Rerank 默认启用；`RERANK_FAILURE_MODE=strict` 在精排失败时返回错误，显式选择 `fallback` 才允许按向量顺序降级并标明状态。
+- 查询向量按模型和规范化问题缓存到 Redis，默认保存 24 小时；命中时跳过 Embedding Provider，Redis 缓存故障自动回退为直接调用。
 - 文件默认保存在后端本地 `uploads`。使用 MinIO 时设置 `STORAGE_PROVIDER=minio` 和 `MINIO_*`，bucket 必须保持私有，预览和下载通过鉴权 API。
 - 永久删除先登记持久化清理任务，再异步移除文件。重新处理会在新向量全部成功并提交后替换旧片段。
-- SQL 迁移位于 `backend/migrations/`。已有环境升级应按迁移说明执行；指定单个文件可使用 `go run ./cmd/migrate -migration 022_user_avatars.sql`。
+- SQL 迁移位于 `backend/migrations/`。已有环境升级应按迁移说明执行；指定单个文件可使用 `go run ./cmd/migrate -migration 024_hybrid_search.sql -timeout 30m`（`-timeout` 默认 30 秒，索引构建按数据量放宽）。
 
 ## 测试与 CI
 
@@ -127,18 +136,17 @@ backend/    API、业务服务、GORM 仓储、Provider、后台任务和 SQL �
 frontend/   React 页面、组件、API 客户端和前端测试
 docs/       产品、架构、接口、部署和交接文档
 deploy/     本地基础服务 Compose
-plans/      功能实施计划
 .github/    GitHub Actions 工作流
 ```
 
 | 需要了解 | 文档 |
 | --- | --- |
-| 当前实现与交接 | [跨会话交接](docs/12-handoff.md) |
+| 当前实现与交接 | [跨会话交接](docs/12-handoff.md) · [功能优化计划](docs/17-improvement-plan.md) |
 | 产品与架构 | [PRD](docs/01-prd.md) · [系统架构](docs/02-architecture.md) |
 | 数据与接口 | [数据库设计](docs/03-database-design.md) · [API 设计](docs/04-api-design.md) · [错误码](docs/09-error-codes.md) |
 | 检索行为 | [RAG 链路](docs/05-rag-pipeline.md) |
-| 前端与交互 | [前端规范](docs/10-frontend-spec.md) · [API 缺口](docs/14-frontend-api-gaps.md) · [交互巡检](docs/16-interaction-review.md) |
+| 前端与交互 | [前端规范](docs/10-frontend-spec.md) · [交互巡检](docs/16-interaction-review.md) |
 | 环境与部署 | [环境配置](docs/08-env-config.md) · [部署运维](docs/13-deployment.md) |
-| 开发约定 | [AI 开发规范](docs/00-ai-development-guide.md) · [任务顺序](docs/11-ai-task-prompts.md) |
+| 开发约定 | [项目指令](AGENTS.md) · [AI 开发规范](docs/00-ai-development-guide.md) |
 
 后端遵循 `handler → service → repository`，数据库访问使用 GORM，模型调用通过 Provider 接口。API 字段采用 camelCase，数据库字段采用 snake_case；知识库访问必须经过所有权及成员权限校验。修改公共接口、schema、默认值或 RAG 行为时，同步更新相关文档。

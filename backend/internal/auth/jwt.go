@@ -12,10 +12,11 @@ import (
 
 type Claims struct {
 	UserID string `json:"userId"`
+	Role   string `json:"role,omitempty"`
 	jwt.RegisteredClaims
 }
 
-func GenerateToken(cfg config.Config, userID uuid.UUID) (string, error) {
+func GenerateToken(cfg config.Config, userID uuid.UUID, role string) (string, error) {
 	secret, err := jwtSecret(cfg)
 	if err != nil {
 		return "", err
@@ -27,6 +28,7 @@ func GenerateToken(cfg config.Config, userID uuid.UUID) (string, error) {
 
 	claims := Claims{
 		UserID: userID.String(),
+		Role:   role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),

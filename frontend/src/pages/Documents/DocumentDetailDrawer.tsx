@@ -1,4 +1,4 @@
-import { Download, FileText, RotateCw, Search, Trash2 } from 'lucide-react';
+import { Download, FileText, FileType, RotateCw, Search, Trash2 } from 'lucide-react';
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -8,6 +8,7 @@ import {
   downloadDocument,
   getDocument,
   getDocumentPreview,
+  getKnowledgeBase,
   listDocumentChunks,
   reprocessDocument,
 } from '../../api/resources';
@@ -15,12 +16,14 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { EmptyState } from '../../components/feedback/EmptyState';
 import { useToast } from '../../components/feedback/ToastProvider';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
+import { PdfPreview } from '../../components/pdf/PdfPreview';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Drawer } from '../../components/ui/Drawer';
 import { SearchInput } from '../../components/ui/Field';
 import { Pagination } from '../../components/ui/Pagination';
-import type { DocumentChunk, DocumentItem, DocumentPreviewResponse } from '../../types/api';
+import type { DocumentChunk, DocumentItem, DocumentPreviewResponse, KnowledgeBase } from '../../types/api';
+import { hasCapability } from '../../utils/access';
 import { formatBytes, formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
 import { DocumentProgress } from './DocumentProgress';
@@ -56,6 +59,8 @@ export function DocumentDetailDrawer({
   /** Which chunk has already been scrolled to, so focus moves once and not again. */
   const focusedChunkRef = useRef('');
   const [document, setDocument] = useState<DocumentItem | null>(null);
+  const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeBase | null>(null);
+  const [accessError, setAccessError] = useState('');
   const [documentScope, setDocumentScope] = useState<string | null>(null);
   const [preview, setPreview] = useState<DocumentPreviewResponse | null>(null);
   const [previewUrl, setPreviewUrl] = useState('');
@@ -73,6 +78,8 @@ export function DocumentDetailDrawer({
   const [previewError, setPreviewError] = useState('');
   const [chunkError, setChunkError] = useState('');
   const submitting = operation !== null;
+  const canDownload = hasCapability(knowledgeBase, 'document.download');
+  const canWrite = hasCapability(knowledgeBase, 'content.write');
   activeDocumentIdRef.current = documentId;
 
   useEffect(() => {
@@ -92,6 +99,8 @@ export function DocumentDetailDrawer({
     setLoading(true);
     setError('');
     setDocument(null);
+    setKnowledgeBase(null);
+    setAccessError('');
     setDocumentScope(null);
     setPreview(null);
     setPreviewUrl('');
@@ -115,13 +124,19 @@ export function DocumentDetailDrawer({
 
         setDocument(documentResponse);
         setDocumentScope(knowledgeBaseId ?? '');
+        const currentKnowledgeBase = await getKnowledgeBase(documentResponse.knowledgeBaseId).catch(() => {
+          if (mounted) setAccessError('暂时无法确认文档操作权限，请重新打开文档重试。');
+          return null;
+        });
+        if (!mounted) return;
+        setKnowledgeBase(currentKnowledgeBase);
         const previewResponse = await getDocumentPreview(documentId).catch((caught) => {
           if (mounted) setPreviewError(previewErrorMessage(caught, '文档预览加载失败'));
           return null;
         });
         if (!mounted) return;
         setPreview(previewResponse);
-        if (previewResponse?.kind === 'file') {
+        if (previewResponse?.kind === 'file' && hasCapability(currentKnowledgeBase, 'document.download')) {
           try {
             const blob = await downloadDocument(documentId);
             if (mounted) setPreviewUrl(URL.createObjectURL(blob));
@@ -223,7 +238,7 @@ export function DocumentDetailDrawer({
   }
 
   async function handleReprocess() {
-    if (!document || mutationRef.current) return;
+    if (!document || !canWrite || mutationRef.current) return;
     const targetId = document.id;
     const token = Symbol('reprocess-document');
     mutationRef.current = token;
@@ -252,7 +267,7 @@ export function DocumentDetailDrawer({
   }
 
   async function handleDelete() {
-    if (!document || mutationRef.current) return;
+    if (!document || !canWrite || mutationRef.current) return;
     const targetId = document.id;
     const token = Symbol('delete-document');
     mutationRef.current = token;
@@ -277,7 +292,7 @@ export function DocumentDetailDrawer({
   }
 
   async function handleDownload() {
-    if (!document || mutationRef.current) return;
+    if (!document || !canDownload || mutationRef.current) return;
     const targetId = document.id;
     const token = Symbol('download-document');
     mutationRef.current = token;
@@ -332,7 +347,7 @@ export function DocumentDetailDrawer({
             {document && (
               <>
                 <section className="doc-detail__head">
-                  <span className="ui-kb-glyph ui-kb-glyph--lg" aria-hidden="true"><FileText /></span>
+                  <span className="ui-kb-glyph ui-kb-glyph--lg" aria-hidden="true">{document.fileType.toLowerCase() === 'docx' ? <FileType /> : <FileText />}</span>
                   <div className="ui-cell-stack">
                     <strong>{document.filename}</strong>
                     <small>{knowledgeBaseName ?? document.knowledgeBaseId}</small>
@@ -371,7 +386,7 @@ export function DocumentDetailDrawer({
                 </dl>
 
                 <div className="doc-detail__actions">
-                  <Button
+                  {canDownload && <Button
                     disabled={submitting}
                     leadingIcon={<Download aria-hidden="true" />}
                     loading={operation === 'download'}
@@ -380,8 +395,8 @@ export function DocumentDetailDrawer({
                     onClick={() => void handleDownload()}
                   >
                     下载
-                  </Button>
-                  <Button
+                  </Button>}
+                  {canWrite && <Button
                     disabled={submitting}
                     leadingIcon={<RotateCw aria-hidden="true" />}
                     loading={operation === 'reprocess'}
@@ -390,7 +405,7 @@ export function DocumentDetailDrawer({
                     onClick={() => void handleReprocess()}
                   >
                     重新处理
-                  </Button>
+                  </Button>}
                   <span className="ui-toolbar__spacer" />
                   <Link
                     className="ui-button ui-button--ghost"
@@ -398,7 +413,7 @@ export function DocumentDetailDrawer({
                   >
                     <span>在知识库中打开</span>
                   </Link>
-                  <Button
+                  {canWrite && <Button
                     disabled={submitting}
                     leadingIcon={<Trash2 aria-hidden="true" />}
                     variant="ghost"
@@ -409,24 +424,27 @@ export function DocumentDetailDrawer({
                     }}
                   >
                     删除
-                  </Button>
+                  </Button>}
                 </div>
+                {accessError && <p className="ui-inline-error" role="alert">{accessError}</p>}
 
                 <section className="ui-panel">
                   <div className="ui-panel__head">
                     <h3>预览</h3>
                     <span className="ui-panel__head-note">{preview?.contentType || '原始上传文件'}</span>
                   </div>
-                  <div className="ui-panel__body doc-preview">
+                  <div className={`ui-panel__body doc-preview${preview?.kind === 'file' ? ' doc-preview--file' : ''}`}>
                     {previewError ? (
                       <p className="ui-inline-error" role="alert">{previewError}</p>
                     ) : !preview ? (
                       <LoadingSkeleton announce compact columns={1} rows={3} />
                     ) : preview.kind === 'text' ? (
                       <pre className="doc-preview__text">{preview.content || ''}</pre>
+                    ) : !canDownload ? (
+                      <p className="ui-muted">可阅读下方内容片段；下载原始文件需要编辑者及以上权限。</p>
                     ) : previewUrl ? (
                       preview.fileType.toLowerCase() === 'pdf' || preview.contentType.includes('pdf') ? (
-                        <iframe className="doc-preview__frame" src={previewUrl} title={`${preview.filename} 预览`} />
+                        <PdfPreview url={previewUrl} filename={preview.filename} initialPage={chunks.find((chunk) => chunk.id === chunkId)?.pageNumber} />
                       ) : (
                         <EmptyState
                           action={<a className="ui-button ui-button--secondary" href={previewUrl} rel="noreferrer" target="_blank"><span>在新标签页打开</span></a>}

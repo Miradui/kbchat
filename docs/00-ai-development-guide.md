@@ -1,6 +1,6 @@
 # AI 开发总规范
 
-本文档是企业知识库问答系统的最高优先级开发规范。后续使用 AI 生成代码时，必须先阅读本文档，再阅读对应模块文档。
+本文档记录项目的开发约束和执行边界。根目录 `AGENTS.md` 提供日常入口；按当前任务查阅本文件及对应模块的相关章节。当前实现、待办与验证范围见 `12-handoff.md`。
 
 ## 项目目标
 
@@ -42,7 +42,6 @@
 3. SSO。
 4. 审计日志。
 5. 除 MinIO S3 之外的其他对象存储后端与生命周期管理。
-6. docx 解析。
 7. 计费和额度系统。
 
 ## 技术约束
@@ -54,7 +53,7 @@
 5. 前端使用 React。
 6. 文件存储支持本地 `uploads` 与 MinIO S3；MinIO bucket 保持私有，访问必须经过后端权限校验。
 7. 异步任务第一版采用数据库任务表加后端 worker。
-8. 文档解析 MVP 只支持 `txt`、`md`、`pdf`。
+8. 文档解析 MVP 支持 `txt`、`md`、`pdf`、`docx`；DOCX 仅解析正文、标题、列表和表格文本。
 
 ## 后端分层约束
 
@@ -103,13 +102,13 @@ MVP 默认实现 OpenAI-compatible HTTP Provider。业务层只能依赖接口�
 
 ## 权限约束
 
-MVP 使用单租户用户私有知识库：
+知识库归属与当前已实现的成员协作权限共同决定访问范围，具体能力矩阵、403/404 和回收站语义见 `04-api-design.md`「权限与能力矩阵」。
 
-1. 用户只能访问自己创建的知识库。
-2. 所有 documents 操作必须通过 `knowledge_base.owner_id` 校验。
-3. 所有 document_chunks 操作必须通过 `knowledge_base.owner_id` 校验。
-4. 所有 chat_sessions 操作必须通过 `knowledge_base.owner_id` 和 `chat_sessions.user_id` 校验。
-5. 删除知识库必须级联处理文档、切片和会话数据。
+1. 所有知识库相关访问都必须检查 `knowledge_bases.owner_id` 归属；成员访问按 `knowledge_base_members.role` 和所需能力授权。
+2. documents 和 document_chunks 操作必须校验所属知识库权限，不能只凭资源 ID 访问。
+3. chat_sessions 操作同时校验 `chat_sessions.user_id` 和知识库权限；成员角色不能授予他人会话的访问权。
+4. 权限由服务端逐次校验；前端 capabilities 和知识库公开标记不能代替授权。
+5. 删除知识库时按当前 API 约定处理关联文档、切片、会话和存储清理，保留软删除与永久删除的区别。
 
 ## RAG 约束
 
@@ -156,9 +155,17 @@ citations 只能来自最终进入 Prompt 的 rerank chunks。禁止引用未参
 
 ## AI 开发执行规则
 
-1. 按 `11-ai-task-prompts.md` 的任务顺序开发。
-2. 每次只实现当前任务，不提前实现后续模块。
-3. 每个任务必须满足对应验收标准。
-4. 修改接口、字段或默认参数时，必须同步更新相关文档。
-5. 新增代码必须遵守目录结构和分层约束。
-6. 不允许生成与 MVP 无关的大型框架或复杂平台能力。
+1. 以当前用户请求确定范围和验收结果，按实际依赖安排工作；功能维护与前后端联调使用当前代码和接口合同。
+2. 开始时明确可验证的完成结果。在授权范围内连续完成实现、必要的运行检查、问题修复和文档同步；除非用户要求阶段评审，否则不在首版实现后默认停下。
+3. 验证与改动范围匹配：先运行受影响包或文件的测试，跨模块影响或任务要求时再做全量检查。纯文档改动检查路径、命令来源和内容一致性；出现新改动、失败或未解决风险时再扩大或重复验证。
+4. 默认本地测试使用 SQLite、临时文件、HTTP/API 替身和 jsdom；可直接运行、修复本次改动引起的失败并复测，无需逐步确认。后端 SQLite 测试需要 CGO 和 C 编译器，命令入口见根目录 `AGENTS.md`。
+5. `RAG_TEST_POSTGRES_DSN` 和 `RAG_TEST_MINIO_*` 会启用真实服务测试并产生写入。运行前核实目标是本次任务授权使用的测试环境；这些测试不能按默认替身测试处理。具体入口见 `backend/internal/repository/postgres_concurrency_integration_test.go` 和 `backend/internal/storage/minio_integration_test.go`。`system_admin_postgres_integration_test.go` 复用独立 schema 和两个连接池，检查首管理员并发创建、提升只成功一次，结束后清理，不修改业务账号。`backend/internal/database/timestamp_integration_test.go` 与 `timestamp_migration_integration_test.go` 也使用该 PostgreSQL 开关：前者检查时间读写，后者仅对事务内临时表执行 023。`backend/internal/repository/chunk_keyword_postgres_integration_test.go` 在独立 schema 内验证关键词召回的 tsvector 匹配、排序与回填，SQLite 替身无法覆盖这部分。临时对象随事务结束或 schema 删除清理，不迁移业务表或启动后台 worker。
+6. doctor 访问配置的真实服务，migrate、seed 及启动后的后台 worker 可能写入数据。按用户已授权的环境和操作范围执行；只有目标、影响或必要授权仍不明确时才确认，并先完成可独立推进的准备工作。已有授权无需重复请求。
+7. 修改公共 API、数据库结构、默认值或 RAG 行为时同步相关文档；更新 `12-handoff.md` 中的当前状态、有效待办和验证范围，历史实施过程由 Git 保留。
+8. 交付时说明改动、验证结果和未满足的验收项；真实服务不可用等限制应明确记录，不能用替身测试结果宣称真实联调通过。
+
+### 真实模型合同验证
+
+`backend/internal/service/chat_provider_integration_test.go` 默认跳过。显式设置 `RAG_TEST_CHAT_PROVIDER=1`、`RAG_TEST_CHAT_BASE_URL`、`RAG_TEST_CHAT_API_KEY` 和逗号分隔的 `RAG_TEST_CHAT_MODELS` 后，在 backend 目录运行 `go test ./internal/service -run '^TestRealChatProviderRefusalContract$' -count=1 -v`。密钥只从环境读取，不写入命令、文档或提交。
+
+此测试使用生产回答提示词和拒答处理器，向指定服务发送合成的有依据、资料不足和隐私骚扰问题，分别检查流式与非流式回答；不打开数据库。它会产生真实模型调用及可能的费用，只在任务已授权的目标上启用。结果仅证明所测模型与提示词的合同遵从，不替代完整检索、意图分类或设备验收。

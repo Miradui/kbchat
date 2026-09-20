@@ -26,7 +26,7 @@ export const currentUserStore = {
     }
 
     const entry = cache;
-    const pending = request()
+    const pending = Promise.resolve().then(request)
       .then((user) => {
         if (cache === entry && tokenStore.getRevision() === revision) {
           entry.user = user;

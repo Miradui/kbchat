@@ -44,7 +44,7 @@ export function HomePage({ sources }: { sources?: HomeSources }) {
 
   // Real recorded events, not a merge of the three lists: deletes, restores and
   // membership changes have no row to reconstruct them from.
-  // See docs/14-frontend-api-gaps.md G18.
+  // See docs/04-api-design.md (GET /activities).
   const activity = useMemo(
     () => activities.data.slice(0, 8).map(activityToItem),
     [activities.data],

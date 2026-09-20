@@ -70,7 +70,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     setError('');
     // Suggest is title-level only, so a keystroke pause no longer pays for a
     // full results page. Chunk content lives behind "查看全部结果".
-    // See docs/14-frontend-api-gaps.md G10.
+    // See docs/04-api-design.md (GET /search/suggest).
     void searchSuggest(debouncedQuery, PER_GROUP * 2, controller.signal)
       .then((response) => {
         if (!controller.signal.aborted) setResults(response.items);

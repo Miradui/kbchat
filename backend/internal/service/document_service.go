@@ -19,6 +19,7 @@ import (
 	"kbchat/backend/internal/access"
 	"kbchat/backend/internal/apperror"
 	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/document/parser"
 	"kbchat/backend/internal/dto"
 	"kbchat/backend/internal/model"
 	"kbchat/backend/internal/repository"
@@ -171,7 +172,7 @@ func (s *DocumentService) cancelStorageReservation(ctx context.Context, storageP
 // List is the knowledge-base-scoped view of the same ledger ListGlobal serves.
 // It pins knowledgeBaseId to the path parameter and otherwise accepts and
 // returns exactly what the global endpoint does, so the two cannot drift.
-// See docs/14-frontend-api-gaps.md G20.
+// See docs/04-api-design.md (GET /knowledge-bases/:kbId/documents).
 func (s *DocumentService) List(ctx context.Context, ownerID, kbID uuid.UUID, query dto.GlobalDocumentListQuery) (*dto.GlobalDocumentListResponse, error) {
 	// Checked up front so a knowledge base the caller cannot reach answers
 	// KNOWLEDGE_BASE_NOT_FOUND instead of an empty page.
@@ -396,7 +397,19 @@ func (s *DocumentService) Preview(ctx context.Context, ownerID, documentID uuid.
 	if err != nil {
 		return nil, documentStorageError(err)
 	}
-	res.Content = string(content)
+	if strings.EqualFold(document.FileType, "docx") {
+		parsed, parseErr := parser.NewDefaultParser().ParseBytes(content, "docx")
+		if parseErr != nil {
+			return nil, apperror.New(http.StatusBadRequest, "DOCUMENT_PREVIEW_FAILED", "文档无法解析")
+		}
+		parts := make([]string, 0, len(parsed.Segments))
+		for _, segment := range parsed.Segments {
+			parts = append(parts, segment.Content)
+		}
+		res.Content = strings.Join(parts, "\n")
+	} else {
+		res.Content = string(content)
+	}
 	return res, nil
 }
 
@@ -586,7 +599,7 @@ func (s *DocumentService) recordDocumentActivity(ctx context.Context, userID uui
 // AllowedDocumentExtensions is the upload allow list enforced by validateFile.
 // GET /api/v1/system/capabilities publishes it so the import dialog offers the
 // same set instead of a frontend copy.
-var AllowedDocumentExtensions = []string{"txt", "md", "pdf"}
+var AllowedDocumentExtensions = []string{"txt", "md", "pdf", "docx"}
 
 func (s *DocumentService) validateFile(file *multipart.FileHeader) error {
 	if file == nil {
@@ -602,8 +615,11 @@ func (s *DocumentService) validateFile(file *multipart.FileHeader) error {
 	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(file.Filename)), ".")
 	for _, allowed := range AllowedDocumentExtensions {
 		if ext == allowed {
-			if ext == "pdf" {
+			switch ext {
+			case "pdf":
 				return validatePDFSignature(file)
+			case "docx":
+				return validateDOCXSignature(file)
 			}
 			return nil
 		}
@@ -627,6 +643,32 @@ func validatePDFSignature(file *multipart.FileHeader) error {
 		return apperror.New(http.StatusBadRequest, "DOCUMENT_TYPE_UNSUPPORTED", "unsupported document type")
 	}
 	return nil
+}
+
+func validateDOCXSignature(file *multipart.FileHeader) error {
+	opened, err := file.Open()
+	if err != nil {
+		return apperror.New(http.StatusBadRequest, "DOCUMENT_TYPE_UNSUPPORTED", "unsupported document type")
+	}
+	defer opened.Close()
+
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(opened, header); err != nil || !isZIPMagic(header) {
+		return apperror.New(http.StatusBadRequest, "DOCUMENT_TYPE_UNSUPPORTED", "unsupported document type")
+	}
+	return nil
+}
+
+func isZIPMagic(header []byte) bool {
+	if len(header) < 4 || header[0] != 'P' || header[1] != 'K' {
+		return false
+	}
+	// Local file header, empty archive, and spanning archive signatures are all
+	// valid ZIP signatures. The parser still requires word/document.xml, so an
+	// arbitrary empty ZIP cannot become a document by passing this check.
+	return (header[2] == 3 && header[3] == 4) ||
+		(header[2] == 5 && header[3] == 6) ||
+		(header[2] == 7 && header[3] == 8)
 }
 
 func (s *DocumentService) latestJobForDocument(ctx context.Context, documentID uuid.UUID) (*model.DocumentJob, error) {
@@ -870,6 +912,8 @@ func contentTypeForFile(filename string) string {
 		return "text/markdown; charset=utf-8"
 	case ".pdf":
 		return "application/pdf"
+	case ".docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 	default:
 		return "application/octet-stream"
 	}
@@ -877,7 +921,7 @@ func contentTypeForFile(filename string) string {
 
 func previewKind(filename string) string {
 	switch strings.ToLower(filepath.Ext(filename)) {
-	case ".txt", ".md":
+	case ".txt", ".md", ".docx":
 		return "text"
 	default:
 		return "file"

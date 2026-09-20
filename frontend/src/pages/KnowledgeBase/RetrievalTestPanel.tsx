@@ -22,6 +22,16 @@ const stageLabels: Record<KnowledgeBaseSearchDebug['rerankStage']['status'], str
   fallback: '已降级',
 };
 
+const keywordStageLabels: Record<KnowledgeBaseSearchDebug['keywordStage']['status'], string> = {
+  completed: '已完成',
+  disabled: '未启用',
+};
+
+const fusionStageLabels: Record<KnowledgeBaseSearchDebug['fusionStage']['status'], string> = {
+  completed: '已融合',
+  skipped: '未融合',
+};
+
 /** Runs a real retrieval against this knowledge base so config changes can be verified. */
 export function RetrievalTestPanel({ knowledgeBase }: { knowledgeBase: KnowledgeBase }) {
   const [query, setQuery] = useState('');
@@ -66,6 +76,7 @@ export function RetrievalTestPanel({ knowledgeBase }: { knowledgeBase: Knowledge
         vectorTopN: knowledgeBase.retrievalConfig.vectorTopN,
         rerankTopK: knowledgeBase.retrievalConfig.rerankTopK,
         enableRerank: knowledgeBase.retrievalConfig.enableRerank,
+        enableKeyword: knowledgeBase.retrievalConfig.enableKeyword,
         debug: debugEnabled,
       });
       // A slower earlier request must not overwrite a newer one.
@@ -128,7 +139,9 @@ export function RetrievalTestPanel({ knowledgeBase }: { knowledgeBase: Knowledge
                   <header>
                     <strong>{result.filename}</strong>
                     <span>
-                      相关度 {formatScore(result.vectorScore)} · 精排 {formatNullableScore(result.rerankScore)}
+                      相关度 {formatScore(result.vectorScore)}
+                      {result.keywordScore != null ? ` · 关键词 ${formatScore(result.keywordScore)}` : ''}
+                      {' '}· 精排 {formatNullableScore(result.rerankScore)}
                     </span>
                   </header>
                   <p>{result.content}</p>
@@ -174,6 +187,47 @@ function DebugPanel({ debug }: { debug: KnowledgeBaseSearchDebug }) {
         </section>
 
         <section>
+          <h3>关键词召回 ({keywordStageLabels[debug.keywordStage.status]}{debug.keywordStage.status === 'completed' ? ` · ${debug.keywordStage.items.length}` : ''})</h3>
+          {debug.keywordStage.status === 'disabled' ? (
+            <p className="ui-field__hint">该知识库未启用关键词召回</p>
+          ) : debug.keywordStage.items.length === 0 ? (
+            <p className="ui-field__hint">没有片段命中查询词元</p>
+          ) : (
+            <ol>
+              {debug.keywordStage.items.map((item) => (
+                <li key={item.chunkId}>
+                  <strong>#{item.rank} {item.filename}</strong>
+                  <span>关键词分 {formatScore(item.keywordScore)}{item.pageNumber !== null ? ` · 第 ${item.pageNumber} 页` : ''}</span>
+                  <p>{item.content}</p>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+
+        <section>
+          <h3>融合 ({fusionStageLabels[debug.fusionStage.status]} · {debug.fusionStage.items.length})</h3>
+          {debug.fusionStage.status === 'skipped' ? (
+            <p className="ui-field__hint">未启用关键词召回，精排输入即向量召回结果</p>
+          ) : debug.fusionStage.items.length === 0 ? (
+            <p className="ui-field__hint">无候选片段</p>
+          ) : (
+            <ol>
+              {debug.fusionStage.items.map((item) => (
+                <li key={item.chunkId}>
+                  <strong>#{item.rank}</strong>
+                  <span>
+                    融合分 {formatScore(item.fusionScore)}
+                    {` · 向量第 ${item.vectorRank ?? '—'} · 关键词第 ${item.keywordRank ?? '—'}`}
+                    {item.pageNumber !== null ? ` · 第 ${item.pageNumber} 页` : ''}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+
+        <section>
           <h3>精排 ({stageLabels[debug.rerankStage.status]})</h3>
           <p className="ui-field__hint">输入 {debug.rerankStage.input.length} 条</p>
           {debug.rerankStage.output.length > 0 && (
@@ -201,7 +255,10 @@ function DebugPanel({ debug }: { debug: KnowledgeBaseSearchDebug }) {
                 <li key={item.chunkId}>
                   <strong>#{item.rank}</strong>
                   <span>
-                    向量 {formatScore(item.vectorScore)} · 精排 {item.rerankScore === null ? '无' : formatScore(item.rerankScore)}
+                    向量 {formatScore(item.vectorScore)}
+                    {item.keywordScore != null ? ` · 关键词 ${formatScore(item.keywordScore)}` : ''}
+                    {item.fusionScore != null ? ` · 融合 ${formatScore(item.fusionScore)}` : ''}
+                    {' '}· 精排 {item.rerankScore === null ? '无' : formatScore(item.rerankScore)}
                     {item.pageNumber !== null ? ` · 第 ${item.pageNumber} 页` : ''}
                   </span>
                 </li>

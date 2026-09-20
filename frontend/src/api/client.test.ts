@@ -10,6 +10,7 @@ class FakeXMLHttpRequest {
   url = '';
   requestHeaders: Record<string, string> = {};
   response: unknown = null;
+  responseHeaders: Record<string, string> = {};
   responseText = '';
   responseType = '';
   status = 0;
@@ -29,6 +30,12 @@ class FakeXMLHttpRequest {
 
   setRequestHeader(name: string, value: string) {
     this.requestHeaders[name] = value;
+  }
+
+  getResponseHeader(name: string) {
+    const match = Object.entries(this.responseHeaders)
+      .find(([header]) => header.toLowerCase() === name.toLowerCase());
+    return match?.[1] ?? null;
   }
 
   send() {}
@@ -88,6 +95,63 @@ describe('apiUploadRequest', () => {
     await expect(request).rejects.toMatchObject({ status: 401, code: 'UNAUTHORIZED' });
     expect(tokenStore.getToken()).toBe('new-token');
     expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it('preserves retry timing for an upload rejected with 429', async () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXMLHttpRequest);
+    const request = apiUploadRequest('/documents', new FormData());
+    const xhr = FakeXMLHttpRequest.instances[0];
+
+    xhr.status = 429;
+    xhr.responseHeaders['Retry-After'] = '11';
+    xhr.response = {
+      code: 'RATE_LIMITED',
+      message: 'too many requests',
+      details: { retryAfter: 99 },
+    };
+    xhr.onload?.();
+
+    await expect(request).rejects.toMatchObject({
+      status: 429,
+      code: 'RATE_LIMITED',
+      retryAfterSeconds: 11,
+      message: '请求过于频繁，请 11 秒后再试',
+    });
+  });
+});
+
+describe('apiRequest rate limit handling', () => {
+  it('preserves the 429 status, code and Retry-After header', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      code: 'RATE_LIMITED',
+      message: '请求过于频繁，请稍后重试',
+      details: { retryAfter: 58 },
+    }), {
+      status: 429,
+      headers: { 'Content-Type': 'application/json', 'Retry-After': '17' },
+    })));
+
+    const error = await apiRequest('/chat/sessions/s1/messages', { method: 'POST' })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      status: 429,
+      code: 'RATE_LIMITED',
+      retryAfterSeconds: 17,
+      message: '请求过于频繁，请 17 秒后再试',
+    });
+  });
+
+  it('uses the response details when Retry-After is unavailable', () => {
+    const error = new ApiError(429, {
+      code: 'RATE_LIMITED',
+      message: 'too many requests',
+      details: { retryAfter: 6.2 },
+    });
+
+    expect(error.retryAfterSeconds).toBe(7);
+    expect(error.message).toBe('请求过于频繁，请 7 秒后再试');
   });
 });
 

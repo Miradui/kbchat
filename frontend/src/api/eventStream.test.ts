@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { apiEventStream } from './client';
+import { ApiError, apiEventStream } from './client';
 import { tokenStore } from '../store/tokenStore';
 
 /** Feeds the response body in caller-controlled pieces to exercise buffering. */
@@ -32,6 +32,40 @@ async function collect(chunks: string[]) {
 }
 
 describe('apiEventStream', () => {
+  it('surfaces a pre-stream 429 with its retry delay', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => Promise.resolve(new Response(JSON.stringify({
+      code: 'RATE_LIMITED',
+      message: '请求过于频繁，请稍后重试',
+      details: { retryAfter: 30 },
+    }), {
+      status: 429,
+      headers: { 'Content-Type': 'application/json', 'Retry-After': '9' },
+    }))) as typeof fetch;
+
+    try {
+      let caught: unknown;
+      try {
+        for await (const _event of apiEventStream('/stream')) {
+          // A rate-limited response never opens an event stream.
+        }
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(ApiError);
+      expect(caught).toMatchObject({
+        status: 429,
+        code: 'RATE_LIMITED',
+        retryAfterSeconds: 9,
+        message: '请求过于频繁，请 9 秒后再试',
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+      tokenStore.clearToken();
+    }
+  });
+
   it('parses event and data fields into frames', async () => {
     const events = await collect([
       'event: citations\ndata: {"citations":[]}\n\n',

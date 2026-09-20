@@ -183,6 +183,27 @@ func TestDiagnosticsReportsMissingRedisAsNotConfigured(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsReportsDownRedis(t *testing.T) {
+	svc := NewSystemService(diagnosticsConfig())
+	svc.SetDiagnosticsDeps(SystemDiagnosticsDeps{
+		Database: &fakePinger{},
+		Redis:    &fakePinger{err: syscall.ECONNREFUSED},
+		Storage:  &fakeStorageChecker{},
+	})
+
+	res := svc.Diagnostics(context.Background())
+	redis := dependencyByName(t, res, "redis")
+	if redis.Status != dto.SystemStatusDown {
+		t.Fatalf("redis status = %q, want down", redis.Status)
+	}
+	if redis.Reason != string(observability.ReasonUnreachable) {
+		t.Errorf("redis reason = %q, want unreachable", redis.Reason)
+	}
+	if res.Status != dto.SystemStatusDown {
+		t.Errorf("overall status = %q, want down", res.Status)
+	}
+}
+
 func TestDiagnosticsClassifiesAMissingStorageBucket(t *testing.T) {
 	svc := NewSystemService(diagnosticsConfig())
 	svc.SetDiagnosticsDeps(SystemDiagnosticsDeps{
@@ -248,6 +269,13 @@ func TestDiagnosticsReportsProviderHealthFromRecordedTraffic(t *testing.T) {
 	recorder.RecordProviderResult(observability.ProviderEmbedding, syscall.ECONNREFUSED)
 	recorder.ObserveDuration(observability.MetricRetrieval, 120*time.Millisecond)
 	recorder.RecordRerankFallback("provider_error")
+	recorder.RecordRateLimitTrigger(observability.RateLimitScopeLogin)
+	recorder.RecordRateLimitTrigger(observability.RateLimitScopeLogin)
+	recorder.RecordRateLimitTrigger(observability.RateLimitScopeChat)
+	recorder.RecordEmbeddingCacheResult(observability.EmbeddingCacheResultHit)
+	recorder.RecordEmbeddingCacheResult(observability.EmbeddingCacheResultHit)
+	recorder.RecordEmbeddingCacheResult(observability.EmbeddingCacheResultMiss)
+	recorder.RecordEmbeddingCacheResult(observability.EmbeddingCacheResultError)
 
 	svc := NewSystemService(diagnosticsConfig())
 	svc.SetDiagnosticsDeps(SystemDiagnosticsDeps{Database: &fakePinger{}, Metrics: recorder})
@@ -278,6 +306,31 @@ func TestDiagnosticsReportsProviderHealthFromRecordedTraffic(t *testing.T) {
 	}
 	if res.RerankFallbacks["provider_error"] != 1 {
 		t.Errorf("rerank fallbacks = %+v, want one provider_error", res.RerankFallbacks)
+	}
+	if res.RateLimitTriggers[observability.RateLimitScopeLogin] != 2 || res.RateLimitTriggers[observability.RateLimitScopeChat] != 1 {
+		t.Errorf("rate-limit triggers = %+v, want login=2 and chat=1", res.RateLimitTriggers)
+	}
+	if res.EmbeddingCache.Hits != 2 || res.EmbeddingCache.Misses != 1 || res.EmbeddingCache.Errors != 1 {
+		t.Errorf("embedding cache = %+v, want 2 hits, 1 miss and 1 error", res.EmbeddingCache)
+	}
+	if res.EmbeddingCache.HitRate == nil || *res.EmbeddingCache.HitRate != 2.0/3.0 {
+		t.Errorf("embedding cache hit rate = %v, want 2/3", res.EmbeddingCache.HitRate)
+	}
+}
+
+func TestDiagnosticsLeavesEmbeddingCacheHitRateNullWithoutLookups(t *testing.T) {
+	recorder := observability.NewRecorder()
+	recorder.RecordEmbeddingCacheResult(observability.EmbeddingCacheResultError)
+
+	svc := NewSystemService(diagnosticsConfig())
+	svc.SetDiagnosticsDeps(SystemDiagnosticsDeps{Database: &fakePinger{}, Metrics: recorder})
+	res := svc.Diagnostics(context.Background())
+
+	if res.EmbeddingCache.HitRate != nil {
+		t.Fatalf("embedding cache hit rate = %v, want nil without a hit or miss", *res.EmbeddingCache.HitRate)
+	}
+	if res.EmbeddingCache.Errors != 1 {
+		t.Fatalf("embedding cache errors = %d, want 1", res.EmbeddingCache.Errors)
 	}
 }
 
@@ -397,6 +450,12 @@ func TestDiagnosticsWorksWithoutAnyDependencies(t *testing.T) {
 	}
 	if res.RerankFallbacks == nil {
 		t.Error("rerankFallbacks is nil, want an empty map so the UI can iterate it")
+	}
+	if res.RateLimitTriggers == nil {
+		t.Error("rateLimitTriggers is nil, want an empty map so clients can iterate it")
+	}
+	if res.EmbeddingCache.HitRate != nil {
+		t.Errorf("embedding cache hit rate = %v, want nil before any lookups", *res.EmbeddingCache.HitRate)
 	}
 }
 

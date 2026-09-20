@@ -18,7 +18,7 @@ var (
 	// corrupt file: the container was readable, the text inside was not.
 	ErrEncodingInvalid = errors.New("content is not valid UTF-8")
 	// ErrCorruptFile means the container itself could not be read -- a truncated
-	// or malformed PDF, not a text encoding problem.
+	// or malformed PDF/DOCX package, not a text encoding problem.
 	ErrCorruptFile = errors.New("file could not be read")
 )
 
@@ -75,6 +75,12 @@ func (p *DefaultParser) ParseDocument(path string, fileType string) (ParsedDocum
 			return ParsedDocument{}, err
 		}
 		return ParsedDocument{FileType: fileType, Segments: segments}, nil
+	case "docx":
+		document, err := parseDOCXPath(path)
+		if err != nil {
+			return ParsedDocument{}, err
+		}
+		return document, nil
 	default:
 		content, err := os.ReadFile(path)
 		if err != nil {
@@ -88,6 +94,20 @@ func (p *DefaultParser) ParseDocument(path string, fileType string) (ParsedDocum
 			Segments: []Segment{{Content: strings.TrimPrefix(string(content), "\ufeff")}},
 		}, nil
 	}
+}
+
+// ParseBytes mirrors ParseDocument for callers that already have the object in
+// memory (the preview endpoint is one such caller). Keeping DOCX decoding here
+// avoids writing a second, subtly different parser just for previews.
+func (p *DefaultParser) ParseBytes(content []byte, fileType string) (ParsedDocument, error) {
+	fileType = normalizeFileType(fileType)
+	if fileType == "docx" {
+		return ParseDOCXBytes(content)
+	}
+	if !utf8.Valid(content) {
+		return ParsedDocument{}, fmt.Errorf("parse %s: %w", fileType, ErrEncodingInvalid)
+	}
+	return ParsedDocument{FileType: fileType, Segments: []Segment{{Content: strings.TrimPrefix(string(content), "\ufeff")}}}, nil
 }
 
 func normalizeFileType(fileType string) string {
@@ -105,16 +125,8 @@ func parsePDFSegments(path string) ([]Segment, error) {
 	}
 	defer file.Close()
 
-	fonts := make(map[string]*pdf.Font)
 	return collectPDFSegments(reader.NumPage(), func(pageNumber int) (string, error) {
-		page := reader.Page(pageNumber)
-		for _, name := range page.Fonts() {
-			if _, exists := fonts[name]; !exists {
-				font := page.Font(name)
-				fonts[name] = &font
-			}
-		}
-		return page.GetPlainText(fonts)
+		return readPDFPageText(reader.Page(pageNumber))
 	})
 }
 

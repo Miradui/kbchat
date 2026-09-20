@@ -22,8 +22,8 @@ func (h *SystemHandler) Capabilities(c *gin.Context) {
 
 // Diagnostics reports dependency, queue, provider and latency state.
 //
-// Always 200, even when a dependency is down: the failing dependency is the
-// payload, and a non-2xx would make the client show a generic error instead of
+// After system-admin authorization, dependency failures still return 200. The
+// failing dependency is the payload; a non-2xx would show a generic error instead of
 // the diagnosis. Callers gate on the "status" field.
 func (h *SystemHandler) Diagnostics(c *gin.Context) {
 	c.JSON(http.StatusOK, h.system.Diagnostics(c.Request.Context()))

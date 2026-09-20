@@ -11,6 +11,10 @@ type RetrievalConfig struct {
 	RerankTopK     int     `json:"rerankTopK"`
 	ScoreThreshold float64 `json:"scoreThreshold"`
 	EnableRerank   bool    `json:"enableRerank"`
+	// EnableKeyword adds lexeme recall next to vector recall and fuses the two
+	// lists before Rerank. Stored configs written before the field existed decode
+	// into the global default, so they keep the server-wide behavior.
+	EnableKeyword bool `json:"enableKeyword"`
 }
 
 type KnowledgeBaseRequest struct {

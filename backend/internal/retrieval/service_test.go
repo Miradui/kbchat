@@ -41,11 +41,24 @@ type fakeChunkStore struct {
 	candidates []repository.SearchResult
 	err        error
 	gotLimit   int
+
+	keywordCandidates []repository.SearchResult
+	keywordErr        error
+	keywordCalls      int
+	gotKeywordQuery   string
+	gotKeywordLimit   int
 }
 
 func (f *fakeChunkStore) SearchByVector(_ context.Context, _ uuid.UUID, _ []float32, limit int) ([]repository.SearchResult, error) {
 	f.gotLimit = limit
 	return append([]repository.SearchResult(nil), f.candidates...), f.err
+}
+
+func (f *fakeChunkStore) SearchByKeyword(_ context.Context, _ uuid.UUID, query string, limit int) ([]repository.SearchResult, error) {
+	f.keywordCalls++
+	f.gotKeywordQuery = query
+	f.gotKeywordLimit = limit
+	return append([]repository.SearchResult(nil), f.keywordCandidates...), f.keywordErr
 }
 
 type fakeEmbedder struct {

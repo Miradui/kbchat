@@ -184,7 +184,7 @@ function KnowledgeBaseOverview() {
             ) : documents.length === 0 ? (
               <EmptyState
                 action={<Link className="ui-button ui-button--primary" to={`${documentsHref}?intent=upload`}><span>导入文档</span></Link>}
-                description="导入 txt、md 或 pdf 后即可开始问答。"
+                description="导入 txt、md、pdf 或 docx 后即可开始问答。"
                 title="还没有文档"
               />
             ) : (
@@ -233,7 +233,7 @@ function KnowledgeBaseOverview() {
             {/*
               Views and questions come from GET /knowledge-bases/:id/stats, not from
               the detail payload — detail responses stay free of list-only
-              aggregates. See docs/14-frontend-api-gaps.md G13.
+              aggregates. See docs/04-api-design.md (GET /knowledge-bases/:id/stats).
             */}
             <p className="sr-only" role="status">{statsLoading ? '正在加载统计…' : ''}</p>
             <div aria-busy={statsLoading}>

@@ -68,7 +68,7 @@ export function ChatSessionRail({
   onCollapse,
 }: ChatSessionRailProps) {
   // Filtering and ordering happen server side now; this only buckets by recency
-  // so a long history stays scannable. See docs/14-frontend-api-gaps.md G1.
+  // so a long history stays scannable. See docs/04-api-design.md (GET /chat/sessions).
   const groups = useMemo(() => {
     const map = new Map<string, ChatSession[]>();
     sessions.forEach((session) => {

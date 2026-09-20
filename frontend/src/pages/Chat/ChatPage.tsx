@@ -35,6 +35,7 @@ import { ChatAssistantLabel, CitationCard, MessageBubble } from './ChatMessage';
 import { ChatSessionRail } from './ChatSessionRail';
 import { ChatSessionRenameDialog } from './ChatSessionRenameDialog';
 import { ChatSourcePreview } from './ChatSourcePreview';
+import { canUnlessUnknown } from '../../utils/access';
 import type { ChatSessionScope } from './ChatSessionRail';
 import { useChatSessions } from './useChatSessions';
 import { useChatThread } from './useChatThread';
@@ -109,6 +110,11 @@ export function ChatPage() {
     onSessionsChanged: () => void reloadSessions(),
   });
 
+  useEffect(() => {
+    if (!thread.rateLimitedQuestion) return;
+    setDraft((current) => current || thread.rateLimitedQuestion || '');
+  }, [thread.rateLimitedQuestion]);
+
   const loadedSession = sessionId && thread.session?.id === sessionId ? thread.session : null;
   const listedSession = sessions.find((session) => session.id === sessionId) ?? null;
   // Sending refreshes the list, which can now carry the first question's title.
@@ -180,7 +186,7 @@ export function ChatPage() {
   // The rail is scoped to the conversation you are in, and that scope is now a
   // server-side filter, so the URL has to carry it. Opening a session from
   // another knowledge base re-points the filter instead of silently disagreeing
-  // with the list. See docs/14-frontend-api-gaps.md G1.
+  // with the list. See docs/04-api-design.md (GET /chat/sessions).
   useEffect(() => {
     const sessionKnowledgeBaseId = currentSession?.knowledgeBaseId;
     if (!sessionKnowledgeBaseId || sessionKnowledgeBaseId === urlKnowledgeBaseId) return;
@@ -653,7 +659,7 @@ export function ChatPage() {
                           Once the first token lands the answer replaces the
                           skeleton, so the wait is only unexplained for as long
                           as retrieval actually takes.
-                          See docs/14-frontend-api-gaps.md G2.
+                          See docs/04-api-design.md (POST /chat/sessions/:id/messages/stream).
                         */}
                         {thread.streamingAnswer ? (
                           <ChatMarkdown
@@ -806,9 +812,13 @@ export function ChatPage() {
 
           <ChatComposer
             disabled={!canSend || thread.sending || sessionBusy}
+            error={thread.rateLimitError}
             hint={composerHint}
             onCancel={thread.cancelSend}
-            onChange={setDraft}
+            onChange={(value) => {
+              setDraft(value);
+              thread.dismissRateLimitError();
+            }}
             onSubmit={() => {
               if (sessionBusyRef.current) return;
               const question = draft.trim();
@@ -828,6 +838,7 @@ export function ChatPage() {
         </section>
         {visibleSource && (
           <ChatSourcePreview
+            canDownload={canUnlessUnknown(activeKnowledgeBase, 'document.download')}
             citation={visibleSource.citation}
             index={visibleSource.index}
             key={`${sourceScope}:${visibleSource.citation.documentId}`}

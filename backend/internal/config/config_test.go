@@ -197,3 +197,85 @@ func TestDefaultStaleDocumentThresholdMatchesTheExampleEnvironment(t *testing.T)
 		t.Fatalf("example environment and code default disagree: example %q, default %q", got, want)
 	}
 }
+
+func TestLoadUsesP2RedisDefaults(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("JWT_SECRET", strings.Repeat("a", 32))
+	t.Setenv("RATE_LIMIT_ENABLED", "true")
+	t.Setenv("RATE_LIMIT_LOGIN_PER_MINUTE", "10")
+	t.Setenv("RATE_LIMIT_CHAT_PER_MINUTE", "30")
+	t.Setenv("RATE_LIMIT_FAILURE_MODE", "open")
+	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8, 192.168.0.0/16")
+	t.Setenv("EMBEDDING_CACHE_TTL", "24h")
+
+	cfg := Load()
+	if !cfg.RateLimitEnabled || cfg.RateLimitLoginPerMinute != 10 || cfg.RateLimitChatPerMinute != 30 {
+		t.Fatalf("unexpected rate-limit defaults: %#v", cfg)
+	}
+	if cfg.RateLimitFailureMode != "open" {
+		t.Fatalf("expected open failure mode, got %q", cfg.RateLimitFailureMode)
+	}
+	if !reflect.DeepEqual(cfg.TrustedProxyCIDRs, []string{"10.0.0.0/8", "192.168.0.0/16"}) {
+		t.Fatalf("unexpected trusted proxies: %q", cfg.TrustedProxyCIDRs)
+	}
+	if cfg.EmbeddingCacheTTL != 24*time.Hour {
+		t.Fatalf("expected a 24h embedding cache TTL, got %s", cfg.EmbeddingCacheTTL)
+	}
+}
+
+func TestConfigValidateRejectsInvalidP2RedisSettings(t *testing.T) {
+	base := Config{
+		JWTSecret:               strings.Repeat("a", 32),
+		MaxUploadSizeMB:         50,
+		StorageProvider:         "local",
+		RedisAddr:               "localhost:6379",
+		RateLimitEnabled:        true,
+		RateLimitLoginPerMinute: 10,
+		RateLimitChatPerMinute:  30,
+		RateLimitFailureMode:    "open",
+		EmbeddingCacheTTL:       24 * time.Hour,
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{name: "login limit", mutate: func(c *Config) { c.RateLimitLoginPerMinute = 0 }, want: "RATE_LIMIT_LOGIN_PER_MINUTE"},
+		{name: "chat limit", mutate: func(c *Config) { c.RateLimitChatPerMinute = -1 }, want: "RATE_LIMIT_CHAT_PER_MINUTE"},
+		{name: "failure mode", mutate: func(c *Config) { c.RateLimitFailureMode = "sometimes" }, want: "RATE_LIMIT_FAILURE_MODE"},
+		{name: "trusted proxy", mutate: func(c *Config) { c.TrustedProxyCIDRs = []string{"not-a-cidr"} }, want: "TRUSTED_PROXY_CIDRS"},
+		{name: "cache ttl", mutate: func(c *Config) { c.EmbeddingCacheTTL = 0 }, want: "EMBEDDING_CACHE_TTL"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := base
+			tt.mutate(&cfg)
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected %s validation error, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
+func TestExampleEnvironmentMatchesP2RedisDefaults(t *testing.T) {
+	values, err := godotenv.Read("../../../.env.example")
+	if err != nil {
+		t.Fatalf("read example environment: %v", err)
+	}
+	want := map[string]string{
+		"RATE_LIMIT_ENABLED":          "true",
+		"RATE_LIMIT_LOGIN_PER_MINUTE": "10",
+		"RATE_LIMIT_CHAT_PER_MINUTE":  "30",
+		"RATE_LIMIT_FAILURE_MODE":     "open",
+		"TRUSTED_PROXY_CIDRS":         "",
+		"EMBEDDING_CACHE_TTL":         "24h",
+	}
+	for key, expected := range want {
+		if got := values[key]; got != expected {
+			t.Errorf("%s = %q, want %q", key, got, expected)
+		}
+	}
+}

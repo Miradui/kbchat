@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"kbchat/backend/internal/document/lexer"
 	"kbchat/backend/internal/model"
 )
 
@@ -21,7 +22,12 @@ type SearchResult struct {
 	Content     string
 	PageNumber  *int
 	VectorScore float64
-	RerankScore *float64
+	// KeywordScore is set only for chunks the keyword stage returned; FusionScore
+	// only when both stages ran and were fused. Nil means the stage did not
+	// see the chunk, which is different from a score of zero.
+	KeywordScore *float64
+	FusionScore  *float64
+	RerankScore  *float64
 }
 
 type ChunkRepository struct {
@@ -183,6 +189,60 @@ func validateChunkOwnership(tx *gorm.DB, chunks []model.DocumentChunk) error {
 	return nil
 }
 
+// ReindexKeywords recomputes search_vector for every chunk, in primary-key
+// order and batches of batchSize, calling progress after each batch with the
+// running total. It is the backfill for chunks published before the column
+// existed and the repair path after a lexer change; new chunks get their
+// vector at publish time and do not need it.
+//
+// Each batch commits on its own so a long run can be interrupted and resumed
+// without holding one transaction open over the whole table.
+func (r *ChunkRepository) ReindexKeywords(ctx context.Context, batchSize int, progress func(done int)) (int, error) {
+	if batchSize <= 0 {
+		batchSize = 200
+	}
+	var lastID uuid.UUID
+	done := 0
+	for {
+		var rows []struct {
+			ID      uuid.UUID
+			Content string
+		}
+		err := r.db.WithContext(ctx).
+			Model(&model.DocumentChunk{}).
+			Select("id", "content").
+			Where("id > ?", lastID).
+			Order("id asc").
+			Limit(batchSize).
+			Find(&rows).Error
+		if err != nil {
+			return done, err
+		}
+		if len(rows) == 0 {
+			return done, nil
+		}
+		err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			for _, row := range rows {
+				vector := model.SearchVector(lexer.TSVector(lexer.Tokenize(row.Content)))
+				if err := tx.Model(&model.DocumentChunk{}).
+					Where("id = ?", row.ID).
+					UpdateColumn("search_vector", vector).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return done, err
+		}
+		done += len(rows)
+		lastID = rows[len(rows)-1].ID
+		if progress != nil {
+			progress(done)
+		}
+	}
+}
+
 func (r *ChunkRepository) ListByDocument(ctx context.Context, documentID uuid.UUID) ([]model.DocumentChunk, error) {
 	var chunks []model.DocumentChunk
 	err := r.db.WithContext(ctx).
@@ -220,14 +280,39 @@ func (r *ChunkRepository) ListByDocumentPaged(ctx context.Context, documentID uu
 	return chunks, total, err
 }
 
+// minHNSWEfSearch is the floor for hnsw.ef_search. An HNSW scan returns at
+// most ef_search candidates, so the setting must be at least the requested
+// limit or the query silently returns fewer rows than asked for; 40 is
+// pgvector's default and keeps small limits from under-searching the graph.
+const minHNSWEfSearch = 40
+
 func (r *ChunkRepository) SearchByVector(ctx context.Context, kbID uuid.UUID, vector []float32, limit int) ([]SearchResult, error) {
 	if limit <= 0 {
 		limit = 30
 	}
 
+	db := r.db.WithContext(ctx)
+	if db.Dialector.Name() != "postgres" {
+		return searchByVector(db, kbID, vector, limit)
+	}
+
+	// SET LOCAL only lives for the enclosing transaction, which is exactly the
+	// scope wanted: the setting must not leak into the pooled connection.
 	var results []SearchResult
-	err := r.db.WithContext(ctx).
-		Table("document_chunks").
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(fmt.Sprintf("SET LOCAL hnsw.ef_search = %d", max(minHNSWEfSearch, limit))).Error; err != nil {
+			return err
+		}
+		var err error
+		results, err = searchByVector(tx, kbID, vector, limit)
+		return err
+	})
+	return results, err
+}
+
+func searchByVector(db *gorm.DB, kbID uuid.UUID, vector []float32, limit int) ([]SearchResult, error) {
+	var results []SearchResult
+	err := publishedChunks(db, kbID).
 		Select(`
 			document_chunks.id AS chunk_id,
 			document_chunks.document_id AS document_id,
@@ -236,12 +321,54 @@ func (r *ChunkRepository) SearchByVector(ctx context.Context, kbID uuid.UUID, ve
 			document_chunks.page_number AS page_number,
 			1 - (document_chunks.embedding <=> ?) AS vector_score
 		`, pgvector.NewVector(vector)).
-		Joins("JOIN documents ON documents.id = document_chunks.document_id").
-		Where("document_chunks.knowledge_base_id = ?", kbID).
-		Where("documents.knowledge_base_id = ?", kbID).
-		Where("documents.deleted_at IS NULL").
 		Order(clause.Expr{SQL: "document_chunks.embedding <=> ?", Vars: []any{pgvector.NewVector(vector)}}).
 		Limit(limit).
 		Scan(&results).Error
 	return results, err
+}
+
+// SearchByKeyword returns the published chunks whose search_vector matches any
+// lexeme of query, best ts_rank_cd first. The query is tokenized with the same
+// lexer that indexed the chunks. A query with no lexemes (punctuation only)
+// matches nothing rather than erroring. KeywordScore is ts_rank_cd with
+// normalization 32, i.e. rank/(rank+1), so it lies in [0, 1); VectorScore is
+// left at zero because no vector distance was computed here.
+func (r *ChunkRepository) SearchByKeyword(ctx context.Context, kbID uuid.UUID, query string, limit int) ([]SearchResult, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	tsquery := lexer.TSQuery(lexer.Tokenize(query))
+	if tsquery == "" {
+		return []SearchResult{}, nil
+	}
+
+	var results []SearchResult
+	err := publishedChunks(r.db.WithContext(ctx), kbID).
+		Select(`
+			document_chunks.id AS chunk_id,
+			document_chunks.document_id AS document_id,
+			documents.filename AS filename,
+			document_chunks.content AS content,
+			document_chunks.page_number AS page_number,
+			0 AS vector_score,
+			ts_rank_cd(document_chunks.search_vector, ?::tsquery, 32) AS keyword_score
+		`, tsquery).
+		Where("document_chunks.search_vector @@ ?::tsquery", tsquery).
+		Order(clause.Expr{SQL: "keyword_score DESC, document_chunks.id ASC"}).
+		Limit(limit).
+		Scan(&results).Error
+	return results, err
+}
+
+// publishedChunks is the shared scope for retrieval: chunks of the knowledge
+// base whose document is not soft-deleted. It deliberately does not look at
+// documents.status, so the previous snapshot stays searchable while a document
+// is being reprocessed.
+func publishedChunks(db *gorm.DB, kbID uuid.UUID) *gorm.DB {
+	return db.
+		Table("document_chunks").
+		Joins("JOIN documents ON documents.id = document_chunks.document_id").
+		Where("document_chunks.knowledge_base_id = ?", kbID).
+		Where("documents.knowledge_base_id = ?", kbID).
+		Where("documents.deleted_at IS NULL")
 }

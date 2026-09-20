@@ -19,6 +19,7 @@ import (
 
 func main() {
 	migration := flag.String("migration", "", "apply only the named file from migrations/")
+	timeout := flag.Duration("timeout", 30*time.Second, "overall deadline; index builds on large tables need more")
 	flag.Parse()
 
 	cfg := config.Load()
@@ -29,7 +30,7 @@ func main() {
 		log.Fatal("DATABASE_URL is required")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
 	conn, err := pgx.Connect(ctx, cfg.DatabaseURL)

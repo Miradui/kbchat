@@ -16,7 +16,7 @@ const jobStatusLabels: Record<DocumentJobStatus, string> = {
   completed: '已完成',
   failed: '失败',
   // A cancelled job also leaves the document on `failed`; only the job status
-  // tells the two apart. See docs/14-frontend-api-gaps.md G8.
+  // tells the two apart. See docs/04-api-design.md (POST /documents/:id/cancel).
   cancelled: '已取消',
 };
 

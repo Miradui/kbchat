@@ -15,7 +15,7 @@ import (
 
 // The SSE framing is a wire contract the frontend parser depends on, so it is
 // pinned here rather than left to the streaming service tests, which only see
-// the sink interface. See docs/14-frontend-api-gaps.md G2.
+// the sink interface. See docs/04-api-design.md (POST /chat/sessions/:id/messages/stream).
 func TestSSESinkFramesEventsForTheClientParser(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

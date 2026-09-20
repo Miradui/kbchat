@@ -22,6 +22,7 @@ export type RetrievalConfig = {
   rerankTopK: number;
   scoreThreshold: number;
   enableRerank: boolean;
+  enableKeyword: boolean;
 };
 
 export type KnowledgeBase = {
@@ -183,7 +184,7 @@ export type KnowledgeBaseBatchTagMode = 'add' | 'remove' | 'replace';
 /**
  * One recorded workspace event. `resourceName` / `knowledgeBaseName` are stored
  * with the event, so an entry still reads correctly after the resource it refers
- * to is permanently deleted. See docs/14-frontend-api-gaps.md G18.
+ * to is permanently deleted. See docs/04-api-design.md (GET /activities).
  */
 export type ActivityItemResponse = {
   id: string;
@@ -204,7 +205,7 @@ export type ActivityListResponse = {
  * The whole workspace landing page in one response. List lengths are chosen by
  * the server; each is paired with the unfiltered total so the page can show
  * "5 of 42" without guessing a pageSize.
- * See docs/14-frontend-api-gaps.md G17.
+ * See docs/04-api-design.md (GET /home/summary).
  */
 export type HomeSummaryResponse = {
   period: 'day' | 'month';
@@ -369,7 +370,7 @@ export type DocumentDuplicateDetails = {
 
 /**
  * GET /knowledge-bases/:id/documents is the knowledge-base-scoped view of
- * GET /documents and returns the same paginated shape. See docs/14-frontend-api-gaps.md G20.
+ * GET /documents and returns the same paginated shape. See docs/04-api-design.md (GET /knowledge-bases/:kbId/documents).
  */
 export type DocumentListResponse = GlobalDocumentListResponse;
 
@@ -443,6 +444,7 @@ export type GlobalDocumentListResponse = {
 
 export type SystemCapabilities = {
   rerankEnabled: boolean;
+  keywordSearchEnabled: boolean;
   upload: {
     maxFileBytes: number;
     allowedExtensions: string[];
@@ -531,6 +533,7 @@ export type KnowledgeBaseSearchRequest = {
   vectorTopN?: number;
   rerankTopK?: number;
   enableRerank?: boolean;
+  enableKeyword?: boolean;
   debug?: boolean;
 };
 
@@ -541,6 +544,7 @@ export type KnowledgeBaseSearchResult = {
   content: string;
   pageNumber: number | null;
   vectorScore: number;
+  keywordScore?: number | null;
   rerankScore?: number | null;
 };
 
@@ -562,6 +566,31 @@ export type KnowledgeBaseSearchDebug = {
     status: string;
     items: Array<KnowledgeBaseSearchResult & { rank: number }>;
   };
+  keywordStage: {
+    status: 'completed' | 'disabled';
+    items: Array<{
+      chunkId: string;
+      documentId: string;
+      filename: string;
+      pageNumber: number | null;
+      content: string;
+      keywordScore: number;
+      rank: number;
+    }>;
+  };
+  fusionStage: {
+    status: 'completed' | 'skipped';
+    items: Array<{
+      chunkId: string;
+      pageNumber: number | null;
+      vectorRank: number | null;
+      keywordRank: number | null;
+      fusionScore: number;
+      vectorScore: number;
+      keywordScore: number | null;
+      rank: number;
+    }>;
+  };
   rerankStage: {
     status: 'completed' | 'disabled' | 'fallback';
     input: Array<{ chunkId: string; pageNumber: number | null; rank: number }>;
@@ -572,6 +601,8 @@ export type KnowledgeBaseSearchDebug = {
       chunkId: string;
       pageNumber: number | null;
       vectorScore: number;
+      keywordScore: number | null;
+      fusionScore: number | null;
       rerankScore: number | null;
       rank: number;
     }>;
@@ -862,6 +893,14 @@ export type SystemLatencyMetric = {
   maxMs: number;
 };
 
+export type SystemEmbeddingCacheMetrics = {
+  hits: number;
+  misses: number;
+  errors: number;
+  /** Null until this process has observed at least one cache hit or miss. */
+  hitRate: number | null;
+};
+
 export type SystemDiagnostics = {
   status: SystemDependencyState;
   checkedAt: string;
@@ -874,6 +913,8 @@ export type SystemDiagnostics = {
   providers: SystemProviderStatus[];
   latency: SystemLatencyMetric[];
   rerankFallbacks: Record<string, number>;
-  /** Latency and fallback counters are per-process and reset on restart. */
+  rateLimitTriggers: Record<string, number>;
+  embeddingCache: SystemEmbeddingCacheMetrics;
+  /** Latency, fallback, rate-limit and cache counters reset on restart. */
   metricsSinceRestart: boolean;
 };

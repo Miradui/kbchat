@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ToastProvider } from '../../components/feedback/ToastProvider';
 import { renderWithRouter } from '../../test/render';
@@ -13,15 +13,22 @@ import type {
   KnowledgeBase,
 } from '../../types/api';
 import { QualityPage } from './QualityPage';
+import { getCurrentUser } from '../../api/resources';
+import { currentUserStore } from '../../store/currentUserStore';
 
 vi.mock('../../api/resources', () => ({
   getChatQualityOverview: vi.fn(),
-  getCurrentUser: vi.fn().mockResolvedValue({ id: 'user-1', username: 'admin', displayName: '管理员' }),
+  getCurrentUser: vi.fn(),
   listChatKnowledgeGaps: vi.fn(),
   listKnowledgeBases: vi.fn(),
   listNegativeChatFeedback: vi.fn(),
   logout: vi.fn().mockResolvedValue(undefined),
 }));
+
+beforeEach(() => {
+  currentUserStore.clear();
+  vi.mocked(getCurrentUser).mockReset().mockResolvedValue({ id: 'user-1', username: 'admin', displayName: '管理员', role: 'admin' });
+});
 
 const overview: ChatQualityOverview = {
   period: 'month', startAt: '2026-08-01T00:00:00Z', endAt: '2026-08-19T00:00:00Z',
@@ -210,6 +217,15 @@ describe('QualityPage', () => {
     const noBasis = within(gapList).getByText('支持跨境退货吗？').closest('article');
     expect(within(noBasis as HTMLElement).getByRole('link', { name: /补充资料/ }))
       .toHaveAttribute('href', '/knowledge-bases/kb-1/documents');
+  });
+
+  it('directs ordinary users to an administrator instead of the restricted diagnostics page', async () => {
+    vi.mocked(getCurrentUser).mockResolvedValue({ id: 'reader', username: 'reader', displayName: '普通用户', role: 'user' });
+    renderWithRouter(<QualityPage sources={createSources()} />, ['/quality']);
+    const gapList = await screen.findByLabelText('知识缺口列表');
+    const failed = within(gapList).getByText('运费怎么算？').closest('article') as HTMLElement;
+    await waitFor(() => expect(within(failed).getByText(/请联系系统管理员/)).toBeInTheDocument());
+    expect(within(failed).queryByRole('link', { name: /查看系统状态/ })).not.toBeInTheDocument();
   });
 
   it('filters by each new category and labels the counts', async () => {

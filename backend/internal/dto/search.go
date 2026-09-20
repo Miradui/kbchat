@@ -5,6 +5,7 @@ type SearchRequest struct {
 	VectorTopN     int      `json:"vectorTopN"`
 	RerankTopK     int      `json:"rerankTopK"`
 	EnableRerank   *bool    `json:"enableRerank"`
+	EnableKeyword  *bool    `json:"enableKeyword"`
 	ScoreThreshold *float64 `json:"scoreThreshold"`
 	Debug          bool     `json:"debug"`
 }
@@ -21,22 +22,64 @@ type RerankFallbackResponse struct {
 }
 
 type SearchResultResponse struct {
-	ChunkID     string   `json:"chunkId"`
-	DocumentID  string   `json:"documentId"`
-	Filename    string   `json:"filename"`
-	Content     string   `json:"content"`
-	PageNumber  *int     `json:"pageNumber"`
-	VectorScore float64  `json:"vectorScore"`
-	RerankScore *float64 `json:"rerankScore"`
+	ChunkID     string  `json:"chunkId"`
+	DocumentID  string  `json:"documentId"`
+	Filename    string  `json:"filename"`
+	Content     string  `json:"content"`
+	PageNumber  *int    `json:"pageNumber"`
+	VectorScore float64 `json:"vectorScore"`
+	// KeywordScore is null when the keyword stage did not return the chunk
+	// (or was disabled); VectorScore is 0 for a chunk only the keyword stage found.
+	KeywordScore *float64 `json:"keywordScore"`
+	RerankScore  *float64 `json:"rerankScore"`
 }
 
 type SearchDebugResponse struct {
 	Query          string                  `json:"query"`
 	RewrittenQuery string                  `json:"rewrittenQuery,omitempty"`
 	VectorStage    SearchDebugVectorStage  `json:"vectorStage"`
+	KeywordStage   SearchDebugKeywordStage `json:"keywordStage"`
+	FusionStage    SearchDebugFusionStage  `json:"fusionStage"`
 	RerankStage    SearchDebugRerankStage  `json:"rerankStage"`
 	FinalStage     SearchDebugFinalStage   `json:"finalStage"`
 	RerankFallback *RerankFallbackResponse `json:"rerankFallback"`
+}
+
+// SearchDebugKeywordStage is the raw lexeme recall. Status is "completed" or
+// "disabled"; a disabled stage has no items.
+type SearchDebugKeywordStage struct {
+	Status string                   `json:"status"`
+	Items  []SearchDebugKeywordItem `json:"items"`
+}
+
+type SearchDebugKeywordItem struct {
+	ChunkID      string  `json:"chunkId"`
+	DocumentID   string  `json:"documentId"`
+	Filename     string  `json:"filename"`
+	PageNumber   *int    `json:"pageNumber"`
+	Content      string  `json:"content"`
+	KeywordScore float64 `json:"keywordScore"`
+	Rank         int     `json:"rank"`
+}
+
+// SearchDebugFusionStage is the reciprocal-rank fusion of the vector and
+// keyword stages, truncated to vectorTopN; this is what Rerank receives. Status
+// is "completed" when both stages ran and "skipped" when keyword recall was
+// disabled, in which case Items is the vector stage unchanged.
+type SearchDebugFusionStage struct {
+	Status string                  `json:"status"`
+	Items  []SearchDebugFusionItem `json:"items"`
+}
+
+type SearchDebugFusionItem struct {
+	ChunkID      string   `json:"chunkId"`
+	PageNumber   *int     `json:"pageNumber"`
+	VectorRank   *int     `json:"vectorRank"`
+	KeywordRank  *int     `json:"keywordRank"`
+	FusionScore  float64  `json:"fusionScore"`
+	VectorScore  float64  `json:"vectorScore"`
+	KeywordScore *float64 `json:"keywordScore"`
+	Rank         int      `json:"rank"`
 }
 
 type SearchDebugVectorStage struct {
@@ -78,11 +121,13 @@ type SearchDebugFinalStage struct {
 }
 
 type SearchDebugFinalItem struct {
-	ChunkID     string   `json:"chunkId"`
-	PageNumber  *int     `json:"pageNumber"`
-	VectorScore float64  `json:"vectorScore"`
-	RerankScore *float64 `json:"rerankScore"`
-	Rank        int      `json:"rank"`
+	ChunkID      string   `json:"chunkId"`
+	PageNumber   *int     `json:"pageNumber"`
+	VectorScore  float64  `json:"vectorScore"`
+	KeywordScore *float64 `json:"keywordScore"`
+	FusionScore  *float64 `json:"fusionScore"`
+	RerankScore  *float64 `json:"rerankScore"`
+	Rank         int      `json:"rank"`
 }
 
 type GlobalSearchResponse struct {

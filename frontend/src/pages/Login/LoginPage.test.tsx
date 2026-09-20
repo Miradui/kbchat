@@ -82,6 +82,23 @@ describe('LoginPage', () => {
     expect(alert).toHaveFocus();
   });
 
+  it('shows a rate limit retry delay inside the login form', async () => {
+    const user = userEvent.setup();
+    renderLogin(() => Promise.reject(new ApiError(429, {
+      code: 'RATE_LIMITED',
+      message: '请求过于频繁，请稍后重试',
+      details: { retryAfter: 23 },
+    })));
+    await user.type(screen.getByLabelText('用户名'), 'admin');
+    await user.type(screen.getByLabelText('密码'), 'bad');
+    await user.click(screen.getByRole('button', { name: '登录' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('请求过于频繁，请 23 秒后再试');
+    expect(alert).toHaveFocus();
+    expect(alert.closest('form')).not.toBeNull();
+  });
+
   it('rejects a password over the bcrypt UTF-8 byte limit before login', async () => {
     const user = userEvent.setup();
     renderLogin();

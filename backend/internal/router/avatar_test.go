@@ -33,11 +33,11 @@ func TestAvatarHTTPContractsAndAuthentication(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	token, err := auth.GenerateToken(cfg, owner.ID)
+	token, err := auth.GenerateToken(cfg, owner.ID, owner.Role)
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherToken, err := auth.GenerateToken(cfg, other.ID)
+	otherToken, err := auth.GenerateToken(cfg, other.ID, other.Role)
 	if err != nil {
 		t.Fatal(err)
 	}

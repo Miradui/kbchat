@@ -22,7 +22,7 @@ type CategoryTreeProps = {
 const noPending: ReadonlySet<string> = new Set();
 
 /**
- * Counts come from the category tree endpoint (docs/14-frontend-api-gaps.md G5).
+ * Counts come from GET /knowledge-base-categories in docs/04-api-design.md.
  * They are optional because create/update responses return a single node with no
  * subtree; a node without them renders no badge rather than a misleading zero.
  */

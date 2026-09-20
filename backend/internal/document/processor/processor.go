@@ -8,6 +8,7 @@ import (
 
 	"github.com/pgvector/pgvector-go"
 
+	"kbchat/backend/internal/document/lexer"
 	"kbchat/backend/internal/document/parser"
 	"kbchat/backend/internal/document/splitter"
 	"kbchat/backend/internal/embedding"
@@ -190,6 +191,7 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 				PageNumber:      part.PageNumber,
 				Metadata:        metadata,
 				Embedding:       pgvector.NewVector(vector),
+				SearchVector:    model.SearchVector(lexer.TSVector(lexer.Tokenize(part.Content))),
 			})
 		}
 		progress := embeddingStart + (end*(embeddingEnd-embeddingStart))/len(parts)

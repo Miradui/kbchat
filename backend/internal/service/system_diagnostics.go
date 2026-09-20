@@ -135,8 +135,24 @@ func (s *SystemService) Diagnostics(ctx context.Context) *dto.SystemDiagnosticsR
 		Providers:           s.providerStatuses(snapshot),
 		Latency:             latencyMetrics(snapshot),
 		RerankFallbacks:     snapshot.RerankFallbacks,
+		RateLimitTriggers:   snapshot.RateLimitTriggers,
+		EmbeddingCache:      embeddingCacheMetrics(snapshot.EmbeddingCacheResult),
 		MetricsSinceRestart: true,
 	}
+}
+
+func embeddingCacheMetrics(stats observability.EmbeddingCacheStats) dto.SystemEmbeddingCacheMetrics {
+	metrics := dto.SystemEmbeddingCacheMetrics{
+		Hits:   stats.Hits,
+		Misses: stats.Misses,
+		Errors: stats.Errors,
+	}
+	lookups := stats.Hits + stats.Misses
+	if lookups > 0 {
+		hitRate := float64(stats.Hits) / float64(lookups)
+		metrics.HitRate = &hitRate
+	}
+	return metrics
 }
 
 // Health is the unauthenticated liveness view: names and statuses only.

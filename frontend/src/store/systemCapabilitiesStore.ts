@@ -11,9 +11,10 @@ import { DEFAULT_MAX_PASSWORD_BYTES } from '../utils/password';
  */
 export const defaultSystemCapabilities: SystemCapabilities = {
   rerankEnabled: false,
+  keywordSearchEnabled: true,
   upload: {
     maxFileBytes: 50 * 1024 * 1024,
-    allowedExtensions: ['txt', 'md', 'pdf'],
+    allowedExtensions: ['txt', 'md', 'pdf', 'docx'],
   },
   retrieval: {
     maxVectorTopN: 100,

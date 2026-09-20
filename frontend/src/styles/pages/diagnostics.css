@@ -5,7 +5,7 @@
 .diagnostics-section { align-content: start; display: grid; gap: var(--s-4); padding: var(--s-5); }
 .diagnostics-section h2 { font-size: var(--t-lead); font-weight: 600; }
 .diagnostics-section p { margin: 0; }
-.diagnostics-providers, .diagnostics-latency { grid-column: 1 / -1; }
+.diagnostics-runtime, .diagnostics-providers, .diagnostics-latency { grid-column: 1 / -1; }
 .diagnostics-dependencies__list,
 .diagnostics-providers__list { display: grid; gap: var(--s-2); list-style: none; margin: 0; padding: 0; }
 .diagnostics-dependency,

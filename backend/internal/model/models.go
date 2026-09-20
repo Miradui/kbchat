@@ -192,6 +192,7 @@ type DocumentChunk struct {
 	PageNumber      *int            `json:"pageNumber"`
 	Metadata        datatypes.JSON  `gorm:"type:jsonb" json:"metadata"`
 	Embedding       pgvector.Vector `gorm:"type:vector(1536)" json:"-"`
+	SearchVector    SearchVector    `gorm:"type:tsvector" json:"-"`
 	CreatedAt       time.Time       `json:"createdAt"`
 }
 

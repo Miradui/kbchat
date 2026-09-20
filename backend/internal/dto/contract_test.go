@@ -59,3 +59,34 @@ func TestSearchResponseIncludesNullRerankFallback(t *testing.T) {
 		t.Fatalf("expected null rerankFallback, got %s", fallback)
 	}
 }
+
+func TestSystemDiagnosticsResponseIncludesP2Metrics(t *testing.T) {
+	payload, err := json.Marshal(SystemDiagnosticsResponse{
+		RateLimitTriggers: map[string]uint64{},
+		EmbeddingCache:    SystemEmbeddingCacheMetrics{},
+	})
+	if err != nil {
+		t.Fatalf("marshal diagnostics response: %v", err)
+	}
+
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &body); err != nil {
+		t.Fatalf("unmarshal diagnostics response: %v", err)
+	}
+	if string(body["rateLimitTriggers"]) != "{}" {
+		t.Fatalf("expected an empty rateLimitTriggers object, got %s", body["rateLimitTriggers"])
+	}
+
+	var cache map[string]json.RawMessage
+	if err := json.Unmarshal(body["embeddingCache"], &cache); err != nil {
+		t.Fatalf("unmarshal embeddingCache: %v", err)
+	}
+	for _, field := range []string{"hits", "misses", "errors", "hitRate"} {
+		if _, ok := cache[field]; !ok {
+			t.Fatalf("expected %q in embeddingCache, got %s", field, body["embeddingCache"])
+		}
+	}
+	if string(cache["hitRate"]) != "null" {
+		t.Fatalf("expected null hitRate without lookups, got %s", cache["hitRate"])
+	}
+}

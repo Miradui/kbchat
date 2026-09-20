@@ -10,8 +10,8 @@ import (
 
 // Reason is a closed set of failure classes safe to return over the API.
 //
-// The roadmap requires that health checks never return keys, connection strings
-// or raw provider errors (docs/15-product-improvement-roadmap.md:72). The
+// The diagnostics contract prohibits keys, connection strings and raw provider
+// errors in API responses (docs/04-api-design.md, system diagnostics). The
 // dangerous case is not the obvious secret but the incidental one: a PostgreSQL
 // driver error embeds the DSN including the password, a MinIO error embeds the
 // endpoint, and a provider 401 body can echo a key prefix. Classify is therefore

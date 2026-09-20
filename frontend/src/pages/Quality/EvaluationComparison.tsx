@@ -34,7 +34,7 @@ function Summary({ run, ids }: { run: EvaluationRun; ids: Set<string> }) {
       <div><dt>调用失败</dt><dd>{results.filter((result) => result.errorCode).length}</dd></div>
       <div><dt>平均耗时</dt><dd>{average === null ? '—' : `${(average / 1000).toFixed(2)} 秒`}</dd></div>
     </dl>
-    <p>召回 {run.config.vectorTopN} · 精排保留 {run.config.rerankTopK} · 阈值 {run.config.scoreThreshold}</p>
+    <p>召回 {run.config.vectorTopN} · 精排保留 {run.config.rerankTopK} · 阈值 {run.config.scoreThreshold} · 关键词召回{run.config.enableKeyword ? '开' : '关'}</p>
     <p>{run.startedAt ? `精排${run.runtime.effectiveRerank ? '已启用' : '未启用'} · ${run.runtime.chatModel || '模型名称未记录'}` : '等待记录实际模型配置'}</p>
     {run.config.enableRerank && run.startedAt && !run.runtime.effectiveRerank && <p>本次请求了精排，运行环境未启用精排服务。</p>}
     {run.errorMessage && <p className="ui-inline-error">{run.errorMessage}</p>}

@@ -26,8 +26,11 @@
 | --- | --- | --- |
 | 401 | `UNAUTHORIZED` | 请先登录 |
 | 403 | `FORBIDDEN` | 无权限访问该资源 |
+| 403 | `SYSTEM_ADMIN_REQUIRED` | 此操作需要系统管理员权限 |
 | 400 | `VALIDATION_ERROR` | 请求参数不合法 |
 | 404 | `RESOURCE_NOT_FOUND` | 资源不存在 |
+| 429 | `RATE_LIMITED` | 请求过于频繁，请稍后重试 |
+| 503 | `RATE_LIMIT_UNAVAILABLE` | 请求频率校验暂时不可用，请稍后重试 |
 | 500 | `INTERNAL_ERROR` | 系统内部错误 |
 
 ## 业务错误码
@@ -38,6 +41,7 @@
 | 404 | `DOCUMENT_NOT_FOUND` | 文档不存在 |
 | 404 | `DOCUMENT_FILE_NOT_FOUND` | 文档原始文件不存在 |
 | 400 | `DOCUMENT_TYPE_UNSUPPORTED` | 不支持的文档类型 |
+| 400 | `DOCUMENT_PREVIEW_FAILED` | 文档内容无法解析，无法在线预览 |
 | 400 | `FILE_TOO_LARGE_FOR_PREVIEW` | 文档过大，无法在线预览 |
 | 409 | `DOCUMENT_DUPLICATE_CONTENT` | 知识库中已存在内容相同的文档 |
 | 409 | `DOCUMENT_ALREADY_SUPERSEDED` | 该文档已被替换，请替换最新版本 |
@@ -68,6 +72,8 @@
 | 409 | `CHAT_MESSAGE_CHANGED` | 编辑消息生成期间会话已被其他请求修改，请刷新后重试 |
 | 400 | `EXPORT_TOO_LARGE` | 搜索结果过多，请缩小范围后再导出 |
 
+`RATE_LIMITED` 必须同时设置整数秒 `Retry-After` 响应头，并在 `details.retryAfter` 返回相同值。`RATE_LIMIT_UNAVAILABLE` 只用于 Redis 故障且限流失败策略为 `closed` 的情况，不得设置 `Retry-After`，也不得计入真实限流触发次数。
+
 ## 字段校验错误示例
 
 ```json
@@ -91,6 +97,8 @@
 ```
 
 ## 权限不足示例
+
+系统诊断使用系统角色检查；非管理员返回 `403 SYSTEM_ADMIN_REQUIRED`，`details` 为 `{}`。角色查询失败默认拒绝并返回脱敏的 `500 INTERNAL_ERROR`；失效登录或账号已删除返回 `401 UNAUTHORIZED`。该错误不使用下述知识库成员能力字段。
 
 知识库相关接口在「能到达资源、但角色不够」时返回 403：
 
@@ -204,5 +212,5 @@
 5. 401 和 403 必须区分：未登录是 401，无权限是 403。
 6. 403 和 404 必须按上文「什么时候不是 403 而是 404」区分：没有立场用 404，角色不够用 403。
    不要为了「信息更清楚」把无立场的情况改成 403。
-7. 403 的 `details` 必须带 `role`、`capability`、`requiredRole`，由
+7. 知识库能力不足的 403 `FORBIDDEN`，其 `details` 必须带 `role`、`capability`、`requiredRole`，由
    `authz.ForbiddenCapability` 统一构造，不要在各处手写。
