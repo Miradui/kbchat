@@ -306,7 +306,7 @@ func (s *KnowledgeBaseService) Update(ctx context.Context, ownerID, id uuid.UUID
 
 	kb.Name = req.Name
 	kb.Description = req.Description
-	kb.UpdatedByID = &ownerID
+	kb.UpdatedByID = editorID(ownerID)
 	kb.CategoryID = req.CategoryID
 	kb.Visibility = visibility
 	kb.RetrievalConfig = datatypes.JSON(configJSON)
@@ -319,7 +319,9 @@ func (s *KnowledgeBaseService) Update(ctx context.Context, ownerID, id uuid.UUID
 			return nil, apperror.Internal(err)
 		}
 	}
-	updated, err := s.repo.FindByIDAndOwner(ctx, kb.ID, ownerID)
+	// The caller may be a manager rather than the owner, and authorization
+	// already happened above, so re-read by id alone.
+	updated, err := s.repo.FindByID(ctx, kb.ID)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -451,7 +453,7 @@ func (s *KnowledgeBaseService) BatchMoveCategory(ctx context.Context, ownerID uu
 			return nil, err
 		}
 		kb.CategoryID = req.CategoryID
-		kb.UpdatedByID = &ownerID
+		kb.UpdatedByID = editorID(ownerID)
 		if err := s.repo.Update(ctx, kb); err != nil {
 			return nil, apperror.Internal(err)
 		}
@@ -563,7 +565,7 @@ func (s *KnowledgeBaseService) UpdatePermissions(ctx context.Context, ownerID, i
 	}
 
 	kb.Visibility = visibility
-	kb.UpdatedByID = &ownerID
+	kb.UpdatedByID = editorID(ownerID)
 	if err := s.repo.Update(ctx, kb); err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -873,6 +875,14 @@ func (s *KnowledgeBaseService) ensureTagsOwner(ctx context.Context, ownerID uuid
 		return apperror.NotFound("TAG_NOT_FOUND", "标签不存在")
 	}
 	return nil
+}
+
+// editorID returns a fresh pointer for updated_by_id. Pointing at the caller's
+// actor parameter would let any later write through the pointer change who the
+// service believes is acting.
+func editorID(actorID uuid.UUID) *uuid.UUID {
+	id := actorID
+	return &id
 }
 
 func defaultConfig(config *dto.RetrievalConfig) dto.RetrievalConfig {

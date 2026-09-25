@@ -371,8 +371,11 @@ func (r *KnowledgeBaseRepository) FindDeletedByIDAndOwner(ctx context.Context, i
 	return &kb, err
 }
 
+// Update writes the knowledge base's own columns. Associations are omitted:
+// callers load Owner and UpdatedBy for display, and saving them would copy the
+// preloaded UpdatedBy.ID back over updated_by_id and upsert the user rows.
 func (r *KnowledgeBaseRepository) Update(ctx context.Context, kb *model.KnowledgeBase) error {
-	return r.db.WithContext(ctx).Save(kb).Error
+	return r.db.WithContext(ctx).Omit(clause.Associations).Save(kb).Error
 }
 
 func (r *KnowledgeBaseRepository) TouchUpdatedBy(ctx context.Context, kbID, userID uuid.UUID) error {
