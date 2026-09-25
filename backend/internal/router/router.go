@@ -299,7 +299,9 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	protected.GET("/chat/sessions/:id/messages", chatHandler.ListMessages)
 	registerChatWriteRoute(protected, "/chat/sessions/:id/messages", chatRateLimit, chatHandler.SendMessage)
 	registerChatWriteRoute(protected, "/chat/sessions/:id/messages/stream", chatRateLimit, chatHandler.SendMessageStream)
-	protected.PUT("/chat/sessions/:id/messages/:messageId/edit", chatHandler.EditMessage)
+	// Editing regenerates the answer, so it spends model tokens like a send and
+	// shares the same per-user window.
+	registerChatEditRoute(protected, "/chat/sessions/:id/messages/:messageId/edit", chatRateLimit, chatHandler.EditMessage)
 	registerChatWriteRoute(protected, "/chat/sessions/:id/messages/:messageId/regenerate", chatRateLimit, chatHandler.RegenerateMessage)
 	protected.GET("/chat/sessions/:id/export", chatHandler.ExportSession)
 	protected.POST("/chat/messages/:messageId/feedback", chatHandler.SetMessageFeedback)
@@ -328,6 +330,14 @@ func registerChatWriteRoute(group *gin.RouterGroup, path string, rateLimit gin.H
 		return
 	}
 	group.POST(path, rateLimit, handler)
+}
+
+func registerChatEditRoute(group *gin.RouterGroup, path string, rateLimit gin.HandlerFunc, handler gin.HandlerFunc) {
+	if rateLimit == nil {
+		group.PUT(path, handler)
+		return
+	}
+	group.PUT(path, rateLimit, handler)
 }
 
 func newRerankProvider(cfg config.Config) rerank.Provider {

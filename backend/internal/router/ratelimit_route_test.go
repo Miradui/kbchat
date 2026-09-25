@@ -74,6 +74,8 @@ func TestOnlyChatGenerationRoutesUseUserRateLimit(t *testing.T) {
 		{http.MethodPost, "/api/v1/chat/sessions/" + uuid.NewString() + "/messages"},
 		{http.MethodPost, "/api/v1/chat/sessions/" + uuid.NewString() + "/messages/stream"},
 		{http.MethodPost, "/api/v1/chat/sessions/" + uuid.NewString() + "/messages/" + uuid.NewString() + "/regenerate"},
+		// Editing regenerates an answer, so it spends tokens like a send.
+		{http.MethodPut, "/api/v1/chat/sessions/" + uuid.NewString() + "/messages/" + uuid.NewString() + "/edit"},
 	}
 	for _, route := range limited {
 		t.Run(route.path, func(t *testing.T) {

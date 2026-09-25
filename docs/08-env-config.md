@@ -91,7 +91,7 @@ VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1
 | `REDIS_DB` | `0` | Redis DB |
 | `RATE_LIMIT_ENABLED` | `true` | 是否启用登录 IP 与聊天用户限流 |
 | `RATE_LIMIT_LOGIN_PER_MINUTE` | `10` | 同一客户端 IP 每分钟登录请求上限 |
-| `RATE_LIMIT_CHAT_PER_MINUTE` | `30` | 同一用户每分钟回答生成请求上限，普通发送、流式发送与重新生成合计 |
+| `RATE_LIMIT_CHAT_PER_MINUTE` | `30` | 同一用户每分钟回答生成请求上限，普通发送、流式发送、重新生成与编辑重生成合计 |
 | `RATE_LIMIT_FAILURE_MODE` | `open` | Redis 计数失败策略：`open` 放行并记录 warning；`closed` 返回 503 |
 | `TRUSTED_PROXY_CIDRS` | 空 | 逗号分隔的可信反向代理 CIDR；只有直连来源可信时才读取 `X-Forwarded-For` |
 | `EMBEDDING_CACHE_TTL` | `24h` | query embedding Redis 缓存 TTL，使用 Go duration 格式 |
@@ -139,7 +139,7 @@ VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1
 
 ## Redis 限流与 query embedding 缓存
 
-登录使用 `ratelimit:login:<客户端 IP>`，三个回答生成接口共用 `ratelimit:chat:<用户 ID>`。固定窗口计数通过单条 Lua 脚本原子执行 `INCR` 与首次 `EXPIRE`。`RATE_LIMIT_ENABLED=false` 会同时关闭这两类限流。
+登录使用 `ratelimit:login:<客户端 IP>`，四个回答生成接口（发送、流式发送、重新生成、编辑重生成）共用 `ratelimit:chat:<用户 ID>`。固定窗口计数通过单条 Lua 脚本原子执行 `INCR` 与首次 `EXPIRE`。`RATE_LIMIT_ENABLED=false` 会同时关闭这两类限流。
 
 `TRUSTED_PROXY_CIDRS` 留空时忽略所有 `X-Forwarded-For`。配置后，只有 TCP 直连地址落在可信网段时才从右向左检查代理链并取首个不可信地址；值必须是 CIDR，例如 `127.0.0.1/32` 或 Nginx 所在的私网网段，不能写裸 IP。
 
