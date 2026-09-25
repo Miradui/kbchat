@@ -121,13 +121,11 @@ func TestNewRerankProviderUsesDisabledProviderWhenDisabled(t *testing.T) {
 
 func TestDocumentChunksRejectInvalidChunkID(t *testing.T) {
 	cfg := config.Config{AppEnv: "test", ServerPort: "0", JWTSecret: "this-is-a-long-router-test-secret-1234", JWTExpiresIn: "1h"}
-	token, err := auth.GenerateToken(cfg, uuid.New(), "user")
-	if err != nil {
-		t.Fatalf("generate chunk query token: %v", err)
-	}
 	for _, rawChunkID := range []string{"not-a-uuid", ""} {
 		t.Run("chunkId="+rawChunkID, func(t *testing.T) {
-			r := New(cfg, testDB(t), logger.New(cfg))
+			db := testDB(t)
+			_, token := createRouteUser(t, cfg, db, "user")
+			r := New(cfg, db, logger.New(cfg))
 			req := httptest.NewRequest(
 				http.MethodGet,
 				"/api/v1/documents/"+uuid.NewString()+"/chunks?chunkId="+rawChunkID,
@@ -157,11 +155,9 @@ func TestDocumentChunksRejectInvalidChunkID(t *testing.T) {
 
 func TestGlobalSearchRejectsInvalidContractParameters(t *testing.T) {
 	cfg := config.Config{AppEnv: "test", ServerPort: "0", JWTSecret: "this-is-a-long-router-test-secret-1234", JWTExpiresIn: "1h"}
-	token, err := auth.GenerateToken(cfg, uuid.New(), "user")
-	if err != nil {
-		t.Fatalf("generate search token: %v", err)
-	}
-	r := New(cfg, testDB(t), logger.New(cfg))
+	db := testDB(t)
+	_, token := createRouteUser(t, cfg, db, "user")
+	r := New(cfg, db, logger.New(cfg))
 
 	for _, path := range []string{
 		"/api/v1/search?q=%20%20%20",
@@ -194,11 +190,9 @@ func TestGlobalSearchRejectsInvalidContractParameters(t *testing.T) {
 
 func TestSendChatMessageRequiresUUIDClientRequestID(t *testing.T) {
 	cfg := config.Config{AppEnv: "test", ServerPort: "0", JWTSecret: "this-is-a-long-router-test-secret-1234", JWTExpiresIn: "1h"}
-	token, err := auth.GenerateToken(cfg, uuid.New(), "user")
-	if err != nil {
-		t.Fatalf("generate chat token: %v", err)
-	}
-	r := New(cfg, testDB(t), logger.New(cfg))
+	db := testDB(t)
+	_, token := createRouteUser(t, cfg, db, "user")
+	r := New(cfg, db, logger.New(cfg))
 	sessionID := uuid.NewString()
 
 	for name, body := range map[string]string{
@@ -394,4 +388,23 @@ func testDB(t *testing.T) *gorm.DB {
 		t.Fatalf("open test db: %v", err)
 	}
 	return db
+}
+
+// createRouteUser inserts a real account and signs a token for it. The auth
+// middleware verifies the account row on every request, so a token minted for a
+// random UUID is rejected before the handler runs.
+func createRouteUser(t *testing.T, cfg config.Config, db *gorm.DB, role string) (model.User, string) {
+	t.Helper()
+	if err := db.AutoMigrate(&model.User{}); err != nil {
+		t.Fatalf("migrate users: %v", err)
+	}
+	user := model.User{Username: "route-" + uuid.NewString(), PasswordHash: "hash", Role: role, Status: "active"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("create route user: %v", err)
+	}
+	token, err := auth.GenerateToken(cfg, user.ID, role)
+	if err != nil {
+		t.Fatalf("generate route token: %v", err)
+	}
+	return user, token
 }

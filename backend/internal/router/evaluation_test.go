@@ -33,7 +33,13 @@ func TestEvaluationHTTPContractsAndAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherToken, err := auth.GenerateToken(cfg, uuid.New(), "user")
+	// The outsider must be a real, active account: the auth middleware now
+	// rejects tokens for unknown users before any resource lookup.
+	other := model.User{Username: "evaluation-outsider", PasswordHash: "hash"}
+	if err := db.Create(&other).Error; err != nil {
+		t.Fatal(err)
+	}
+	otherToken, err := auth.GenerateToken(cfg, other.ID, "user")
 	if err != nil {
 		t.Fatal(err)
 	}

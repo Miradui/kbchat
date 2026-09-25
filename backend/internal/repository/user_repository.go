@@ -52,6 +52,14 @@ func (r *UserRepository) FindByUsername(ctx context.Context, username string) (*
 	return &user, err
 }
 
+// UsernameExistsFold reports whether any user has the given username ignoring
+// case, so "Admin" cannot be created next to "admin". Stored case is preserved.
+func (r *UserRepository) UsernameExistsFold(ctx context.Context, username string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&model.User{}).Where("LOWER(username) = LOWER(?)", username).Count(&count).Error
+	return count > 0, err
+}
+
 func (r *UserRepository) FindByID(ctx context.Context, id uuid.UUID) (*model.User, error) {
 	var user model.User
 	err := r.db.WithContext(ctx).Where("id = ?", id).First(&user).Error
@@ -69,11 +77,8 @@ func (r *UserRepository) IsActive(ctx context.Context, id uuid.UUID) (bool, erro
 	var user model.User
 	err := r.db.WithContext(ctx).Select("id", "status").First(&user, "id = ?", id).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		// Some lightweight contract tests use signed fixture tokens without a
-		// corresponding row. The auth middleware only needs this lookup to
-		// invalidate disabled accounts; normal resource authorization still
-		// resolves the caller against its own tables.
-		return true, nil
+		// A signed token whose account no longer exists is not a valid login.
+		return false, nil
 	}
 	if err != nil {
 		return false, err
@@ -132,9 +137,14 @@ func (r *UserRepository) UpdateAdminProfile(ctx context.Context, id uuid.UUID, d
 		if status != "active" && status != "disabled" {
 			return ErrAdminInvalidStatus
 		}
-		if user.Role == model.SystemRoleAdmin && status == "disabled" {
-			// The service performs the actor self-check; this branch only keeps the
-			// repository safe for callers that use it directly.
+		if user.Role == model.SystemRoleAdmin && status == "disabled" && userIsActive(user) {
+			others, err := countOtherActiveAdmins(tx, user.ID)
+			if err != nil {
+				return err
+			}
+			if others == 0 {
+				return ErrAdminLastAdmin
+			}
 		}
 		if err := tx.Model(&user).Updates(map[string]any{"display_name": displayName, "status": status, "updated_at": time.Now()}).Error; err != nil {
 			return err
@@ -176,12 +186,12 @@ func (r *UserRepository) UpdateAdminRole(ctx context.Context, actorID, targetID 
 			}
 			return err
 		}
-		if user.Role == model.SystemRoleAdmin && role == model.SystemRoleUser {
-			var admins int64
-			if err := tx.Model(&model.User{}).Where("role = ? AND status = ?", model.SystemRoleAdmin, "active").Count(&admins).Error; err != nil {
+		if user.Role == model.SystemRoleAdmin && role == model.SystemRoleUser && userIsActive(user) {
+			others, err := countOtherActiveAdmins(tx, user.ID)
+			if err != nil {
 				return err
 			}
-			if admins <= 1 {
+			if others == 0 {
 				return ErrAdminLastAdmin
 			}
 		}
@@ -191,6 +201,21 @@ func (r *UserRepository) UpdateAdminRole(ctx context.Context, actorID, targetID 
 		return tx.First(&user, "id = ?", targetID).Error
 	})
 	return &user, err
+}
+
+// userIsActive treats the legacy empty status as active, matching IsActive.
+func userIsActive(user model.User) bool {
+	return user.Status == "" || user.Status == "active"
+}
+
+// countOtherActiveAdmins counts active administrators other than the target so
+// last-admin protection is decided by who would remain, not by who exists now.
+func countOtherActiveAdmins(tx *gorm.DB, excluding uuid.UUID) (int64, error) {
+	var count int64
+	err := tx.Model(&model.User{}).
+		Where("role = ? AND (status = ? OR status = '' OR status IS NULL) AND id <> ?", model.SystemRoleAdmin, "active", excluding).
+		Count(&count).Error
+	return count, err
 }
 
 func (r *UserRepository) CountActiveAdmins(ctx context.Context) (int64, error) {
@@ -269,7 +294,9 @@ func (r *UserRepository) Search(ctx context.Context, query string, limit int) ([
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
-	db := r.db.WithContext(ctx).Model(&model.User{})
+	db := r.db.WithContext(ctx).Model(&model.User{}).
+		// Disabled accounts cannot sign in, so they must not be offered as new members.
+		Where("status <> ?", "disabled")
 	if query != "" {
 		like := "%" + query + "%"
 		db = db.Where("LOWER(username) LIKE ? OR LOWER(display_name) LIKE ?", like, like)

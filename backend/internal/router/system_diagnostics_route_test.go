@@ -76,6 +76,9 @@ func TestDiagnosticsUsesTheCurrentSystemRole(t *testing.T) {
 	}
 }
 
+// The users table is missing entirely, so the account lookup errors. The auth
+// middleware fails closed before RequireSystemAdmin runs, answering 503 rather
+// than trusting the signed claim; nothing about the schema or config leaks.
 func TestDiagnosticsFailsClosedWhenRoleLookupFails(t *testing.T) {
 	cfg := diagnosticsRouteConfig(t)
 	r := New(cfg, testDB(t), logger.New(cfg))
@@ -87,8 +90,11 @@ func TestDiagnosticsFailsClosedWhenRoleLookupFails(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("unexpected status: %d", rec.Code)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unexpected status: %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "AUTH_UNAVAILABLE") {
+		t.Fatalf("expected AUTH_UNAVAILABLE, got %s", rec.Body.String())
 	}
 	for _, forbidden := range []string{"dependencies", "no such table", "SELECT", "routesecret"} {
 		if strings.Contains(rec.Body.String(), forbidden) {

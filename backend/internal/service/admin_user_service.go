@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -25,6 +26,11 @@ const (
 	ActivityAdminUserRoleChanged   = "admin.user.roleChanged"
 	adminGeneratedPasswordLength   = 14
 )
+
+// adminUsernamePattern is the login identifier contract: no whitespace, no
+// characters that would need escaping in a URL or shell, 3-64 ASCII characters.
+// Case is preserved as typed; uniqueness is checked case-insensitively.
+var adminUsernamePattern = regexp.MustCompile(`^[A-Za-z0-9._@-]{3,64}$`)
 
 type AdminUserService struct {
 	users      *repository.UserRepository
@@ -56,8 +62,15 @@ func (s *AdminUserService) List(ctx context.Context, query dto.AdminUserListQuer
 
 func (s *AdminUserService) Create(ctx context.Context, actorID uuid.UUID, req dto.AdminUserCreateRequest) (*dto.AdminUserMutationResponse, error) {
 	username := strings.TrimSpace(req.Username)
-	if username == "" || utf8.RuneCountInString(username) > 64 {
-		return nil, apperror.Validation(map[string]any{"username": "用户名不能为空且不能超过 64 个字符"})
+	if !adminUsernamePattern.MatchString(username) {
+		return nil, apperror.Validation(map[string]any{"username": "用户名须为 3-64 个字母、数字或 . _ @ - 字符，不能包含空格"})
+	}
+	exists, err := s.users.UsernameExistsFold(ctx, username)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	if exists {
+		return nil, apperror.New(http.StatusConflict, "USERNAME_EXISTS", "用户名已存在")
 	}
 	displayName := strings.TrimSpace(req.DisplayName)
 	if displayName == "" {
@@ -74,7 +87,7 @@ func (s *AdminUserService) Create(ctx context.Context, actorID uuid.UUID, req dt
 			return nil, apperror.Internal(err)
 		}
 	}
-	if err := validateNewPassword(password); err != nil {
+	if err := validatePasswordField(password, "password"); err != nil {
 		return nil, err
 	}
 	hash, err := auth.HashPassword(password)
@@ -120,6 +133,11 @@ func (s *AdminUserService) Update(ctx context.Context, actorID, targetID uuid.UU
 }
 
 func (s *AdminUserService) ResetPassword(ctx context.Context, actorID, targetID uuid.UUID) (*dto.AdminUserResetPasswordResponse, error) {
+	if actorID == targetID {
+		// An administrator changes their own password through the normal flow,
+		// which requires the current password; a one-time reset would bypass it.
+		return nil, apperror.New(http.StatusBadRequest, "ADMIN_SELF_MUTATION", "请通过账户设置修改自己的密码")
+	}
 	password, err := generateAdminPassword()
 	if err != nil {
 		return nil, apperror.Internal(err)
@@ -168,6 +186,28 @@ func normalizeAdminPage(page, pageSize int) (int, int) {
 		pageSize = 100
 	}
 	return page, pageSize
+}
+
+// validatePasswordField applies the shared password rules but reports the
+// failure under the request field the caller actually sent (the admin create
+// body uses "password", the change-password body uses "newPassword").
+func validatePasswordField(password, field string) error {
+	err := validateNewPassword(password)
+	if err == nil {
+		return nil
+	}
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || appErr.Code != "VALIDATION_ERROR" {
+		return err
+	}
+	details := make(map[string]any, len(appErr.Details))
+	for key, value := range appErr.Details {
+		if key == "newPassword" {
+			key = field
+		}
+		details[key] = value
+	}
+	return apperror.Validation(details)
 }
 
 func generateAdminPassword() (string, error) {

@@ -29,10 +29,20 @@ CREATE TABLE users (
     display_name VARCHAR(128),
     avatar_url TEXT,
     role VARCHAR(32) DEFAULT 'user',
+    status VARCHAR(16) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+    last_login_at TIMESTAMPTZ,
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
+
+CREATE INDEX idx_users_status ON users (status);
+CREATE INDEX idx_users_created_by ON users (created_by);
 ```
+
+`status`、`last_login_at`、`created_by` 由迁移 `025_user_status_and_admin.sql` 加入。`status=disabled` 是可逆的状态而不是删除：账号数据、其拥有的知识库和会话全部保留，禁用后登录被拒，已签发的 JWT 在下一次请求经认证中间件查询 `status` 时失效。`last_login_at` 在登录成功时更新；`created_by` 记录通过 `/admin/users` 创建该账号的管理员，操作者被删除时置空。
+
+`username` 的唯一约束按字面值，但应用层在创建时按 `LOWER(username)` 判重，`Admin` 与 `admin` 不能并存；已有的大小写混合用户名保持原样。
 
 资料字段的接口上限按 Unicode 码点（Go rune）计数，不能按 UTF-16 code unit
 或 UTF-8 字节误算。密码明文不落库；登录和改密在进入 bcrypt 前按 UTF-8
@@ -40,7 +50,7 @@ CREATE TABLE users (
 
 `users.role` 是系统角色：`user` 为普通用户，`admin` 为系统管理员；与知识库成员的 `viewer` / `editor` / `manager` 以及 `owner_id` 无关。系统管理员可以读取系统诊断，但不会因此取得其他用户知识库或会话的访问权。未知系统角色不能访问诊断。
 
-首位系统管理员通过 `cmd/bootstrap-admin` 显式指定账号初始化，事务级 PostgreSQL advisory lock 串行化首次创建或提升。同名管理员重复执行不修改数据，已有其他管理员时拒绝继续初始化。复用已有 `users.role` 字段，无需新 schema 迁移；具体命令见 [部署指南](13-deployment.md#74-初始化系统管理员)。
+首位系统管理员通过 `cmd/bootstrap-admin` 显式指定账号初始化，事务级 PostgreSQL advisory lock 串行化首次创建或提升。同名管理员重复执行不修改数据，已有其他管理员时拒绝继续初始化。它只写 `users.role`，不依赖迁移 025 之后的列；之后的账号创建、禁用、角色变更都在 `/admin/users` 上完成（见 [接口设计](04-api-design.md#admin-users)），系统会拒绝禁用或降级最后一位启用的管理员。具体命令见 [部署指南](13-deployment.md#74-初始化系统管理员)。
 
 ## user_avatars
 

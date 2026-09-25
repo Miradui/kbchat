@@ -6,20 +6,15 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/google/uuid"
-
-	"kbchat/backend/internal/auth"
 	"kbchat/backend/internal/config"
 	"kbchat/backend/internal/logger"
 )
 
 func TestKnowledgeGapsRejectsInvalidContractParameters(t *testing.T) {
 	cfg := config.Config{AppEnv: "test", ServerPort: "0", JWTSecret: "this-is-a-long-router-test-secret-1234", JWTExpiresIn: "1h"}
-	token, err := auth.GenerateToken(cfg, uuid.New(), "user")
-	if err != nil {
-		t.Fatalf("generate quality token: %v", err)
-	}
-	r := New(cfg, testDB(t), logger.New(cfg))
+	db := testDB(t)
+	_, token := createRouteUser(t, cfg, db, "user")
+	r := New(cfg, db, logger.New(cfg))
 
 	for _, path := range []string{
 		"/api/v1/chat/quality/knowledge-gaps?period=week",

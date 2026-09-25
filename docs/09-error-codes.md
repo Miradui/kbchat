@@ -45,6 +45,8 @@
 | 403 | `SYSTEM_ADMIN_REQUIRED` | 需要系统管理员权限 |
 | 409 | `LAST_ADMIN_REQUIRED` | 不能撤销最后一位系统管理员 |
 | 400 | `ADMIN_SELF_MUTATION` | 不能禁用或降级自己的管理员账号 |
+| 409 | `USERNAME_EXISTS` | 用户名已存在 |
+| 503 | `AUTH_UNAVAILABLE` | 身份校验暂时不可用，请稍后重试 |
 | 400 | `FILE_TOO_LARGE_FOR_PREVIEW` | 文档过大，无法在线预览 |
 | 409 | `DOCUMENT_DUPLICATE_CONTENT` | 知识库中已存在内容相同的文档 |
 | 409 | `DOCUMENT_ALREADY_SUPERSEDED` | 该文档已被替换，请替换最新版本 |
@@ -101,7 +103,9 @@
 
 ## 权限不足示例
 
-系统诊断使用系统角色检查；非管理员返回 `403 SYSTEM_ADMIN_REQUIRED`，`details` 为 `{}`。角色查询失败默认拒绝并返回脱敏的 `500 INTERNAL_ERROR`；失效登录或账号已删除返回 `401 UNAUTHORIZED`。该错误不使用下述知识库成员能力字段。
+系统诊断使用系统角色检查；非管理员返回 `403 SYSTEM_ADMIN_REQUIRED`，`details` 为 `{}`。角色查询失败默认拒绝并返回脱敏的 `500 INTERNAL_ERROR`；失效登录或账号已删除、已禁用返回 `401 UNAUTHORIZED`。认证中间件查询账号状态本身失败时同样拒绝而不放行，但返回 `503 AUTH_UNAVAILABLE` 而非 401：token 可能仍然有效，客户端不应因数据库瞬时故障丢弃它。该错误不使用下述知识库成员能力字段。
+
+`/admin/users` 沿用同一套系统角色判定；`USERNAME_EXISTS` 按大小写不敏感判重（`Admin` 与 `admin` 视为同名），`ADMIN_SELF_MUTATION` 也覆盖管理员重置自己密码的情况，`LAST_ADMIN_REQUIRED` 同时覆盖降级和禁用两条路径。
 
 知识库相关接口在「能到达资源、但角色不够」时返回 403：
 

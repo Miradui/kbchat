@@ -183,13 +183,130 @@ limit=20
 
 ### Admin users
 
-系统管理员专用接口位于 `/admin/users`，支持分页搜索、创建账号、修改显示名/状态、一次性重置密码和切换系统管理员角色。禁用账号会在后续请求的认证中间件中立即失效；不能禁用或降级自己，也不能撤销最后一位启用的管理员。
+系统管理员专用接口位于 `/admin/users`，全部经过 `RequireSystemAdmin`：未登录返回 `401 UNAUTHORIZED`，已登录但 `users.role != admin` 返回 `403 SYSTEM_ADMIN_REQUIRED`（角色以数据库为准，不信任 JWT 中的 role 声明）。禁用账号的 JWT 在下一次任何请求时被认证中间件拒绝（`401 UNAUTHORIZED`）；账号状态查询失败时中间件拒绝而不是放行，返回 `503 AUTH_UNAVAILABLE`。所有变更写入 `activities`，`action` 前缀 `admin.user.*`，`resourceType=user`。
 
-`GET /admin/users` 支持 `q`、`status`、`role`、`page`、`pageSize`。创建和重置密码响应中的密码只返回一次。非管理员统一返回 `SYSTEM_ADMIN_REQUIRED`。
+用户对象：
+
+```json
+{
+  "id": "user_uuid",
+  "username": "alice",
+  "displayName": "Alice",
+  "avatarUrl": "",
+  "role": "user",
+  "status": "active",
+  "lastLoginAt": "2026-09-20T08:00:00Z",
+  "createdAt": "2026-09-01T00:00:00Z"
+}
+```
+
+`role` 取 `user` / `admin`，`status` 取 `active` / `disabled`。密码散列永不返回。
+
+#### GET /admin/users
+
+```text
+q=关键词            按 username / displayName 大小写不敏感模糊匹配
+status=active|disabled
+role=user|admin
+page=1
+pageSize=20         最大 100
+```
+
+```json
+{
+  "items": [ { "id": "user_uuid", "username": "alice", "...": "..." } ],
+  "total": 42,
+  "page": 1,
+  "pageSize": 20
+}
+```
+
+按创建时间倒序。
+
+#### POST /admin/users
+
+```json
+{
+  "username": "alice",
+  "displayName": "Alice",
+  "password": "optional-initial-password"
+}
+```
+
+- `username` 必填，须匹配 `^[A-Za-z0-9._@-]{3,64}$`（不含空白），大小写按输入保存，但唯一性按大小写不敏感判定：已有 `alice` 时 `Alice` 返回 `409 USERNAME_EXISTS`。
+- `displayName` 可选，留空时使用用户名，最长 128 个码点。
+- `password` 可选。省略时服务端生成 14 位随机密码；指定时按与 `bootstrap-admin` 及改密相同的规则校验（最少 8 个字符、最多 72 个 UTF-8 字节），不合法时 `400 VALIDATION_ERROR`，`details` 键为 `password`。
+
+响应 `201`：
+
+```json
+{
+  "user": { "id": "user_uuid", "username": "alice", "role": "user", "status": "active", "...": "..." },
+  "initialPassword": "Xk3#..."
+}
+```
+
+`initialPassword` 无论是生成的还是管理员指定的都只在这次响应中返回一次。新用户 `role=user`、`status=active`、`created_by` 为操作者。
+
+#### PUT /admin/users/:id
+
+```json
+{ "displayName": "Alice Liddell", "status": "disabled" }
+```
+
+两个字段都必填。`status=disabled` 时：目标是操作者自己返回 `400 ADMIN_SELF_MUTATION`；目标是当前唯一的启用管理员返回 `409 LAST_ADMIN_REQUIRED`。响应 `200` 返回用户对象。
+
+#### POST /admin/users/:id/reset-password
+
+无请求体。生成新密码并使旧密码立即失效，响应 `200`：
+
+```json
+{ "user": { "...": "..." }, "password": "new-one-time-password" }
+```
+
+操作者不能重置自己的密码（`400 ADMIN_SELF_MUTATION`），自己的密码通过 `POST /auth/change-password` 修改。
+
+#### PUT /admin/users/:id/role
+
+```json
+{ "role": "admin" }
+```
+
+`user` ↔ `admin`。操作者不能修改自己的角色（`400 ADMIN_SELF_MUTATION`）；把当前唯一的启用管理员降为 `user` 返回 `409 LAST_ADMIN_REQUIRED`。判定「唯一」时只计 `status=active` 的管理员且排除目标本人，因此降级一个已禁用的管理员总是允许。响应 `200` 返回用户对象。
+
+#### 错误码
+
+| HTTP | code | 场景 |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | 用户名格式、显示名长度、`password` 长度、`status` / `role` 取值、`id` 非 UUID |
+| 400 | `ADMIN_SELF_MUTATION` | 禁用、降级或重置自己的密码 |
+| 403 | `SYSTEM_ADMIN_REQUIRED` | 调用者不是系统管理员 |
+| 404 | `USER_NOT_FOUND` | 目标用户不存在 |
+| 409 | `USERNAME_EXISTS` | 用户名（忽略大小写）已存在 |
+| 409 | `LAST_ADMIN_REQUIRED` | 会移除最后一位启用管理员 |
 
 ### GET /chat/quality/usage
 
-需要质量读取权限。`knowledgeBaseId` 可选，`from` / `to` 使用 RFC3339，`groupBy` 为 `day`、`knowledgeBase`、`user` 或 `model`，默认最近 7 天按日聚合。返回 prompt、completion、total token 和调用次数；Provider 未返回 usage 时 token 字段保持空值并不会估算。
+范围与质量页其他接口一致：不传 `knowledgeBaseId` 时汇总调用者拥有或以 manager 身份可读质量数据的全部知识库；传入时须对该知识库具备 `quality.read`，否则 403 / 404；系统管理员（`users.role=admin`）看到全部知识库。`from` / `to` 使用 RFC3339，默认最近 7 天（滚动 168 小时）；`groupBy` 为 `day`、`knowledgeBase`、`user` 或 `model`，其他值返回 `VALIDATION_ERROR`。
+
+```json
+{
+  "from": "2026-09-14T00:00:00Z",
+  "to": "2026-09-21T00:00:00Z",
+  "groupBy": "day",
+  "items": [
+    { "groupKey": "2026-09-20", "groupLabel": "", "promptTokens": 1200, "completionTokens": 300, "totalTokens": 1500, "calls": 12, "estimatedCost": null }
+  ],
+  "totalPromptTokens": 1200,
+  "totalCompletionTokens": 300,
+  "totalTokens": 1500,
+  "pricingConfigured": true,
+  "estimatedCost": 0.00096,
+  "unpricedModels": []
+}
+```
+
+`groupKey` 按日为 UTC 的 `YYYY-MM-DD`，按知识库 / 用户为 UUID 且 `groupLabel` 为名称或显示名，按模型为模型名。`estimatedCost` 只在 `groupBy=model` 且该模型在 `MODEL_PRICING` 中有价格时按行给出；顶层 `estimatedCost` 为所有有价格模型的合计，`unpricedModels` 列出范围内没有价格的模型，`pricingConfigured=false` 时两者均为空值。Provider 未返回 usage 时 token 字段保持空值并不会估算。
 
 ### GET /system/capabilities
 
@@ -244,7 +361,7 @@ limit=20
     {
       "id": "uuid",
       "action": "document.deleted",
-      "resourceType": "knowledgeBase|document|chatSession|member",
+      "resourceType": "knowledgeBase|document|chatSession|member|user",
       "resourceId": "uuid",
       "resourceName": "manual.pdf",
       "knowledgeBaseId": "uuid",
@@ -262,7 +379,10 @@ knowledgeBase.created / knowledgeBase.deleted / knowledgeBase.restored
 document.uploaded / document.deleted / document.restored / document.moved / document.cancelled
 member.added / member.roleChanged / member.removed
 chatSession.deleted / chatSession.restored
+admin.user.created / admin.user.updated / admin.user.passwordReset / admin.user.roleChanged
 ```
+
+`admin.user.*` 只由系统管理员在 `/admin/users` 上的操作写入，`resourceType=user`、`resourceName` 为目标用户名，没有 `knowledgeBaseId`。
 
 设计要点：
 
@@ -331,6 +451,12 @@ chatSession.deleted / chatSession.restored
 矩阵的唯一定义在 `backend/internal/access/capability.go` 的 `minRole`。这张表由该
 map 生成，改代码不改表就会与实现不一致；`internal/access/capability_test.go` 锁住
 每一格，`internal/service/access_contract_test.go` 按接口逐个断言。
+
+**系统管理员不在这张表里。** `users.role=admin` 只解锁 `/system/diagnostics` 与
+`/admin/users` 这类系统级接口（由 `RequireSystemAdmin` 判定，`403 SYSTEM_ADMIN_REQUIRED`），
+不会给管理员任何一个知识库上的能力：管理员访问别人的私有知识库、文档或会话时，和普通
+外人一样得到 404。两套判定互不叠加，`internal/router/admin_users_route_test.go` 与
+`system_diagnostics_route_test.go` 锁住这一边界。
 
 ### 为什么几个能力放在看起来偏高的位置
 

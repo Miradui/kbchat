@@ -74,6 +74,8 @@ seed 创建普通系统用户，本地默认账号为 `admin` / `123456`；账�
 
 生产首次部署可跳过 seed，直接创建首位管理员：在进程环境中设置 `BOOTSTRAP_ADMIN_PASSWORD` 为强密码，可选设置 `BOOTSTRAP_ADMIN_DISPLAY_NAME`，再运行 `go run ./cmd/bootstrap-admin -username <指定账号> -create`。密码至少 8 个字符、最多 72 个 UTF-8 字节；命令不会覆盖现有普通账号。初始化只在运维 CLI 提供，详见 [部署指南](docs/13-deployment.md#74-初始化系统管理员)。
 
+首次部署的账号流程只需要执行一次 `bootstrap-admin`：之后用该管理员登录，在「系统 → 用户管理」（`/admin/users`）创建其余账号、禁用/启用账号、重置密码和授予/撤销系统管理员，不再需要 seed 或直接操作数据库。创建和重置密码得到的密码只显示一次；系统不允许禁用或降级最后一位启用的管理员，管理员也不能在该页面禁用、降级自己或重置自己的密码（改自己的密码走账户设置）。禁用账号后，其已登录会话在下一次请求即失效。
+
 文档处理、评测和存储清理任务随后端进程运行。处理并发及重试由 `WORKER_CONCURRENCY`、`WORKER_MAX_RETRIES`、`WORKER_RETRY_DELAY` 等参数控制。
 
 ### 3. 启动前端

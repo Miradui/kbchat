@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 
-	"kbchat/backend/internal/auth"
 	"kbchat/backend/internal/cache"
 	"kbchat/backend/internal/config"
 	"kbchat/backend/internal/logger"
@@ -62,37 +61,33 @@ func TestOnlyChatGenerationRoutesUseUserRateLimit(t *testing.T) {
 	cfg := rateLimitRouterConfig()
 	cfg.RateLimitChatPerMinute = 1
 	recorder := observability.NewRecorder()
-	r := NewWithStorageAndDependencies(cfg, testDB(t), logger.New(cfg), storage.NewLocalStorage(t.TempDir()), Dependencies{
+	db := testDB(t)
+	r := NewWithStorageAndDependencies(cfg, db, logger.New(cfg), storage.NewLocalStorage(t.TempDir()), Dependencies{
 		RateLimiter: cache.NewFixedWindowRateLimiter(redisClient),
 		Metrics:     recorder,
 	})
 
-	limited := []string{
-		"/api/v1/chat/sessions/" + uuid.NewString() + "/messages",
-		"/api/v1/chat/sessions/" + uuid.NewString() + "/messages/stream",
-		"/api/v1/chat/sessions/" + uuid.NewString() + "/messages/" + uuid.NewString() + "/regenerate",
+	limited := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/chat/sessions/" + uuid.NewString() + "/messages"},
+		{http.MethodPost, "/api/v1/chat/sessions/" + uuid.NewString() + "/messages/stream"},
+		{http.MethodPost, "/api/v1/chat/sessions/" + uuid.NewString() + "/messages/" + uuid.NewString() + "/regenerate"},
 	}
-	for _, path := range limited {
-		t.Run(path, func(t *testing.T) {
-			userID := uuid.New()
-			token, err := auth.GenerateToken(cfg, userID, "user")
-			if err != nil {
-				t.Fatalf("generate token: %v", err)
-			}
-			first := authenticatedPost(t, r, path, token, `{}`)
+	for _, route := range limited {
+		t.Run(route.path, func(t *testing.T) {
+			_, token := createRouteUser(t, cfg, db, "user")
+			first := authenticatedRequest(t, r, route.method, route.path, token, `{}`)
 			if first.Code == http.StatusTooManyRequests {
 				t.Fatal("first request was limited")
 			}
-			second := authenticatedPost(t, r, path, token, `{}`)
+			second := authenticatedRequest(t, r, route.method, route.path, token, `{}`)
 			assertRateLimitedResponse(t, second, "60")
 		})
 	}
 
-	userID := uuid.New()
-	token, err := auth.GenerateToken(cfg, userID, "user")
-	if err != nil {
-		t.Fatalf("generate unrestricted token: %v", err)
-	}
+	_, token := createRouteUser(t, cfg, db, "user")
 	first := authenticatedPost(t, r, "/api/v1/chat/sessions", token, `{}`)
 	second := authenticatedPost(t, r, "/api/v1/chat/sessions", token, `{}`)
 	if first.Code == http.StatusTooManyRequests || second.Code == http.StatusTooManyRequests {
@@ -118,7 +113,12 @@ func rateLimitRouterConfig() config.Config {
 
 func authenticatedPost(t *testing.T, handler http.Handler, path, token, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	return authenticatedRequest(t, handler, http.MethodPost, path, token, body)
+}
+
+func authenticatedRequest(t *testing.T, handler http.Handler, method, path, token, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
