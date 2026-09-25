@@ -1,10 +1,11 @@
 import { lazy, Suspense } from 'react';
 import type { ReactNode } from 'react';
-import { createBrowserRouter, Navigate, useParams, useSearchParams } from 'react-router-dom';
+import { createBrowserRouter, Navigate, useLocation, useParams, useSearchParams } from 'react-router-dom';
 
 import { App } from '../App';
 import { LoadingSkeleton } from '../components/LoadingSkeleton';
 import { ProtectedRoute } from './ProtectedRoute';
+import { RenderBoundary, RenderFailure } from '../components/feedback/RenderBoundary';
 
 const LoginPage = lazy(() => import('../pages/Login/LoginPage').then((m) => ({ default: m.LoginPage })));
 const HomePage = lazy(() => import('../pages/Home/HomePage').then((m) => ({ default: m.HomePage })));
@@ -20,10 +21,13 @@ const DiagnosticsPage = lazy(() => import('../pages/Diagnostics/DiagnosticsPage'
 const AdminUsersPage = lazy(() => import('../pages/Admin/UsersPage').then((m) => ({ default: m.UsersPage })));
 
 function RoutePage({ children }: { children: ReactNode }) {
+  const location = useLocation();
   return (
-    <Suspense fallback={<div className="route-loading"><LoadingSkeleton announce rows={5} columns={3} /></div>}>
-      {children}
-    </Suspense>
+    <RenderBoundary resetKey={location.pathname}>
+      <Suspense fallback={<div className="route-loading"><LoadingSkeleton announce rows={5} columns={3} /></div>}>
+        {children}
+      </Suspense>
+    </RenderBoundary>
   );
 }
 
@@ -62,6 +66,7 @@ function KnowledgeBaseDetailEntry() {
 export const router = createBrowserRouter([{
   path: '/',
   element: <App />,
+  errorElement: <RenderFailure />,
   children: [
     { index: true, element: <Navigate to="/home" replace /> },
     { path: 'login', element: <RoutePage><LoginPage /></RoutePage> },

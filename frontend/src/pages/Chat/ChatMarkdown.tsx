@@ -6,6 +6,7 @@ import type { Element, ElementContent } from 'hast';
 import type { Citation } from '../../types/api';
 import { CodeBlock } from './CodeBlock';
 import { remarkCitations } from './remarkCitations';
+import { RenderBoundary } from '../../components/feedback/RenderBoundary';
 
 type CitationContextValue = {
   citations: Citation[];
@@ -58,6 +59,7 @@ export function ChatMarkdown({
 }: Partial<CitationContextValue> & { content: string; streaming?: boolean }) {
   return (
     <div aria-busy={streaming || undefined} className="chat-msg__content chat-markdown">
+      <RenderBoundary local resetKey={content}>
       <CitationContext.Provider value={{ citations, focusedIndex, onSelect }}>
         <Markdown
           components={components}
@@ -65,6 +67,7 @@ export function ChatMarkdown({
           skipHtml
         >{content}</Markdown>
       </CitationContext.Provider>
+      </RenderBoundary>
       {streaming && <span aria-hidden="true" className="chat-msg__caret" />}
     </div>
   );

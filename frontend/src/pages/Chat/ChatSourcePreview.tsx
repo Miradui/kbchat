@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { downloadDocument, getDocument, getDocumentPreview } from '../../api/resources';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { PdfPreview } from '../../components/pdf/PdfPreview';
+import { RenderBoundary } from '../../components/feedback/RenderBoundary';
 import { Button } from '../../components/ui/Button';
 import { Drawer } from '../../components/ui/Drawer';
 import { IconButton } from '../../components/ui/IconButton';
@@ -138,7 +139,7 @@ export function ChatSourcePreview({ citation, index, knowledgeBaseId, canDownloa
       ) : !canDownload && state?.preview.kind === 'file' ? (
         <p className="ui-muted">可阅读上方引用内容；下载原始文件需要编辑者及以上权限。</p>
       ) : state?.url && state.preview.fileType.toLowerCase() === 'pdf' ? (
-        <PdfPreview url={state.url} filename={state.document.filename} initialPage={pageNumber} />
+        <RenderBoundary local resetKey={state.url}><PdfPreview url={state.url} filename={state.document.filename} initialPage={pageNumber} /></RenderBoundary>
       ) : <p className="chat-preview__error">暂不支持直接预览此格式，可下载原文查看。</p>}
     </div>
   );
