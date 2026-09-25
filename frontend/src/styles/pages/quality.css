@@ -91,3 +91,41 @@
   .quality-gaps__item-head .ui-button { margin-left: 42px; }
   .quality-gaps__meta .ui-button { margin-left: 0; }
 }
+
+/* Usage panel: controls row above everything it scopes, then totals, chart, table. */
+.quality-usage { display: grid; gap: var(--s-4); }
+.quality-usage__controls { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-3); }
+.quality-usage__body { display: grid; gap: var(--s-4); transition: opacity var(--fast) var(--ease); }
+/* Refetch keeps the previous frame at reduced opacity instead of a skeleton flash. */
+.quality-usage__body.is-refreshing { opacity: 0.55; }
+.quality-usage__table td:not(:first-child), .quality-usage__table th:not(:first-child) { font-variant-numeric: tabular-nums; text-align: right; }
+.quality-usage__chart {
+  --usage-series: #2a78d6;
+  --usage-grid: var(--line);
+  --usage-axis: var(--line-strong);
+  margin: 0; position: relative; width: 100%;
+}
+:root[data-theme='dark'] .quality-usage__chart { --usage-series: #3987e5; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .quality-usage__chart { --usage-series: #3987e5; }
+}
+.quality-usage__svg { display: block; font-family: var(--font); height: auto; max-height: 280px; touch-action: none; width: 100%; }
+.quality-usage__grid { stroke: var(--usage-grid); stroke-width: 1; }
+.quality-usage__axis { stroke: var(--usage-axis); stroke-width: 1; }
+.quality-usage__tick { fill: var(--text-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.quality-usage__label { fill: var(--text); font-size: 12px; font-weight: 600; }
+.quality-usage__line { fill: none; stroke: var(--usage-series); stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
+.quality-usage__area { fill: var(--usage-series); opacity: 0.1; }
+.quality-usage__dot { fill: var(--usage-series); stroke: var(--surface); stroke-width: 2; }
+.quality-usage__crosshair { stroke: var(--line-strong); stroke-width: 1; }
+.quality-usage__tooltip {
+  background: var(--surface-overlay); border: 1px solid var(--line); border-radius: var(--r-sm); box-shadow: var(--shadow-popover);
+  display: grid; font-size: var(--t-small); gap: 2px; padding: var(--s-2) var(--s-3); pointer-events: none; position: absolute; top: var(--s-2);
+  transform: translateX(-50%); white-space: nowrap;
+}
+.quality-usage__tooltip strong { color: var(--text); }
+.quality-usage__tooltip span { color: var(--text-muted); }
+.evaluation-summary__answer { overflow-wrap: anywhere; }
+.evaluation-summary__diff { border-top: 1px solid var(--line); display: grid; gap: var(--s-1); margin: 0; padding: var(--s-2) 0 0; }
+.evaluation-summary__diff dt { color: var(--text-muted); font-size: var(--t-small); }
+.evaluation-summary__diff dd { color: var(--text); font-size: var(--t-small); margin: 0; overflow-wrap: anywhere; }

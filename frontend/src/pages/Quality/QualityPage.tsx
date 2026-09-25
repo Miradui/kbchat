@@ -4,9 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 
 import {
   getChatQualityOverview,
-  getChatUsage,
   listChatKnowledgeGaps,
-  listKnowledgeBases,
   listNegativeChatFeedback,
 } from '../../api/resources';
 import type {
@@ -19,7 +17,6 @@ import type {
   ChatQualityOverview,
   ChatQualityOverviewParams,
   ChatQualityPeriod,
-  ChatUsageResponse,
   KnowledgeBase,
 } from '../../types/api';
 import { canUnlessUnknown } from '../../utils/access';
@@ -38,6 +35,8 @@ import { AppShell } from '../../layouts/AppShell';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { EvaluationCaseDialog } from './EvaluationCaseDialog';
 import { EvaluationPanel } from './EvaluationPanel';
+import { UsagePanel } from './UsagePanel';
+import { useKnowledgeBaseOptions, loadKnowledgeBaseOptions } from '../../hooks/useKnowledgeBaseOptions';
 import { chatFeedbackReasonLabel } from '../../utils/chatFeedback';
 
 const PAGE_SIZE = 10;
@@ -53,7 +52,7 @@ const defaultSources: QualitySources = {
   loadOverview: getChatQualityOverview,
   loadFeedback: async (params) => listNegativeChatFeedback(params),
   loadKnowledgeGaps: async (params) => listChatKnowledgeGaps(params),
-  loadKnowledgeBases: async () => (await listKnowledgeBases({ page: 1, pageSize: 100, sort: 'updatedAt_desc' })).items,
+  loadKnowledgeBases: loadKnowledgeBaseOptions,
 };
 
 /**
@@ -138,13 +137,10 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
   const [overview, setOverview] = useState<ChatQualityOverview | null>(null);
   const [feedback, setFeedback] = useState<ChatQualityFeedbackListResponse | null>(null);
   const [gaps, setGaps] = useState<ChatKnowledgeGapListResponse | null>(null);
-  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
-  const [usage, setUsage] = useState<ChatUsageResponse | null>(null);
-  const [usageError, setUsageError] = useState('');
+  const { items: knowledgeBases, error: kbError, reload: reloadKnowledgeBases } = useKnowledgeBaseOptions(sources.loadKnowledgeBases);
   const [overviewState, setOverviewState] = useState<LoadState>({ loading: true, error: '' });
   const [feedbackState, setFeedbackState] = useState<LoadState>({ loading: true, error: '' });
   const [gapState, setGapState] = useState<LoadState>({ loading: true, error: '' });
-  const [kbError, setKbError] = useState('');
   const overviewRequest = useRef(0);
   const feedbackRequest = useRef(0);
   const gapRequest = useRef(0);
@@ -155,12 +151,6 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
     return () => { mounted.current = false; };
   }, []);
 
-  const reloadKnowledgeBases = useCallback(() => {
-    setKbError('');
-    void sources.loadKnowledgeBases()
-      .then((items) => { if (mounted.current) setKnowledgeBases(items); })
-      .catch((error: unknown) => { if (mounted.current) setKbError(getErrorMessage(error, '知识库列表加载失败')); });
-  }, [sources]);
 
   const reloadOverview = useCallback(() => {
     const request = ++overviewRequest.current;
@@ -227,15 +217,10 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
       });
   }, [gapCategory, gapPage, knowledgeBaseId, period, sources]);
 
-  useEffect(() => { reloadKnowledgeBases(); }, [reloadKnowledgeBases]);
+
   useEffect(() => { reloadOverview(); }, [reloadOverview]);
   useEffect(() => { reloadFeedback(); }, [reloadFeedback]);
   useEffect(() => { reloadGaps(); }, [reloadGaps]);
-  useEffect(() => {
-    if (activeTab !== 'usage') return;
-    setUsageError('');
-    void getChatUsage({ groupBy: 'day', ...(knowledgeBaseId ? { knowledgeBaseId } : {}) }).then(setUsage).catch((error) => setUsageError(getErrorMessage(error, '用量统计加载失败')));
-  }, [activeTab, knowledgeBaseId]);
 
   // Only bases the caller can read quality data for. The unfiltered view already
   // aggregates exactly these, so offering the others would turn the filter into the
@@ -276,7 +261,7 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
   }
 
   return (
-    <AppShell active="quality" breadcrumbs={[{ label: '质量运营' }]}> 
+    <AppShell active="quality" breadcrumbs={[{ label: '质量运营' }]}>
       <div className="quality-page">
         <header className="ui-page-heading quality-page__header">
           <div className="ui-page-heading__copy">
@@ -320,7 +305,7 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
           {selectedKnowledgeBase && <span className="ui-muted">当前：{selectedKnowledgeBase.name}</span>}
         </div>
 
-        {activeTab === 'usage' ? <UsagePanel error={usageError} usage={usage} /> : activeTab === 'evaluation' ? selectedKnowledgeBase
+        {activeTab === 'usage' ? <UsagePanel knowledgeBaseId={knowledgeBaseId} /> : activeTab === 'evaluation' ? selectedKnowledgeBase
           ? <EvaluationPanel key={selectedKnowledgeBase.id} knowledgeBase={selectedKnowledgeBase} />
           : <EmptyState title="选择一个知识库开始评测" description="测试问题与运行记录按知识库保存。" />
           : <><section aria-label="质量概览" className="ui-panel quality-overview">
@@ -400,16 +385,6 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
         onSaved={() => setSearchParams({ knowledgeBaseId: caseDraft.knowledgeBaseId, tab: 'evaluation' })} />}
     </AppShell>
   );
-}
-
-function UsagePanel({ usage, error }: { usage: ChatUsageResponse | null; error: string }) {
-  return <section aria-label="模型用量" className="ui-panel quality-overview">
-    <div className="ui-panel__head"><div><h2>模型用量</h2><span className="ui-panel__head-note">最近 7 天，按天汇总；Provider 未返回 usage 的调用不会估算</span></div></div>
-    {error ? <ErrorState description={error} title="用量统计加载失败" /> : !usage ? <LoadingSkeleton announce columns={4} rows={2} /> : <>
-      <MetricStrip label="用量总计" metrics={[{ key: 'prompt', label: 'Prompt tokens', value: usage.totalPromptTokens }, { key: 'completion', label: 'Completion tokens', value: usage.totalCompletionTokens }, { key: 'total', label: 'Total tokens', value: usage.totalTokens }]} />
-      <div className="ui-table-wrap"><table className="ui-table"><thead><tr><th>日期</th><th>Prompt</th><th>Completion</th><th>Total</th><th>调用次数</th></tr></thead><tbody>{usage.items.map((item) => <tr key={item.groupKey}><td>{item.groupKey}</td><td>{item.promptTokens}</td><td>{item.completionTokens}</td><td>{item.totalTokens}</td><td>{item.calls}</td></tr>)}</tbody></table></div>
-    </>}
-  </section>;
 }
 
 /**

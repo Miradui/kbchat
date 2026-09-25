@@ -17,6 +17,7 @@ import type {
   ChatQualityFeedbackParams,
   ChatQualityOverview,
   ChatQualityOverviewParams,
+  ChatUsageGroupBy,
   ChatUsageResponse,
   ChatSession,
   ChatSessionListParams,
@@ -739,7 +740,9 @@ export function getChatQualityOverview(
   return apiRequest<ChatQualityOverview>(withQuery('/chat/quality/overview', params));
 }
 
-export function getChatUsage(params: { knowledgeBaseId?: string; from?: string; to?: string; groupBy?: string } = {}): Promise<ChatUsageResponse> {
+export type ChatUsageParams = { knowledgeBaseId?: string; from?: string; to?: string; groupBy?: ChatUsageGroupBy };
+
+export function getChatUsage(params: ChatUsageParams = {}): Promise<ChatUsageResponse> {
   return apiRequest<ChatUsageResponse>(withQuery('/chat/quality/usage', params));
 }
 

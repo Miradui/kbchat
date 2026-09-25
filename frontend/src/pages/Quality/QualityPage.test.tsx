@@ -10,14 +10,16 @@ import type {
   ChatKnowledgeGapListResponse,
   ChatQualityFeedbackListResponse,
   ChatQualityOverview,
+  ChatUsageResponse,
   KnowledgeBase,
 } from '../../types/api';
 import { QualityPage } from './QualityPage';
-import { getCurrentUser } from '../../api/resources';
+import { getChatUsage, getCurrentUser } from '../../api/resources';
 import { currentUserStore } from '../../store/currentUserStore';
 
 vi.mock('../../api/resources', () => ({
   getChatQualityOverview: vi.fn(),
+  getChatUsage: vi.fn(),
   getCurrentUser: vi.fn(),
   listChatKnowledgeGaps: vi.fn(),
   listKnowledgeBases: vi.fn(),
@@ -28,7 +30,29 @@ vi.mock('../../api/resources', () => ({
 beforeEach(() => {
   currentUserStore.clear();
   vi.mocked(getCurrentUser).mockReset().mockResolvedValue({ id: 'user-1', username: 'admin', displayName: '管理员', role: 'admin' });
+  vi.mocked(getChatUsage).mockReset().mockImplementation(async (params) => (params?.groupBy === 'model' ? usageByModel : usageByDay));
 });
+
+const usageByDay: ChatUsageResponse = {
+  from: '2026-09-15T00:00:00Z', to: '2026-09-21T23:59:59Z', groupBy: 'day',
+  items: [
+    { groupKey: '2026-09-15', groupLabel: '2026-09-15', promptTokens: 1000, completionTokens: 200, totalTokens: 1200, calls: 3, estimatedCost: null },
+    // 09-16 and 09-17 are deliberately absent: the chart must fill them with zero.
+    { groupKey: '2026-09-18', groupLabel: '2026-09-18', promptTokens: 4000, completionTokens: 800, totalTokens: 4800, calls: 9, estimatedCost: null },
+  ],
+  totalPromptTokens: 5000, totalCompletionTokens: 1000, totalTokens: 6000,
+  pricingConfigured: false, estimatedCost: null, unpricedModels: [],
+};
+
+const usageByModel: ChatUsageResponse = {
+  from: '2026-09-15T00:00:00Z', to: '2026-09-21T23:59:59Z', groupBy: 'model',
+  items: [
+    { groupKey: 'gpt-4o-mini', groupLabel: 'gpt-4o-mini', promptTokens: 4000, completionTokens: 800, totalTokens: 4800, calls: 9, estimatedCost: 0.0123 },
+    { groupKey: 'local-llm', groupLabel: 'local-llm', promptTokens: 1000, completionTokens: 200, totalTokens: 1200, calls: 3, estimatedCost: null },
+  ],
+  totalPromptTokens: 5000, totalCompletionTokens: 1000, totalTokens: 6000,
+  pricingConfigured: true, estimatedCost: 0.0123, unpricedModels: ['local-llm'],
+};
 
 const overview: ChatQualityOverview = {
   period: 'month', startAt: '2026-08-01T00:00:00Z', endAt: '2026-08-19T00:00:00Z',
@@ -282,5 +306,88 @@ describe('QualityPage', () => {
     await user.selectOptions(screen.getByRole('combobox', { name: '知识缺口类型' }), 'no_citations');
 
     expect(await screen.findByText('当前周期内的知识型提问都检索到了内容。')).toBeInTheDocument();
+  });
+
+  describe('usage tab', () => {
+    it('fetches the last 7 days by day and renders totals, a chart and the table', async () => {
+      renderWithRouter(<QualityPage sources={createSources()} />, ['/quality?tab=usage']);
+
+      const chart = await screen.findByRole('img', { name: /token 用量折线图/ });
+      expect(chart).toHaveAccessibleName(expect.stringContaining('峰值 4,800 tokens（2026-09-18）'));
+      expect(vi.mocked(getChatUsage)).toHaveBeenLastCalledWith(expect.objectContaining({ groupBy: 'day', from: expect.any(String), to: expect.any(String) }));
+      expect(vi.mocked(getChatUsage)).toHaveBeenLastCalledWith(expect.not.objectContaining({ knowledgeBaseId: expect.anything() }));
+
+      const totals = screen.getByRole('group', { name: '用量总计' });
+      expect(within(totals).getByText('5,000')).toBeInTheDocument();
+      expect(within(totals).getByText('1,000')).toBeInTheDocument();
+      expect(within(totals).getByText('6,000')).toBeInTheDocument();
+      // 调用次数 is the sum of the rows, which the server does not total.
+      expect(within(totals).getByText('12')).toBeInTheDocument();
+      expect(within(totals).queryByText('估算成本')).not.toBeInTheDocument();
+      expect(screen.getByText('未配置 MODEL_PRICING，仅显示 token 数')).toBeInTheDocument();
+
+      // The chart and table fill the missing days so the line is continuous.
+      const table = screen.getByRole('table');
+      expect(within(table).getAllByRole('row')).toHaveLength(1 + 7);
+      expect(within(table).getByRole('cell', { name: '2026-09-16' })).toBeInTheDocument();
+      expect(within(table).getByRole('cell', { name: '4,800' })).toBeInTheDocument();
+    });
+
+    it('passes the knowledge base filter through to the usage request', async () => {
+      renderWithRouter(<QualityPage sources={createSources()} />, ['/quality?tab=usage&knowledgeBaseId=kb-1']);
+      await screen.findByRole('img', { name: /token 用量折线图/ });
+      expect(vi.mocked(getChatUsage)).toHaveBeenLastCalledWith(expect.objectContaining({ groupBy: 'day', knowledgeBaseId: 'kb-1' }));
+    });
+
+    it('refetches by model and shows the cost column with the unpriced note', async () => {
+      const user = userEvent.setup();
+      renderWithRouter(<QualityPage sources={createSources()} />, ['/quality?tab=usage']);
+      await screen.findByRole('img', { name: /token 用量折线图/ });
+
+      await user.click(within(screen.getByRole('group', { name: '分组' })).getByRole('button', { name: '按模型' }));
+
+      await waitFor(() => expect(vi.mocked(getChatUsage)).toHaveBeenLastCalledWith(expect.objectContaining({ groupBy: 'model' })));
+      const table = await screen.findByRole('table');
+      await within(table).findByRole('columnheader', { name: '估算成本' });
+      expect(within(table).getByRole('columnheader', { name: '名称' })).toBeInTheDocument();
+      expect(within(table).getByRole('cell', { name: 'gpt-4o-mini' })).toBeInTheDocument();
+      expect(within(table).getByRole('cell', { name: '0.0123' })).toBeInTheDocument();
+      // A model without a price shows a dash, never 0.
+      expect(within(table).getByRole('cell', { name: '—' })).toBeInTheDocument();
+      expect(screen.queryByRole('img', { name: /token 用量折线图/ })).not.toBeInTheDocument();
+
+      const totals = screen.getByRole('group', { name: '用量总计' });
+      expect(within(totals).getByText('估算成本')).toBeInTheDocument();
+      expect(within(totals).getByText('0.0123')).toBeInTheDocument();
+      expect(screen.getByText(/以下模型未配置价格.*local-llm/)).toBeInTheDocument();
+      expect(screen.queryByText('未配置 MODEL_PRICING，仅显示 token 数')).not.toBeInTheDocument();
+    });
+
+    it('refetches when the range preset changes', async () => {
+      const user = userEvent.setup();
+      renderWithRouter(<QualityPage sources={createSources()} />, ['/quality?tab=usage']);
+      await screen.findByRole('img', { name: /token 用量折线图/ });
+      const [firstCall] = vi.mocked(getChatUsage).mock.calls.at(-1) ?? [];
+
+      await user.click(screen.getByRole('button', { name: '最近 30 天' }));
+
+      await waitFor(() => expect(vi.mocked(getChatUsage).mock.calls.length).toBeGreaterThan(1));
+      const [lastCall] = vi.mocked(getChatUsage).mock.calls.at(-1) ?? [];
+      expect(lastCall?.groupBy).toBe('day');
+      expect(Date.parse(lastCall?.from ?? '')).toBeLessThan(Date.parse(firstCall?.from ?? ''));
+    });
+
+    it('shows the error state when the usage request fails', async () => {
+      vi.mocked(getChatUsage).mockRejectedValue(new Error('boom'));
+      renderWithRouter(<QualityPage sources={createSources()} />, ['/quality?tab=usage']);
+      expect(await screen.findByRole('alert')).toHaveTextContent('用量统计加载失败');
+    });
+
+    it('shows an empty state when no usage was recorded', async () => {
+      vi.mocked(getChatUsage).mockResolvedValue({ ...usageByDay, items: [], totalPromptTokens: 0, totalCompletionTokens: 0, totalTokens: 0 });
+      renderWithRouter(<QualityPage sources={createSources()} />, ['/quality?tab=usage']);
+      expect(await screen.findByText('暂无用量数据')).toBeInTheDocument();
+      expect(screen.queryByRole('img', { name: /token 用量折线图/ })).not.toBeInTheDocument();
+    });
   });
 });

@@ -735,10 +735,27 @@ export type ChatQualityOverview = {
 	withoutCitationsRate: number;
 };
 
+export type ChatUsageGroupBy = 'day' | 'knowledgeBase' | 'user' | 'model';
+
+export type ChatUsageItem = {
+  /** "YYYY-MM-DD" (UTC) for day grouping, the UUID for knowledgeBase/user, the model name for model. */
+  groupKey: string;
+  groupLabel: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  calls: number;
+  /** Only set per row for model grouping when that model is priced. */
+  estimatedCost: number | null;
+};
+
 export type ChatUsageResponse = {
   from: string; to: string; groupBy: string;
+  items: ChatUsageItem[];
   totalPromptTokens: number; totalCompletionTokens: number; totalTokens: number;
-  items: Array<{ groupKey: string; promptTokens: number; completionTokens: number; totalTokens: number; calls: number }>;
+  pricingConfigured: boolean;
+  estimatedCost: number | null;
+  unpricedModels: string[];
 };
 
 export type ChatQualityFeedbackParams = ChatQualityOverviewParams & {
