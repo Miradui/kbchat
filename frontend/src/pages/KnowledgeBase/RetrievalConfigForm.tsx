@@ -71,6 +71,8 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
           enableRerank: config.enableRerank,
           enableKeyword: config.enableKeyword,
         },
+        // Carry the stored answer config so this form never resets the other one.
+        answerConfig: knowledgeBase.answerConfig,
         tagIds: knowledgeBase.tags?.map((tag) => tag.id) ?? [],
       });
       if (!mountedRef.current) return;
