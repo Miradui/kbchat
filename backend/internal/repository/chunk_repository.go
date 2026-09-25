@@ -321,7 +321,9 @@ func searchByVector(db *gorm.DB, kbID uuid.UUID, vector []float32, limit int) ([
 			document_chunks.page_number AS page_number,
 			1 - (document_chunks.embedding <=> ?) AS vector_score
 		`, pgvector.NewVector(vector)).
-		Order(clause.Expr{SQL: "document_chunks.embedding <=> ?", Vars: []any{pgvector.NewVector(vector)}}).
+		// GORM's Order ignores a bare clause.Expr; it must be wrapped in
+		// clause.OrderBy or the query silently loses its ORDER BY.
+		Order(clause.OrderBy{Expression: clause.Expr{SQL: "document_chunks.embedding <=> ?", Vars: []any{pgvector.NewVector(vector)}}}).
 		Limit(limit).
 		Scan(&results).Error
 	return results, err
@@ -354,7 +356,7 @@ func (r *ChunkRepository) SearchByKeyword(ctx context.Context, kbID uuid.UUID, q
 			ts_rank_cd(document_chunks.search_vector, ?::tsquery, 32) AS keyword_score
 		`, tsquery).
 		Where("document_chunks.search_vector @@ ?::tsquery", tsquery).
-		Order(clause.Expr{SQL: "keyword_score DESC, document_chunks.id ASC"}).
+		Order(clause.OrderBy{Expression: clause.Expr{SQL: "keyword_score DESC, document_chunks.id ASC"}}).
 		Limit(limit).
 		Scan(&results).Error
 	return results, err
