@@ -609,7 +609,7 @@ export function emptyDocumentRecycleBin(): Promise<void> {
 export function globalSearch(params: GlobalSearchParams, signal?: AbortSignal): Promise<GlobalSearchResponse> {
   return apiRequest<GlobalSearchResponse>(withQuery('/search', {
     q: params.query,
-    type: params.type,
+    type: params.type === 'all' ? undefined : params.type,
     page: params.page,
     pageSize: params.pageSize,
   }), { signal });
@@ -620,7 +620,7 @@ export function exportGlobalSearch(
 ): Promise<Blob> {
   return apiBlobRequest(withQuery('/search/export', {
     q: params.query,
-    type: params.type,
+    type: params.type === 'all' ? undefined : params.type,
   }));
 }
 
@@ -756,7 +756,9 @@ export function listNegativeChatFeedback(
 export function listChatKnowledgeGaps(
   params: ChatKnowledgeGapParams = {},
 ): Promise<ChatKnowledgeGapListResponse> {
-  return apiRequest<ChatKnowledgeGapListResponse>(withQuery('/chat/quality/knowledge-gaps', params));
+  return apiRequest<ChatKnowledgeGapListResponse>(withQuery('/chat/quality/knowledge-gaps', {
+    ...params, category: params.category === 'all' ? undefined : params.category,
+  }));
 }
 
 export function sendChatMessage(
@@ -886,7 +888,7 @@ function withQuery(path: string, params: Record<string, unknown>): string {
   const query = new URLSearchParams();
 
   Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === null || value === '' || value === 'all') {
+    if (value === undefined || value === null || value === '') {
       return;
     }
     if (Array.isArray(value)) {

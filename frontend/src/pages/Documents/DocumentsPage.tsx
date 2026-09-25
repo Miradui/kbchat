@@ -1,13 +1,12 @@
 import { Ban, FileText, FileType, MessageSquareText, PencilLine, RotateCw, Search, Trash2, Upload, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import {
   batchDeleteDocuments,
   batchReprocessDocuments,
   cancelDocumentJob,
   deleteDocument,
-  listKnowledgeBases,
   replaceDocument,
   reprocessDocument,
   updateDocument,
@@ -22,7 +21,9 @@ import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
-import { Checkbox, Field, Input, SearchInput, Select } from '../../components/ui/Field';
+import { Checkbox, Field, Input, Select } from '../../components/ui/Field';
+import { DebouncedSearchInput } from '../../components/ui/DebouncedSearchInput';
+import { useKnowledgeBaseOptions } from '../../hooks/useKnowledgeBaseOptions';
 import { IconButton } from '../../components/ui/IconButton';
 import { MetricStrip } from '../../components/ui/MetricStrip';
 import { OverflowMenu } from '../../components/ui/OverflowMenu';
@@ -103,6 +104,7 @@ function ScopedDocuments({ children }: { children: React.ReactNode }) {
 }
 
 function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string }) {
+  const location = useLocation();
   const toast = useToast();
   const imports = useDocumentImports();
   const observedImportVersion = useRef(imports?.changeVersion ?? 0);
@@ -110,8 +112,9 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
   const list = useDocumentList(scopeKnowledgeBaseId);
   const { items, total, counts, loading, error, filters, activeFilterCount, refresh, setFilter } = list;
 
-  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
-  const [knowledgeBasesLoaded, setKnowledgeBasesLoaded] = useState(false);
+  const knowledgeBaseOptions = useKnowledgeBaseOptions();
+  const knowledgeBases = knowledgeBaseOptions.items;
+  const knowledgeBasesLoaded = !knowledgeBaseOptions.loading;
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [importOpen, setImportOpen] = useState(false);
   const [recycleOpen, setRecycleOpen] = useState(false);
@@ -120,7 +123,6 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
   const [renameTarget, setRenameTarget] = useState<{ id: string; filename: string } | null>(null);
   const [renameError, setRenameError] = useState('');
   const [detailId, setDetailId] = useState<string | null>(null);
-  const [searchDraft, setSearchDraft] = useState(filters.q);
   // Ids from the most recent import, watched until they stop processing. Held here
   // rather than derived from the list because "just imported" is not a property of
   // a document -- a document that was already completed when the page loaded must
@@ -164,16 +166,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
     setGuidanceDismissed(false);
   }, [scopeKnowledgeBaseId]);
 
-  useEffect(() => setSearchDraft(filters.q), [filters.q]);
 
-  useEffect(() => {
-    let active = true;
-    void listKnowledgeBases({ pageSize: 100 })
-      .then((response) => { if (active) setKnowledgeBases(response.items); })
-      .catch(() => { if (active) setKnowledgeBases([]); })
-      .finally(() => { if (active) setKnowledgeBasesLoaded(true); });
-    return () => { active = false; };
-  }, []);
 
   useEffect(() => {
     if (!imports?.changeVersion || observedImportVersion.current === imports.changeVersion) return;
@@ -338,7 +331,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
       knowledgeBases: uploadTargets,
     });
     setImportOpen(false);
-  }, [imports?.openImport, importOpen, knowledgeBasesLoaded, scopeKnowledgeBaseId, uploadTargets]);
+  }, [imports, importOpen, knowledgeBasesLoaded, scopeKnowledgeBaseId, uploadTargets]);
 
   return (
     <div className="doc-page">
@@ -356,16 +349,15 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
         </Button>
       </header>
       <div className="doc-toolbar">
+        {knowledgeBaseOptions.error && <p className="ui-inline-error" role="alert">{knowledgeBaseOptions.error}<Button variant="link" onClick={() => void knowledgeBaseOptions.reload()}>重试知识库列表</Button></p>}
         <div className="ui-toolbar">
-          <SearchInput
+          <DebouncedSearchInput
             aria-label="按文件名搜索"
             icon={<Search aria-hidden="true" />}
-            onChange={(event) => {
-              setSearchDraft(event.target.value);
-              setFilter({ q: event.target.value.trim() });
-            }}
+            onCommit={(q) => setFilter({ q })}
             placeholder="搜索文件名"
-            value={searchDraft}
+            value={filters.q}
+            resetKey={location.key}
           />
 
           {!scopeKnowledgeBaseId && (

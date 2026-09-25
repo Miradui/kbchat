@@ -4,6 +4,9 @@ import type { FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { login } from '../../api/resources';
+import { isRateLimitError } from '../../api/client';
+import { RetryCountdown, retryNotice } from '../../components/feedback/RetryCountdown';
+import type { RetryNotice } from '../../components/feedback/RetryCountdown';
 import { BrandMark } from '../../components/BrandMark';
 import { Button } from '../../components/ui/Button';
 import { Field, Input } from '../../components/ui/Field';
@@ -36,13 +39,14 @@ export function LoginPage({ loginRequest = login }: LoginPageProps) {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
+  const [retry, setRetry] = useState<RetryNotice | null>(null);
   const [fieldErrors, setFieldErrors] = useState<{ username?: string; password?: string }>({});
   const [submitting, setSubmitting] = useState(false);
 
   // A failed login must move focus to the message, not leave it on the button.
   useEffect(() => {
     if (error) errorRef.current?.focus();
-  }, [error]);
+  }, [error, retry]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -66,12 +70,14 @@ export function LoginPage({ loginRequest = login }: LoginPageProps) {
     submittingRef.current = true;
     setFieldErrors({});
     setError('');
+    setRetry(null);
     setSubmitting(true);
     try {
       const response = await loginRequest(username.trim(), password);
       tokenStore.setToken(response.token);
       navigate(safeReturnPath(location.state), { replace: true });
     } catch (caught) {
+      if (isRateLimitError(caught)) setRetry(retryNotice(caught));
       setError(getErrorMessage(caught, '登录失败，请稍后重试'));
     } finally {
       submittingRef.current = false;
@@ -166,7 +172,7 @@ export function LoginPage({ loginRequest = login }: LoginPageProps) {
             </div>
           </Field>
 
-          {error && <p className="auth__error" ref={errorRef} role="alert" tabIndex={-1}>{error}</p>}
+          {error && <p className="auth__error" ref={errorRef} role="alert" tabIndex={-1}>{retry ? <RetryCountdown notice={retry} /> : error}</p>}
 
           <Button className="auth__submit" loading={submitting} loadingLabel="登录中" trailingIcon={<ArrowRight aria-hidden="true" />} type="submit">登录</Button>
           <p className="auth__help">账户由管理员配置，如需帮助请联系管理员。</p>

@@ -24,7 +24,7 @@ import { DocumentsPage } from './DocumentsPage';
 
 const documentListMocks = vi.hoisted(() => ({
   counts: vi.fn(),
-  primary: vi.fn(),
+  primary: vi.fn<(kb: string, params?: { q?: string; page?: number; pageSize?: number; status?: string }) => Promise<{ items: DocumentItem[]; total?: number; page?: number; pageSize?: number }>>(),
 }));
 
 vi.mock('../../api/resources', () => ({
@@ -93,11 +93,11 @@ vi.mock('./DocumentDetailDrawer', () => ({
   ),
 }));
 
-const knowledgeBase = {
+const knowledgeBase = {answerConfig: { systemPromptAddition: '', answerLanguage: 'auto' as const, allowGeneralKnowledge: false, model: '' },
   id: 'kb1',
   name: '制度库',
   description: '制度说明',
-  retrievalConfig: { vectorTopN: 30, rerankTopK: 5, scoreThreshold: 0.3, enableRerank: true },
+  retrievalConfig: {enableKeyword: true,  vectorTopN: 30, rerankTopK: 5, scoreThreshold: 0.3, enableRerank: true },
   createdAt: '2026-07-01T00:00:00Z',
   updatedAt: '2026-07-01T00:00:00Z',
 } satisfies KnowledgeBase;
@@ -142,7 +142,7 @@ function deferred<T>() {
 beforeEach(() => {
   documentListMocks.counts.mockReset().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 1 });
   vi.mocked(getKnowledgeBase).mockReset().mockResolvedValue(knowledgeBase);
-  vi.mocked(listDocuments).mockReset().mockResolvedValue({ items: [] });
+  documentListMocks.primary.mockReset().mockResolvedValue({total: ([]).length, page: 1, pageSize: 20,  items: [] });
   vi.mocked(listKnowledgeBases).mockReset().mockResolvedValue({ items: [knowledgeBase] });
   vi.mocked(listKnowledgeBaseCategories).mockReset().mockResolvedValue({ items: [] });
   vi.mocked(listKnowledgeBaseTags).mockReset().mockResolvedValue({ items: [] });
@@ -225,7 +225,12 @@ async function clickDocumentAction(
 
 describe('DocumentsPage', () => {
   it('keeps a cancelled document neutral without failure advice', async () => {
-    vi.mocked(listDocuments).mockResolvedValue({ items: [{
+    documentListMocks.primary.mockResolvedValue({total: ([{
+      ...uploadedDocument,
+      status: 'failed',
+      jobStatus: 'cancelled',
+      errorMessage: '用户主动取消',
+    }]).length, page: 1, pageSize: 20,  items: [{
       ...uploadedDocument,
       status: 'failed',
       jobStatus: 'cancelled',
@@ -233,7 +238,7 @@ describe('DocumentsPage', () => {
     }] });
     renderPage();
 
-    const row = (await screen.findByRole('button', { name: 'handbook.pdf', exact: true })).closest('tr')!;
+    const row = (await screen.findByRole('button', { name: 'handbook.pdf' })).closest('tr')!;
     expect(within(row).getByText('已取消')).toBeInTheDocument();
     expect(within(row).queryByText(/文档处理失败|用户主动取消/)).not.toBeInTheDocument();
   });
@@ -325,7 +330,7 @@ describe('DocumentsPage', () => {
   });
 
   it('announces an asynchronous document-list failure', async () => {
-    vi.mocked(listDocuments).mockRejectedValue(new Error('offline'));
+    documentListMocks.primary.mockRejectedValue(new Error('offline'));
     documentListMocks.counts.mockRejectedValue(new Error('offline'));
     renderPage();
 
@@ -344,7 +349,7 @@ describe('DocumentsPage', () => {
     vi.mocked(getKnowledgeBase).mockImplementation((knowledgeBaseId) => Promise.resolve(
       knowledgeBaseId === secondKnowledgeBase.id ? secondKnowledgeBase : knowledgeBase,
     ));
-    vi.mocked(listDocuments).mockImplementation((knowledgeBaseId) => Promise.resolve({
+    documentListMocks.primary.mockImplementation((knowledgeBaseId) => Promise.resolve({
       items: knowledgeBaseId === secondKnowledgeBase.id ? [secondDocument] : [{ ...uploadedDocument, status: 'completed' }],
     }));
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
@@ -378,7 +383,7 @@ describe('DocumentsPage', () => {
     vi.mocked(getKnowledgeBase).mockImplementation((knowledgeBaseId) => Promise.resolve(
       knowledgeBaseId === secondKnowledgeBase.id ? secondKnowledgeBase : knowledgeBase,
     ));
-    vi.mocked(listDocuments).mockImplementation((knowledgeBaseId) => Promise.resolve({
+    documentListMocks.primary.mockImplementation((knowledgeBaseId) => Promise.resolve({
       items: knowledgeBaseId === secondKnowledgeBase.id ? [secondDocument] : [{ ...uploadedDocument, status: 'completed' }],
     }));
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
@@ -410,7 +415,7 @@ describe('DocumentsPage', () => {
     vi.mocked(getKnowledgeBase).mockImplementation((id) => (
       id === knowledgeBase.id ? firstKnowledgeBase.promise : Promise.resolve(secondKnowledgeBase)
     ));
-    vi.mocked(listDocuments).mockImplementation((id) => (
+    documentListMocks.primary.mockImplementation((id) => (
       id === knowledgeBase.id ? firstDocuments.promise : Promise.resolve({ items: [secondDocument] })
     ));
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
@@ -438,7 +443,7 @@ describe('DocumentsPage', () => {
     vi.mocked(getKnowledgeBase).mockImplementation((id) => Promise.resolve(
       id === secondKnowledgeBase.id ? secondKnowledgeBase : knowledgeBase,
     ));
-    vi.mocked(listDocuments).mockImplementation((id) => Promise.resolve({
+    documentListMocks.primary.mockImplementation((id) => Promise.resolve({
       items: id === secondKnowledgeBase.id ? [secondDocument] : [],
     }));
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
@@ -474,7 +479,7 @@ describe('DocumentsPage', () => {
     vi.mocked(getKnowledgeBase).mockImplementation((knowledgeBaseId) => Promise.resolve(
       knowledgeBaseId === secondKnowledgeBase.id ? secondKnowledgeBase : knowledgeBase,
     ));
-    vi.mocked(listDocuments).mockImplementation((knowledgeBaseId) => Promise.resolve({
+    documentListMocks.primary.mockImplementation((knowledgeBaseId) => Promise.resolve({
       items: knowledgeBaseId === secondKnowledgeBase.id ? [secondDocument] : [],
     }));
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
@@ -501,7 +506,7 @@ describe('DocumentsPage', () => {
   });
 
   it('announces the primary document-list loading state', () => {
-    vi.mocked(listDocuments).mockReturnValue(deferred<Awaited<ReturnType<typeof listDocuments>>>().promise);
+    documentListMocks.primary.mockReturnValue(deferred<Awaited<ReturnType<typeof listDocuments>>>().promise);
     renderPage();
 
     expect(screen.getByRole('status', { name: '正在加载' })).toBeInTheDocument();
@@ -510,7 +515,7 @@ describe('DocumentsPage', () => {
   it('does not refresh document data after an in-flight reprocess outlives the page', async () => {
     const reprocessResult = deferred<Awaited<ReturnType<typeof reprocessDocument>>>();
     vi.mocked(reprocessDocument).mockReturnValue(reprocessResult.promise);
-    vi.mocked(listDocuments).mockResolvedValue({ items: [{ ...uploadedDocument, status: 'completed' }] });
+    documentListMocks.primary.mockResolvedValue({total: ([{ ...uploadedDocument, status: 'completed' }]).length, page: 1, pageSize: 20,  items: [{ ...uploadedDocument, status: 'completed' }] });
     const user = userEvent.setup();
     renderPage();
 
@@ -526,7 +531,7 @@ describe('DocumentsPage', () => {
   });
 
   it('announces successful document reprocessing', async () => {
-    vi.mocked(listDocuments).mockResolvedValue({ items: [{ ...uploadedDocument, status: 'completed' }] });
+    documentListMocks.primary.mockResolvedValue({total: ([{ ...uploadedDocument, status: 'completed' }]).length, page: 1, pageSize: 20,  items: [{ ...uploadedDocument, status: 'completed' }] });
     vi.mocked(reprocessDocument).mockResolvedValue({ ...uploadedDocument, status: 'uploaded' });
     const user = userEvent.setup();
     renderPage();
@@ -539,7 +544,7 @@ describe('DocumentsPage', () => {
   it('locks the active document row while keeping unrelated page controls available', async () => {
     const reprocessResult = deferred<Awaited<ReturnType<typeof reprocessDocument>>>();
     vi.mocked(reprocessDocument).mockReturnValue(reprocessResult.promise);
-    vi.mocked(listDocuments).mockResolvedValue({ items: [{ ...uploadedDocument, status: 'completed' }] });
+    documentListMocks.primary.mockResolvedValue({total: ([{ ...uploadedDocument, status: 'completed' }]).length, page: 1, pageSize: 20,  items: [{ ...uploadedDocument, status: 'completed' }] });
     const user = userEvent.setup();
     renderPage();
 
@@ -560,7 +565,7 @@ describe('DocumentsPage', () => {
   it('synchronously blocks opening document detail after a mutation starts', async () => {
     const reprocessResult = deferred<Awaited<ReturnType<typeof reprocessDocument>>>();
     vi.mocked(reprocessDocument).mockReturnValue(reprocessResult.promise);
-    vi.mocked(listDocuments).mockResolvedValue({ items: [{ ...uploadedDocument, status: 'completed' }] });
+    documentListMocks.primary.mockResolvedValue({total: ([{ ...uploadedDocument, status: 'completed' }]).length, page: 1, pageSize: 20,  items: [{ ...uploadedDocument, status: 'completed' }] });
     renderPage();
 
     const rowMenu = await openDocumentMenu(userEvent.setup(), uploadedDocument.filename);
@@ -582,7 +587,7 @@ describe('DocumentsPage', () => {
     vi.mocked(getKnowledgeBase).mockImplementation((id) => Promise.resolve(
       id === secondKnowledgeBase.id ? secondKnowledgeBase : knowledgeBase,
     ));
-    vi.mocked(listDocuments).mockImplementation((id) => Promise.resolve({
+    documentListMocks.primary.mockImplementation((id) => Promise.resolve({
       items: id === secondKnowledgeBase.id ? [secondDocument] : [],
     }));
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
@@ -599,16 +604,18 @@ describe('DocumentsPage', () => {
 
   it('does not let an older poll overwrite a newer manual refresh', async () => {
     let poll: TimerHandler | undefined;
+    const timerHandle = setInterval(() => undefined, 300000);
+    window.clearInterval(timerHandle);
     vi.spyOn(window, 'setInterval').mockImplementation((handler, timeout) => {
       if (timeout === 3000) poll = handler;
-      return 1;
+      return timerHandle;
     });
     const pollResult = deferred<{ items: DocumentItem[] }>();
     const refreshedDocument = { ...uploadedDocument, id: 'doc-latest', filename: 'latest.pdf', status: 'completed' as const };
-    vi.mocked(listDocuments)
-      .mockResolvedValueOnce({ items: [uploadedDocument] })
+    documentListMocks.primary
+      .mockResolvedValueOnce({total: ([uploadedDocument]).length, page: 1, pageSize: 20,  items: [uploadedDocument] })
       .mockReturnValueOnce(pollResult.promise)
-      .mockResolvedValueOnce({ items: [refreshedDocument] });
+      .mockResolvedValueOnce({total: ([refreshedDocument]).length, page: 1, pageSize: 20,  items: [refreshedDocument] });
     const user = userEvent.setup();
     renderPage();
 
@@ -662,7 +669,7 @@ describe('DocumentsPage', () => {
   });
 
   it('keeps a failed document delete error inside the confirmation dialog', async () => {
-    vi.mocked(listDocuments).mockResolvedValue({ items: [uploadedDocument] });
+    documentListMocks.primary.mockResolvedValue({total: ([uploadedDocument]).length, page: 1, pageSize: 20,  items: [uploadedDocument] });
     vi.mocked(deleteDocument).mockRejectedValue(
       new ApiError(500, { code: 'DELETE_FAILED', message: '暂时无法删除文档' }),
     );
@@ -713,14 +720,14 @@ describe('DocumentsPage', () => {
       uploaded = true;
       return uploadedDocument;
     });
-    vi.mocked(listDocuments).mockImplementation(async () => ({
+    documentListMocks.primary.mockImplementation(async () => ({
       items: uploaded ? [{ ...uploadedDocument, status: 'completed' }] : [],
     }));
     renderPage('/knowledge-bases/kb1/documents?intent=upload');
     await uploadThroughDialog(user, new File(['content'], 'handbook.pdf', { type: 'application/pdf' }), false);
 
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '导入文档' })).not.toBeInTheDocument());
-    await waitFor(() => expect(vi.mocked(listDocuments).mock.calls.length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(documentListMocks.primary.mock.calls.length).toBeGreaterThanOrEqual(2));
     expect(await screen.findByText('handbook.pdf')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '基于此知识库提问' }));
@@ -737,7 +744,7 @@ describe('DocumentsPage', () => {
       uploaded = true;
       return uploadedDocument;
     });
-    vi.mocked(listDocuments).mockImplementation(async () => ({
+    documentListMocks.primary.mockImplementation(async () => ({
       items: uploaded ? [failedDocument] : [],
     }));
     renderPage('/knowledge-bases/kb1/documents?intent=upload');
@@ -782,7 +789,7 @@ describe('DocumentsPage', () => {
   it('invites the user to ask only once the imported documents finish processing', async () => {
     const completed = { ...uploadedDocument, status: 'completed' as const };
     vi.mocked(uploadDocument).mockResolvedValue(uploadedDocument);
-    vi.mocked(listDocuments).mockResolvedValue({ items: [uploadedDocument] });
+    documentListMocks.primary.mockResolvedValue({total: ([uploadedDocument]).length, page: 1, pageSize: 20,  items: [uploadedDocument] });
     const user = userEvent.setup();
     renderPage();
 
@@ -794,7 +801,7 @@ describe('DocumentsPage', () => {
     expect(await screen.findByText('handbook.pdf')).toBeInTheDocument();
     expect(screen.queryByText(/可以开始提问/)).not.toBeInTheDocument();
 
-    vi.mocked(listDocuments).mockResolvedValue({ items: [completed] });
+    documentListMocks.primary.mockResolvedValue({total: ([completed]).length, page: 1, pageSize: 20,  items: [completed] });
     await user.click(screen.getByRole('button', { name: '更多文档操作' }));
     await user.click(screen.getByRole('menuitem', { name: '刷新列表' }));
 
@@ -807,7 +814,7 @@ describe('DocumentsPage', () => {
   it('does not invite questions about documents that were already complete on load', async () => {
     // The guidance is about a batch the user just imported, not about the list
     // happening to contain finished documents.
-    vi.mocked(listDocuments).mockResolvedValue({ items: [{ ...uploadedDocument, status: 'completed' }] });
+    documentListMocks.primary.mockResolvedValue({total: ([{ ...uploadedDocument, status: 'completed' }]).length, page: 1, pageSize: 20,  items: [{ ...uploadedDocument, status: 'completed' }] });
     renderPage();
 
     expect(await screen.findByText('handbook.pdf')).toBeInTheDocument();
@@ -817,7 +824,7 @@ describe('DocumentsPage', () => {
   it('reports a failed import without offering to ask', async () => {
     const failed = { ...uploadedDocument, status: 'failed' as const, errorMessage: 'boom' };
     vi.mocked(uploadDocument).mockResolvedValue(uploadedDocument);
-    vi.mocked(listDocuments).mockResolvedValue({ items: [failed] });
+    documentListMocks.primary.mockResolvedValue({total: ([failed]).length, page: 1, pageSize: 20,  items: [failed] });
     const user = userEvent.setup();
     renderPage();
 
@@ -831,7 +838,22 @@ describe('DocumentsPage', () => {
     expect(screen.queryByRole('status', { name: '导入结果' })).not.toBeInTheDocument();
   });
   it('shows the classified reason in the list and flags stale documents', async () => {
-    vi.mocked(listDocuments).mockResolvedValue({
+    documentListMocks.primary.mockResolvedValue({total: ([
+        {
+          ...uploadedDocument,
+          status: 'failed',
+          errorCode: 'encoding_invalid',
+          errorMessage: 'content is not valid UTF-8',
+        },
+        {
+          ...uploadedDocument,
+          id: 'doc2',
+          filename: 'old-policy.md',
+          status: 'completed',
+          isStale: true,
+          staleAfterDays: 180,
+        },
+      ]).length, page: 1, pageSize: 20,
       items: [
         {
           ...uploadedDocument,
@@ -880,7 +902,7 @@ describe('DocumentsPage capability gating', () => {
   function renderAsViewer() {
     vi.mocked(getKnowledgeBase).mockResolvedValue(viewerKnowledgeBase);
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [viewerKnowledgeBase] });
-    vi.mocked(listDocuments).mockResolvedValue({ items: [uploadedDocument] });
+    documentListMocks.primary.mockResolvedValue({total: ([uploadedDocument]).length, page: 1, pageSize: 20,  items: [uploadedDocument] });
     return renderPage();
   }
 
@@ -893,7 +915,7 @@ describe('DocumentsPage capability gating', () => {
    */
   async function renderWorkspaceWide(bases: KnowledgeBase[], documents: DocumentItem[] = []) {
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: bases });
-    vi.mocked(listDocuments).mockResolvedValue({ items: documents });
+    documentListMocks.primary.mockResolvedValue({total: (documents).length, page: 1, pageSize: 20,  items: documents });
     renderWithRouter(
       <Routes>
         <Route path="/documents" element={<DocumentsPage />} />
@@ -956,7 +978,7 @@ describe('DocumentsPage capability gating', () => {
     } satisfies KnowledgeBase;
     vi.mocked(getKnowledgeBase).mockResolvedValue(editorKnowledgeBase);
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [editorKnowledgeBase] });
-    vi.mocked(listDocuments).mockResolvedValue({ items: [uploadedDocument] });
+    documentListMocks.primary.mockResolvedValue({total: ([uploadedDocument]).length, page: 1, pageSize: 20,  items: [uploadedDocument] });
     const user = userEvent.setup();
     renderPage();
 
@@ -977,7 +999,7 @@ describe('DocumentsPage capability gating', () => {
     } satisfies KnowledgeBase;
     vi.mocked(getKnowledgeBase).mockResolvedValue(managerKnowledgeBase);
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [managerKnowledgeBase] });
-    vi.mocked(listDocuments).mockResolvedValue({ items: [uploadedDocument] });
+    documentListMocks.primary.mockResolvedValue({total: ([uploadedDocument]).length, page: 1, pageSize: 20,  items: [uploadedDocument] });
     const user = userEvent.setup();
     renderPage();
 

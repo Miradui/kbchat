@@ -1,11 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { apiRequest } from './client';
-import { globalSearch } from './resources';
+import { globalSearch, listKnowledgeBases, listAdminUsers, listGlobalDocuments } from './resources';
 
 vi.mock('./client', () => ({ apiRequest: vi.fn(), apiBlobRequest: vi.fn() }));
 
 describe('search resources', () => {
+  it('preserves a literal all search while omitting only all-valued enum filters', () => {
+    void globalSearch({ query: 'all', type: 'all' });
+    void listKnowledgeBases({ q: 'all', scope: 'all', visibility: 'all' });
+    void listAdminUsers({ q: 'all' });
+    void listGlobalDocuments({ q: 'all' });
+    const paths = vi.mocked(apiRequest).mock.calls.map(([path]) => path);
+    expect(paths).toEqual(expect.arrayContaining(['/search?q=all', '/knowledge-bases?q=all', '/admin/users?q=all', '/documents?q=all']));
+  });
   it('forwards the abort signal to the API client', () => {
 	vi.mocked(apiRequest).mockResolvedValue({ items: [], total: 0, page: 2, pageSize: 40 });
     const controller = new AbortController();
