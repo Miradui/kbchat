@@ -143,11 +143,11 @@ function latencyRow(metric: SystemLatencyMetric) {
   return (
     <tr key={metric.metric}>
       <th scope="row">{metricLabel(metric.metric)}</th>
-      <td>{metric.count}</td>
-      <td>{metric.p50Ms} ms</td>
-      <td>{metric.p95Ms} ms</td>
-      <td>{metric.maxMs} ms</td>
-      <td>{metric.sampleCount}</td>
+      <td data-label="次数">{metric.count}</td>
+      <td data-label="P50">{metric.p50Ms} ms</td>
+      <td data-label="P95">{metric.p95Ms} ms</td>
+      <td data-label="最大">{metric.maxMs} ms</td>
+      <td data-label="样本数">{metric.sampleCount}</td>
     </tr>
   );
 }

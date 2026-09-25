@@ -204,7 +204,7 @@ export type KnowledgeBaseBatchTagMode = 'add' | 'remove' | 'replace';
 export type ActivityItemResponse = {
   id: string;
   action: string;
-  resourceType: 'knowledgeBase' | 'document' | 'chatSession' | 'member';
+  resourceType: 'knowledgeBase' | 'document' | 'chatSession' | 'member' | 'user';
   resourceId: string;
   resourceName: string;
   knowledgeBaseId?: string;

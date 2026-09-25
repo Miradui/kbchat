@@ -30,6 +30,10 @@ const actionLabels: Record<string, string> = {
   'member.removed': '移除了成员',
   'chatSession.deleted': '删除了会话',
   'chatSession.restored': '恢复了会话',
+  'admin.user.created': '创建了用户',
+  'admin.user.updated': '更新了用户',
+  'admin.user.passwordReset': '重置了用户密码',
+  'admin.user.roleChanged': '调整了用户角色',
 };
 
 const resourceLabels: Record<ActivityItemResponse['resourceType'], string> = {
@@ -37,6 +41,7 @@ const resourceLabels: Record<ActivityItemResponse['resourceType'], string> = {
   document: '文档',
   chatSession: '问答会话',
   member: '成员',
+  user: '用户',
 };
 
 const kindByResource: Record<ActivityItemResponse['resourceType'], ActivityItem['kind']> = {
@@ -44,6 +49,8 @@ const kindByResource: Record<ActivityItemResponse['resourceType'], ActivityItem[
   document: 'document',
   chatSession: 'session',
   member: 'member',
+  // Account entries reuse the person icon; there is no dedicated user kind.
+  user: 'member',
 };
 
 export function activityToItem(activity: ActivityItemResponse): ActivityItem {
@@ -83,6 +90,10 @@ function activityHref(activity: ActivityItemResponse): string {
       return activity.knowledgeBaseId
         ? `/knowledge-bases/${activity.knowledgeBaseId}/settings`
         : '/knowledge-bases';
+    case 'user':
+      // Only system administrators record these; the entry leads back to the
+      // page where the account can be acted on again.
+      return '/admin/users';
     default:
       return '/home';
   }
