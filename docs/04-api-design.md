@@ -1562,7 +1562,7 @@ limit=10
 }
 ```
 
-`keywordStage` 是关键词召回的原始结果，按 `keywordScore` 降序；关键词召回未启用时 `status=disabled` 且 `items=[]`。`fusionStage` 是两路召回的 RRF 融合结果，即精排的输入；`vectorRank` / `keywordRank` 为该 chunk 在各自召回列表中的 1-based 名次，缺席一路为 `null`。关键词召回未启用时 `status=skipped`，`items` 与 `vectorStage` 顺序一致且 `fusionScore=0`。`finalStage` 的 `keywordScore` 与 `fusionScore` 在对应阶段没有分数时为 `null`。
+`vectorStage.exactFallback` 为 true 表示近似索引扫描返回的候选少于 `vectorTopN` 且知识库还有更多可检索片段，本次已改用精确检索，`items` 是精确结果；未回退时省略该字段。`keywordStage` 是关键词召回的原始结果，按 `keywordScore` 降序；关键词召回未启用时 `status=disabled` 且 `items=[]`。`fusionStage` 是两路召回的 RRF 融合结果，即精排的输入；`vectorRank` / `keywordRank` 为该 chunk 在各自召回列表中的 1-based 名次，缺席一路为 `null`。关键词召回未启用时 `status=skipped`，`items` 与 `vectorStage` 顺序一致且 `fusionScore=0`。`finalStage` 的 `keywordScore` 与 `fusionScore` 在对应阶段没有分数时为 `null`。
 
 默认 `RERANK_FAILURE_MODE=strict`，Rerank 失败返回：
 
@@ -2397,6 +2397,7 @@ Kubernetes livenessProbe 重启容器，而重启 API 不会让 Redis 恢复，�
   "rerankFallbacks": { "provider_unavailable": 4 },
   "rateLimitTriggers": { "login": 3, "chat": 7 },
   "embeddingCache": { "hits": 80, "misses": 20, "errors": 1, "hitRate": 0.8 },
+  "vectorSearch": { "pgvectorVersion": "0.5.1", "iterativeScan": false, "exactFallbacks": 2 },
   "metricsSinceRestart": true
 }
 ```
@@ -2415,6 +2416,7 @@ Kubernetes livenessProbe 重启容器，而重启 API 不会让 Redis 恢复，�
 - `failureWindowHours` 固定为 24，按 `updated_at` 统计 `completed` 与 `failed`。
 - `rateLimitTriggers` 只统计真正返回 429 的请求，Redis 故障导致的 closed 拒绝不计入；键固定为 `login` / `chat`，未触发的键可缺省。
 - `embeddingCache.hitRate = hits / (hits + misses)`；缓存错误单独计数，不进入分母。进程尚未发生缓存查询时为 `null`。
+- `vectorSearch.pgvectorVersion` 为数据库中 `vector` 扩展的版本，读取失败或非 PostgreSQL 时为空字符串；`iterativeScan` 在 0.8.0 及以上为 true；`exactFallbacks` 为本进程内向量召回因索引扫描返回不足而改用精确检索的次数（见 RAG 规范“pgvector 查询约束”）。
 
 ### Provider 为什么不做探测
 

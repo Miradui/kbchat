@@ -276,11 +276,20 @@ func TestDiagnosticsReportsProviderHealthFromRecordedTraffic(t *testing.T) {
 	recorder.RecordEmbeddingCacheResult(observability.EmbeddingCacheResultHit)
 	recorder.RecordEmbeddingCacheResult(observability.EmbeddingCacheResultMiss)
 	recorder.RecordEmbeddingCacheResult(observability.EmbeddingCacheResultError)
+	recorder.RecordVectorExactFallback()
 
 	svc := NewSystemService(diagnosticsConfig())
-	svc.SetDiagnosticsDeps(SystemDiagnosticsDeps{Database: &fakePinger{}, Metrics: recorder})
+	svc.SetDiagnosticsDeps(SystemDiagnosticsDeps{
+		Database: &fakePinger{},
+		Metrics:  recorder,
+		Vector:   fakeVectorInspector{info: repository.PgvectorInfo{Version: "0.5.1"}},
+	})
 
 	res := svc.Diagnostics(context.Background())
+
+	if res.VectorSearch.PgvectorVersion != "0.5.1" || res.VectorSearch.IterativeScan || res.VectorSearch.ExactFallbacks != 1 {
+		t.Errorf("vector search = %+v, want 0.5.1 without iterative scan and one fallback", res.VectorSearch)
+	}
 
 	chat := providerByName(t, res, "chat")
 	if chat.Status != dto.SystemStatusOK || chat.SuccessCount != 1 {
@@ -554,4 +563,12 @@ func TestHealthStaysOKWhenEverythingAnswers(t *testing.T) {
 	if len(res.Dependencies) != 3 {
 		t.Errorf("dependencies = %+v, want all three", res.Dependencies)
 	}
+}
+
+type fakeVectorInspector struct {
+	info repository.PgvectorInfo
+}
+
+func (f fakeVectorInspector) Pgvector(context.Context) repository.PgvectorInfo {
+	return f.info
 }

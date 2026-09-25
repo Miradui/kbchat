@@ -38,6 +38,10 @@ type systemDocumentQueueStatter interface {
 	QueueStats(ctx context.Context, window time.Duration) (repository.DocumentQueueStats, error)
 }
 
+type systemVectorSearchInspector interface {
+	Pgvector(ctx context.Context) repository.PgvectorInfo
+}
+
 type systemCleanupQueueStatter interface {
 	QueueStats(ctx context.Context) (repository.StorageCleanupQueueStats, error)
 }
@@ -53,6 +57,7 @@ type SystemDiagnosticsDeps struct {
 	Storage  systemStorageChecker
 	Docs     systemDocumentQueueStatter
 	Cleanup  systemCleanupQueueStatter
+	Vector   systemVectorSearchInspector
 	Metrics  *observability.Recorder
 	Logger   *zap.Logger
 }
@@ -137,8 +142,19 @@ func (s *SystemService) Diagnostics(ctx context.Context) *dto.SystemDiagnosticsR
 		RerankFallbacks:     snapshot.RerankFallbacks,
 		RateLimitTriggers:   snapshot.RateLimitTriggers,
 		EmbeddingCache:      embeddingCacheMetrics(snapshot.EmbeddingCacheResult),
+		VectorSearch:        s.vectorSearchStatus(ctx, snapshot),
 		MetricsSinceRestart: true,
 	}
+}
+
+func (s *SystemService) vectorSearchStatus(ctx context.Context, snapshot observability.Snapshot) dto.SystemVectorSearchStatus {
+	status := dto.SystemVectorSearchStatus{ExactFallbacks: snapshot.VectorExactFallbacks}
+	if s.diag.Vector != nil {
+		info := s.diag.Vector.Pgvector(ctx)
+		status.PgvectorVersion = info.Version
+		status.IterativeScan = info.IterativeScan
+	}
+	return status
 }
 
 func embeddingCacheMetrics(stats observability.EmbeddingCacheStats) dto.SystemEmbeddingCacheMetrics {

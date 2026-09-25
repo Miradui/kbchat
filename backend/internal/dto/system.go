@@ -132,6 +132,17 @@ type SystemEmbeddingCacheMetrics struct {
 	HitRate *float64 `json:"hitRate"`
 }
 
+// SystemVectorSearchStatus describes the vector index path. PgvectorVersion is
+// empty when it could not be read (not PostgreSQL, extension missing, or the
+// lookup failed). IterativeScan is true from pgvector 0.8.0. ExactFallbacks
+// counts searches since restart whose approximate scan came back short and was
+// rerun exhaustively.
+type SystemVectorSearchStatus struct {
+	PgvectorVersion string `json:"pgvectorVersion"`
+	IterativeScan   bool   `json:"iterativeScan"`
+	ExactFallbacks  uint64 `json:"exactFallbacks"`
+}
+
 // SystemDiagnosticsResponse is the diagnostics payload.
 //
 // Latency, fallbacks, rate limits and cache metrics are per-process and reset
@@ -149,6 +160,7 @@ type SystemDiagnosticsResponse struct {
 	RerankFallbacks   map[string]uint64           `json:"rerankFallbacks"`
 	RateLimitTriggers map[string]uint64           `json:"rateLimitTriggers"`
 	EmbeddingCache    SystemEmbeddingCacheMetrics `json:"embeddingCache"`
+	VectorSearch      SystemVectorSearchStatus    `json:"vectorSearch"`
 	// MetricsSinceRestart is always true today. It exists so a future durable
 	// metrics store can say otherwise without a breaking contract change.
 	MetricsSinceRestart bool `json:"metricsSinceRestart"`

@@ -163,7 +163,7 @@ embedding vector(1536)
 4. 清理或重新生成旧 chunks embedding。
 5. 更新本文档和 `03-database-design.md`。
 
-当前使用 Qwen3 Embedding 时，Provider 必须请求输出 `1536` 维，避免超过 pgvector `ivfflat` 索引的维度限制。
+当前使用 Qwen3 Embedding 时，Provider 必须请求输出 `1536` 维，与 `document_chunks.embedding vector(1536)` 一致，且不超过 pgvector `vector` 类型 HNSW 索引的 2000 维上限。
 
 ## Rerank Provider 约束
 

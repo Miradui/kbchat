@@ -271,8 +271,12 @@ fusionScore = Σ 1 / (k + rank_i)    其中 rank_i 为该 chunk 在第 i 路中�
 3. 召回数量使用 `vectorTopN`。
 4. 相似度分数返回为 `vectorScore`。
 5. `vectorTopN` 最大为 `100`；最终 `rerankTopK` 最大为 `20`，且不得大于本轮 `vectorTopN`。
-6. 向量索引为 HNSW；查询在事务内 `SET LOCAL hnsw.ef_search = max(40, vectorTopN)`，保证索引扫描返回的候选不少于请求数量。
+6. 向量索引为 HNSW；查询在事务内 `SET LOCAL hnsw.ef_search = max(40, vectorTopN)`。HNSW 扫描最多产出 `ef_search` 个近邻，知识库与软删除条件在扫描之后才过滤，所以当附近有大量其他知识库或已删除文档的片段时，结果可能少于请求数量甚至为空，且不会报错。因此：
+   - pgvector ≥ 0.8.0 时同一事务内追加 `SET LOCAL hnsw.iterative_scan = strict_order`，让扫描继续到满足数量；版本在首次检索时读取并缓存。
+   - 所有版本：向量召回返回数少于 `vectorTopN` 时，统计该知识库可检索片段数（已发布、文档未删除、有 embedding）；多于已返回数则改用精确检索（先在 `MATERIALIZED` CTE 中过滤再按距离排序，HNSW 无法作用于 CTE 扫描），用精确结果替换，计入诊断的 `vectorSearch.exactFallbacks`，并在 debug 的 `vectorStage.exactFallback` 标记。知识库本身小于 `vectorTopN` 时只多一次计数查询。
+   - 不能用 `SET LOCAL enable_indexscan = off` 代替 CTE：`enable_*` 只增加代价，其他路径同样不可用时规划器仍会选 HNSW。
 7. 关键词召回使用相同的知识库、软删除和已发布约束，见“混合召回与融合”。
+8. 排序表达式必须包在 `clause.OrderBy{Expression: ...}` 中；GORM 的 `Order` 会静默忽略裸 `clause.Expr`，查询会只剩 `LIMIT`。
 
 ## Rerank 约束
 
@@ -401,7 +405,7 @@ content: ...
 开启 `debug=true` 时，响应增加：
 
 1. `query`：当前检索 query；当前搜索接口没有改写步骤，因此不返回 `rewrittenQuery`。
-2. `vectorStage`：pgvector TopN 原始召回 chunks，包含 `chunkId`、`documentId`、`filename`、`pageNumber`、`content`、`vectorScore`、`rank`。
+2. `vectorStage`：pgvector TopN 原始召回 chunks，包含 `chunkId`、`documentId`、`filename`、`pageNumber`、`content`、`vectorScore`、`rank`；发生精确检索回退时 `exactFallback=true`，`items` 为精确结果。
 3. `keywordStage`：关键词 TopN 原始召回 chunks，字段同上但分数为 `keywordScore`；`status` 为 `completed`、`disabled` 或 `failed`。`failed` 表示关键词查询报错（例如未执行迁移 024），本次已降级为纯向量召回，items 为空。
 4. `fusionStage`：RRF 融合后的精排输入，包含 `chunkId`、`pageNumber`、`vectorRank`、`keywordRank`、`fusionScore`、`vectorScore`、`keywordScore`、`rank`；`status` 为 `completed`，关键词召回关闭或失败时为 `skipped` 且顺序等于 `vectorStage`。
 5. `rerankStage`：Rerank 输入和输出映射，包含 `chunkId`、`pageNumber`、`rerankScore`、`rank`；`status` 为 `completed`、`disabled` 或 `fallback`。

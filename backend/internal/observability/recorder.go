@@ -106,6 +106,7 @@ type Recorder struct {
 	fallbacks            map[string]uint64
 	rateLimitTriggers    map[string]uint64
 	embeddingCacheResult EmbeddingCacheStats
+	vectorExactFallbacks uint64
 	now                  func() time.Time
 	logger               *zap.Logger
 }
@@ -291,6 +292,19 @@ func (r *Recorder) RecordEmbeddingCacheResult(result string) {
 	}
 }
 
+// RecordVectorExactFallback counts a vector search that had to be rerun
+// exhaustively because the approximate index scan returned fewer rows than the
+// knowledge base could supply. A steady rate means the HNSW scan is losing
+// candidates to the knowledge-base and soft-delete filters.
+func (r *Recorder) RecordVectorExactFallback() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.vectorExactFallbacks++
+}
+
 func (r *Recorder) clock() time.Time {
 	if r.now != nil {
 		return r.now()
@@ -350,6 +364,7 @@ type Snapshot struct {
 	RerankFallbacks      map[string]uint64
 	RateLimitTriggers    map[string]uint64
 	EmbeddingCacheResult EmbeddingCacheStats
+	VectorExactFallbacks uint64
 }
 
 // Snapshot returns the current figures. A nil receiver yields empty maps rather
@@ -395,6 +410,7 @@ func (r *Recorder) Snapshot() Snapshot {
 		snapshot.RateLimitTriggers[scope] = count
 	}
 	snapshot.EmbeddingCacheResult = r.embeddingCacheResult
+	snapshot.VectorExactFallbacks = r.vectorExactFallbacks
 	return snapshot
 }
 

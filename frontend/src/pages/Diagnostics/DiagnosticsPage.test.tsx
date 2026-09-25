@@ -51,6 +51,7 @@ function diagnostics(overrides: Partial<SystemDiagnostics> = {}): SystemDiagnost
     rerankFallbacks: {},
     rateLimitTriggers: { login: 3, chat: 7 },
     embeddingCache: { hits: 8, misses: 2, errors: 1, hitRate: 0.8 },
+    vectorSearch: { pgvectorVersion: '0.5.1', iterativeScan: false, exactFallbacks: 4 },
     metricsSinceRestart: true,
     ...overrides,
   };
@@ -128,6 +129,11 @@ describe('DiagnosticsPage', () => {
     expect(within(cache).getByText('缓存未命中')).toBeInTheDocument();
     expect(within(cache).getByText('缓存错误')).toBeInTheDocument();
     expect(within(cache).getByText('80%')).toBeInTheDocument();
+    const vector = within(runtime).getByLabelText('向量检索');
+    expect(within(vector).getByText('0.5.1')).toBeInTheDocument();
+    expect(within(vector).getByText('不支持')).toBeInTheDocument();
+    expect(within(vector).getByText('4')).toBeInTheDocument();
+    expect(within(runtime).getByText(/pgvector 低于 0\.8\.0/)).toBeInTheDocument();
 
     const providers = screen.getByLabelText('模型 Provider');
     expect(within(providers).getByText('对话模型')).toBeInTheDocument();

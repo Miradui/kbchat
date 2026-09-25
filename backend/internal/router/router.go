@@ -139,6 +139,7 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 		Database: repository.NewSystemRepository(db),
 		Docs:     documentRepo,
 		Cleanup:  storageCleanupRepo,
+		Vector:   chunkRepo,
 		Metrics:  metrics,
 		Logger:   logger,
 	}

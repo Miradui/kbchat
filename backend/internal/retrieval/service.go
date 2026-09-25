@@ -51,6 +51,8 @@ type searchOptions struct {
 
 type chunkSearcher interface {
 	SearchByVector(ctx context.Context, kbID uuid.UUID, vector []float32, limit int) ([]repository.SearchResult, error)
+	SearchByVectorExact(ctx context.Context, kbID uuid.UUID, vector []float32, limit int) ([]repository.SearchResult, error)
+	CountVectorSearchable(ctx context.Context, kbID uuid.UUID) (int64, error)
 	SearchByKeyword(ctx context.Context, kbID uuid.UUID, query string, limit int) ([]repository.SearchResult, error)
 }
 
@@ -138,6 +140,10 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 		return nil, apperror.Internal(err)
 	}
 	vectorCandidates = limitSearchResults(vectorCandidates, options.vectorTopN)
+	vectorCandidates, exactFallback, err := s.completeVectorRecall(ctx, kbID, queryVector, options.vectorTopN, vectorCandidates)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
 
 	// Keyword recall runs after the vector stage rather than concurrently: the
 	// two queries share the same pool and the keyword one is cheap, so the
@@ -247,6 +253,7 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 		res.Debug = buildSearchDebugResponse(searchDebugInput{
 			query:              req.Query,
 			vectorCandidates:   vectorCandidates,
+			exactFallback:      exactFallback,
 			keywordCandidates:  keywordCandidates,
 			keywordStageStatus: keywordStageStatus,
 			fused:              fused,
@@ -482,9 +489,36 @@ func filterSearchResults(candidates []repository.SearchResult, threshold float64
 	return filtered
 }
 
+// completeVectorRecall reruns the vector stage exhaustively when the
+// approximate scan came back with fewer than limit rows although the knowledge
+// base holds more. An HNSW scan yields at most ef_search neighbours before the
+// knowledge-base and soft-delete filters run, so with many chunks from other
+// knowledge bases or deleted documents nearby it can return a handful of rows,
+// or none, without any error. A short result on a small knowledge base is
+// normal and costs one COUNT to confirm.
+func (s *Service) completeVectorRecall(ctx context.Context, kbID uuid.UUID, vector []float32, limit int, approximate []repository.SearchResult) ([]repository.SearchResult, bool, error) {
+	if len(approximate) >= limit {
+		return approximate, false, nil
+	}
+	searchable, err := s.chunks.CountVectorSearchable(ctx, kbID)
+	if err != nil {
+		return nil, false, err
+	}
+	if searchable <= int64(len(approximate)) {
+		return approximate, false, nil
+	}
+	exact, err := s.chunks.SearchByVectorExact(ctx, kbID, vector, limit)
+	if err != nil {
+		return nil, false, err
+	}
+	s.metrics.RecordVectorExactFallback()
+	return limitSearchResults(exact, limit), true, nil
+}
+
 type searchDebugInput struct {
 	query              string
 	vectorCandidates   []repository.SearchResult
+	exactFallback      bool
 	keywordCandidates  []repository.SearchResult
 	keywordStageStatus string
 	fused              []fusedCandidate
@@ -500,8 +534,9 @@ func buildSearchDebugResponse(in searchDebugInput) *dto.SearchDebugResponse {
 	return &dto.SearchDebugResponse{
 		Query: in.query,
 		VectorStage: dto.SearchDebugVectorStage{
-			Status: "completed",
-			Items:  toDebugVectorItems(in.vectorCandidates),
+			Status:        "completed",
+			Items:         toDebugVectorItems(in.vectorCandidates),
+			ExactFallback: in.exactFallback,
 		},
 		KeywordStage: dto.SearchDebugKeywordStage{
 			Status: in.keywordStageStatus,

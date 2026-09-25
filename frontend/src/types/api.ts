@@ -581,6 +581,8 @@ export type KnowledgeBaseSearchDebug = {
   vectorStage: {
     status: string;
     items: Array<KnowledgeBaseSearchResult & { rank: number }>;
+    /** True when the index scan came back short and the stage was rerun exhaustively. */
+    exactFallback?: boolean;
   };
   keywordStage: {
     status: 'completed' | 'disabled' | 'failed';
@@ -940,6 +942,15 @@ export type SystemEmbeddingCacheMetrics = {
   hitRate: number | null;
 };
 
+export type SystemVectorSearchStatus = {
+  /** Empty when the version could not be read. */
+  pgvectorVersion: string;
+  /** pgvector 0.8.0 and later keep scanning the HNSW index until the page is full. */
+  iterativeScan: boolean;
+  /** Searches since restart whose approximate scan was rerun exhaustively. */
+  exactFallbacks: number;
+};
+
 export type SystemDiagnostics = {
   status: SystemDependencyState;
   checkedAt: string;
@@ -954,6 +965,7 @@ export type SystemDiagnostics = {
   rerankFallbacks: Record<string, number>;
   rateLimitTriggers: Record<string, number>;
   embeddingCache: SystemEmbeddingCacheMetrics;
+  vectorSearch: SystemVectorSearchStatus;
   /** Latency, fallback, rate-limit and cache counters reset on restart. */
   metricsSinceRestart: boolean;
 };

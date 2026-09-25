@@ -39,7 +39,7 @@ Browser
 | Go | 1.25，与 `backend/go.mod` 一致 |
 | Node.js | 20 或更高版本 |
 | Docker | Docker Engine 26+ 与 Compose 2.24.4+ |
-| PostgreSQL | PostgreSQL 16，安装 pgvector 扩展 |
+| PostgreSQL | PostgreSQL 15 或 16，安装 pgvector 扩展：HNSW 需要 ≥ 0.5.0，建议 ≥ 0.8.0（支持迭代索引扫描）。低于 0.8.0 时服务仍能返回完整结果，但依赖精确检索回退，知识库较大时检索变慢；`go run ./cmd/doctor` 与诊断页会显示版本。自建或托管数据库须自行核对版本，Compose 镜像 `pgvector/pgvector:pg16` 随拉取时间变化 |
 | Redis | Redis 7 |
 | Web Server | Nginx 1.24+ |
 

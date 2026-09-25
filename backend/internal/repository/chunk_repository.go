@@ -3,7 +3,9 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,6 +34,19 @@ type SearchResult struct {
 
 type ChunkRepository struct {
 	db *gorm.DB
+
+	pgvectorMu     sync.Mutex
+	pgvectorLoaded bool
+	pgvector       PgvectorInfo
+}
+
+// PgvectorInfo describes the vector extension the repository is talking to.
+// Version is empty when the database is not PostgreSQL or the extension is not
+// installed. IterativeScan is true from pgvector 0.8.0, where an HNSW scan can
+// keep going past ef_search until enough rows survive the WHERE clause.
+type PgvectorInfo struct {
+	Version       string
+	IterativeScan bool
 }
 
 func NewChunkRepository(db *gorm.DB) *ChunkRepository {
@@ -296,6 +311,7 @@ func (r *ChunkRepository) SearchByVector(ctx context.Context, kbID uuid.UUID, ve
 		return searchByVector(db, kbID, vector, limit)
 	}
 
+	iterative := r.Pgvector(ctx).IterativeScan
 	// SET LOCAL only lives for the enclosing transaction, which is exactly the
 	// scope wanted: the setting must not leak into the pooled connection.
 	var results []SearchResult
@@ -303,11 +319,118 @@ func (r *ChunkRepository) SearchByVector(ctx context.Context, kbID uuid.UUID, ve
 		if err := tx.Exec(fmt.Sprintf("SET LOCAL hnsw.ef_search = %d", max(minHNSWEfSearch, limit))).Error; err != nil {
 			return err
 		}
+		// ef_search bounds how many neighbours the index hands back before the
+		// knowledge-base and soft-delete filters run, so a filtered scan can
+		// return fewer rows than asked for. From pgvector 0.8 the scan can keep
+		// going until the limit is met; older versions rely on the caller's
+		// exact fallback (see SearchByVectorExact).
+		if iterative {
+			if err := tx.Exec("SET LOCAL hnsw.iterative_scan = strict_order").Error; err != nil {
+				return err
+			}
+		}
 		var err error
 		results, err = searchByVector(tx, kbID, vector, limit)
 		return err
 	})
 	return results, err
+}
+
+// CountVectorSearchable is how many chunks a vector search of this knowledge
+// base could return: published, in a live document, with an embedding. The
+// retrieval service compares it with what SearchByVector returned to detect an
+// index scan that ran out of candidates.
+func (r *ChunkRepository) CountVectorSearchable(ctx context.Context, kbID uuid.UUID) (int64, error) {
+	var count int64
+	err := publishedChunks(r.db.WithContext(ctx), kbID).
+		Where("document_chunks.embedding IS NOT NULL").
+		Count(&count).Error
+	return count, err
+}
+
+// exactVectorSearchSQL filters in a MATERIALIZED CTE before ordering by
+// distance. The planner cannot push an ORDER BY over a CTE scan into the HNSW
+// index, so the result is exact regardless of table size or planner settings.
+// Turning enable_indexscan off is not enough: enable_* only adds a cost
+// penalty, and with other paths also unavailable the planner still picks HNSW.
+const exactVectorSearchSQL = `WITH candidates AS MATERIALIZED (
+	SELECT document_chunks.id, document_chunks.document_id, documents.filename,
+		document_chunks.content, document_chunks.page_number, document_chunks.embedding
+	FROM document_chunks
+	JOIN documents ON documents.id = document_chunks.document_id
+	WHERE document_chunks.knowledge_base_id = ?
+		AND documents.knowledge_base_id = ?
+		AND documents.deleted_at IS NULL
+		AND document_chunks.embedding IS NOT NULL
+)
+SELECT id AS chunk_id, document_id, filename, content, page_number,
+	1 - (embedding <=> ?) AS vector_score
+FROM candidates
+ORDER BY embedding <=> ?
+LIMIT ?`
+
+// SearchByVectorExact returns the same rows as SearchByVector would with an
+// exhaustive scan. It costs a distance computation per chunk of the knowledge
+// base, so it is only the fallback for a short approximate result.
+func (r *ChunkRepository) SearchByVectorExact(ctx context.Context, kbID uuid.UUID, vector []float32, limit int) ([]SearchResult, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	db := r.db.WithContext(ctx)
+	if db.Dialector.Name() != "postgres" {
+		return searchByVector(db, kbID, vector, limit)
+	}
+	var results []SearchResult
+	query := pgvector.NewVector(vector)
+	err := db.Raw(exactVectorSearchSQL, kbID, kbID, query, query, limit).Scan(&results).Error
+	return results, err
+}
+
+// Pgvector reports the installed extension version, read once per repository.
+// A failed lookup is not cached, so a transient error at startup does not
+// switch iterative scans off for the life of the process; until it succeeds the
+// search runs without them and the exact fallback keeps results complete.
+func (r *ChunkRepository) Pgvector(ctx context.Context) PgvectorInfo {
+	r.pgvectorMu.Lock()
+	defer r.pgvectorMu.Unlock()
+	if r.pgvectorLoaded {
+		return r.pgvector
+	}
+	db := r.db.WithContext(ctx)
+	if db.Dialector.Name() != "postgres" {
+		r.pgvectorLoaded = true
+		return r.pgvector
+	}
+	var versions []string
+	if err := db.Raw("SELECT extversion FROM pg_extension WHERE extname = 'vector'").Scan(&versions).Error; err != nil {
+		return PgvectorInfo{}
+	}
+	if len(versions) > 0 {
+		r.pgvector = PgvectorInfo{Version: versions[0], IterativeScan: versionAtLeast(versions[0], 0, 8, 0)}
+	}
+	r.pgvectorLoaded = true
+	return r.pgvector
+}
+
+// versionAtLeast compares dotted numeric versions field by field. A string
+// comparison would put "0.10.0" before "0.8.0"; an unparsable field counts as
+// zero so a pre-release suffix never enables a feature early.
+func versionAtLeast(version string, want ...int) bool {
+	parts := strings.Split(strings.TrimSpace(version), ".")
+	for i, target := range want {
+		value := 0
+		if i < len(parts) {
+			digits := parts[i]
+			if end := strings.IndexFunc(digits, func(r rune) bool { return r < '0' || r > '9' }); end >= 0 {
+				digits = digits[:end]
+			}
+			value, _ = strconv.Atoi(digits)
+		}
+		if value != target {
+			return value > target
+		}
+	}
+	return true
 }
 
 func searchByVector(db *gorm.DB, kbID uuid.UUID, vector []float32, limit int) ([]SearchResult, error) {

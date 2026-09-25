@@ -86,6 +86,9 @@ type SearchDebugFusionItem struct {
 type SearchDebugVectorStage struct {
 	Status string                  `json:"status"`
 	Items  []SearchDebugVectorItem `json:"items"`
+	// ExactFallback is true when the approximate index scan came back short and
+	// the stage was rerun exhaustively; the items are the exact result.
+	ExactFallback bool `json:"exactFallback,omitempty"`
 }
 
 type SearchDebugVectorItem struct {

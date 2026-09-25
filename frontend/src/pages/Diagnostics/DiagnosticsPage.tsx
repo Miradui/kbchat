@@ -207,6 +207,7 @@ function DiagnosticsContent({ sources, onForbidden }: { sources: DiagnosticsSour
   const fallbackEntries = Object.entries(diagnostics?.rerankFallbacks ?? {});
   const rateLimitTriggers = diagnostics?.rateLimitTriggers ?? {};
   const embeddingCache = diagnostics?.embeddingCache;
+  const vectorSearch = diagnostics?.vectorSearch;
 
   return (
     <AppShell active="diagnostics" breadcrumbs={[{ label: '系统诊断' }]}>
@@ -288,7 +289,7 @@ function DiagnosticsContent({ sources, onForbidden }: { sources: DiagnosticsSour
 
                 <section aria-label="当前进程指标" className="ui-panel diagnostics-section diagnostics-runtime">
                   <h2>当前进程指标</h2>
-                  <p className="ui-muted">限流与查询向量缓存统计随服务重启归零。</p>
+                  <p className="ui-muted">限流、查询向量缓存与精确检索回退统计随服务重启归零。</p>
                   <MetricStrip label="限流触发次数" metrics={[
                     {
                       key: 'login-rate-limit',
@@ -318,6 +319,24 @@ function DiagnosticsContent({ sources, onForbidden }: { sources: DiagnosticsSour
                       value: formatRate(embeddingCache?.hitRate ?? null),
                     },
                   ]} />
+                  <MetricStrip label="向量检索" metrics={[
+                    { key: 'pgvector-version', label: 'pgvector 版本', value: vectorSearch?.pgvectorVersion || '未知' },
+                    {
+                      key: 'pgvector-iterative-scan',
+                      label: '迭代索引扫描',
+                      value: vectorSearch?.iterativeScan ? '已启用' : '不支持',
+                      tone: vectorSearch && !vectorSearch.iterativeScan ? 'warn' : 'default',
+                    },
+                    {
+                      key: 'vector-exact-fallbacks',
+                      label: '精确检索回退',
+                      value: vectorSearch?.exactFallbacks ?? 0,
+                      tone: (vectorSearch?.exactFallbacks ?? 0) > 0 ? 'warn' : 'default',
+                    },
+                  ]} />
+                  {vectorSearch && !vectorSearch.iterativeScan && (
+                    <p className="ui-muted">pgvector 低于 0.8.0 时，向量索引可能被知识库与删除过滤截短，服务端会改用精确检索补齐；知识库较大时建议升级。</p>
+                  )}
                 </section>
 
                 <section aria-label="模型 Provider" className="ui-panel diagnostics-section diagnostics-providers">

@@ -197,5 +197,29 @@ describe('RetrievalTestPanel', () => {
     const debug = await screen.findByRole('region', { name: '检索调试信息' });
     expect(debug).toHaveTextContent('该知识库未启用关键词召回');
     expect(debug).toHaveTextContent('精排输入即向量召回结果');
+    expect(debug).not.toHaveTextContent('改用精确检索');
+  });
+
+  it('explains when the vector stage fell back to an exact search', async () => {
+    const user = userEvent.setup();
+    resources.searchKnowledgeBase.mockResolvedValue({
+      items: [],
+      rerankFallback: null,
+      debug: {
+        query: 'q',
+        vectorStage: { status: 'completed', exactFallback: true, items: [{ chunkId: 'c1', documentId: 'd1', filename: 'faq.md', content: '向量片段', pageNumber: null, vectorScore: 0.8, rank: 1 }] },
+        keywordStage: { status: 'disabled', items: [] },
+        fusionStage: { status: 'skipped', items: [] },
+        rerankStage: { status: 'disabled', input: [], output: [] },
+        finalStage: { items: [] },
+        rerankFallback: null,
+      },
+    });
+    render(<RetrievalTestPanel knowledgeBase={knowledgeBase} />);
+    await user.click(screen.getByRole('checkbox', { name: '显示调试信息' }));
+    await user.type(screen.getByRole('searchbox'), 'q');
+    await user.click(screen.getByRole('button', { name: '检索' }));
+    const debug = await screen.findByRole('region', { name: '检索调试信息' });
+    expect(debug).toHaveTextContent('向量索引扫描返回的候选不足，本次已改用精确检索补齐');
   });
 });

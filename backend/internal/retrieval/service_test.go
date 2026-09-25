@@ -47,6 +47,30 @@ type fakeChunkStore struct {
 	keywordCalls      int
 	gotKeywordQuery   string
 	gotKeywordLimit   int
+
+	// searchable overrides CountVectorSearchable; nil reports exactly what the
+	// approximate search returned, which never triggers the exact fallback.
+	searchable      *int64
+	countErr        error
+	countCalls      int
+	exactCandidates []repository.SearchResult
+	exactErr        error
+	exactCalls      int
+	gotExactLimit   int
+}
+
+func (f *fakeChunkStore) CountVectorSearchable(context.Context, uuid.UUID) (int64, error) {
+	f.countCalls++
+	if f.searchable != nil {
+		return *f.searchable, f.countErr
+	}
+	return int64(len(f.candidates)), f.countErr
+}
+
+func (f *fakeChunkStore) SearchByVectorExact(_ context.Context, _ uuid.UUID, _ []float32, limit int) ([]repository.SearchResult, error) {
+	f.exactCalls++
+	f.gotExactLimit = limit
+	return append([]repository.SearchResult(nil), f.exactCandidates...), f.exactErr
 }
 
 func (f *fakeChunkStore) SearchByVector(_ context.Context, _ uuid.UUID, _ []float32, limit int) ([]repository.SearchResult, error) {

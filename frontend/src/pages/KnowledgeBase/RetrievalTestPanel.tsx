@@ -173,6 +173,9 @@ function DebugPanel({ debug }: { debug: KnowledgeBaseSearchDebug }) {
       <div className="retrieval-debug__grid">
         <section>
           <h3>向量召回 ({debug.vectorStage.items.length})</h3>
+          {debug.vectorStage.exactFallback && (
+            <p className="ui-field__hint">向量索引扫描返回的候选不足，本次已改用精确检索补齐</p>
+          )}
           {debug.vectorStage.items.length === 0 ? (
             <p className="ui-field__hint">无候选片段</p>
           ) : (
