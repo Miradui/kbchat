@@ -142,7 +142,10 @@ func (p *OpenAICompatibleProvider) ChatStreamWithOptions(
 	})
 	if err != nil {
 		if streamUnsupportedError(err) {
-			answer, usage, fallbackErr := p.ChatWithUsage(ctx, messages)
+			// Fall back with the same model and temperature: a knowledge base
+			// that overrides the model must not be answered by the default one
+			// just because the upstream refused to stream.
+			answer, usage, fallbackErr := p.ChatWithOptions(ctx, messages, options)
 			if fallbackErr == nil && onDelta != nil {
 				fallbackErr = onDelta(answer)
 			}

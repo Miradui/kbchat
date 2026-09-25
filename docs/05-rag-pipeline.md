@@ -338,6 +338,17 @@ Prompt 必须包含：
 不要编造事实，不要编造引用来源。
 ```
 
+### 知识库回答配置
+
+知识库 `answerConfig` 只在知识型回答（`intent=knowledge_base` 且有召回片段）的最终生成中生效，不影响意图分类、对话型回答与标题提炼。组装顺序固定：
+
+1. 上述基础约束不可删除、不可被覆盖。`allowGeneralKnowledge=true` 时只把第二条替换为“优先基于知识片段回答，片段不足时可补充常识并明确标注。”，其余不变；`answerStatus` 口径不变，仍由 `[[NO_ANSWER]]` 标记与召回结果决定。
+2. `systemPromptAddition`（去首尾空白，最多 2000 个字符）以“知识库回答补充要求：”开头追加在基础约束之后。
+3. `answerLanguage=zh` 追加“请使用中文回答。”，`en` 追加“Please answer in English.”，`auto` 不追加语言指令。
+4. 最后追加拒答识别规则（见“模型拒答识别”）。
+
+`model` 非空时按请求覆盖 Provider 模型，`temperature` 非空时覆盖温度（0–1）；流式不可用而回退为阻塞调用时同样保留这两项覆盖。`model` 只能取 `CHAT_ALLOWED_MODELS` 中的值，白名单为空时任何非空 `model` 都被拒绝。评测运行在创建时快照 `answerConfig`，之后修改知识库不影响该运行；`runtime.chatModel` 记录实际回答模型。
+
 知识片段格式：
 
 ```text

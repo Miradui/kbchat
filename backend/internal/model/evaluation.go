@@ -32,10 +32,13 @@ type EvaluationRun struct {
 	Cases           datatypes.JSON `gorm:"type:jsonb;not null"`
 	Results         datatypes.JSON `gorm:"type:jsonb;not null"`
 	Runtime         datatypes.JSON `gorm:"type:jsonb;not null"`
-	ErrorMessage    string         `gorm:"not null;default:''"`
-	LeaseToken      *uuid.UUID     `gorm:"type:uuid"`
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	StartedAt       *time.Time
-	FinishedAt      *time.Time
+	// AnswerConfig is the knowledge base's answer configuration when the run
+	// was created, so two runs can be compared on prompt and model changes.
+	AnswerConfig datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'"`
+	ErrorMessage string         `gorm:"not null;default:''"`
+	LeaseToken   *uuid.UUID     `gorm:"type:uuid"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	StartedAt    *time.Time
+	FinishedAt   *time.Time
 }

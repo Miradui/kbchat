@@ -134,6 +134,12 @@ func runResponse(run *model.EvaluationRun, detail bool) (*dto.EvaluationRunRespo
 			return nil, apperror.Internal(err)
 		}
 	}
+	res.AnswerConfig = defaultAnswerConfig
+	if len(run.AnswerConfig) > 0 {
+		if err := json.Unmarshal(run.AnswerConfig, &res.AnswerConfig); err != nil {
+			return nil, apperror.Internal(err)
+		}
+	}
 	res.Total, res.CompletedCount = len(res.Cases), len(res.Results)
 	if !detail {
 		res.Cases, res.Results = nil, nil
@@ -194,7 +200,14 @@ func (s *EvaluationService) CreateRun(ctx context.Context, actor, kbID uuid.UUID
 	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].ID < snapshots[j].ID })
 	cases, _ := json.Marshal(snapshots)
 	config, _ := json.Marshal(cfg)
-	run, err := s.repo.CreateRun(ctx, &model.EvaluationRun{ID: uuid.New(), KnowledgeBaseID: kbID, CreatedBy: actor, ClientRequestID: requestID, RequestHash: hash, Name: req.Name, Status: "queued", Cases: cases, Config: config, Results: datatypes.JSON("[]"), Runtime: datatypes.JSON("{}")})
+	// The answer configuration is frozen with the run: a later edit to the
+	// knowledge base must not change what an old run reports it was generated with.
+	kb, err := s.kbs.FindByID(ctx, kbID)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	answerConfig, _ := json.Marshal(storedAnswerConfig(kb))
+	run, err := s.repo.CreateRun(ctx, &model.EvaluationRun{ID: uuid.New(), KnowledgeBaseID: kbID, CreatedBy: actor, ClientRequestID: requestID, RequestHash: hash, Name: req.Name, Status: "queued", Cases: cases, Config: config, AnswerConfig: answerConfig, Results: datatypes.JSON("[]"), Runtime: datatypes.JSON("{}")})
 	if err != nil {
 		return nil, evaluationError(err)
 	}
@@ -274,7 +287,11 @@ func (s *EvaluationService) ProcessNext(ctx context.Context) (bool, error) {
 	if err != nil {
 		return true, err
 	}
-	runtime, _ := json.Marshal(dto.EvaluationRuntime{ChatModel: s.chat.cfg.ChatModel, EmbeddingModel: s.chat.cfg.EmbeddingModel, RerankModel: s.chat.cfg.RerankModel, EffectiveRerank: s.chat.cfg.RerankEnabled && res.Config.EnableRerank})
+	chatModel := s.chat.cfg.ChatModel
+	if res.AnswerConfig.Model != "" {
+		chatModel = res.AnswerConfig.Model
+	}
+	runtime, _ := json.Marshal(dto.EvaluationRuntime{ChatModel: chatModel, EmbeddingModel: s.chat.cfg.EmbeddingModel, RerankModel: s.chat.cfg.RerankModel, EffectiveRerank: s.chat.cfg.RerankEnabled && res.Config.EnableRerank})
 	results := []dto.EvaluationResult{}
 	save := func(status, message string) (bool, error) {
 		data, _ := json.Marshal(results)
@@ -318,7 +335,7 @@ func (s *EvaluationService) ProcessNext(ctx context.Context) (bool, error) {
 		if ok, err := s.repo.Heartbeat(workCtx, run); err != nil || !ok {
 			return true, err
 		}
-		result := s.evaluateCase(workCtx, run, item, res.Config)
+		result := s.evaluateCase(workCtx, run, item, res.Config, res.AnswerConfig)
 		if workCtx.Err() != nil {
 			_, err = save("failed", "评测运行已中断，请重新发起评测。")
 			return true, err
@@ -332,12 +349,12 @@ func (s *EvaluationService) ProcessNext(ctx context.Context) (bool, error) {
 	return true, err
 }
 
-func (s *EvaluationService) evaluateCase(ctx context.Context, run *model.EvaluationRun, item dto.EvaluationCaseResponse, cfg dto.RetrievalConfig) dto.EvaluationResult {
+func (s *EvaluationService) evaluateCase(ctx context.Context, run *model.EvaluationRun, item dto.EvaluationCaseResponse, cfg dto.RetrievalConfig, answerConfig dto.AnswerConfig) dto.EvaluationResult {
 	start := time.Now()
 	result := dto.EvaluationResult{CaseID: item.ID, Citations: []dto.CitationResponse{}, MissingKeywords: []string{}}
 	callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	generated, err := s.chat.generateAnswerWithHooks(callCtx, run.CreatedBy, &model.ChatSession{KnowledgeBaseID: run.KnowledgeBaseID}, item.Question, nil, answerHooks{retrievalConfig: &cfg})
+	generated, err := s.chat.generateAnswerWithHooks(callCtx, run.CreatedBy, &model.ChatSession{KnowledgeBaseID: run.KnowledgeBaseID}, item.Question, nil, answerHooks{retrievalConfig: &cfg, answerConfig: &answerConfig})
 	result.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
 		result.ErrorCode, result.ErrorMessage = "EVALUATION_FAILED", "评测调用失败，请检查系统状态后重试。"

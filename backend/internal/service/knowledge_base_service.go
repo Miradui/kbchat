@@ -265,12 +265,26 @@ func (s *KnowledgeBaseService) Update(ctx context.Context, ownerID, id uuid.UUID
 	}
 	kb := granted.knowledgeBase
 
-	config := defaultConfig(req.RetrievalConfig)
+	// A request that omits a config block keeps what is stored. The settings
+	// page saves retrieval and answer configuration from separate forms, and
+	// the rename dialog sends neither; resetting the absent block to defaults
+	// would silently discard the other form's work.
+	retrievalRequest := req.RetrievalConfig
+	if retrievalRequest == nil {
+		stored := storedRetrievalConfig(kb)
+		retrievalRequest = &stored
+	}
+	config := defaultConfig(retrievalRequest)
 	configJSON, err := json.Marshal(config)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
-	answerConfig, err := s.normalizeAnswerConfig(req.AnswerConfig)
+	answerRequest := req.AnswerConfig
+	if answerRequest == nil {
+		stored := storedAnswerConfig(kb)
+		answerRequest = &stored
+	}
+	answerConfig, err := s.normalizeAnswerConfig(answerRequest)
 	if err != nil {
 		return nil, err
 	}
@@ -868,6 +882,25 @@ func defaultConfig(config *dto.RetrievalConfig) dto.RetrievalConfig {
 	return *config
 }
 
+// storedRetrievalConfig decodes the persisted retrieval block, falling back to
+// the defaults for rows written before the block existed.
+func storedRetrievalConfig(kb *model.KnowledgeBase) dto.RetrievalConfig {
+	config := defaultRetrievalConfig
+	if kb != nil && len(kb.RetrievalConfig) > 0 {
+		_ = json.Unmarshal(kb.RetrievalConfig, &config)
+	}
+	return config
+}
+
+// storedAnswerConfig decodes the persisted answer block the same way.
+func storedAnswerConfig(kb *model.KnowledgeBase) dto.AnswerConfig {
+	config := defaultAnswerConfig
+	if kb != nil && len(kb.AnswerConfig) > 0 {
+		_ = json.Unmarshal(kb.AnswerConfig, &config)
+	}
+	return config
+}
+
 func (s *KnowledgeBaseService) normalizeAnswerConfig(config *dto.AnswerConfig) (dto.AnswerConfig, error) {
 	result := defaultAnswerConfig
 	if config != nil {
@@ -886,7 +919,14 @@ func (s *KnowledgeBaseService) normalizeAnswerConfig(config *dto.AnswerConfig) (
 	if result.Temperature != nil && (*result.Temperature < 0 || *result.Temperature > 1) {
 		return result, apperror.Validation(map[string]any{"answerConfig.temperature": "温度必须在 0 到 1 之间"})
 	}
-	if result.Model != "" && len(s.chatAllowedModels) > 0 {
+	result.Model = strings.TrimSpace(result.Model)
+	if result.Model != "" {
+		// Only models the operator listed in CHAT_ALLOWED_MODELS may be chosen.
+		// An empty list means overrides are not offered at all, so any explicit
+		// model is rejected rather than forwarded unchecked to the provider.
+		if len(s.chatAllowedModels) == 0 {
+			return result, apperror.Validation(map[string]any{"answerConfig.model": "当前未开放模型覆盖，请留空使用全局默认模型"})
+		}
 		allowed := false
 		for _, model := range s.chatAllowedModels {
 			if model == result.Model {

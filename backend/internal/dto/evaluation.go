@@ -38,6 +38,8 @@ type EvaluationResult struct {
 }
 
 type EvaluationRuntime struct {
+	// ChatModel is the model that actually answered: the knowledge base
+	// override when one was configured, otherwise the global default.
 	ChatModel       string `json:"chatModel"`
 	EmbeddingModel  string `json:"embeddingModel"`
 	RerankModel     string `json:"rerankModel"`
@@ -51,6 +53,7 @@ type EvaluationRunResponse struct {
 	Name            string                   `json:"name"`
 	Status          string                   `json:"status"`
 	Config          RetrievalConfig          `json:"config"`
+	AnswerConfig    AnswerConfig             `json:"answerConfig"`
 	Cases           []EvaluationCaseResponse `json:"cases,omitempty"`
 	Results         []EvaluationResult       `json:"results,omitempty"`
 	Runtime         EvaluationRuntime        `json:"runtime"`

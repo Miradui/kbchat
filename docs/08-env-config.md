@@ -6,7 +6,7 @@
 
 ## P4–P6 配置
 
-`CHAT_ALLOWED_MODELS` 是可选的逗号分隔回答模型白名单；`MODEL_PRICING` 可选地提供按百万 token 的 prompt/completion 价格 JSON，用于质量页成本估算。
+`CHAT_ALLOWED_MODELS` 是可选的逗号分隔回答模型白名单，留空表示不开放知识库级模型覆盖；`MODEL_PRICING` 可选地提供按百万 token 的 prompt/completion 价格 JSON（例如 `{"gpt-4.1-mini":{"prompt":0.4,"completion":1.6}}`），配置后质量页用量标签显示估算成本，未配置只显示 token 数，格式非法时启动校验失败。
 
 ## .env.example
 
@@ -95,6 +95,7 @@ VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1
 | `RATE_LIMIT_FAILURE_MODE` | `open` | Redis 计数失败策略：`open` 放行并记录 warning；`closed` 返回 503 |
 | `TRUSTED_PROXY_CIDRS` | 空 | 逗号分隔的可信反向代理 CIDR；只有直连来源可信时才读取 `X-Forwarded-For` |
 | `EMBEDDING_CACHE_TTL` | `24h` | query embedding Redis 缓存 TTL，使用 Go duration 格式 |
+| `CHAT_ALLOWED_MODELS` | 空 | 逗号分隔的知识库回答模型白名单；留空不开放模型覆盖 |
 | `MODEL_PRICING` | `{}` | 按模型的百万 token 价格 JSON，用于质量页成本估算 |
 | `JWT_SECRET` | 无 | JWT 签名密钥；必填，须由密码学安全随机源生成至少 32 字节，并替换示例占位值 |
 | `BOOTSTRAP_ADMIN_PASSWORD` | 空 | 仅运维 CLI 显式创建首位系统管理员时使用；至少 8 个字符、最多 72 个 UTF-8 字节。提升现有用户时不读取或覆盖其密码 |

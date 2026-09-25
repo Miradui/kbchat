@@ -340,6 +340,7 @@ pageSize=20         最大 100
 
 - `rerankEnabled` 来自 `RERANK_ENABLED`
 - `keywordSearchEnabled` 来自 `KEYWORD_SEARCH_ENABLED`，为 `false` 时知识库的 `enableKeyword` 会保存但不生效
+- `chatModels` 来自 `CHAT_ALLOWED_MODELS`，是知识库 `answerConfig.model` 唯一可选的值；为空数组时不开放模型覆盖
 - `upload.maxFileBytes` 来自 `MAX_UPLOAD_SIZE_MB`
 - `upload.allowedExtensions` 就是文档上传校验使用的白名单
 - `retrieval.*` 就是检索服务对 `vectorTopN` / `rerankTopK` 的硬上限
@@ -632,6 +633,13 @@ map 生成，改代码不改表就会与实现不一致；`internal/access/capab
     "scoreThreshold": 0.3,
     "enableRerank": true,
     "enableKeyword": true
+  },
+  "answerConfig": {
+    "systemPromptAddition": "",
+    "answerLanguage": "auto",
+    "allowGeneralKnowledge": false,
+    "model": "",
+    "temperature": null
   },
   "updatedBy": {
     "id": "uuid",
@@ -2279,6 +2287,7 @@ MVP 语义：
 | `id`, `knowledgeBaseId`, `clientRequestId`, `name` | 标识和运行名称 |
 | `status` | queued / running / completed / failed / cancelled |
 | `config` | 请求的检索配置快照，不修改知识库默认配置 |
+| `answerConfig` | 创建时知识库 `answerConfig` 的快照；之后修改知识库不影响该运行，对比页据此展示配置差异 |
 | `runtime` | `chatModel`、`embeddingModel`、`rerankModel`、`effectiveRerank`；执行前模型字段为空 |
 | `cases` | 详情包含完整问题快照，含 question、expectedAnswer、requiredKeywords、requireCitation |
 | `results` | 详情中的已完成题目结果；尚无结果时可省略 |

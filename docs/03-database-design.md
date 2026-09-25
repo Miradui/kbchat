@@ -363,6 +363,7 @@ CREATE TABLE evaluation_runs (
     cases JSONB NOT NULL,
     results JSONB NOT NULL DEFAULT '[]',
     runtime JSONB NOT NULL DEFAULT '{}',
+    answer_config JSONB NOT NULL DEFAULT '{"answerLanguage":"auto","allowGeneralKnowledge":false,"model":""}',
     error_message TEXT NOT NULL DEFAULT '',
     lease_token UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

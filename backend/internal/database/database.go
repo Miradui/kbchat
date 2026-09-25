@@ -126,6 +126,7 @@ func validateSchema(ctx context.Context, db *gorm.DB) error {
 			{&model.DocumentChunk{}, "search_vector", "024_hybrid_search.sql"},
 			{&model.User{}, "status", "025_user_status_and_admin.sql"},
 			{&model.KnowledgeBase{}, "answer_config", "027_kb_answer_config.sql"},
+			{&model.EvaluationRun{}, "answer_config", "028_evaluation_answer_config.sql"},
 		} {
 			if !migrator.HasColumn(required.model, required.column) {
 				return fmt.Errorf("database schema incompatible: missing %s; apply migration %s", required.column, required.migration)

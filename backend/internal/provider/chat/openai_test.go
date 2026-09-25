@@ -268,3 +268,48 @@ func TestChatStreamAcceptsBlockingJSONFromStreamRequest(t *testing.T) {
 		t.Fatalf("expected no second request for an already successful JSON response, got %d", requests.Load())
 	}
 }
+
+func TestChatStreamFallbackKeepsModelAndTemperatureOverrides(t *testing.T) {
+	var models []string
+	var temperatures []float32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Model       string  `json:"model"`
+			Stream      bool    `json:"stream"`
+			Temperature float32 `json:"temperature"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		models = append(models, request.Model)
+		temperatures = append(temperatures, request.Temperature)
+		w.Header().Set("Content-Type", "application/json")
+		if request.Stream {
+			w.WriteHeader(http.StatusUnsupportedMediaType)
+			_, _ = fmt.Fprint(w, `{"error":{"message":"stream is not supported"}}`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"model":"kb-model","choices":[{"message":{"role":"assistant","content":"回退回答"}}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}`)
+	}))
+	defer server.Close()
+
+	temperature := 0.7
+	answer, usage, err := newOpenAIStreamTestProvider(server.URL).ChatStreamWithOptions(
+		context.Background(),
+		[]chatcore.Message{{Role: "user", Content: "问题"}},
+		func(string) error { return nil },
+		chatcore.Options{Model: "kb-model", Temperature: &temperature},
+	)
+	if err != nil {
+		t.Fatalf("chat stream fallback: %v", err)
+	}
+	if answer != "回退回答" || usage.Model != "kb-model" || usage.TotalTokens != 7 {
+		t.Fatalf("unexpected fallback answer=%q usage=%#v", answer, usage)
+	}
+	if len(models) != 2 || models[0] != "kb-model" || models[1] != "kb-model" {
+		t.Fatalf("fallback must keep the overriding model on both attempts, got %#v", models)
+	}
+	if len(temperatures) != 2 || temperatures[1] != 0.7 {
+		t.Fatalf("fallback must keep the overriding temperature, got %#v", temperatures)
+	}
+}

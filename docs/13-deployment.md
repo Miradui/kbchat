@@ -323,6 +323,14 @@ cd /opt/rag/app/backend
 
 ### 7.4 初始化系统管理员
 
+升级到 2026-09-20 之后的版本还需依次执行 025–028：
+
+```bash
+for m in 025_user_status_and_admin.sql 026_model_usage_records.sql 027_kb_answer_config.sql 028_evaluation_answer_config.sql; do ./bin/rag-migrate -migration $m; done
+```
+
+025 为 `users` 增加状态与最近登录时间；026 新建 `model_usage_records`；027 为 `knowledge_bases` 增加 `answer_config`；028 为 `evaluation_runs` 增加 `answer_config` 快照。四个迁移都是 `ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS`，可重复执行，耗时与表锁都很短。新版 backend 启动时会检查 024–028 对应的列与表，缺失时直接报错并指出需要的迁移文件。
+
 先执行数据库迁移，再通过 CLI 指定首位系统管理员。新部署可直接创建账号，密码至少 8 个字符、最多 72 个 UTF-8 字节：
 
 ```bash

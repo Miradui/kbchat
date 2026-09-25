@@ -1438,6 +1438,9 @@ type generatedChatAnswer struct {
 type answerHooks struct {
 	// Evaluations supply a snapshot without mutating the knowledge base defaults.
 	retrievalConfig *dto.RetrievalConfig
+	// answerConfig is the answer configuration snapshot an evaluation run was
+	// started with. nil means "read the knowledge base's current config".
+	answerConfig *dto.AnswerConfig
 	// onCitations fires once retrieval has settled, before any answer text
 	// exists, because the citations are an input to the prompt rather than a
 	// product of the completion.
@@ -1637,10 +1640,7 @@ func (s *ChatService) generateAnswerWithHooks(
 	// is a real statement about the knowledge base rather than a failure.
 	answerStatus := AnswerStatusNoBasis
 	if len(searchRes.Items) > 0 {
-		answerConfig := dto.AnswerConfig{AnswerLanguage: "auto"}
-		if kb, fetchErr := s.knowledgeBases.FindByID(ctx, session.KnowledgeBaseID); fetchErr == nil && kb != nil && len(kb.AnswerConfig) > 0 {
-			_ = json.Unmarshal(kb.AnswerConfig, &answerConfig)
-		}
+		answerConfig := s.resolveAnswerConfig(ctx, session.KnowledgeBaseID, hooks.answerConfig)
 		var firstToken time.Duration
 		// Streamed through the gate so the marker is never shown to the user. The
 		// gate holds back at most the marker's own length before deciding.
