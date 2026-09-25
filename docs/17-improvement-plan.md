@@ -1,6 +1,6 @@
 # 功能优化计划
 
-制定日期：2026-09-20。本文件是 2026-09 功能巡检后确定的六个改进阶段的实施计划。每个阶段独立交付、独立验证；阶段完成后把状态记入 [跨会话交接](12-handoff.md)，并把稳定下来的行为写进对应规范（API、数据库、RAG、环境变量、前端）。本文件只维护计划与完成状态，不重复规范内容。
+制定日期：2026-09-20，2026-09-21 按代码审查结果复核并修订状态，2026-09-24 评估未完成验收与暂缓项并增补 P7–P15。本文件是 2026-09 功能巡检后确定的改进阶段实施计划。每个阶段独立交付、独立验证；阶段完成后把状态记入 [跨会话交接](12-handoff.md)，并把稳定下来的行为写进对应规范（API、数据库、RAG、环境变量、前端）。本文件只维护计划与完成状态，不重复规范内容。
 
 ## 背景与结论
 
@@ -31,6 +31,28 @@ P6 按知识库定制回答配置（系统提示、模型覆盖）
 ```
 
 P1、P2 直接决定回答质量和线上安全，先做。P3 到 P6 相互独立，可按需要调整先后；P6 依赖 P5 的模型名与用量记录才能完整展示，建议放在 P5 之后。
+
+2026-09-24 评估（见“2026-09-24 评估”一节）后增补：
+
+```text
+P7  向量召回过滤短缺修复（HNSW + 知识库 / 软删除过滤）
+P8  引用位置信息与原文定位
+P9  小型正确性修复（用量模型名与分组、最后更新人、确定性失败不重试、集成测试挂起）
+P10 真实环境验收（P1–P9，须用户授权）
+P11 知识缺口转测试问题与管理员操作记录
+P12 知识库所有权转移
+P13 粘贴文本入库
+P14 文档任务租约（多实例或滚动发布前置）
+P15 Embedding 模型记录、维度校验与重建工具
+```
+
+- **先做 P7–P9**：修正已确认的缺陷，三者互不依赖。
+- **P10**：在 P7–P9 之后执行。它要在共享开发库写数据并调用真实模型，须先得到用户授权；未获授权不阻塞 P11 之后的阶段。
+- **P8**：前端改动基于 [前端改进计划](18-frontend-improvement-plan.md) F1–F6 改过的 `ChatSourcePreview.tsx` 进行（F1–F6 已于 2026-09-25 在本地完成，2026-09-26 提交）。
+- **P11–P13**：相互独立。
+- **P14**：在部署多个 backend 实例或滚动发布之前完成。
+- **P15**：在切换 `EMBEDDING_MODEL` 之前完成。
+- **新增迁移**：按实施顺序取下一个可用编号，并加入启动时的 schema 校验（参照 `backend/internal/database/database.go` 对 024–028 的做法）。
 
 每个阶段遵循相同的交付流程：迁移与后端 → 后端测试 → 前端 → 前端测试与构建 → 文档同步 → 交接记录。后端遵循 `handler -> service -> repository`，数据库走 GORM，模型调用走 Provider 接口。
 
@@ -258,17 +280,492 @@ P1、P2 直接决定回答质量和线上安全，先做。P3 到 P6 相互独�
 
 ---
 
-## 本计划暂不包含
+## 2026-09-24 评估
 
-以下项在巡检中提出，但本轮不排期，待上述阶段完成后再评估：跨知识库会话、URL / 粘贴文本入库、扫描 PDF OCR、追问建议、引用在 PDF 预览中的高亮定位、知识缺口一键转测试问题、每知识库独立 embedding 模型、多实例 worker 租约协议、独立审计表、知识库所有权转移、公开注册。
+评估方法：
+- 在本地运行全量检查。
+- 对开发库（`.env` 指向的共享 PostgreSQL 与 Redis）只做只读查询，在 READ ONLY 事务内执行并回滚。
+- 没有调用模型服务，也没有写业务数据。
+- 探针脚本在被 Git 忽略的 `backend/tmp/_eval-20260924/`，输出在 `output/eval-*.log`。
+
+### 环境与数据
+
+- **本地检查**（2026-09-24 17:10 左右的工作区，早于前端改进 F1–F6）：后端 `go vet ./...`、`go test ./...` 通过；前端 76 个测试文件 698/698 通过，`npm run build`（含 11 项路由分包检查）通过。
+- **开发库版本**：PostgreSQL 15.4、pgvector 0.5.1。部署文档写的是 PostgreSQL 16，也没写 pgvector 最低版本。
+- **迁移状态**：public schema 已含 024–028 的列与表；`search_vector` 没有空值，说明关键词回填已完成。
+- **数据量**：
+  - 1 个知识库；166 个 chunk，其中 77 个属于已软删除文档。
+  - 有效文档为 1 个 Markdown、1 个 PDF，没有 DOCX。
+  - 1 个系统管理员，0 次评测运行。
+  - `model_usage_records` 只有 2026-09-20 修复前的 2 条。
+  - Redis 中 `embed:*`、`ratelimit:*` 都是 0 个键。
+  - 2026-09-20 之后没有真实问答。
+- **存储抽样**（166 个 chunk，平均 719 字符，只能看量级）：
+  - `search_vector` 平均每个 chunk 3.7 KB，约为正文字节数的 2.5 倍。
+  - `search_vector` 与 GIN 索引合计约占 `document_chunks` 总体积的 44%（2.6 MB / 6.0 MB）。
+- **遗留测试 schema**：开发库中有 5 个，已于 2026-09-24 删除，删除前的表与行数记录在 `output/eval-dropped-schemas-20260924.json`。
+  - 4 个 `rag_it_*`：PostgreSQL 集成测试挂起后没有清理。
+  - 1 个 `rag_accept_*`：来自 2026-09-15 的 PDF 预览验收。
+
+### P1–P6 验收缺口
+
+| 阶段 | 未完成的验收 | 现状 | 去向 |
+| --- | --- | --- | --- |
+| P1 | 真实数据命中率对照、`EXPLAIN` 走索引 | 当前数据量下规划器选择全表扫描；强制走 HNSW 会暴露召回短缺 | 命中率对照入 P10；“走索引”改为 P7 的“走索引时不短缺” |
+| P2 | Redis 停机演练、浏览器复验 | 没有流量记录 | P10 |
+| P3 | 真实 DOCX 端到端 | 开发库没有 DOCX | P10；引用定位缺陷见 P8 |
+| P4 | 界面流程、真实部署 | 025 已执行；没有 `admin.user.*` 活动 | P10；禁用所有者后知识库无人能管理，见 P12 |
+| P5 | 真实 Provider usage | 修复前的 2 条记录证明 DeepSeek 返回 usage，但记下的是返回的模型名 | 模型名问题见 P9；复验入 P10 |
+| P6 | 模型覆盖、两库风格对比、评测快照 | 只有 1 个知识库；`CHAT_ALLOWED_MODELS` 只有默认模型；0 次评测运行 | P10 |
+
+### 新发现的缺陷
+
+1. **HNSW 过滤后召回短缺**：pgvector 0.5.1 下强制走 HNSW，6 个样本查询中有 1 个只返回 6/30。见 P7。
+2. **Markdown / DOCX 引用无法定位**：chunk 内容带标题前缀，来源预览按原文精确匹配，所以总是失败。开发库 Markdown 文档的 83 个 chunk 全都带多级标题前缀。见 P8。
+3. **用量模型名与定价对不上**：用量记录的是 Provider 返回的模型名（真实记录为 `deepseek-flash`，配置为 `deepseek-v4-flash`）。`MODEL_PRICING` 按记录名匹配，按配置名写的价格会全部显示为未定价。见 P9。
+4. **知识库“最后更新人”不更新**：编辑后该字段不变；管理员编辑后的回读能成功，只是因为指针别名碰巧改掉了参数。见 P9。
+
+---
+
+## P7 向量召回过滤短缺修复
+
+### 目标
+
+规划器选择 HNSW 索引时，向量召回仍返回 `min(vectorTopN, 该知识库可检索 chunk 数)` 条，且与精确结果一致；不再取决于数据量和 pgvector 版本。
+
+### 问题与证据
+
+- **原因**：HNSW 扫描最多产出 `hnsw.ef_search` 个近邻，知识库与软删除条件在扫描之后才过滤。pgvector 0.8.0 之前没有迭代扫描，被过滤掉的候选不会补回。
+- **现有措施不够**：`backend/internal/repository/chunk_repository.go` 的 `SearchByVector` 设置 `SET LOCAL hnsw.ef_search = max(40, limit)`，这只在不过滤时够用。[RAG 规范](05-rag-pipeline.md)“pgvector 查询约束”第 6 条说“保证候选不少于请求数量”，有过滤时不成立。
+- **复现（2026-09-24，开发库只读事务）**：
+  - 做法：关闭 `enable_seqscan`、`enable_bitmapscan`、`enable_sort`，并把知识库条件改为文本比较使 btree 不可用，从而把生产查询强制为 HNSW 索引扫描；样本查询取有效 chunk 自身的向量。
+  - 结果：6 个样本中有 1 个，全表最近 40 个近邻里 34 个属于已删除文档，只返回 6 条，与精确结果重合 0.20；`ef_search=100` 时返回 27 条。其余 5 个都是 30/30。
+- **风险**：规划器今天选择全表扫描，结果是精确的。表变大后会改选 HNSW，届时短缺静默出现，没有任何指标报告。多知识库时，其他知识库的 chunk 同样会占用候选额度。
+
+### 设计要点
+
+1. **版本探测**：`ChunkRepository` 首次在 PostgreSQL 上做向量检索时读取 `pg_extension.extversion`，用 `sync.Once` 缓存，按数字段比较版本（不做字符串比较）。版本 ≥ 0.8.0 时，在同一事务内追加 `SET LOCAL hnsw.iterative_scan = strict_order`，`hnsw.max_scan_tuples` 保持默认。
+2. **短缺兜底（所有版本）**：
+   - 在 `retrieval.Service.Search` 的向量阶段，若返回数少于 `vectorTopN`，调用新增的 `ChunkRepository.CountVectorSearchable(ctx, kbID)`。它的条件与 `publishedChunks` 相同，外加 `embedding IS NOT NULL`。
+   - 可检索数大于已返回数时，调用新增的 `SearchByVectorExact`：先用 `WITH … AS MATERIALIZED` 取出该知识库已发布且未删除的 chunk，再在 CTE 上按距离排序取前 N。HNSW 无法作用于 CTE 扫描，所以结果一定精确，也不依赖 `enable_*` 规划器参数。
+     - 不要只用 `SET LOCAL enable_indexscan = off`：`enable_*` 只给路径加惩罚成本，其他路径也被禁用时，规划器仍可能选 HNSW。
+     - 2026-09-24 在开发库只读验证（`backend/tmp/_eval-20260924/evalprobe4`）：在强制参数下，CTE 写法的 6 个样本全部与精确结果一致；只关 `enable_indexscan` 的写法，样本 1 仍走 HNSW，只返回 6 条。
+   - SQLite 路径下两个方法等价。
+3. **可观测**：
+   - `observability.Recorder` 增加精确回退计数，在 `system/diagnostics` 展示。
+   - 检索 debug 的 `vectorStage` 增加 `exactFallback`（布尔，省略表示 false）；为 true 时，检索测试面板显示一行说明。
+   - 诊断同时展示 pgvector 版本与是否启用迭代扫描。
+4. **不变的行为**：`vectorScore`、RRF、Rerank、阈值语义不变。关键词召回走 GIN 位图扫描，不受影响。
+5. **运维**：
+   - `cmd/doctor` 输出 pgvector 版本；低于 0.8.0 时提示“依赖精确回退兜底，建议升级”。
+   - [部署指南](13-deployment.md) 写明：HNSW 需要 pgvector ≥ 0.5.0，建议 ≥ 0.8.0；自建数据库需要核对版本。
+   - [环境变量规范](08-env-config.md) 中“避免超过 ivfflat 维度限制”改为 HNSW 的限制（`vector` 类型索引上限 2000 维）。
+
+### 涉及改动
+
+- `backend/internal/repository/chunk_repository.go`（版本探测、迭代扫描、`CountVectorSearchable`、`SearchByVectorExact`）、`backend/internal/retrieval/service.go`（回退与计数）、`backend/internal/dto/search.go`、`backend/internal/observability`、`backend/internal/service/system_diagnostics.go`、`backend/cmd/doctor`。
+- 前端 `RetrievalTestPanel.tsx`、诊断页、`types/api.ts`。
+- 文档：`05-rag-pipeline.md`（改写第 6 条，补回退规则与 debug 字段）、`04-api-design.md`（debug 与诊断字段）、`13-deployment.md`、`08-env-config.md`。
+
+### 测试
+
+- **PostgreSQL 集成测试**（`RAG_TEST_POSTGRES_DSN`，独立 schema）：
+  - 沿用 `postgres_concurrency_integration_test.go` 的 harness；search_path 需包含 public，才能使用 `vector` 类型与 `<=>`。
+  - 数据：用 3 维向量构造知识库 A 的 40 个有效 chunk、离查询最近的 60 个已删除文档 chunk、知识库 B 的 200 个近邻 chunk，并建 HNSW 索引。
+  - 在会话级关闭 `enable_seqscan`、`enable_bitmapscan`、`enable_sort`，强制走索引。
+  - 断言检索服务返回 30 条且与精确结果一致；pgvector < 0.8 时再断言确实触发了精确回退。
+- **retrieval 单元测试**（替身仓库）：返回数不足且可检索数更多时回退；可检索数等于返回数时不回退；回退计数与 `exactFallback` 字段正确；`vectorTopN` 截断不变。
+- 现有 retrieval 与 repository 测试不改动即通过。
+
+### 验收
+
+- 上述集成测试通过。
+- 在开发库用同样的强制计划复测 2026-09-24 的 6 个样本（方法见 `backend/tmp/_eval-20260924/evalprobe2`）：检索结果全部为 30 条，且与精确结果一致。
+- 诊断页能看到 pgvector 版本、迭代扫描状态与精确回退计数。
+
+### 风险
+
+- 精确回退在大知识库上要对全部 chunk 算距离（1536 维向量存于 TOAST），延迟随知识库 chunk 数线性增长。回退计数会暴露它的频率；频繁发生时应升级 pgvector，启用迭代扫描。
+
+---
+
+## P8 引用位置信息与原文定位
+
+### 目标
+
+TXT、Markdown、DOCX 的聊天引用在来源预览中能准确定位并高亮 chunk 的主来源正文，同时为以后的 PDF 引用高亮提供位置数据。
+
+### 问题与证据
+
+- **现象**：切片器把标题路径以 `一级 > 二级\n` 的形式写在 chunk `content` 开头（`backend/internal/document/splitter/splitter.go` `chunkBuilder.content`），citations 原样复制该 `content`（`backend/internal/service/chat_service.go` `citationsFromSearch`）。来源预览（`frontend/src/pages/Chat/ChatSourcePreview.tsx`）用 `content.indexOf(excerpt)` 在原文中精确查找，带前缀的 chunk 永远匹配不上，只显示“可对照上方摘录阅读原文”。overlap 复制的内容同样会让精确匹配失败。
+- **开发库证据**：唯一的 Markdown 文档，83 个 chunk 全部带多级标题前缀。
+- **已有的位置数据**：chunk `metadata` 里已有 `startOffset` / `endOffset`，表示主来源正文在规范化 segment 内的 UTF-8 字节偏移，不含标题前缀与 overlap（见 RAG 规范“切片规则”）。
+  - TXT、Markdown、DOCX 各只有一个 segment；规范化指去 BOM、把 `\r\n` / `\r` 转为 `\n`。
+  - 预览接口对 TXT / Markdown 返回原始文本（可能含 BOM 与 CRLF），对 DOCX 返回解析后的同一 segment 文本。
+  - 检索 SQL 目前没有选出 `metadata`。
+
+### 设计要点
+
+1. **后端**：
+   - `SearchByVector`、`SearchByKeyword` 与 P7 的精确查询一并选出 `document_chunks.metadata`。
+   - 在 retrieval 层解析出 `startOffset`、`endOffset`，加入 `SearchResultResponse` 与 `CitationResponse`（可空，camelCase）。解析失败或缺失时为空，不报错。
+   - 融合、Rerank、阈值过滤之后保留这两个字段。
+   - 新消息的 citations 随 JSONB 持久化；旧消息不回填。
+2. **前端定位**：
+   - 预览文本先去掉开头的 U+FEFF，把 `\r\n` / `\r` 转为 `\n`。
+   - 再用 `TextEncoder` 编码，把字节偏移换算成字符串下标（例如解码 `[0, start)` 后取长度）。
+   - 偏移越界、不落在字符边界、或文件类型为 PDF 时，不使用偏移。
+3. **没有偏移的旧引用**：先整段精确匹配；失败且 `content` 含换行时，去掉首行（标题前缀）再匹配；仍失败则保持现有提示。
+4. **不在本阶段**：
+   - PDF 高亮：偏移是 Go 解析器的页内文本偏移，与 pdf.js 文本项不对应，见暂缓项。
+   - `DocumentDetailDrawer` 片段列表的定位不改。
+
+### 涉及改动
+
+- `backend/internal/repository/chunk_repository.go`（`SearchResult` 增加 metadata）、`backend/internal/retrieval/service.go`、`backend/internal/dto/search.go`、`backend/internal/dto/chat.go`、`backend/internal/service/chat_service.go`。
+- 前端 `ChatSourcePreview.tsx`、`types/api.ts`。
+- 文档：`05-rag-pipeline.md`（citations 字段）、`04-api-design.md`（search 与 citation 响应）、`10-frontend-spec.md`（定位规则）。
+
+### 测试
+
+- **后端**：
+  - 检索结果在向量、关键词、融合、Rerank 与 fallback 各路径都携带偏移。
+  - metadata 缺失或非法时偏移为空。
+  - citations 持久化后读回仍含偏移。
+- **前端 `ChatSourcePreview.test.tsx`**：
+  - 带多级标题前缀的 Markdown chunk 按偏移高亮正文。
+  - 中文多字节字符与 emoji 的偏移换算正确。
+  - 源文件带 BOM 与 CRLF 时仍能定位。
+  - DOCX 预览文本能定位。
+  - 旧引用去掉首行后能匹配。
+  - 偏移越界时显示原有提示。
+
+### 验收
+
+- 开发库那份 Markdown 文档的任意引用，“定位到引用”高亮的文本与 chunk 主来源正文一致（在 1920×1080 浏览器复验，可并入 P10）。
+- 旧会话的引用行为不退化。
+
+---
+
+## P9 小型正确性修复
+
+以下四项互不依赖，可分开提交。
+
+### A. 用量模型名与按用途分组
+
+- **问题**：
+  - `chatcore.Usage.Model` 取的是 Provider 响应里的 `model`（`backend/internal/provider/chat/openai.go` 的非流式与流式路径、`backend/internal/provider/title/openai.go`）。服务商常返回规范名而不是请求名：开发库真实记录为 `deepseek-flash`，而配置与白名单为 `deepseek-v4-flash`。
+  - `MODEL_PRICING` 按记录名匹配（`chat_service.go` `GetChatUsage`），按配置名写的价格会显示为未定价。
+  - 非流式路径在响应缺少 `model` 时，服务层回退到全局 `CHAT_MODEL`，知识库覆盖的模型会被记错。
+- **修复模型名**：Provider 的 `Usage.Model` 一律填本次请求实际发送的模型名（全局配置或 `answerConfig.model` 覆盖），不再用响应中的名称；服务层的回退保留作兜底。不新增列，已有记录不回填，在 API 规范中说明 `model` 是请求模型名。
+- **新增按用途分组**：用量接口的 `groupBy` 增加 `purpose`（`intent` / `answer` / `title` / `evaluation`），同步修改 `backend/internal/repository/model_usage_repository.go` `groupExpressions` 与 `chat_service.go` 中的校验。前端 `UsagePanel.tsx` 增加“按用途”选项和中文标签。
+- **测试**：Provider 返回不同模型名时记录请求名；覆盖模型被正确记录；按用途聚合正确；按配置名定价后成本非空。
+- **文档**：`04`、`03`（`model` 列语义）、`08`（`MODEL_PRICING` 的键是配置中的模型名）。
+
+### B. 知识库“最后更新人”
+
+- **问题**：
+  - `KnowledgeBaseRepository.Update` 对预加载了 `Owner` / `UpdatedBy` 的对象执行 `Save`。GORM 保存 belongs-to 关联时，用旧的 `UpdatedBy.ID` 覆盖外键，所以 `updated_by_id` 不会变成本次编辑者。
+  - 又因为 `kb.UpdatedByID = &ownerID` 指向函数参数，这个参数也被改成了旧更新人。`Update` 随后用 `FindByIDAndOwner(kb.ID, ownerID)` 回读，对管理员只是“碰巧”成功（2026-09-24 用临时测试与 SQL 日志确认）。
+  - 这次 `Save` 还会对关联用户多做一次 upsert。
+  - 涉及 `knowledge_base_service.go` 的 `Update`、`BatchMoveCategory`、`UpdatePermissions` 三处 `kb.UpdatedByID = &ownerID`。
+- **修复**：
+  - `Update` 改为 `Omit(clause.Associations).Save(kb)`。
+  - 三处都不再取参数地址。
+  - `Update` 结束时的回读改为 `FindByID`（授权在前面已经完成）。
+  - 前端“最后更新人”的显示不变。
+- **测试**：
+  - 管理员改名、改检索配置、改回答配置后返回 200；`updated_by_id` 为该管理员，`owner_id` 不变。
+  - 另一位管理员再次编辑后，更新人随之变化。
+  - 批量移动分类与修改可见性同样记录编辑者。
+
+### C. 确定性失败不重试
+
+- **问题**：worker 对所有失败都先重试 `maxRetries` 次（默认 3 次，间隔 10 秒）再分类（`backend/internal/job/worker.go`）。没有文字层的 PDF、编码错误、损坏文件每次都白跑三轮，用户要多等约 30 秒才看到原因。
+- **修复**：`processor.ClassifyError` 的结果为 `encoding_invalid`、`corrupt_file`、`empty_content`，或错误链包含 `storage.ErrNotFound` 时，直接 `FailJobWithCode`。`embedding_failed`、`storage_failed`（非 NotFound）与 `internal` 继续重试。
+- **测试**：各类确定性错误一次即失败并写入错误码；可重试错误的行为不变。
+
+### D. PostgreSQL 集成测试挂起与 schema 清理
+
+- **问题**：设置 `RAG_TEST_POSTGRES_DSN` 后，`TestPostgresRecycleBinRestoreLosesToPermanentDelete/chat_session` 会挂起直到 `go test` 超时。此时 `t.Cleanup` 不执行，独立 schema 残留在库里（开发库曾残留 4 个）。
+- **修复**：
+  - `postgresDSNWithSearchPath` 按设置 `search_path` 的方式追加 `lock_timeout`（如 5s）与 `statement_timeout`（如 60s）运行参数，让挂起变成可诊断的失败。
+  - schema 名改为 `rag_it_<UTC 时间戳>_<随机>`；harness 启动时删除时间戳早于 24 小时的 `rag_it_` schema。
+  - 再根据失败信息定位并修复该用例的锁等待。
+- **测试**：在授权的测试库上完整运行 `RAG_TEST_POSTGRES_DSN` 相关测试，全部能结束，且不残留 schema。
+
+---
+
+## P10 真实环境验收
+
+### 目标
+
+在真实服务上补齐 P1–P9 的验收，结果记入交接。
+
+### 前置与授权
+
+执行前须得到用户明确授权。这一阶段会：
+- 在共享开发库写入业务数据（知识库、文档、会话、评测、用户）；
+- 调用真实 Chat / Embedding 服务并产生费用；
+- 临时修改 `.env`，例如在 `CHAT_ALLOWED_MODELS` 增加第二个模型、配置 `MODEL_PRICING`。
+
+验收结束后删除临时数据并恢复配置。不得停止共享 Redis。真实浏览器检查只用 1920×1080。
+
+### 清单
+
+| 项 | 做法 | 记录 |
+| --- | --- | --- |
+| P1 命中率 | 从现有文档挑至少 10 个含型号、错误码、专有名词的问题，用检索测试接口分别在 `enableKeyword` 开与关下运行 | 每题目标 chunk 是否在 `vectorTopN` 内及排名 |
+| P7 | 用强制 HNSW 计划复测 2026-09-24 的 6 个样本 | 返回数，以及与精确结果的重合率 |
+| P2 | 本机另起临时 Redis 与临时 backend：验证第 11 次登录返回 429 并带 `Retry-After`；同一问题两次检索命中缓存；停止该临时 Redis 后，`open` 模式下仍可登录和问答 | 响应码、诊断计数 |
+| P3 / P8 | 上传含 Heading、多级列表、表格、合并单元格的 DOCX；查看片段的 `headingPath` / `structureType`；在聊天中引用它并点“定位到引用” | 片段结构、定位是否准确 |
+| P4 | 在界面上创建用户、禁用用户（其旧会话下一次请求返回 401）、重置密码、授予与撤销管理员、验证最后管理员保护 | 每一步的结果与活动记录 |
+| P5 / P9A | 新会话首问产生 `intent`、`answer`、`title` 三条记录，`message_id` 已回填，`model` 为配置名；运行一次评测，产生 `evaluation` 记录；配置价格后质量页显示成本；按用途分组 | 用量记录与页面截图 |
+| P6 | 白名单加入第二个模型；建第二个知识库，两库设置不同的 `systemPromptAddition` 与模型；用同一问题比较回答风格和 citations 规则；运行评测并在对比页看到配置差异 | 回答摘要、`runtime.chatModel`、对比页 |
+| P9B | 以管理员成员身份给知识库改名 | “最后更新人” |
+
+### 验收
+
+清单每一项都有记录；失败项登记为缺陷，回到对应阶段修复。
+
+---
+
+## P11 知识缺口转测试问题与管理员操作记录
+
+### A. 知识缺口一键转测试问题
+
+- **现状**：负反馈行已有“保存为测试问题”，它预填 `EvaluationCaseDialog` 并切到评测标签（`frontend/src/pages/Quality/QualityPage.tsx`）。知识缺口行只有“查看会话”“补充资料”“查看系统状态”。缺口项已带 `question` 与 `knowledgeBaseId`。
+- **做法**（纯前端，不改接口）：
+  - 四类缺口行都增加“保存为测试问题”，复用同一个对话框和跳转；`repeated_rewrite` 聚类用它的代表问题。
+  - 打开对话框前，用现有接口读取该知识库已有的测试问题。问题文本 trim 并折叠空白后完全相同时，提示“已在测试集中”，不重复创建。
+  - 达到每库 200 条上限时，展示后端返回的错误。
+  - 权限与现有一致（`quality.read`）。
+- **修正 API 规范**：[API 规范](04-api-design.md) 中 `no_citations` 的定义要改。代码实际选取的是 citations 为空、且 `answer_status` 不是 `retrieval_failed` / `model_refused` 的知识型回答，而不是 `answer_status='no_basis'`。
+- **测试**：每类缺口行都出现按钮并正确预填；重复问题给出提示；保存后切到评测标签。
+
+### B. 管理员操作记录
+
+- **现状**：`admin.user.*` 活动只写进操作者本人的时间线（`GET /activities` 按 `user_id` 过滤），其他管理员看不到，所以 P4 说的“方便追溯”实际做不到。另外，禁用和改名共用同一个动作 `admin.user.updated`。
+- **做法**：
+  - 新增 `GET /admin/activities`（`RequireSystemAdmin`，分页，`pageSize` 上限 100）。服务端固定只返回 `action` 以 `admin.` 开头的记录，按时间倒序，带操作者的用户名与显示名；不开放其他用户的知识库活动。
+  - `AdminUserService.Update` 在状态变化时分别记录 `admin.user.disabled` / `admin.user.enabled`，只有显示名变化时才记录 `admin.user.updated`。
+  - 前端 `/admin/users` 增加“操作记录”区域（列表加分页），`activityDisplay.ts` 补上标签。
+- **测试**：非管理员返回 403；列表包含多位管理员的操作，且排除非 `admin.` 活动；分页正确；禁用与启用记录为两个独立动作。
+- **文档**：`04`、`10`。
+
+---
+
+## P12 知识库所有权转移
+
+### 目标
+
+- 知识库所有者可以把知识库转给其他启用状态的用户。
+- 系统管理员可以把某个用户（通常是即将或已经禁用的用户）拥有的全部知识库一次转给他人。
+
+这补上 P4 禁用所有者后知识库无人能管理的缺口。
+
+### 现状
+
+- **所有者专属能力**：`kb.delete`（软删除与恢复知识库）和知识库回收站只有所有者能用；系统管理员没有知识库能力（见 [API 规范](04-api-design.md)“权限与能力矩阵”）。
+- **所有者被禁用后**：成员仍可使用知识库，但没有人能删除、恢复知识库或处理回收站；已在回收站中的知识库会一直卡住。
+- **缺少入口**：目前没有任何修改 `owner_id` 的入口；成员接口也拒绝把所有者当成员处理（`OWNER_MEMBER_IMMUTABLE`）。
+- **分类与标签按用户私有**：写入者只能使用自己的分类和标签（`ensureCategoryOwner` / `ensureTagsOwner`）。
+
+### 设计要点
+
+1. **服务方法** `TransferOwnership(actor, kbID, newOwnerID, keepPreviousOwnerAsManager)`，在单个事务内锁定知识库行后执行：
+   - 校验新所有者存在、`status=active`，且不是当前所有者；
+   - 更新 `owner_id`，`updated_by_id` 记为操作者；
+   - 删除新所有者原有的成员行；
+   - `keepPreviousOwnerAsManager=true` 时，为原所有者写入 `manager` 成员行；
+   - `category_id` 不属于新所有者时置空；标签绑定、收藏、浏览记录与会话保持不变；
+   - 原所有者不保留成员身份时，按现有“撤销成员”规则失去访问，包括其会话。
+2. **所有者入口**：`POST /knowledge-bases/:id/transfer-ownership`，请求体 `{newOwnerId, keepPreviousOwnerAsManager}`。能力矩阵新增只有所有者持有的 `kb.transfer`。只允许未删除的知识库。
+3. **管理员入口**：`POST /admin/users/:id/transfer-knowledge-bases`，请求体 `{newOwnerId, keepPreviousOwnerAsManager}`，受 `RequireSystemAdmin` 保护。
+   - 转移该用户拥有的全部知识库（含回收站中的），逐个调用同一个服务方法，并返回转移数量。
+   - `GET /admin/users` 的列表项增加 `ownedKnowledgeBaseCount`（含回收站）。
+4. **活动记录**：为操作者和新所有者各记一条 `kb.ownership_transferred`，带知识库 ID 与名称。
+5. **前端**：
+   - 知识库设置页的危险区增加“转移所有权”，只有所有者可见。用户选择复用 `/users/search`，它已排除禁用账号。
+   - 管理员用户页的行操作增加“转移知识库”，数量为 0 时禁用。
+   - 禁用某用户时，如果他拥有知识库，确认框提示先转移。
+
+### 涉及改动
+
+- `access/capability.go`、`service/knowledge_base_service.go`、`service/admin_user_service.go`、`repository/knowledge_base_repository.go`、`knowledge_base_member_repository.go`、`handler`、`router`、`dto`。
+- 前端：知识库设置页、`pages/Admin/UsersPage.tsx`、`UserDialogs.tsx`、`api`、`types`。
+- 文档：`04`（接口与能力矩阵）、`09`（新错误码，如目标用户无效）、`10`、`README.md`（用户管理流程）。无 schema 变更。
+
+### 测试
+
+- **service**：
+  - 所有者转移；
+  - 管理员批量转移，含软删除的知识库；
+  - 新所有者原有的成员行被移除；
+  - 选择保留时，旧所有者成为 manager；
+  - 分类置空规则；
+  - 目标用户已禁用、不存在或与当前所有者相同时拒绝；
+  - 转移后，新所有者可以恢复回收站中的知识库。
+- **权限契约**：在 `access_contract_test.go` 增加用例；非所有者成员返回 403，陌生人返回 404。
+- **路由**：非管理员调用管理员入口返回 403。
+- **前端**：两个入口的确认流程，以及禁用用户时的提示。
+
+### 验收
+
+禁用一个拥有知识库（其中一个在回收站）的用户，由管理员转移后：新所有者能恢复、删除这些知识库，原成员的访问不受影响。
+
+---
+
+## P13 粘贴文本入库
+
+### 目标
+
+在知识库中直接粘贴文本创建文档，走与上传相同的查重、存储、处理与权限流程。
+
+### 现状
+
+上传链路只接受 `*multipart.FileHeader`：`validateFile`、`hashUploadedFile`、`Storage.SaveKnowledgeBaseFile` 都以它为参数，没有从字节或 Reader 保存对象的入口。
+
+### 设计要点
+
+1. **接口**：`POST /knowledge-bases/:id/documents/text`，请求体 `{title, content, format, allowDuplicate}`。
+   - `format` 取 `md` 或 `txt`，默认 `md`。
+   - 权限与上传相同（`content.write`，编辑者及以上）。
+2. **校验**：
+   - `title` trim 后为 1–200 个字符；按现有文件名规则清洗后加上扩展名，作为 `filename`。
+   - `content` 去掉空白后不能为空，字节数不超过 `MAX_UPLOAD_SIZE_MB`。
+3. **重构**：
+   - 抽出上传核心，输入改为“文件名、大小、打开 Reader”的来源抽象，multipart 与文本各一个实现。
+   - `Storage` 增加 `SaveKnowledgeBaseObject(ctx, location, reader, size)`，本地、MinIO 与路由实现都补上；`SaveKnowledgeBaseFile` 改为基于它实现。
+   - 以下行为与上传保持一致：内容哈希查重、`409 DOCUMENT_DUPLICATE_CONTENT`、存储清理预留、文档与任务在同一事务创建、活动记录。
+4. **前端**：导入对话框增加“粘贴文本”模式，包含标题、格式（Markdown / 纯文本）、正文与字节计数。提交后刷新列表；重复内容按上传时的 409 交互处理。
+
+### 涉及改动
+
+- `service/document_service.go` 及上传相关文件、`storage`（local、minio、routed）、`handler/document_handler.go`、`router`、`dto/document.go`。
+- 前端 `DocumentImportDialog.tsx`、`api/resources.ts`、`types/api.ts`。
+- 文档：`04`、`05`（入库来源）、`10`、`README.md`。
+
+### 测试
+
+- **service**：空内容、超长标题、超出大小限制的校验；查重与 `allowDuplicate`；写入的对象字节与请求内容一致；处理任务被创建；权限。
+- **storage**：本地实现从 Reader 保存；MinIO 实现走 `RAG_TEST_MINIO_*` 集成测试。
+- **前端**：模式切换、校验、提交与重复提示。
+
+### 验收
+
+粘贴一段带标题的 Markdown，处理完成后切片结构与上传同内容 `.md` 文件一致，并且能被问答引用。
+
+---
+
+## P14 文档任务租约（多实例前置）
+
+### 启动条件
+
+部署第二个 backend 实例、或采用新旧进程重叠的滚动发布之前必须完成。当前单实例 systemd 部署不受影响。
+
+### 现状
+
+- **领取任务**：用 `FOR UPDATE SKIP LOCKED` 并在锁内复查，在 PostgreSQL 上是原子的（`backend/internal/repository/document_repository.go` `ClaimPendingJob`）。
+- **启动恢复**：worker 启动时，`RecoverRunningJobs` 把所有 `running` 的 `process_document` 任务无条件重置为 `pending`。这会夺走其他存活实例正在处理的任务，而且没有 fencing，两个实例可能同时处理同一文档，先发布的一方被另一方覆盖。
+- **租约字段**：`document_jobs.locked_at` 只在领取时写一次，没有心跳、`lease_token` 或持有者。
+- **崩溃恢复**：实例崩溃后，它的任务要等某个实例重启才会恢复，期间会阻塞同一文档的后续任务。
+- **可参照的实现**：存储清理任务的 `lease_token` 与过期重领（`storage_cleanup_repository.go`），评测运行的心跳与超时判定（`evaluation_repository.go`）。
+
+### 设计要点
+
+1. **迁移**：`document_jobs` 增加 `lease_token UUID`、`heartbeat_at TIMESTAMPTZ` 及相应索引，并加入启动校验。
+2. **领取**：写入新的 `lease_token`，同时写 `locked_at` 与 `heartbeat_at`。
+3. **心跳**：处理期间每 15 秒刷新 `heartbeat_at`，条件为 `id` 与 `lease_token` 都匹配。刷新失败即视为失去租约，按取消处理并停止发布。
+4. **fencing**：进度、状态、`EnsureJobRunning`、`PublishByDocument`、`FailJob`、`RetryJob` 的写入条件都加上 `lease_token`。
+5. **过期回收**：删除启动时的无条件重置，改为由各实例周期执行：把 `heartbeat_at` 超过租约时长（如 2 分钟）的 `running` 任务放回 `pending`。
+6. **文档**：在 [架构](02-architecture.md) 与 [部署指南](13-deployment.md) 写明多实例的其他前提：
+   - 共享存储必须用 MinIO，本地 `uploads` 每台主机各自独立；
+   - 诊断指标按进程统计；
+   - 限流在 Redis 故障时默认放行。
+
+### 测试
+
+- **SQLite 单元测试**：`lease_token` 不匹配时所有写入都不生效；心跳失败会中止处理。
+- **PostgreSQL 集成测试**：两个连接池并发领取时，同一任务只有一方拿到；过期任务会被回收；旧持有者的发布被拒绝。
+- **回归**：取消、重试、进度的行为不变。
+
+---
+
+## P15 Embedding 模型记录、维度校验与重建工具
+
+### 目标
+
+防止两类问题：向量列维度与 `EMBEDDING_DIMENSION` 不一致；切换 `EMBEDDING_MODEL` 后新旧向量混用而没人察觉。这也是“每知识库独立 embedding 模型”的前置。
+
+### 现状
+
+- **维度**：`document_chunks.embedding` 为 `vector(1536)`。`EMBEDDING_DIMENSION` 只用于请求 Provider 和校验返回长度，启动、doctor、诊断都不拿它和列维度比较。
+- **模型来源**：chunk 与 document 都不记录向量是哪个模型生成的。
+- **重新向量化**：只能按文档 ID 列表批量重处理，没有整库重新向量化的工具。
+- **查询缓存**：缓存键包含模型、维度与端点，切换模型后不会读到旧缓存；但库里的旧向量仍会被新的查询向量检索。
+
+### 设计要点
+
+1. **启动与 doctor 校验**：在 PostgreSQL 上读取 `embedding` 列声明的维度（`pg_attribute.atttypmod`）。与 `EMBEDDING_DIMENSION` 不一致时启动失败，并提示迁移步骤；doctor 输出两者。
+2. **迁移**：`documents` 增加 `embedding_model VARCHAR(128)` 与 `embedding_dimension INT`，由 processor 在发布 chunks 的同一事务中写入。迁移前的旧数据为 NULL，表示未知。
+3. **诊断**：展示按 `embedding_model` 统计的有效文档数；与当前配置不同或为未知的数量单独标出。
+4. **重建 CLI**：新增 `cmd/reembed`，参数为 `-kb`（可选）、`-only-mismatched`（默认 true，NULL 视为不匹配）、`-dry-run`、`-batch`。
+   - 用现有重处理队列为匹配的文档排队，跳过已删除和已有活动任务的文档。
+   - 说明中写明：重处理会更换 chunk ID，旧 citations 里的 `chunkId` 会失效，但内容与页码仍保留。
+5. **切换流程**：[部署指南](13-deployment.md) 写明：
+   - 改 `EMBEDDING_MODEL`（维度不变）后必须运行 `reembed`，完成之前检索质量会下降；
+   - 改维度需要先迁移列类型、重建 HNSW 索引，再全量重建。
+
+### 测试
+
+- 维度不一致时启动报错。
+- processor 写入模型与维度。
+- 诊断统计正确。
+- CLI 的筛选、dry-run 与排队（SQLite），以及跳过有活动任务的文档。
+
+---
+
+## 暂缓项（2026-09-24 评估）
+
+原“本计划暂不包含”的 11 项已完成评估，其中 6 项已排期或由新阶段覆盖：
+- 知识缺口一键转测试问题排入 P11A；
+- 知识库所有权转移排入 P12；
+- 粘贴文本入库排入 P13；
+- 多实例 worker 租约排入 P14；
+- 独立审计表的当前需求由 P11B 满足；
+- 每知识库独立 embedding 模型的前置工作由 P15 完成。
+
+其余项继续暂缓，启动时遵循下表的约束。工作量为粗估：M 为 2–4 天，L 为 1–2 周，XL 为 2 周以上。
+
+| 项 | 评估结论 | 启动条件 | 设计约束 |
+| --- | --- | --- | --- |
+| 追问建议 | M。前端读到 `done` 就停止读流；首问的 `done` 已排在同步标题生成之后（超时 5 秒） | P8 完成，且有明确需求 | 用独立接口按需生成，不进 SSE 流；只针对最新一条带 citations 的知识型回答，以这些 citations 为上下文，避免建议知识库答不了的问题；计入 usage（`purpose=suggestion`）与聊天限流 |
+| PDF 引用高亮 | M。`PdfPreview` 已开文本层并支持 `initialPage`；Go 解析器的偏移与 pdf.js 文本项不对应；只读成员没有下载权限，看不到 PDF | P8 完成 | 在引用页的文本层对正文做规范化（空白、全半角）后模糊匹配；先决定只读成员能否查看原始 PDF（新增能力或只读预览流） |
+| 扫描 PDF OCR | L。没有文字层的 PDF 已归为 `empty_content` 并给出 OCR 建议；部分页是扫描件时，这些页会被静默丢弃；后端是 systemd 原生二进制，没有容器镜像 | 真实语料中扫描件占比明显 | 优先走 Provider 接口（OCR 或视觉模型），而不是本机 Tesseract；需要先定页面图像的提取或渲染方案；可以先做“记录无文字页数并提示” |
+| URL 入库 | L。后端没有抓取用户 URL 的代码，也没有 SSRF 防护 | P13 完成 | 解析后的 IP 与每次重定向的目标都要拦截私网、回环、链路本地和云元数据地址；限制重定向次数、大小、超时与 Content-Type；正文抽取为 Markdown；新增 `source_url` 并定义刷新语义 |
+| 跨知识库会话 | XL。单知识库假设贯穿 schema、检索、citations、usage（`knowledge_base_id NOT NULL`）、知识缺口、评测、导出与前端 | 明确的产品需求 | 先做“多知识库检索”，citations 带上 `knowledgeBaseId`；先定清楚多库时检索与回答配置、用量归属的规则 |
+| 每知识库独立 embedding 模型 | XL。列固定为 `vector(1536)`；pgvector 0.5.1 没有 `halfvec`，`vector` 的 HNSW 索引上限 2000 维 | P15 完成，且确有多模型需求 | 按维度分列或分表，或用不带维度的列加按维度的部分表达式索引；每库各自的 Provider 与重建流程 |
+| 独立审计表 | L。AGENTS.md 把审计日志列在 MVP 之外；当前的追溯需求由 P11B 满足 | 出现合规要求 | 只追加写入，写入失败即操作失败；定义保留期；防篡改 |
+| 公开注册 | 不做。系统面向企业内部，P4 已决定由管理员建号；用户名的大小写判重只在应用层做，存在并发窗口 | 产品定位发生变化 | 优先邀请或管理员审批；先补 `lower(username)` 唯一索引，以及按账号和 IP 的注册限流 |
+| 首问 `done` 等待标题 | 待测量。`done` 在同步标题生成（超时 5 秒）之后才发出，回答流完后界面可能还要再等 | P10 实测首问收尾明显变慢 | 改为在 `done` 之后异步生成标题，通过会话列表刷新 |
 
 ## 完成状态
 
 | 阶段 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- |
-| P1 混合检索 | 已完成 | 2026-09-20 | 分词与融合规则见 [RAG 规范](05-rag-pipeline.md)“混合召回与融合”；既有环境需执行迁移 024 并运行 `cmd/reindex-keywords`。真实数据上的命中对照与 HNSW 构建耗时待在集成环境补测。 |
-| P2 限流与 Redis 落地 | 已完成 | 2026-09-20 | 登录按可信客户端 IP、聊天生成按用户 ID 固定窗口限流；query embedding 按模型与规范化问题缓存 24h；诊断与前端 429 提示已接入。miniredis、路由和前端替身验证通过，真实 Redis 停机演练与集成浏览器复验待部署环境执行。 |
-| P3 DOCX 解析 | 已完成 | 2026-09-20 | OOXML 正文/标题/列表/表格解析、ZIP 魔数校验、DOCX 文本预览与前端上传/类型展示已接入；真实 DOCX 上传端到端复验待集成环境执行。 |
-| P4 用户管理 | 已完成 | 2026-09-20 | 用户状态、管理员 CRUD/重置密码/角色保护、禁用 JWT 即时失效及管理页已接入；真实部署迁移待执行。 |
-| P5 Token 用量统计 | 已完成 | 2026-09-20 | Provider usage、用量记录表、质量页按日聚合已接入；真实 Provider usage 返回仍待集成环境复验。 |
-| P6 回答配置 | 已完成 | 2026-09-20 | 知识库回答配置、提示词边界、语言与模型/温度字段已接入；模型白名单与真实模型覆盖待集成环境复验。 |
+| P1 混合检索 | 已完成（验收待补） | 2026-09-21 | 分词与融合规则见 [RAG 规范](05-rag-pipeline.md)“混合召回与融合”；既有环境需执行迁移 024 并运行 `cmd/reindex-keywords`。2026-09-21 补上启动时对 024 的校验，关键词阶段报错改为降级为纯向量召回并记 `keyword` 故障计数。与计划的偏离：召回改为顺序执行而非并行（同一连接池、开销小）。真实数据命中率对照、`EXPLAIN` 走索引与存储增长抽样仍未在集成环境记录。2026-09-24 评估：开发库已执行 024 并完成回填，存储增长已抽样（见“2026-09-24 评估”）；强制走 HNSW 时召回短缺，修复见 P7，“`EXPLAIN` 走索引”由 P7 的验收取代；命中率对照入 P10。 |
+| P2 限流与 Redis 落地 | 已完成 | 2026-09-21 | 登录按可信客户端 IP、聊天生成按用户 ID 固定窗口限流；query embedding 缓存 24h。2026-09-21 把消息编辑重生成接口纳入聊天限流，缓存键加入 embedding 维度与端点哈希。真实 Redis 停机演练与集成浏览器复验待部署环境执行。2026-09-24：停机演练（改用本机临时 Redis）与浏览器复验入 P10。 |
+| P3 DOCX 解析 | 已完成 | 2026-09-21 | 2026-09-21 修复切片器只对 `md` 启用结构解析的缺陷，DOCX 现与 Markdown 共用同一结构路径（`headingPath` / `structureType` 生效，有对照测试）；补齐 vMerge 续格置空、编号标题保持标题、`numId=0` 不作列表、样式 `basedOn` 继承、段落级 `outlineLvl`、内容控件 / 域 / 嵌套表格文本、连续列表项合并、解压 64MB 上限、`.doc` 与加密文件的明确提示。真实 DOCX 上传端到端复验待集成环境执行。2026-09-24：带标题前缀的 Markdown / DOCX 引用无法在来源预览中定位，见 P8；真实 DOCX 端到端入 P10。 |
+| P4 用户管理 | 已完成 | 2026-09-21 | 2026-09-21 修复认证中间件查库失败放行、未知用户视为启用、最后管理员判断包含目标本人且不覆盖禁用路径、管理员可自重置密码；用户名格式校验与大小写不敏感判重；成员搜索排除禁用账号；前端补编辑对话框、分页、二次确认、自身行保护、活动时间线映射；补齐 service / 路由 403 / 前端测试与 04、03、09、10、README 文档。真实部署迁移待执行。2026-09-24：开发库已执行 025；界面流程入 P10；禁用所有者后知识库无人能管理，见 P12；管理员操作记录只有操作者本人能看到，见 P11。 |
+| P5 Token 用量统计 | 已完成 | 2026-09-21 | 2026-09-21 修复评测记录零 UUID 触发外键而静默丢失、`message_id` 永不回填、耗时含检索、provider 硬编码、写入错误无日志；实现 `MODEL_PRICING` 解析与成本估算；用量范围改为质量页规则（可读知识库汇总，管理员看全部）；按日键统一为 UTC `YYYY-MM-DD`，按知识库 / 用户返回名称；质量页用量标签补范围与分组控件、折线图、按知识库 / 模型表格与成本列；补 Provider、service、聚合与前端测试，04、03、05、08 文档同步。真实 Provider usage 返回仍待集成环境复验。2026-09-24：开发库只有修复前的 2 条真实记录，证明 DeepSeek 返回 usage；记录的是返回模型名，与配置名不同，定价因此匹配不上，见 P9；复验入 P10。 |
+| P6 回答配置 | 已完成 | 2026-09-21 | 2026-09-21 修复保存检索配置或改名会清空回答配置（服务端对缺省块保留已存值，前端两表单互带）、白名单为空时放行任意模型（改为拒绝）、流式降级丢失模型与温度覆盖、`answer_config` 解码错误静默；评测运行新增 `answerConfig` 快照（迁移 028）与 `runtime.chatModel` 实际模型，对比页展示配置差异；模型下拉只列白名单；补 Prompt 组装、校验、快照与前端测试，05、04、03、08、10 文档同步。真实模型覆盖待集成环境复验。2026-09-24：开发库只有 1 个知识库，白名单只有默认模型，复验入 P10；知识库“最后更新人”不随编辑更新，见 P9。 |
+| P7 向量召回过滤短缺修复 | 待实施 | — | |
+| P8 引用位置信息与原文定位 | 待实施 | — | 前端部分基于前端改进计划 F1–F6 改过的 `ChatSourcePreview.tsx` 实施；该文件仍用 `indexOf` 精确匹配 |
+| P9 小型正确性修复 | 待实施 | — | A–D 可分开提交 |
+| P10 真实环境验收 | 待授权 | — | 写入共享开发库并调用真实模型，须用户授权 |
+| P11 知识缺口转测试问题与管理员操作记录 | 待实施 | — | |
+| P12 知识库所有权转移 | 待实施 | — | |
+| P13 粘贴文本入库 | 待实施 | — | |
+| P14 文档任务租约 | 条件启动 | — | 部署多实例或滚动发布前完成 |
+| P15 Embedding 模型记录、维度校验与重建工具 | 待实施 | — | 切换 `EMBEDDING_MODEL` 前完成 |
