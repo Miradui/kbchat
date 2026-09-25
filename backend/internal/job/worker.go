@@ -169,7 +169,8 @@ func (w *Worker) process(ctx context.Context, job *model.DocumentJob) {
 		}
 
 		message := err.Error()
-		if job.RetryCount < w.maxRetries {
+		permanent := processor.IsPermanent(err)
+		if job.RetryCount < w.maxRetries && !permanent {
 			nextRetryCount := job.RetryCount + 1
 			retryAt := time.Now().Add(w.retryDelay)
 			w.logger.Warn("document job scheduled for retry",
@@ -194,6 +195,7 @@ func (w *Worker) process(ctx context.Context, job *model.DocumentJob) {
 			zap.String("document_id", job.DocumentID.String()),
 			zap.Int("retry_count", job.RetryCount),
 			zap.Int("max_retries", w.maxRetries),
+			zap.Bool("permanent", permanent),
 			zap.Error(err),
 		)
 		// Classified only on the terminal failure: a retry is still in progress, so

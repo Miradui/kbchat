@@ -14,6 +14,7 @@ import (
 	"kbchat/backend/internal/document/parser"
 	"kbchat/backend/internal/document/processor"
 	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/storage"
 )
 
 func TestWorkerRetriesFailedJobBeforeMarkingDocumentFailed(t *testing.T) {
@@ -110,10 +111,10 @@ func TestWorkerProcessesJobsConcurrently(t *testing.T) {
 	}
 }
 
-func TestWorkerClassifiesTerminalFailuresButNotRetries(t *testing.T) {
+func TestWorkerClassifiesOnlyTerminalFailures(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeDocumentStore()
-	failing := &fakeProcessor{err: fmt.Errorf("parse md: %w", parser.ErrEncodingInvalid)}
+	failing := &fakeProcessor{err: fmt.Errorf("embed batch: %w", processor.ErrEmbeddingFailed)}
 	worker := NewWorkerWithOptions(store, failing, zap.NewNop(), Options{
 		Concurrency: 1,
 		MaxRetries:  1,
@@ -134,8 +135,53 @@ func TestWorkerClassifiesTerminalFailuresButNotRetries(t *testing.T) {
 	if store.failedJobs != 1 {
 		t.Fatalf("expected one terminal failure, got %d", store.failedJobs)
 	}
-	if store.lastErrorCode != processor.ErrorCodeEncodingInvalid {
-		t.Fatalf("expected %q, got %q", processor.ErrorCodeEncodingInvalid, store.lastErrorCode)
+	if store.lastErrorCode != processor.ErrorCodeEmbeddingFailed {
+		t.Fatalf("expected %q, got %q", processor.ErrorCodeEmbeddingFailed, store.lastErrorCode)
+	}
+}
+
+// A file that is not UTF-8, is corrupt, has no text layer, or whose object is
+// gone fails the same way every time. Retrying only delays the verdict by the
+// whole retry budget, so these fail on the first attempt.
+func TestWorkerFailsPermanentErrorsWithoutRetrying(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		code string
+	}{
+		{"encoding", fmt.Errorf("parse md: %w", parser.ErrEncodingInvalid), processor.ErrorCodeEncodingInvalid},
+		{"corrupt", fmt.Errorf("parse pdf: %w", parser.ErrCorruptFile), processor.ErrorCodeCorruptFile},
+		{"empty", processor.ErrEmptyContent, processor.ErrorCodeEmptyContent},
+		{"missing object", fmt.Errorf("%w: %w", processor.ErrStorageFailed, storage.ErrNotFound), processor.ErrorCodeStorageFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeDocumentStore()
+			worker := NewWorkerWithOptions(store, &fakeProcessor{err: tc.err}, zap.NewNop(), Options{
+				Concurrency: 1,
+				MaxRetries:  3,
+				RetryDelay:  time.Minute,
+			})
+			worker.process(context.Background(), &model.DocumentJob{ID: uuid.New(), DocumentID: uuid.New(), Status: "running"})
+			if store.retryCalls != 0 {
+				t.Fatalf("expected no retry, got %d", store.retryCalls)
+			}
+			if store.failedJobs != 1 || store.lastErrorCode != tc.code {
+				t.Fatalf("expected one failure with %q, got %d failures with %q", tc.code, store.failedJobs, store.lastErrorCode)
+			}
+		})
+	}
+
+	// A storage read that failed for any other reason may succeed next time.
+	store := newFakeDocumentStore()
+	worker := NewWorkerWithOptions(store, &fakeProcessor{err: fmt.Errorf("%w: connection reset", processor.ErrStorageFailed)}, zap.NewNop(), Options{
+		Concurrency: 1,
+		MaxRetries:  3,
+		RetryDelay:  time.Minute,
+	})
+	worker.process(context.Background(), &model.DocumentJob{ID: uuid.New(), DocumentID: uuid.New(), Status: "running"})
+	if store.retryCalls != 1 || store.failedJobs != 0 {
+		t.Fatalf("expected a transient storage failure to retry, got %d retries and %d failures", store.retryCalls, store.failedJobs)
 	}
 }
 

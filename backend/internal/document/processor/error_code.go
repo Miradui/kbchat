@@ -64,3 +64,19 @@ func ClassifyError(err error) string {
 		return ErrorCodeInternal
 	}
 }
+
+// IsPermanent reports whether running the same job again cannot succeed: the
+// file itself is unreadable, not UTF-8, has no extractable text, or the stored
+// object is gone. The worker fails these on the first attempt instead of
+// spending its retry budget and making the user wait for the same verdict.
+// Provider, storage-read and unrecognised failures stay retryable.
+func IsPermanent(err error) bool {
+	switch ClassifyError(err) {
+	case ErrorCodeEncodingInvalid, ErrorCodeCorruptFile, ErrorCodeEmptyContent:
+		return true
+	case ErrorCodeStorageFailed:
+		return errors.Is(err, storage.ErrNotFound)
+	default:
+		return false
+	}
+}

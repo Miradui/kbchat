@@ -1032,6 +1032,8 @@ pageSize
 未失败的文档不返回 `errorCode`（`omitempty`）；019 之前记录的失败也没有该字段，客户端必须
 能回落到中性文案。
 
+`corrupt_file`、`encoding_invalid`、`empty_content` 以及对象已不存在的 `storage_failed` 是确定性失败，后台任务首次失败即终止，不消耗重试次数；其余失败按 worker 的重试次数与间隔重试，只在最终失败时写入 `errorCode`。
+
 `isStale` 只是展示提示，不是判断：文档超过 `staleAfterDays` 没有更新即为 true。它**不影响
 检索**，过期文档照常被检索和引用。`staleAfterDays` 回显服务端阈值（`STALE_DOCUMENT_AFTER_DAYS`，
 默认 180），`0` 表示该提示在服务端关闭。
