@@ -754,6 +754,9 @@ function DuplicateChoice({ busy, canReplace, details, filename, onChoose }: Dupl
 function documentUploadErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.code === 'DOCUMENT_TYPE_UNSUPPORTED') {
+      const reason = error.details.reason;
+      if (reason === 'legacy_doc') return '不支持旧版 .doc，请另存为 .docx';
+      if (reason === 'legacy_or_encrypted') return '文件是旧版 .doc 或已加密，请另存为未加密的 .docx';
       return '格式不受支持';
     }
     if (error.code === 'VALIDATION_ERROR') {

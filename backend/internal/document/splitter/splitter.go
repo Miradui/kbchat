@@ -88,7 +88,7 @@ func (s *Splitter) SplitDocument(document parser.ParsedDocument) []Chunk {
 		if text == "" {
 			continue
 		}
-		blocks := parseBlocks(text, fileType == "md", fileType, segment.PageNumber)
+		blocks := parseBlocks(text, structuredMarkdown(fileType), fileType, segment.PageNumber)
 		for _, chunk := range s.splitBlocks(blocks) {
 			chunk.Index = len(chunks)
 			chunks = append(chunks, chunk)
@@ -336,6 +336,13 @@ func (b chunkBuilder) structureType() string {
 		}
 	}
 	return "mixed"
+}
+
+// structuredMarkdown reports whether a file type is split with Markdown
+// structure awareness. DOCX is included because the parser renders OOXML
+// headings, lists and tables as Markdown so both formats share one chunk shape.
+func structuredMarkdown(fileType string) bool {
+	return fileType == "md" || fileType == "docx"
 }
 
 func parseBlocks(text string, markdown bool, fileType string, pageNumber *int) []block {

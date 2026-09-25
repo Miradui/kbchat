@@ -23,7 +23,7 @@ func TestParseDOCXPreservesHeadingsListsTablesAndDeletedText(t *testing.T) {
 	if document.FileType != "docx" || len(document.Segments) != 1 {
 		t.Fatalf("unexpected document shape: %#v", document)
 	}
-	want := "# 产品手册\n\n## 安装\n\n- 第一步\n\n  1. 第二步\n\n| 名称 |  |\n| --- | --- |\n| 服务 | 状态 \\| 正常 |"
+	want := "# 产品手册\n\n## 安装\n\n- 第一步\n  1. 第二步\n\n| 名称 |  |\n| --- | --- |\n| 服务 | 状态 \\| 正常 |"
 	if document.Segments[0].Content != want {
 		t.Fatalf("unexpected rendered markdown:\nwant:\n%s\n got:\n%s", want, document.Segments[0].Content)
 	}

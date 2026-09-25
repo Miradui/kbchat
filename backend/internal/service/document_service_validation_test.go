@@ -113,3 +113,32 @@ func TestValidateFileRequiresDOCXZipSignature(t *testing.T) {
 		t.Fatalf("expected valid DOCX ZIP signature to pass, got %v", err)
 	}
 }
+
+func TestValidateFileExplainsLegacyDocAndEncryptedWordFiles(t *testing.T) {
+	service := &DocumentService{cfg: config.Config{MaxUploadSizeMB: 1}}
+	ole := string([]byte{0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1}) + "compound"
+	cases := []struct {
+		name   string
+		file   string
+		body   string
+		reason string
+	}{
+		{name: "legacy extension", file: "old.doc", body: ole, reason: "legacy_doc"},
+		{name: "renamed or encrypted", file: "renamed.docx", body: ole, reason: "legacy_or_encrypted"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			err := service.validateFile(createUploadFile(t, tt.file, tt.body))
+			var appErr *apperror.Error
+			if !errors.As(err, &appErr) || appErr.Code != "DOCUMENT_TYPE_UNSUPPORTED" {
+				t.Fatalf("expected DOCUMENT_TYPE_UNSUPPORTED, got %v", err)
+			}
+			if appErr.Details["reason"] != tt.reason {
+				t.Fatalf("expected reason %q, got %#v", tt.reason, appErr.Details)
+			}
+			if appErr.Message == "unsupported document type" {
+				t.Fatalf("expected an explicit message, got %q", appErr.Message)
+			}
+		})
+	}
+}

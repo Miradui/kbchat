@@ -1335,3 +1335,51 @@ func TestSplitOverlapsUnspacedTextWithinTokenBudget(t *testing.T) {
 		})
 	}
 }
+
+func TestSplitDocumentGivesDOCXTheSameStructureAsMarkdown(t *testing.T) {
+	content := strings.Join([]string{
+		"# 产品手册",
+		"",
+		"## 安装",
+		"",
+		"- 第一步",
+		"  1. 第二步",
+		"",
+		"| 名称 | 状态 |",
+		"| --- | --- |",
+		"| 服务 | 正常 |",
+	}, "\n")
+	// A tiny budget keeps every block as its own chunk so structure types are
+	// observable instead of being merged into one "mixed" chunk.
+	markdown := New(24, 4).SplitDocument(parser.ParsedDocument{FileType: "md", Segments: []parser.Segment{{Content: content}}})
+	docx := New(24, 4).SplitDocument(parser.ParsedDocument{FileType: "docx", Segments: []parser.Segment{{Content: content}}})
+
+	if len(docx) == 0 || len(docx) != len(markdown) {
+		t.Fatalf("expected docx chunks to mirror markdown chunks, md=%d docx=%d", len(markdown), len(docx))
+	}
+	for index := range docx {
+		if docx[index].Content != markdown[index].Content {
+			t.Fatalf("chunk %d content differs:\nmd:   %q\ndocx: %q", index, markdown[index].Content, docx[index].Content)
+		}
+		if docx[index].Metadata["structureType"] != markdown[index].Metadata["structureType"] {
+			t.Fatalf("chunk %d structure differs: md=%v docx=%v", index, markdown[index].Metadata["structureType"], docx[index].Metadata["structureType"])
+		}
+		mdPath, _ := markdown[index].Metadata["headingPath"].([]string)
+		docxPath, _ := docx[index].Metadata["headingPath"].([]string)
+		if strings.Join(mdPath, ">") != strings.Join(docxPath, ">") {
+			t.Fatalf("chunk %d heading path differs: md=%v docx=%v", index, mdPath, docxPath)
+		}
+		if docx[index].Metadata["fileType"] != "docx" {
+			t.Fatalf("expected docx fileType metadata, got %#v", docx[index].Metadata)
+		}
+	}
+	structures := map[string]bool{}
+	for _, chunk := range docx {
+		structures[chunk.Metadata["structureType"].(string)] = true
+	}
+	for _, want := range []string{"list", "table"} {
+		if !structures[want] {
+			t.Fatalf("expected a %s chunk from docx content, got %#v", want, structures)
+		}
+	}
+}

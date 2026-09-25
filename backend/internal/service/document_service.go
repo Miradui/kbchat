@@ -613,6 +613,11 @@ func (s *DocumentService) validateFile(file *multipart.FileHeader) error {
 	}
 
 	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(file.Filename)), ".")
+	if ext == "doc" {
+		err := apperror.New(http.StatusBadRequest, "DOCUMENT_TYPE_UNSUPPORTED", "legacy .doc is not supported; save the file as .docx")
+		err.Details["reason"] = "legacy_doc"
+		return err
+	}
 	for _, allowed := range AllowedDocumentExtensions {
 		if ext == allowed {
 			switch ext {
@@ -652,11 +657,27 @@ func validateDOCXSignature(file *multipart.FileHeader) error {
 	}
 	defer opened.Close()
 
-	header := make([]byte, 4)
-	if _, err := io.ReadFull(opened, header); err != nil || !isZIPMagic(header) {
+	header := make([]byte, 8)
+	n, readErr := io.ReadFull(opened, header)
+	if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		return apperror.New(http.StatusBadRequest, "DOCUMENT_TYPE_UNSUPPORTED", "unsupported document type")
+	}
+	if isOLEMagic(header[:n]) {
+		// A .docx extension over a compound file is either a renamed legacy .doc
+		// or an Office-encrypted package. Say which so the user knows to convert
+		// or decrypt instead of re-uploading the same file.
+		err := apperror.New(http.StatusBadRequest, "DOCUMENT_TYPE_UNSUPPORTED", "legacy .doc or encrypted Word document is not supported; save as an unencrypted .docx")
+		err.Details["reason"] = "legacy_or_encrypted"
+		return err
+	}
+	if !isZIPMagic(header[:n]) {
 		return apperror.New(http.StatusBadRequest, "DOCUMENT_TYPE_UNSUPPORTED", "unsupported document type")
 	}
 	return nil
+}
+
+func isOLEMagic(header []byte) bool {
+	return bytes.HasPrefix(header, []byte{0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1})
 }
 
 func isZIPMagic(header []byte) bool {

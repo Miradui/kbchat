@@ -418,6 +418,13 @@ func TestProcessSelectsSplitterStrategyFromParsedFileType(t *testing.T) {
 			wantHeadingPathLen: 1,
 			wantLiteral:        "Product Guide\nbody text",
 		},
+		{
+			name:               "docx shares the markdown structure path",
+			fileType:           "docx",
+			content:            "# 产品手册\n\n## 安装\n\n正文段落",
+			wantHeadingPathLen: 2,
+			wantLiteral:        "产品手册 > 安装\n正文段落",
+		},
 	}
 
 	for _, tt := range tests {
