@@ -583,7 +583,7 @@ export type KnowledgeBaseSearchDebug = {
     items: Array<KnowledgeBaseSearchResult & { rank: number }>;
   };
   keywordStage: {
-    status: 'completed' | 'disabled';
+    status: 'completed' | 'disabled' | 'failed';
     items: Array<{
       chunkId: string;
       documentId: string;

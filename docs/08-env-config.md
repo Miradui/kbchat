@@ -143,7 +143,7 @@ VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1
 
 `TRUSTED_PROXY_CIDRS` 留空时忽略所有 `X-Forwarded-For`。配置后，只有 TCP 直连地址落在可信网段时才从右向左检查代理链并取首个不可信地址；值必须是 CIDR，例如 `127.0.0.1/32` 或 Nginx 所在的私网网段，不能写裸 IP。
 
-检索按 `embed:<model>:<sha256(normalized query)>` 缓存 query vector。规范化只折叠首尾和连续 Unicode 空白，同一规范化文本也用于实际 Embedding 调用；向量以版本化二进制格式保存。缓存命中不产生 Provider 调用指标，读写失败始终降级为直接调用 Provider。Redis 停止时，`open` 模式仍允许登录和聊天，`closed` 模式的受限接口返回 `RATE_LIMIT_UNAVAILABLE`；embedding 缓存两种模式都只降级。
+检索按 `embed:<model>:<dimension>:<endpoint hash>:<sha256(normalized query)>` 缓存 query vector，模型名、`EMBEDDING_DIMENSION` 与 `EMBEDDING_BASE_URL` 任一变化都会自然失效旧缓存。规范化只折叠首尾和连续 Unicode 空白，同一规范化文本也用于实际 Embedding 调用；向量以版本化二进制格式保存。缓存命中不产生 Provider 调用指标，读写失败始终降级为直接调用 Provider。Redis 停止时，`open` 模式仍允许登录和聊天，`closed` 模式的受限接口返回 `RATE_LIMIT_UNAVAILABLE`；embedding 缓存两种模式都只降级。
 
 ## Embedding 维度约束
 

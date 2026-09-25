@@ -2,12 +2,16 @@ package retrieval
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"kbchat/backend/internal/access"
 	"kbchat/backend/internal/apperror"
@@ -142,17 +146,35 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 	keywordStageStatus := "disabled"
 	fusionStageStatus := "skipped"
 	var fused []fusedCandidate
+	keywordFailed := false
 	if options.enableKeyword {
 		keywordStart := time.Now()
 		keywordCandidates, err = s.chunks.SearchByKeyword(ctx, kbID, req.Query, options.vectorTopN)
+		s.metrics.RecordProviderResult(observability.ProviderKeyword, err)
 		if err != nil {
-			return nil, apperror.Internal(err)
+			// Keyword recall is an addition to vector recall, not a prerequisite:
+			// a broken GIN index or a missing search_vector column must not take
+			// down retrieval that worked before hybrid search existed. The stage
+			// is reported as failed in debug output and the vector list is used
+			// alone, with vector-score thresholds as before.
+			if log := s.metrics.Logger(); log != nil {
+				log.Warn("keyword recall failed; falling back to vector recall", zap.String("knowledgeBaseId", kbID.String()), zap.Error(err))
+			}
+			keywordFailed = true
+			keywordCandidates = nil
+			keywordStageStatus = "failed"
+			fusionStageStatus = "skipped"
+			fused = fuseByReciprocalRank(vectorCandidates, nil, options.vectorTopN)
+			for i := range fused {
+				fused[i].FusionScore = nil
+			}
+		} else {
+			s.metrics.ObserveSince(observability.MetricKeyword, keywordStart)
+			keywordCandidates = limitSearchResults(keywordCandidates, options.vectorTopN)
+			keywordStageStatus = "completed"
+			fusionStageStatus = "completed"
+			fused = fuseByReciprocalRank(vectorCandidates, keywordCandidates, options.vectorTopN)
 		}
-		s.metrics.ObserveSince(observability.MetricKeyword, keywordStart)
-		keywordCandidates = limitSearchResults(keywordCandidates, options.vectorTopN)
-		keywordStageStatus = "completed"
-		fusionStageStatus = "completed"
-		fused = fuseByReciprocalRank(vectorCandidates, keywordCandidates, options.vectorTopN)
 	} else {
 		fused = fuseByReciprocalRank(vectorCandidates, nil, options.vectorTopN)
 		for i := range fused {
@@ -166,7 +188,7 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 	// off (unchanged behavior) and the normalized fusion score when it is on,
 	// because a keyword-only chunk has no vector score to compare.
 	thresholdScore := scoreVector
-	if options.enableKeyword {
+	if options.enableKeyword && !keywordFailed {
 		thresholdScore = scoreFusion
 	}
 
@@ -241,8 +263,9 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 
 func (s *Service) queryEmbedding(ctx context.Context, query string) ([]float32, error) {
 	normalizedQuery := cache.NormalizeEmbeddingQuery(query)
+	cacheModel := s.embeddingCacheModelKey()
 	if s.embeddingCache != nil {
-		vector, hit, err := s.embeddingCache.Get(ctx, s.cfg.EmbeddingModel, normalizedQuery)
+		vector, hit, err := s.embeddingCache.Get(ctx, cacheModel, normalizedQuery)
 		switch {
 		case err != nil:
 			s.metrics.RecordEmbeddingCacheResult(observability.EmbeddingCacheResultError)
@@ -269,11 +292,20 @@ func (s *Service) queryEmbedding(ctx context.Context, query string) ([]float32, 
 
 	vector := embeddings[0]
 	if s.embeddingCache != nil {
-		if err := s.embeddingCache.Set(ctx, s.cfg.EmbeddingModel, normalizedQuery, vector, s.cfg.EmbeddingCacheTTL); err != nil {
+		if err := s.embeddingCache.Set(ctx, cacheModel, normalizedQuery, vector, s.cfg.EmbeddingCacheTTL); err != nil {
 			s.metrics.RecordEmbeddingCacheResult(observability.EmbeddingCacheResultError)
 		}
 	}
 	return vector, nil
+}
+
+// embeddingCacheModelKey namespaces cached vectors by everything that changes
+// their meaning: the model name, the configured dimension and the endpoint.
+// Switching any of them must miss the cache instead of serving vectors from
+// the previous configuration for the rest of the TTL.
+func (s *Service) embeddingCacheModelKey() string {
+	endpoint := sha256.Sum256([]byte(strings.TrimSpace(s.cfg.EmbeddingBaseURL)))
+	return fmt.Sprintf("%s:%d:%s", s.cfg.EmbeddingModel, s.cfg.EmbeddingDimension, hex.EncodeToString(endpoint[:6]))
 }
 
 func (s *Service) resolveSearchOptions(kb *model.KnowledgeBase, req dto.SearchRequest) searchOptions {

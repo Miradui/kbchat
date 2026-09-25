@@ -8,10 +8,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"kbchat/backend/internal/apperror"
 	"kbchat/backend/internal/config"
 	"kbchat/backend/internal/dto"
 	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/observability"
 	"kbchat/backend/internal/repository"
 	"kbchat/backend/internal/rerank"
 )
@@ -244,16 +244,28 @@ func TestSearchKeywordEnabledWithoutRerankAppliesThresholdToFusionScore(t *testi
 	}
 }
 
-func TestSearchKeywordStageErrorIsInternal(t *testing.T) {
-	kb := knowledgeBaseWithRetrievalConfig(t, dto.RetrievalConfig{VectorTopN: 2, RerankTopK: 2, EnableKeyword: true})
+func TestSearchKeywordStageErrorFallsBackToVectorRecall(t *testing.T) {
+	kb := knowledgeBaseWithRetrievalConfig(t, dto.RetrievalConfig{VectorTopN: 2, RerankTopK: 2, ScoreThreshold: 0.5, EnableKeyword: true})
 	service, _, chunks := newTestServiceWithKB(config.Config{KeywordSearchEnabled: true}, kb, []repository.SearchResult{
 		searchResult(uuid.New(), 0.9),
+		searchResult(uuid.New(), 0.2),
 	}, nil, nil)
+	recorder := observability.NewRecorder()
+	service.SetRecorder(recorder)
 	chunks.keywordErr = errors.New("relation search_vector does not exist")
 
-	_, err := service.Search(context.Background(), kb.OwnerID, kb.ID, dto.SearchRequest{Query: "policy"})
-	var app *apperror.Error
-	if !errors.As(err, &app) || app.Code != "INTERNAL_ERROR" {
-		t.Fatalf("expected internal error from keyword stage failure, got %v", err)
+	res, err := service.Search(context.Background(), kb.OwnerID, kb.ID, dto.SearchRequest{Query: "policy", Debug: true})
+	if err != nil {
+		t.Fatalf("keyword failure must not fail the search: %v", err)
+	}
+	// Vector semantics apply again: the 0.2 candidate is below the 0.5 threshold.
+	if len(res.Items) != 1 || res.Items[0].KeywordScore != nil {
+		t.Fatalf("expected the vector-only result filtered by vector score, got %#v", res.Items)
+	}
+	if res.Debug == nil || res.Debug.KeywordStage.Status != "failed" || res.Debug.FusionStage.Status != "skipped" {
+		t.Fatalf("expected failed keyword stage in debug payload, got %#v", res.Debug)
+	}
+	if health, ok := recorder.Snapshot().Providers[observability.ProviderKeyword]; !ok || health.FailureCount == 0 {
+		t.Fatalf("expected keyword failure to be recorded, got %#v", recorder.Snapshot().Providers)
 	}
 }

@@ -218,6 +218,10 @@ fusionScore = Σ 1 / (k + rank_i)    其中 rank_i 为该 chunk 在第 i 路中�
 
 `enableKeyword` 保存在知识库 `retrievalConfig`，默认 `true`；搜索接口可按请求覆盖，Chat 与评测复用知识库配置（评测运行的配置快照包含该字段）。`KEYWORD_SEARCH_ENABLED=false` 为全局关闭，此时关键词阶段不执行、融合阶段跳过，`fusionScore` 不产生。关闭关键词召回时整条链路的行为、分数与响应字段含义都与旧版一致。
 
+### 关键词阶段失败
+
+关键词召回是向量召回的补充而不是前提。`SearchByKeyword` 报错（GIN 索引损坏、`search_vector` 列缺失等）时检索不返回 500，而是记录 warning 与 `keyword` 故障计数，按纯向量列表继续：融合阶段跳过、阈值按 `vectorScore` 过滤，与关闭关键词召回时完全一致。debug payload 的 `keywordStage.status` 为 `failed`。启动时若 `document_chunks.search_vector` 缺失会直接报错提示执行迁移 024，因此该降级只覆盖运行期故障。
+
 ## 多轮上下文规则
 
 聊天接口必须支持会话上下文。问题类型由 Chat Provider 做意图分类，程序只负责解析分类结果并执行路由。
@@ -383,8 +387,8 @@ content: ...
 
 1. `query`：当前检索 query；当前搜索接口没有改写步骤，因此不返回 `rewrittenQuery`。
 2. `vectorStage`：pgvector TopN 原始召回 chunks，包含 `chunkId`、`documentId`、`filename`、`pageNumber`、`content`、`vectorScore`、`rank`。
-3. `keywordStage`：关键词 TopN 原始召回 chunks，字段同上但分数为 `keywordScore`；`status` 为 `completed` 或 `disabled`。
-4. `fusionStage`：RRF 融合后的精排输入，包含 `chunkId`、`pageNumber`、`vectorRank`、`keywordRank`、`fusionScore`、`vectorScore`、`keywordScore`、`rank`；`status` 为 `completed`，关键词召回关闭时为 `skipped` 且顺序等于 `vectorStage`。
+3. `keywordStage`：关键词 TopN 原始召回 chunks，字段同上但分数为 `keywordScore`；`status` 为 `completed`、`disabled` 或 `failed`。`failed` 表示关键词查询报错（例如未执行迁移 024），本次已降级为纯向量召回，items 为空。
+4. `fusionStage`：RRF 融合后的精排输入，包含 `chunkId`、`pageNumber`、`vectorRank`、`keywordRank`、`fusionScore`、`vectorScore`、`keywordScore`、`rank`；`status` 为 `completed`，关键词召回关闭或失败时为 `skipped` 且顺序等于 `vectorStage`。
 5. `rerankStage`：Rerank 输入和输出映射，包含 `chunkId`、`pageNumber`、`rerankScore`、`rank`；`status` 为 `completed`、`disabled` 或 `fallback`。
 6. `finalStage`：最终返回给用户或进入 Prompt 的 chunks，包含 `chunkId`、`pageNumber`、`vectorScore`、`keywordScore`、`fusionScore`、`rerankScore`、`rank`。
 7. `rerankFallback`：沿用普通响应中的 fallback 语义；未 fallback 时为 `null`。

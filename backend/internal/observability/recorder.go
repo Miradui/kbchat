@@ -33,7 +33,11 @@ const (
 	ProviderChat      = "chat"
 	ProviderEmbedding = "embedding"
 	ProviderRerank    = "rerank"
-	ProviderTitle     = "title"
+	// ProviderKeyword is the PostgreSQL full-text stage. It is not a remote
+	// provider, but its failures need the same visibility because keyword
+	// recall silently falls back to vector recall when it breaks.
+	ProviderKeyword = "keyword"
+	ProviderTitle   = "title"
 )
 
 // Rate-limit scopes are deliberately a closed set. Keeping the recorder's
@@ -423,4 +427,14 @@ func percentile(sorted []time.Duration, p int) time.Duration {
 		rank = len(sorted)
 	}
 	return sorted[rank-1]
+}
+
+// Logger exposes the logger wired by WithLogger so services that already hold a
+// Recorder can report non-metric failures without a second dependency. It is
+// nil-safe and returns nil when no logger was configured.
+func (r *Recorder) Logger() *zap.Logger {
+	if r == nil {
+		return nil
+	}
+	return r.log()
 }

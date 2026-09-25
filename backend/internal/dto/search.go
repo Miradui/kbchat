@@ -45,8 +45,9 @@ type SearchDebugResponse struct {
 	RerankFallback *RerankFallbackResponse `json:"rerankFallback"`
 }
 
-// SearchDebugKeywordStage is the raw lexeme recall. Status is "completed" or
-// "disabled"; a disabled stage has no items.
+// SearchDebugKeywordStage is the raw lexeme recall. Status is "completed",
+// "disabled" or "failed"; a disabled or failed stage has no items. A failed
+// stage means the query fell back to vector recall alone.
 type SearchDebugKeywordStage struct {
 	Status string                   `json:"status"`
 	Items  []SearchDebugKeywordItem `json:"items"`

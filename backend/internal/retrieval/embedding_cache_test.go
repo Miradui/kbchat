@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,7 +96,9 @@ func TestSearchEmbeddingCacheHitSkipsProvider(t *testing.T) {
 	if embedder.calls != 0 {
 		t.Fatalf("expected cache hit to skip provider, got %d calls", embedder.calls)
 	}
-	if embeddingCache.getQuery != "退款 政策" || embeddingCache.getModel != "embedding-model" {
+	// The key namespaces by model, dimension and endpoint so a configuration
+	// change cannot serve vectors from the previous setup.
+	if embeddingCache.getQuery != "退款 政策" || !strings.HasPrefix(embeddingCache.getModel, "embedding-model:0:") {
 		t.Fatalf("unexpected cache lookup model=%q query=%q", embeddingCache.getModel, embeddingCache.getQuery)
 	}
 	snapshot := recorder.Snapshot()

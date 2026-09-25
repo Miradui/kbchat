@@ -25,6 +25,7 @@ const stageLabels: Record<KnowledgeBaseSearchDebug['rerankStage']['status'], str
 const keywordStageLabels: Record<KnowledgeBaseSearchDebug['keywordStage']['status'], string> = {
   completed: '已完成',
   disabled: '未启用',
+  failed: '已降级',
 };
 
 const fusionStageLabels: Record<KnowledgeBaseSearchDebug['fusionStage']['status'], string> = {
@@ -190,6 +191,8 @@ function DebugPanel({ debug }: { debug: KnowledgeBaseSearchDebug }) {
           <h3>关键词召回 ({keywordStageLabels[debug.keywordStage.status]}{debug.keywordStage.status === 'completed' ? ` · ${debug.keywordStage.items.length}` : ''})</h3>
           {debug.keywordStage.status === 'disabled' ? (
             <p className="ui-field__hint">该知识库未启用关键词召回</p>
+          ) : debug.keywordStage.status === 'failed' ? (
+            <p className="ui-field__hint">关键词召回执行失败，本次已按纯向量召回返回；请检查迁移 024 与关键词索引</p>
           ) : debug.keywordStage.items.length === 0 ? (
             <p className="ui-field__hint">没有片段命中查询词元</p>
           ) : (
