@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { listChatSessions, listKnowledgeBases } from '../../api/resources';
-import type { ChatSession, KnowledgeBase } from '../../types/api';
+import { listChatSessions } from '../../api/resources';
+import { useKnowledgeBaseOptions } from '../../hooks/useKnowledgeBaseOptions';
+import type { ChatSession } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
 
 /**
@@ -30,17 +31,14 @@ export function useChatSessions({
 }: UseChatSessionsOptions = {}) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [sessionTotal, setSessionTotal] = useState(0);
-  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
+  const options = useKnowledgeBaseOptions();
   const [sessionsLoading, setSessionsLoading] = useState(true);
-  const [knowledgeBasesLoading, setKnowledgeBasesLoading] = useState(true);
   const [sessionsError, setSessionsError] = useState('');
   const [loadMoreError, setLoadMoreError] = useState('');
   const [sessionsLoadingMore, setSessionsLoadingMore] = useState(false);
-  const [knowledgeBasesError, setKnowledgeBasesError] = useState('');
   const sessionRequestRef = useRef(0);
   const sessionPageRef = useRef(1);
   const loadingMoreRef = useRef(false);
-  const kbRequestRef = useRef(0);
 
   const loadSessions = useCallback(async () => {
     const request = ++sessionRequestRef.current;
@@ -105,23 +103,6 @@ export function useChatSessions({
     }
   }, [archived, knowledgeBaseId, sessionTotal, sessions, sessionsLoading]);
 
-  const loadKnowledgeBases = useCallback(async () => {
-    const request = ++kbRequestRef.current;
-    setKnowledgeBasesLoading(true);
-    try {
-      const response = await listKnowledgeBases({ pageSize: 100 });
-      if (kbRequestRef.current === request) {
-        setKnowledgeBases(response.items);
-        setKnowledgeBasesError('');
-      }
-    } catch (caught) {
-      if (kbRequestRef.current === request) {
-        setKnowledgeBasesError(getErrorMessage(caught, '知识库列表加载失败'));
-      }
-    } finally {
-      if (kbRequestRef.current === request) setKnowledgeBasesLoading(false);
-    }
-  }, []);
 
   useEffect(() => {
     void loadSessions();
@@ -130,12 +111,6 @@ export function useChatSessions({
     };
   }, [loadSessions]);
 
-  useEffect(() => {
-    void loadKnowledgeBases();
-    return () => {
-      kbRequestRef.current += 1;
-    };
-  }, [loadKnowledgeBases]);
 
   const mergeSession = useCallback((session: ChatSession) => {
     // A response that started before this local mutation must not overwrite it.
@@ -172,14 +147,14 @@ export function useChatSessions({
     hasMoreSessions: sessionTotal > sessions.length,
     sessionsLoadingMore,
     loadMoreError,
-    knowledgeBases,
+    knowledgeBases: options.items,
     sessionsLoading,
-    knowledgeBasesLoading,
+    knowledgeBasesLoading: options.loading,
     sessionsError,
-    knowledgeBasesError,
+    knowledgeBasesError: options.error,
     reloadSessions: loadSessions,
     loadMoreSessions,
-    reloadKnowledgeBases: loadKnowledgeBases,
+    reloadKnowledgeBases: options.reload,
     mergeSession,
     removeSession,
   };

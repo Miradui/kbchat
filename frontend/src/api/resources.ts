@@ -1,3 +1,4 @@
+import { invalidateKnowledgeBaseOptionsAfter } from '../store/queryClient';
 import { ApiError, apiBlobRequest, apiEventStream, apiRequest, apiUploadRequest } from './client';
 import type {
   ActivityListResponse,
@@ -129,8 +130,12 @@ export function listActivities(limit = 20): Promise<ActivityListResponse> {
   return apiRequest<ActivityListResponse>(withQuery('/activities', { limit }));
 }
 
-export function listKnowledgeBases(params: KnowledgeBaseListParams = {}): Promise<KnowledgeBaseListResponse> {
-  return apiRequest<KnowledgeBaseListResponse>(withQuery('/knowledge-bases', params));
+export function listKnowledgeBases(params: KnowledgeBaseListParams = {}, signal?: AbortSignal): Promise<KnowledgeBaseListResponse> {
+  return apiRequest<KnowledgeBaseListResponse>(withQuery('/knowledge-bases', {
+    ...params,
+    scope: params.scope === 'all' ? undefined : params.scope,
+    visibility: params.visibility === 'all' ? undefined : params.visibility,
+  }), { signal });
 }
 
 export function getKnowledgeBase(id: string): Promise<KnowledgeBase> {
@@ -138,23 +143,23 @@ export function getKnowledgeBase(id: string): Promise<KnowledgeBase> {
 }
 
 export function createKnowledgeBase(input: KnowledgeBaseInput): Promise<KnowledgeBase> {
-  return apiRequest<KnowledgeBase>('/knowledge-bases', {
+  return invalidateKnowledgeBaseOptionsAfter(apiRequest<KnowledgeBase>('/knowledge-bases', {
     method: 'POST',
     body: input,
-  });
+  }));
 }
 
 export function updateKnowledgeBase(id: string, input: KnowledgeBaseInput): Promise<KnowledgeBase> {
-  return apiRequest<KnowledgeBase>(`/knowledge-bases/${id}`, {
+  return invalidateKnowledgeBaseOptionsAfter(apiRequest<KnowledgeBase>(`/knowledge-bases/${id}`, {
     method: 'PUT',
     body: input,
-  });
+  }));
 }
 
 export function deleteKnowledgeBase(id: string): Promise<void> {
-  return apiRequest<void>(`/knowledge-bases/${id}`, {
+  return invalidateKnowledgeBaseOptionsAfter(apiRequest<void>(`/knowledge-bases/${id}`, {
     method: 'DELETE',
-  });
+  }));
 }
 
 export function listKnowledgeBaseCategories(): Promise<KnowledgeBaseCategoryListResponse> {
@@ -278,23 +283,23 @@ export function batchFavoriteKnowledgeBases(ids: string[], favorite: boolean): P
 }
 
 export function batchDeleteKnowledgeBases(ids: string[]): Promise<BatchResultResponse> {
-  return apiRequest<BatchResultResponse>('/knowledge-bases/batch-delete', {
+  return invalidateKnowledgeBaseOptionsAfter(apiRequest<BatchResultResponse>('/knowledge-bases/batch-delete', {
     method: 'POST',
     body: { knowledgeBaseIds: ids },
-  });
+  }));
 }
 
 export function restoreKnowledgeBase(id: string): Promise<void> {
-  return apiRequest<void>(`/knowledge-bases/${id}/restore`, {
+  return invalidateKnowledgeBaseOptionsAfter(apiRequest<void>(`/knowledge-bases/${id}/restore`, {
     method: 'POST',
-  });
+  }));
 }
 
 export function batchRestoreKnowledgeBases(ids: string[]): Promise<BatchResultResponse> {
-  return apiRequest<BatchResultResponse>('/knowledge-bases/batch-restore', {
+  return invalidateKnowledgeBaseOptionsAfter(apiRequest<BatchResultResponse>('/knowledge-bases/batch-restore', {
     method: 'POST',
     body: { knowledgeBaseIds: ids },
-  });
+  }));
 }
 
 export function batchMoveKnowledgeBases(
@@ -330,15 +335,15 @@ export function listKnowledgeBaseRecycleBin(page = 1, pageSize = 20): Promise<Re
 }
 
 export function deleteKnowledgeBasePermanently(id: string): Promise<void> {
-  return apiRequest<void>(`/knowledge-bases/recycle-bin/${id}`, {
+  return invalidateKnowledgeBaseOptionsAfter(apiRequest<void>(`/knowledge-bases/recycle-bin/${id}`, {
     method: 'DELETE',
-  });
+  }));
 }
 
 export function emptyKnowledgeBaseRecycleBin(): Promise<void> {
-  return apiRequest<void>('/knowledge-bases/recycle-bin/empty', {
+  return invalidateKnowledgeBaseOptionsAfter(apiRequest<void>('/knowledge-bases/recycle-bin/empty', {
     method: 'POST',
-  });
+  }));
 }
 
 export function getKnowledgeBasePermissions(id: string): Promise<KnowledgeBasePermissionResponse> {
@@ -349,10 +354,10 @@ export function updateKnowledgeBasePermissions(
   id: string,
   visibility: 'private' | 'public',
 ): Promise<KnowledgeBasePermissionResponse> {
-  return apiRequest<KnowledgeBasePermissionResponse>(`/knowledge-bases/${id}/permissions`, {
+  return invalidateKnowledgeBaseOptionsAfter(apiRequest<KnowledgeBasePermissionResponse>(`/knowledge-bases/${id}/permissions`, {
     method: 'PUT',
     body: { visibility },
-  });
+  }));
 }
 
 export function searchUsers(q: string, limit = 20): Promise<UserSearchResponse> {
@@ -384,10 +389,10 @@ export function addKnowledgeBaseMember(
   userId: string,
   role: MemberRole,
 ): Promise<void> {
-  return apiRequest<void>(`/knowledge-bases/${id}/members`, {
+  return invalidateKnowledgeBaseOptionsAfter(apiRequest<void>(`/knowledge-bases/${id}/members`, {
     method: 'POST',
     body: { userId, role },
-  });
+  }));
 }
 
 export function updateKnowledgeBaseMember(
@@ -395,16 +400,16 @@ export function updateKnowledgeBaseMember(
   userId: string,
   role: MemberRole,
 ): Promise<void> {
-  return apiRequest<void>(`/knowledge-bases/${id}/members/${userId}`, {
+  return invalidateKnowledgeBaseOptionsAfter(apiRequest<void>(`/knowledge-bases/${id}/members/${userId}`, {
     method: 'PUT',
     body: { role },
-  });
+  }));
 }
 
 export function deleteKnowledgeBaseMember(id: string, userId: string): Promise<void> {
-  return apiRequest<void>(`/knowledge-bases/${id}/members/${userId}`, {
+  return invalidateKnowledgeBaseOptionsAfter(apiRequest<void>(`/knowledge-bases/${id}/members/${userId}`, {
     method: 'DELETE',
-  });
+  }));
 }
 
 /**
