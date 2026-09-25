@@ -32,6 +32,7 @@ export function useChatMessageSearch({ sessionId, messages, ready, targetMessage
   }, [messages, ready, sessionId, term]);
   const index = Math.max(0, matches.findIndex((match) => match.message.id === selectedId));
   const active = matches[index];
+  const activeMessageId = active?.message.id;
   const targetExists = ready && messages.some((message) => message.id === targetMessageId && message.sessionId === sessionId);
 
   useEffect(() => {
@@ -51,8 +52,8 @@ export function useChatMessageSearch({ sessionId, messages, ready, targetMessage
   }, [onLocate, ready, sessionId, targetExists, targetMessageId]);
 
   useEffect(() => {
-    if (open && active) onLocate(active.message.id, false);
-  }, [open, active?.message.id, term, onLocate]);
+    if (open && activeMessageId) onLocate(activeMessageId, false);
+  }, [open, activeMessageId, term, onLocate]);
 
   const openSearch = useCallback(() => {
     setOpen(true);

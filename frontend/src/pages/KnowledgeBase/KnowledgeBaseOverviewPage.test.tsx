@@ -31,9 +31,9 @@ function stats(value: number, period: 'day' | 'month' = 'month'): KnowledgeBaseD
 }
 
 const emptyDocuments = { items: [], total: 0, page: 1, pageSize: 6 };
-const knowledgeBase: KnowledgeBase = {
+const knowledgeBase: KnowledgeBase = {answerConfig: { systemPromptAddition: '', answerLanguage: 'auto' as const, allowGeneralKnowledge: false, model: '' },
   id: 'kb1', name: '知识库一', description: '', visibility: 'private',
-  retrievalConfig: { vectorTopN: 30, rerankTopK: 5, scoreThreshold: 0.3, enableRerank: true },
+  retrievalConfig: {enableKeyword: true,  vectorTopN: 30, rerankTopK: 5, scoreThreshold: 0.3, enableRerank: true },
   createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z',
 };
 
@@ -60,16 +60,16 @@ describe('KnowledgeBaseOverviewPage', () => {
     resources.getKnowledgeBaseDetailStats.mockImplementation((_id, period) => period === 'day' ? day.promise : Promise.resolve(stats(222)));
     renderOverview();
     await screen.findByText('222');
-    await user.click(screen.getByRole('button', { name: '日', exact: true }));
+    await user.click(screen.getByRole('button', { name: '日' }));
     expect(screen.queryByText('222')).not.toBeInTheDocument();
     expect(screen.getByText('正在加载统计…')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '月', exact: true }));
+    await user.click(screen.getByRole('button', { name: '月' }));
     await screen.findByText('222');
     await act(async () => {
       if (outcome === 'success') day.resolve(stats(111, 'day'));
       else day.reject(new Error('过期统计失败'));
     });
-    expect(screen.getByRole('button', { name: '月', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: '月' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('222')).toBeInTheDocument();
     expect(screen.queryByText('111')).not.toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();

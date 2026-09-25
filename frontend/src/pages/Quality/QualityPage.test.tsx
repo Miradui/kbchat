@@ -37,8 +37,8 @@ const overview: ChatQualityOverview = {
   feedbackCoverage: 0.6, positiveRate: 2 / 3, withoutCitationsRate: 0.5,
 };
 
-const knowledgeBase: KnowledgeBase = {
-  id: 'kb-1', name: '产品知识库', description: '', retrievalConfig: {
+const knowledgeBase: KnowledgeBase = {answerConfig: { systemPromptAddition: '', answerLanguage: 'auto' as const, allowGeneralKnowledge: false, model: '' },
+  id: 'kb-1', name: '产品知识库', description: '', retrievalConfig: {enableKeyword: true,
     vectorTopN: 30, rerankTopK: 5, scoreThreshold: 0.3, enableRerank: true,
   }, createdAt: '2026-08-01T00:00:00Z', updatedAt: '2026-08-01T00:00:00Z',
 };

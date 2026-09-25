@@ -85,7 +85,8 @@ function KnowledgeBaseOverview() {
 
   useEffect(() => {
     void loadDocuments();
-    return () => { documentsRequest.current++; };
+    const epoch = documentsRequest;
+    return () => { epoch.current += 1; };
   }, [loadDocuments]);
 
   const loadStats = useCallback(async () => {
@@ -110,7 +111,8 @@ function KnowledgeBaseOverview() {
 
   useEffect(() => {
     void loadStats();
-    return () => { statsRequest.current++; };
+    const epoch = statsRequest;
+    return () => { epoch.current += 1; };
   }, [loadStats]);
 
   useEffect(() => {

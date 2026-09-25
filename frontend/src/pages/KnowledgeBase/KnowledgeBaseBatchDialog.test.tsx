@@ -8,7 +8,7 @@ import { KnowledgeBaseBatchDialog } from './KnowledgeBaseBatchDialog';
 function props() {
   return {
     kind: 'move' as const, count: 2, busy: false, error: '', categories: [{ id: 'cat-1', label: '产品资料', depth: 0 }],
-    tags: [{ id: 'tag-1', name: '指南' }, { id: 'tag-2', name: '制度' }], optionsLoading: false, optionsError: '',
+    tags: [{ id: 'tag-1', name: '指南', createdAt: '', updatedAt: '' }, { id: 'tag-2', name: '制度', createdAt: '', updatedAt: '' }], optionsLoading: false, optionsError: '',
     onRetryOptions: vi.fn(), onClose: vi.fn(), onSubmit: vi.fn(),
   };
 }

@@ -54,16 +54,16 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); });
 
 async function selectFiles(user: ReturnType<typeof userEvent.setup>, files: File[] = [file]) {
-  await user.click(screen.getByRole('button', { name: '导入文档', exact: true }));
+  await user.click(screen.getByRole('button', { name: '导入文档' }));
   await user.upload(screen.getByLabelText('选择文档文件'), files);
   await user.click(screen.getByRole('button', { name: '开始导入' }));
 }
 
 async function submitWithTimers(files: File[] = [file]) {
-  fireEvent.click(screen.getByRole('button', { name: '导入文档', exact: true }));
+  fireEvent.click(screen.getByRole('button', { name: '导入文档' }));
   fireEvent.change(screen.getByLabelText('选择文档文件'), { target: { files } });
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: '开始导入' })); });
-  fireEvent.click(screen.getByRole('button', { name: '上传任务', exact: true }));
+  fireEvent.click(screen.getByRole('button', { name: '上传任务' }));
 }
 
 describe('DocumentImportProvider', () => {
@@ -80,7 +80,7 @@ describe('DocumentImportProvider', () => {
     await user.click(screen.getByRole('link', { name: '切换页面' }));
     expect(screen.getByRole('heading', { name: '另一页面' })).toBeInTheDocument();
     expect(signal?.aborted).toBe(false);
-    await user.click(screen.getByRole('button', { name: '上传任务', exact: true }));
+    await user.click(screen.getByRole('button', { name: '上传任务' }));
     expect(screen.getByRole('progressbar', { name: 'policy.md 上传进度' })).toHaveAttribute('aria-valuenow', '37');
     await user.click(screen.getByRole('button', { name: '查看上传清单' }));
     expect(screen.getByRole('combobox', { name: '目标知识库' })).toHaveValue('kb1');
@@ -89,7 +89,7 @@ describe('DocumentImportProvider', () => {
     await act(async () => upload.resolve(documentItem));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '另一页面' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '上传任务', exact: true }));
+    await user.click(screen.getByRole('button', { name: '上传任务' }));
     expect(within(screen.getByRole('region', { name: '文档处理任务' })).getByRole('article', { name: file.name })).toHaveTextContent('已上传');
     expect(uploadGlobalDocument).toHaveBeenCalledTimes(1);
   });
@@ -103,7 +103,7 @@ describe('DocumentImportProvider', () => {
     await user.click(screen.getByRole('button', { name: '收起窗口' }));
     await user.click(screen.getByRole('link', { name: '切换页面' }));
     // This page suggests kb2, but an existing submitted batch must not be retargeted.
-    await user.click(screen.getByRole('button', { name: '导入文档', exact: true }));
+    await user.click(screen.getByRole('button', { name: '导入文档' }));
     expect(screen.getByRole('combobox', { name: '目标知识库' })).toHaveValue('kb1');
     expect(screen.getByRole('combobox', { name: '目标知识库' })).toBeDisabled();
     await user.click(screen.getByRole('button', { name: choice === 'keep' ? '保留两份' : '替换原文档' }));
@@ -120,7 +120,7 @@ describe('DocumentImportProvider', () => {
     await screen.findByRole('button', { name: '重试失败项' });
     await user.click(screen.getByRole('button', { name: '收起窗口' }));
     await user.click(screen.getByRole('link', { name: '切换页面' }));
-    await user.click(screen.getByRole('button', { name: '上传任务', exact: true }));
+    await user.click(screen.getByRole('button', { name: '上传任务' }));
     expect(screen.getByRole('article', { name: file.name })).toHaveTextContent('上传失败');
     await user.click(screen.getByRole('button', { name: '继续导入' }));
     await user.click(screen.getByRole('button', { name: '重试失败项' }));
@@ -141,7 +141,7 @@ describe('DocumentImportProvider', () => {
     window.dispatchEvent(closing);
     expect(closing.defaultPrevented).toBe(true);
     await user.click(screen.getByRole('link', { name: '切换页面' }));
-    await user.click(screen.getByRole('button', { name: '上传任务', exact: true }));
+    await user.click(screen.getByRole('button', { name: '上传任务' }));
     expect(screen.getByRole('article', { name: file.name })).toHaveTextContent('结果待确认');
     await user.click(screen.getByRole('button', { name: '继续导入' }));
     await user.click(screen.getByRole('button', { name: '开始导入' }));
@@ -181,9 +181,9 @@ describe('DocumentImportProvider', () => {
       }
     });
     expect(signal?.aborted).toBe(true);
-    expect(screen.queryByRole('button', { name: '上传任务', exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '上传任务' })).not.toBeInTheDocument();
     await act(async () => upload.resolve(documentItem));
-    expect(screen.queryByRole('button', { name: '上传任务', exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '上传任务' })).not.toBeInTheDocument();
     const closing = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(closing);
     expect(closing.defaultPrevented).toBe(false);

@@ -198,7 +198,8 @@ function DiagnosticsContent({ sources, onForbidden }: { sources: DiagnosticsSour
 
   useEffect(() => {
     void reload();
-    return () => { requestRef.current++; };
+    const epoch = requestRef;
+    return () => { epoch.current += 1; };
   }, [reload]);
 
   const documents = diagnostics?.queues.documents;

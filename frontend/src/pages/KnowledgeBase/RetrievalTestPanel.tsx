@@ -47,7 +47,7 @@ export function RetrievalTestPanel({ knowledgeBase }: { knowledgeBase: Knowledge
   const searchingRef = useRef(false);
 
   useEffect(() => {
-    requestRef.current++;
+    requestRef.current += 1;
     searchingRef.current = false;
     setQuery('');
     setResults([]);
@@ -56,7 +56,8 @@ export function RetrievalTestPanel({ knowledgeBase }: { knowledgeBase: Knowledge
     setSearching(false);
     setError('');
     setSearched(false);
-    return () => { requestRef.current++; };
+    const epoch = requestRef;
+    return () => { epoch.current += 1; };
   }, [knowledgeBase.id]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {

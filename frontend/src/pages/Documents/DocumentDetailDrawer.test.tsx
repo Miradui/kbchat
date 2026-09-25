@@ -112,9 +112,9 @@ describe('DocumentDetailDrawer', () => {
     renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
     expect(await screen.findByText('可阅读下方内容片段；下载原始文件需要编辑者及以上权限。')).toBeInTheDocument();
     expect(await screen.findByText(sourceChunk.content)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '下载', exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '下载' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '重新处理' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '删除', exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '删除' })).not.toBeInTheDocument();
     expect(downloadDocument).not.toHaveBeenCalled();
   });
 
@@ -123,9 +123,9 @@ describe('DocumentDetailDrawer', () => {
     vi.mocked(listDocumentChunks).mockResolvedValue({ items: [sourceChunk], total: 1, page: 1, pageSize: 20 });
     renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
     expect(await screen.findByText('暂时无法确认文档操作权限，请重新打开文档重试。')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '下载', exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '下载' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '重新处理' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '删除', exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '删除' })).not.toBeInTheDocument();
   });
 
   it('closes from the backdrop but not from clicks inside the panel', async () => {
@@ -627,7 +627,7 @@ describe('DocumentDetailDrawer citation landing', () => {
     });
     // Reprocessing replaces `document`, which refetches the chunks and hands the
     // effect a new array -- a real path where it runs again after focus has landed.
-    vi.mocked(reprocessDocument).mockResolvedValue({ ...document, status: 'processing' });
+    vi.mocked(reprocessDocument).mockResolvedValue({ ...document, status: 'parsing' });
 
     const user = userEvent.setup();
     renderWithRouter(<DocumentDetailDrawer chunkId="chunk1" documentId="doc1" onClose={vi.fn()} />);

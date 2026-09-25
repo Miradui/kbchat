@@ -114,7 +114,7 @@ npm run dev -- --host 127.0.0.1 --port 5173
 | 任务 | 检查内容 |
 | --- | --- |
 | Backend | 根据 `go.mod` 安装 Go，启用 CGO，缓存依赖，执行 `go vet`、全量测试和构建 |
-| Frontend | 使用 Node.js 22，缓存 npm 依赖，执行 `npm ci`、全量测试、TypeScript 检查、Vite 构建及 11 项路由分包检查 |
+| Frontend | 使用 Node.js 22，缓存 npm 依赖，执行 `npm ci`、Hooks ESLint、测试 TypeScript 检查、全量测试、生产 TypeScript/Vite 构建及 11 项路由分包检查 |
 
 CI 使用单元测试中的数据库和 Provider 替身，不需要生产密钥。真实 PostgreSQL、Redis、存储、模型调用及浏览器联调仍需在集成环境验证。
 
@@ -129,6 +129,8 @@ go build ./...
 cd ../frontend
 npm ci
 npm test
+npm run lint
+npm run typecheck:test
 npm run build
 ```
 

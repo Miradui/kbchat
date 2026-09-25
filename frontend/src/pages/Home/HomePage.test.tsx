@@ -10,7 +10,7 @@ import type { GlobalDocumentItem, HomeSummaryResponse, KnowledgeBase } from '../
 import type { HomeSources } from './homeData';
 import { HomePage } from './HomePage';
 
-const knowledgeBase = { id: 'kb1', name: '员工手册', description: '制度资料', visibility: 'private', retrievalConfig: { vectorTopN: 20, rerankTopK: 5, scoreThreshold: 0.2, enableRerank: true }, createdAt: '2026-07-01T00:00:00Z', updatedAt: '2026-07-02T00:00:00Z' } satisfies KnowledgeBase;
+const knowledgeBase = {answerConfig: { systemPromptAddition: '', answerLanguage: 'auto' as const, allowGeneralKnowledge: false, model: '' },  id: 'kb1', name: '员工手册', description: '制度资料', visibility: 'private', retrievalConfig: {enableKeyword: true,  vectorTopN: 20, rerankTopK: 5, scoreThreshold: 0.2, enableRerank: true }, createdAt: '2026-07-01T00:00:00Z', updatedAt: '2026-07-02T00:00:00Z' } satisfies KnowledgeBase;
 const document = { id: 'd1', knowledgeBaseId: 'kb1', knowledgeBaseName: '员工手册', filename: 'handbook.pdf', fileType: 'pdf', fileSize: 120, status: 'completed', errorMessage: null, createdAt: '2026-07-02T00:00:00Z' } satisfies GlobalDocumentItem;
 
 // G17: the page is fed by one aggregate response instead of four list calls.

@@ -74,7 +74,7 @@ vi.mock('./useChatThread', () => ({
     regeneration: null,
     regeneratingId: null,
     rerankFallback: null,
-    streamingAnswer: '',
+    streamText: { subscribe: () => () => undefined, getSnapshot: () => '' },
     streamingCitations: [],
     reload: vi.fn(),
     send: vi.fn(),

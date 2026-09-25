@@ -81,7 +81,8 @@ function AccountSettingsContent({ onClose, onProfileSaved, revision }: Omit<Prop
   useEffect(() => {
     mountedRef.current = true;
     void loadProfile();
-    return () => { mountedRef.current = false; readRef.current++; };
+    const epoch = readRef;
+    return () => { mountedRef.current = false; epoch.current += 1; };
   }, [loadProfile]);
 
   useEffect(() => () => { if (draft) URL.revokeObjectURL(draft.previewURL); }, [draft]);

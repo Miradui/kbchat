@@ -92,7 +92,7 @@ describe('AccountSettingsDialog', () => {
     const user = userEvent.setup();
     renderDialog();
     await screen.findByDisplayValue('Owner');
-    await user.click(screen.getByRole('button', { name: '修改密码', exact: true }));
+    await user.click(screen.getByRole('button', { name: '修改密码' }));
     const inputs = passwordInputs();
 
     await user.type(inputs.current, 'current-secret');
@@ -110,7 +110,7 @@ describe('AccountSettingsDialog', () => {
     const user = userEvent.setup();
     renderDialog();
     await screen.findByDisplayValue('Owner');
-    await user.click(screen.getByRole('button', { name: '修改密码', exact: true }));
+    await user.click(screen.getByRole('button', { name: '修改密码' }));
     const inputs = passwordInputs();
 
     await user.type(inputs.current, 'current-secret');
@@ -130,7 +130,7 @@ describe('AccountSettingsDialog', () => {
     }));
     renderDialog();
     await screen.findByDisplayValue('Owner');
-    await user.click(screen.getByRole('button', { name: '修改密码', exact: true }));
+    await user.click(screen.getByRole('button', { name: '修改密码' }));
     const inputs = passwordInputs();
 
     await user.type(inputs.current, 'incorrect-current-password');
@@ -192,7 +192,7 @@ describe('AccountSettingsDialog', () => {
     await screen.findByDisplayValue('Owner');
     await pickAvatar(user);
     fireEvent.change(screen.getByLabelText('显示名称'), { target: { value: '未保存的名称' } });
-    await user.click(screen.getByRole('button', { name: '修改密码', exact: true }));
+    await user.click(screen.getByRole('button', { name: '修改密码' }));
     await user.type(screen.getByLabelText('当前密码'), 'unfinished');
     await user.click(screen.getByRole('button', { name: '个人资料' }));
     expect(screen.getByDisplayValue('未保存的名称')).toBeInTheDocument();
@@ -201,7 +201,7 @@ describe('AccountSettingsDialog', () => {
     await user.click(screen.getByRole('button', { name: '取消更换' }));
     expect(avatarMocks.revokeURL).toHaveBeenCalledWith('blob:preview');
     expect(screen.getByRole('button', { name: '选择图片' })).toHaveFocus();
-    await user.click(screen.getByRole('button', { name: '修改密码', exact: true }));
+    await user.click(screen.getByRole('button', { name: '修改密码' }));
     expect(screen.getByLabelText('当前密码')).toHaveValue('unfinished');
   });
 
@@ -240,7 +240,7 @@ describe('AccountSettingsDialog', () => {
     expect(resourceMocks.uploadAvatar).toHaveBeenCalledOnce();
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: '关闭' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '修改密码', exact: true })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '修改密码' })).toBeDisabled();
     await act(async () => response.resolve(savedUser));
     expect(screen.getByRole('button', { name: '关闭' })).toBeEnabled();
   });

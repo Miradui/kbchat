@@ -11,10 +11,10 @@ vi.mock('../../api/resources', () => resources);
 vi.mock('../../components/UserAvatar', () => ({ UserAvatar: () => <span /> }));
 
 const owner = { id: 'owner', username: 'admin', displayName: '管理员' };
-const knowledgeBase: KnowledgeBase = {
+const knowledgeBase: KnowledgeBase = {answerConfig: { systemPromptAddition: '', answerLanguage: 'auto' as const, allowGeneralKnowledge: false, model: '' },
   id: 'kb1', name: '成员验收', description: '', visibility: 'private',
   effectiveRole: 'owner', capabilities: ['members.read', 'members.write'],
-  retrievalConfig: { vectorTopN: 30, rerankTopK: 5, scoreThreshold: 0.3, enableRerank: true },
+  retrievalConfig: {enableKeyword: true,  vectorTopN: 30, rerankTopK: 5, scoreThreshold: 0.3, enableRerank: true },
   createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z',
 };
 
@@ -31,7 +31,7 @@ describe('MembersPanel search', () => {
     expect(await screen.findByRole('combobox', { name: '可见性' })).toHaveValue('private');
     expect(screen.queryByText('没有找到匹配的用户，请调整关键词。')).not.toBeInTheDocument();
     await user.type(screen.getByRole('searchbox', { name: '搜索用户' }), '不存在');
-    await user.click(screen.getByRole('button', { name: '搜索', exact: true }));
+    await user.click(screen.getByRole('button', { name: '搜索' }));
     expect(await screen.findByRole('status')).toHaveTextContent('没有找到匹配的用户');
   });
 
@@ -42,14 +42,14 @@ describe('MembersPanel search', () => {
     renderWithRouter(<MembersPanel knowledgeBase={knowledgeBase} onVisibilityChange={vi.fn()} />);
     const search = await screen.findByRole('searchbox', { name: '搜索用户' });
     await user.type(search, 'old');
-    await user.click(screen.getByRole('button', { name: '搜索', exact: true }));
+    await user.click(screen.getByRole('button', { name: '搜索' }));
     expect(screen.getByRole('status')).toHaveTextContent('正在搜索用户');
     await user.clear(search);
     await user.type(search, 'new');
     await act(async () => resolve({ items: [{ id: 'old-user', username: 'old', displayName: '过期用户' }] }));
     expect(screen.queryByText('过期用户')).not.toBeInTheDocument();
     expect(screen.getByRole('status')).toBeEmptyDOMElement();
-    expect(screen.getByRole('button', { name: '搜索', exact: true })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '搜索' })).toBeEnabled();
   });
 
   it('retains a failed query and clears the error after a successful retry', async () => {
@@ -57,10 +57,10 @@ describe('MembersPanel search', () => {
     resources.searchUsers.mockRejectedValueOnce(new Error('unavailable')).mockResolvedValue({ items: [owner] });
     renderWithRouter(<MembersPanel knowledgeBase={knowledgeBase} onVisibilityChange={vi.fn()} />);
     await user.type(await screen.findByRole('searchbox', { name: '搜索用户' }), 'admin');
-    await user.click(screen.getByRole('button', { name: '搜索', exact: true }));
+    await user.click(screen.getByRole('button', { name: '搜索' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('用户搜索失败，请重试');
     expect(screen.getByRole('searchbox')).toHaveValue('admin');
-    await user.click(screen.getByRole('button', { name: '搜索', exact: true }));
+    await user.click(screen.getByRole('button', { name: '搜索' }));
     expect(await screen.findByRole('status')).toHaveTextContent('找到 1 位用户');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '设为只读成员' })).toBeDisabled();

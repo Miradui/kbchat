@@ -36,12 +36,12 @@ vi.mock('../../api/resources', () => ({
   updateChatSessionTitle: vi.fn(),
 }));
 
-const knowledgeBase = {
+const knowledgeBase = {answerConfig: { systemPromptAddition: '', answerLanguage: 'auto' as const, allowGeneralKnowledge: false, model: '' },
   id: 'kb1',
   name: '制度库',
   description: '制度说明',
   visibility: 'private',
-  retrievalConfig: { vectorTopN: 30, rerankTopK: 5, scoreThreshold: 0.3, enableRerank: true },
+  retrievalConfig: {enableKeyword: true,  vectorTopN: 30, rerankTopK: 5, scoreThreshold: 0.3, enableRerank: true },
   createdAt: '2026-07-01T00:00:00Z',
   updatedAt: '2026-07-01T00:00:00Z',
 } satisfies KnowledgeBase;
@@ -72,8 +72,8 @@ beforeEach(() => {
   vi.mocked(listKnowledgeBaseCategories).mockResolvedValue({ items: [] });
   vi.mocked(listChatSessions).mockResolvedValue({ items: [session], total: 1, page: 1, pageSize: 50 });
   vi.mocked(getChatSession).mockResolvedValue(session);
-  vi.mocked(listChatMessages).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 50 });
-  vi.mocked(getWorkspacePreference).mockResolvedValue({ key: 'chat.lastKnowledgeBaseId', value: 'kb1' });
+  vi.mocked(listChatMessages).mockResolvedValue({ items: [] });
+  vi.mocked(getWorkspacePreference).mockResolvedValue({ viewMode: 'table', scope: 'all', sort: 'updatedAt_desc', visibility: 'all', expandedCategoryIds: [] });
 });
 
 /**
@@ -156,9 +156,6 @@ describe('ChatPage stream announcement', () => {
     const userMessage = { ...assistantMessage, id: 'u1', role: 'user', content: '年假怎么算' } as ChatMessage;
     vi.mocked(listChatMessages).mockResolvedValue({
       items: [userMessage, assistantMessage],
-      total: 2,
-      page: 1,
-      pageSize: 50,
     });
     await act(async () => {
       stream.resolve({

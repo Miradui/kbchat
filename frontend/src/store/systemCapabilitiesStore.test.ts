@@ -4,7 +4,7 @@ import { defaultSystemCapabilities, systemCapabilitiesStore } from './systemCapa
 import type { SystemCapabilities } from '../types/api';
 
 const serverCapabilities: SystemCapabilities = {
-  rerankEnabled: true,
+  rerankEnabled: true, keywordSearchEnabled: true,
   upload: { maxFileBytes: 10 * 1024 * 1024, allowedExtensions: ['txt'] },
   retrieval: { maxVectorTopN: 60, maxRerankTopK: 8 },
   account: {

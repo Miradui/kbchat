@@ -52,6 +52,10 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install dependencies
         run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck tests
+        run: npm run typecheck:test
       - name: Test
         run: npm test
       - name: Typecheck, build and verify route chunks

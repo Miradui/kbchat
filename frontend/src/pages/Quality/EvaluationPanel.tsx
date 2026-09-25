@@ -104,15 +104,15 @@ export function EvaluationPanel({ knowledgeBase }: { knowledgeBase: KnowledgeBas
     return () => { active = false; };
   }, [kbId]);
 
-  function clearPending() {
+  const clearPending = useCallback(() => {
     try { sessionStorage.removeItem(storageKey); } catch { /* The persisted key is safe to reconcile again. */ }
     pendingRef.current = null; setPending(null);
-  }
+  }, [storageKey]);
   useEffect(() => {
     if (!pending) return;
     const found = runs.find((run) => run.clientRequestId === pending.clientRequestId);
     if (found) { clearPending(); setCandidateId(found.id); setCreateError(''); }
-  }, [pending, runs, storageKey]);
+  }, [pending, runs, clearPending]);
 
   const polling = runs.some(isEvaluationActive);
   useEffect(() => {

@@ -15,9 +15,9 @@ vi.mock('../../api/evaluations', () => ({ createEvaluationRun: vi.fn(), getEvalu
 vi.mock('../../api/resources', () => ({ getCurrentUser: vi.fn().mockResolvedValue({ id: 'owner', username: 'owner' }) }));
 vi.mock('../../hooks/useSystemCapabilities', () => ({ useSystemCapabilities: () => ({ retrieval: { maxVectorTopN: 100, maxRerankTopK: 20 }, rerankEnabled: true }) }));
 
-const kb: KnowledgeBase = { id: 'kb1', name: '制度库', description: '', retrievalConfig: { vectorTopN: 30, rerankTopK: 5, scoreThreshold: .3, enableRerank: true }, createdAt: '', updatedAt: '' };
+const kb: KnowledgeBase = {answerConfig: { systemPromptAddition: '', answerLanguage: 'auto' as const, allowGeneralKnowledge: false, model: '' },  id: 'kb1', name: '制度库', description: '', retrievalConfig: {enableKeyword: true,  vectorTopN: 30, rerankTopK: 5, scoreThreshold: .3, enableRerank: true }, createdAt: '', updatedAt: '' };
 const item: EvaluationCase = { id: 'case-1', knowledgeBaseId: 'kb1', question: '几天内可退货？', expectedAnswer: '7 天内', requiredKeywords: ['7'], requireCitation: true, createdAt: '', updatedAt: '' };
-const completed: EvaluationRun = { id: 'run-1', knowledgeBaseId: 'kb1', clientRequestId: 'request-1', name: '首次运行', status: 'completed', config: kb.retrievalConfig, cases: [item], results: [{ caseId: item.id, answer: '7 天内可退货。', answerStatus: 'answered', citations: [], rerankFallback: null, durationMs: 1100, rulePassed: false, missingKeywords: [], errorCode: '', errorMessage: '' }], runtime: { chatModel: 'test-model', effectiveRerank: true }, total: 1, completedCount: 1, errorMessage: '', createdAt: '2026-09-10T00:00:00Z', startedAt: '2026-09-10T00:00:01Z', finishedAt: '2026-09-10T00:00:02Z' };
+const completed: EvaluationRun = { id: 'run-1', knowledgeBaseId: 'kb1', clientRequestId: 'request-1', name: '首次运行', status: 'completed', config: kb.retrievalConfig, cases: [item], results: [{ caseId: item.id, answer: '7 天内可退货。', answerStatus: 'answered', citations: [], rerankFallback: null, durationMs: 1100, rulePassed: false, missingKeywords: [], errorCode: '', errorMessage: '' }], answerConfig: { systemPromptAddition: '', answerLanguage: 'auto', allowGeneralKnowledge: false, model: '', temperature: null }, runtime: { chatModel: 'test-model', effectiveRerank: true }, total: 1, completedCount: 1, errorMessage: '', createdAt: '2026-09-10T00:00:00Z', startedAt: '2026-09-10T00:00:01Z', finishedAt: '2026-09-10T00:00:02Z' };
 
 beforeEach(() => {
   vi.clearAllMocks(); currentUserStore.clear(); sessionStorage.clear();
@@ -34,7 +34,7 @@ describe('evaluation workflow', () => {
     renderWithRouter(<EvaluationPanel knowledgeBase={kb} />);
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: '新增测试问题' }));
-    await user.type(screen.getByRole('textbox', { name: '测试问题', exact: true }), item.question);
+    await user.type(screen.getByRole('textbox', { name: '测试问题' }), item.question);
     await user.click(screen.getByRole('button', { name: '保存测试问题' }));
     await screen.findByRole('checkbox', { name: `选择测试问题：${item.question}` });
     await act(async () => resolveOriginal({ items: [] }));

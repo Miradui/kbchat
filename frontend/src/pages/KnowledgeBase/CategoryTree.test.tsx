@@ -79,12 +79,12 @@ describe('CategoryTree', () => {
     render(<Tree />);
 
     expect(screen.getByTitle('含子分类共 15 个知识库，本级 3 个')).toHaveTextContent('15');
-    expect(screen.queryByRole('button', { name: child.name, exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: child.name })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: `展开 ${parent.name}` }));
     expect(screen.getByTitle('本级 3 个知识库')).toHaveTextContent('3');
     expect(screen.getByTitle('本级 12 个知识库')).toHaveTextContent('12');
 
-    const name = screen.getByRole('button', { name: child.name, exact: true });
+    const name = screen.getByRole('button', { name: child.name });
     expect(name).toHaveAttribute('title', child.name);
     expect(name).toHaveAttribute('aria-current', 'true');
     await user.click(name);
@@ -145,7 +145,7 @@ describe('CategoryTree', () => {
     );
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /的更多操作/u })).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: parent.name, exact: true }));
+    await user.click(screen.getByRole('button', { name: parent.name }));
     expect(handlers.onSelectCategory).toHaveBeenCalledExactlyOnceWith(parent.id);
   });
 });

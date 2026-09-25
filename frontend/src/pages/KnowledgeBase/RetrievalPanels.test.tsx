@@ -15,7 +15,7 @@ vi.mock('../../hooks/useSystemCapabilities', () => ({
   useSystemCapabilities: () => capabilities,
 }));
 
-const knowledgeBase: KnowledgeBase = {
+const knowledgeBase: KnowledgeBase = {answerConfig: { systemPromptAddition: '', answerLanguage: 'auto' as const, allowGeneralKnowledge: false, model: '' },
   id: 'kb1', name: '检索验收', description: '', visibility: 'private', effectiveRole: 'owner',
   retrievalConfig: { vectorTopN: 30, rerankTopK: 5, scoreThreshold: 0.3, enableRerank: true, enableKeyword: true },
   createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z',
@@ -115,7 +115,7 @@ describe('RetrievalTestPanel', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('知识库内检索失败');
     expect(screen.getByRole('searchbox')).toHaveValue('报销规定');
     expect(screen.queryByRole('heading', { name: /还没有检索|没有召回结果/ })).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '检索', exact: true }));
+    await user.click(screen.getByRole('button', { name: '检索' }));
     expect(await screen.findByRole('heading', { name: '没有召回结果' })).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
@@ -127,12 +127,12 @@ describe('RetrievalTestPanel', () => {
     resources.searchKnowledgeBase.mockReturnValueOnce(oldSearch.promise).mockReturnValueOnce(nextSearch.promise);
     const view = render(<RetrievalTestPanel knowledgeBase={knowledgeBase} />);
     await user.type(screen.getByRole('searchbox'), '旧库问题');
-    await user.click(screen.getByRole('button', { name: '检索', exact: true }));
+    await user.click(screen.getByRole('button', { name: '检索' }));
     view.rerender(<RetrievalTestPanel knowledgeBase={{ ...knowledgeBase, id: 'kb2' }} />);
     expect(screen.getByRole('searchbox')).toHaveValue('');
     expect(screen.getByRole('heading', { name: '还没有检索' })).toBeInTheDocument();
     await user.type(screen.getByRole('searchbox'), '新库问题');
-    await user.click(screen.getByRole('button', { name: '检索', exact: true }));
+    await user.click(screen.getByRole('button', { name: '检索' }));
     await act(async () => oldSearch.reject(new Error('旧库请求失败')));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('正在检索相关片段');
@@ -163,7 +163,7 @@ describe('RetrievalTestPanel', () => {
     render(<RetrievalTestPanel knowledgeBase={knowledgeBase} />);
     await user.click(screen.getByRole('checkbox', { name: '显示调试信息' }));
     await user.type(screen.getByRole('searchbox'), 'E-4021');
-    await user.click(screen.getByRole('button', { name: '检索', exact: true }));
+    await user.click(screen.getByRole('button', { name: '检索' }));
     expect(resources.searchKnowledgeBase).toHaveBeenCalledWith('kb1', expect.objectContaining({ enableKeyword: true, debug: true }));
     const debug = await screen.findByRole('region', { name: '检索调试信息' });
     expect(debug).toHaveTextContent('关键词召回 (已完成 · 1)');
@@ -192,7 +192,7 @@ describe('RetrievalTestPanel', () => {
     render(<RetrievalTestPanel knowledgeBase={{ ...knowledgeBase, retrievalConfig: { ...knowledgeBase.retrievalConfig, enableKeyword: false } }} />);
     await user.click(screen.getByRole('checkbox', { name: '显示调试信息' }));
     await user.type(screen.getByRole('searchbox'), 'q');
-    await user.click(screen.getByRole('button', { name: '检索', exact: true }));
+    await user.click(screen.getByRole('button', { name: '检索' }));
     expect(resources.searchKnowledgeBase).toHaveBeenCalledWith('kb1', expect.objectContaining({ enableKeyword: false }));
     const debug = await screen.findByRole('region', { name: '检索调试信息' });
     expect(debug).toHaveTextContent('该知识库未启用关键词召回');

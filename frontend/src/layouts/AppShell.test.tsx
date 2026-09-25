@@ -1,6 +1,6 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { StrictMode, useState } from 'react';
+import { StrictMode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -8,7 +8,6 @@ import { getCurrentUser, logout } from '../api/resources';
 import { currentUserStore } from '../store/currentUserStore';
 import { tokenStore } from '../store/tokenStore';
 import { renderWithRouter } from '../test/render';
-import { Dialog } from '../components/ui/Dialog';
 import { AppShell, completeLogout, finishLocalLogout } from './AppShell';
 
 vi.mock('../api/resources', () => ({
@@ -50,24 +49,6 @@ function stubMatchMedia(initialMatches: boolean) {
 function LocationProbe() {
   const location = useLocation();
   return <output aria-label="当前位置">{location.pathname + location.search}</output>;
-}
-
-function ShellWithContextDialog() {
-  const [open, setOpen] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  return (
-    <AppShell
-      active="knowledge-bases"
-      contextSidebar={<>
-        <button aria-expanded={expanded} type="button" onClick={() => setExpanded((value) => !value)}>展开制度分类</button>
-        <button data-app-drawer-dismiss="true" type="button" onClick={() => setOpen(true)}>编辑制度分类</button>
-      </>}
-    >
-      <Dialog open={open} title="编辑分类" onClose={() => setOpen(false)}>
-        <button type="button">保存分类</button>
-      </Dialog>
-    </AppShell>
-  );
 }
 
 function deferred<T>() {
