@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 
 	"kbchat/backend/internal/access"
 	"kbchat/backend/internal/apperror"
@@ -234,6 +235,7 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 
 	items := make([]dto.SearchResultResponse, 0, len(candidates))
 	for _, item := range candidates {
+		start, end := chunkSourceOffsets(item.Metadata)
 		items = append(items, dto.SearchResultResponse{
 			ChunkID:      item.ChunkID.String(),
 			DocumentID:   item.DocumentID.String(),
@@ -243,6 +245,8 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 			VectorScore:  item.VectorScore,
 			KeywordScore: item.KeywordScore,
 			RerankScore:  item.RerankScore,
+			StartOffset:  start,
+			EndOffset:    end,
 		})
 	}
 
@@ -487,6 +491,26 @@ func filterSearchResults(candidates []repository.SearchResult, threshold float64
 		}
 	}
 	return filtered
+}
+
+// chunkSourceOffsets reads startOffset/endOffset from chunk metadata. Missing,
+// malformed or inverted offsets yield nil: a citation without a location is
+// still a citation, so this never fails the search.
+func chunkSourceOffsets(metadata datatypes.JSON) (*int, *int) {
+	if len(metadata) == 0 {
+		return nil, nil
+	}
+	var offsets struct {
+		StartOffset *int `json:"startOffset"`
+		EndOffset   *int `json:"endOffset"`
+	}
+	if err := json.Unmarshal(metadata, &offsets); err != nil {
+		return nil, nil
+	}
+	if offsets.StartOffset == nil || offsets.EndOffset == nil || *offsets.StartOffset < 0 || *offsets.EndOffset <= *offsets.StartOffset {
+		return nil, nil
+	}
+	return offsets.StartOffset, offsets.EndOffset
 }
 
 // completeVectorRecall reruns the vector stage exhaustively when the

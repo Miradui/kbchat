@@ -140,6 +140,9 @@ func TestChunkRepositorySearchByVectorUsesPublishedChunksDuringReprocessing(t *t
 	if !strings.Contains(query, "order by document_chunks.embedding <=>") {
 		t.Fatalf("expected vector search to order by distance, got %q", trace.query)
 	}
+	if !strings.Contains(query, "document_chunks.metadata as metadata") {
+		t.Fatalf("expected vector search to return chunk metadata for citation offsets, got %q", trace.query)
+	}
 }
 
 func TestChunkRepositorySearchByKeywordScopesToPublishedChunksOfKnowledgeBase(t *testing.T) {
@@ -163,6 +166,7 @@ func TestChunkRepositorySearchByKeywordScopesToPublishedChunksOfKnowledgeBase(t 
 		"ts_rank_cd(",
 		"'错误' | '误码' | 'e-4021' | 'e' | '4021'",
 		"order by keyword_score desc, document_chunks.id asc",
+		"document_chunks.metadata as metadata",
 	} {
 		if !strings.Contains(query, want) {
 			t.Fatalf("expected keyword query to contain %q, got %q", want, trace.query)

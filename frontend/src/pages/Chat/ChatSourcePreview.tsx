@@ -12,6 +12,7 @@ import { useMediaQuery } from '../../hooks/useMediaQuery';
 import type { Citation, DocumentItem, DocumentPreviewResponse } from '../../types/api';
 import { downloadBlob } from '../../utils/download';
 import { getErrorMessage } from '../../utils/errors';
+import { locateCitation, normalizeSourceText } from './citationLocation';
 
 type PreviewState = {
   document: DocumentItem;
@@ -83,12 +84,12 @@ export function ChatSourcePreview({ citation, index, knowledgeBaseId, canDownloa
     if (!overlay) panelRef.current?.focus({ preventScroll: true });
   }, [citation.documentId, citation.chunkId, overlay]);
 
-  const content = state?.preview.content?.replace(/\r\n?/gu, '\n') ?? '';
-  const excerpt = citation.content.trim().replace(/\r\n?/gu, '\n');
-  const matchIndex = excerpt ? content.indexOf(excerpt) : -1;
+  const content = normalizeSourceText(state?.preview.content ?? '');
+  const match = state?.preview.kind === 'text' ? locateCitation(content, citation) : null;
+  const matchStart = match?.start ?? -1;
   useEffect(() => {
     if (!loading) matchRef.current?.scrollIntoView?.({ block: 'center', behavior: 'auto' });
-  }, [loading, citation.chunkId, matchIndex]);
+  }, [loading, citation.chunkId, matchStart]);
 
   async function download() {
     if (!canDownload || !state || downloading) return;
@@ -129,11 +130,11 @@ export function ChatSourcePreview({ citation, index, knowledgeBaseId, canDownloa
         <>
           <div className="chat-preview__toolbar">
             <span>文档原文</span>
-            {matchIndex >= 0 ? <Button leadingIcon={<LocateFixed aria-hidden="true" />} onClick={() => matchRef.current?.scrollIntoView?.({ block: 'center', behavior: 'auto' })} variant="ghost">定位到引用</Button>
+            {match ? <Button leadingIcon={<LocateFixed aria-hidden="true" />} onClick={() => matchRef.current?.scrollIntoView?.({ block: 'center', behavior: 'auto' })} variant="ghost">定位到引用</Button>
               : <small>可对照上方摘录阅读原文</small>}
           </div>
           <pre aria-label="文档原文" className="chat-preview__text" tabIndex={0}>
-            {matchIndex >= 0 ? <>{content.slice(0, matchIndex)}<mark ref={matchRef}>{content.slice(matchIndex, matchIndex + excerpt.length)}</mark>{content.slice(matchIndex + excerpt.length)}</> : content || '文档没有可预览的文本内容。'}
+            {match ? <>{content.slice(0, match.start)}<mark ref={matchRef}>{content.slice(match.start, match.end)}</mark>{content.slice(match.end)}</> : content || '文档没有可预览的文本内容。'}
           </pre>
         </>
       ) : !canDownload && state?.preview.kind === 'file' ? (

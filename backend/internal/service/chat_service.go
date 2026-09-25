@@ -1875,6 +1875,8 @@ func citationsFromSearch(items []dto.SearchResultResponse) []dto.CitationRespons
 			Content:     item.Content,
 			VectorScore: item.VectorScore,
 			RerankScore: item.RerankScore,
+			StartOffset: item.StartOffset,
+			EndOffset:   item.EndOffset,
 		})
 	}
 	return citations

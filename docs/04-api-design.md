@@ -1483,12 +1483,16 @@ limit=10
       "pageNumber": 4,
       "vectorScore": 0.78,
       "keywordScore": 0.42,
-      "rerankScore": 0.91
+      "rerankScore": 0.91,
+      "startOffset": 1024,
+      "endOffset": 1310
     }
   ],
   "rerankFallback": null
 }
 ```
+
+`startOffset` / `endOffset` 是该 chunk 主来源正文（不含标题前缀与 overlap）在规范化 segment 内的 UTF-8 字节区间：去掉开头 BOM，`\r\n` 与 `\r` 统一为 `\n`；PDF 为页内偏移。chunk 没有可用偏移时为 `null`。
 
 结果必须按 `rerankScore` 降序排列。若关闭 Rerank，`rerankScore` 可为空，结果按进入精排的候选顺序截断到 `rerankTopK`。
 
@@ -1884,12 +1888,16 @@ assistant 消息为 `{ "messageId", "rating", "reason", "comment", "updatedAt" }
       "pageNumber": 6,
       "content": "差旅报销需提供...",
       "vectorScore": 0.76,
-      "rerankScore": 0.93
+      "rerankScore": 0.93,
+      "startOffset": 2048,
+      "endOffset": 2210
     }
   ],
   "rerankFallback": null
 }
 ```
+
+citation 的 `startOffset` / `endOffset` 与检索结果同义，随消息持久化；2026-09-26 之前保存的 citation 没有这两个字段（省略），客户端须能回退到按内容匹配。
 
 `answerStatus` 是封闭集合，值域由 migration 019 的 CHECK 约束固定：
 

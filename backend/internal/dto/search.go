@@ -32,6 +32,12 @@ type SearchResultResponse struct {
 	// (or was disabled); VectorScore is 0 for a chunk only the keyword stage found.
 	KeywordScore *float64 `json:"keywordScore"`
 	RerankScore  *float64 `json:"rerankScore"`
+	// StartOffset and EndOffset locate the chunk's own source text (without the
+	// heading prefix or overlap) as UTF-8 byte offsets in the normalized
+	// segment: BOM removed, CRLF and CR turned into LF. PDF offsets are within
+	// the page. Null when the chunk carries no usable offsets.
+	StartOffset *int `json:"startOffset"`
+	EndOffset   *int `json:"endOffset"`
 }
 
 type SearchDebugResponse struct {

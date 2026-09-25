@@ -562,6 +562,8 @@ export type KnowledgeBaseSearchResult = {
   vectorScore: number;
   keywordScore?: number | null;
   rerankScore?: number | null;
+  startOffset?: number | null;
+  endOffset?: number | null;
 };
 
 export type KnowledgeBaseRerankFallback = {
@@ -667,6 +669,12 @@ export type Citation = {
   content: string;
   vectorScore: number;
   rerankScore: number | null;
+  /**
+   * UTF-8 byte range of the chunk's own text in the normalized source (BOM
+   * removed, CRLF/CR as LF); absent on citations stored before offsets existed.
+   */
+  startOffset?: number | null;
+  endOffset?: number | null;
 };
 
 /**

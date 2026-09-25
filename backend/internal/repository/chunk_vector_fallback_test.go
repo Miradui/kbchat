@@ -84,6 +84,8 @@ func TestExactVectorSearchFiltersBeforeOrdering(t *testing.T) {
 		"documents.deleted_at is null",
 		"document_chunks.embedding is not null",
 		"from candidates order by embedding <=> ?",
+		"document_chunks.metadata,",
+		"page_number, metadata,",
 	} {
 		if !strings.Contains(query, want) {
 			t.Errorf("exact search SQL lacks %q:\n%s", want, exactVectorSearchSQL)

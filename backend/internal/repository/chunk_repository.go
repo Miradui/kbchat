@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
@@ -30,6 +31,9 @@ type SearchResult struct {
 	KeywordScore *float64
 	FusionScore  *float64
 	RerankScore  *float64
+	// Metadata is the chunk's splitter metadata; retrieval reads the source
+	// offsets from it so a citation can be located in the original text.
+	Metadata datatypes.JSON
 }
 
 type ChunkRepository struct {
@@ -355,7 +359,8 @@ func (r *ChunkRepository) CountVectorSearchable(ctx context.Context, kbID uuid.U
 // penalty, and with other paths also unavailable the planner still picks HNSW.
 const exactVectorSearchSQL = `WITH candidates AS MATERIALIZED (
 	SELECT document_chunks.id, document_chunks.document_id, documents.filename,
-		document_chunks.content, document_chunks.page_number, document_chunks.embedding
+		document_chunks.content, document_chunks.page_number, document_chunks.metadata,
+		document_chunks.embedding
 	FROM document_chunks
 	JOIN documents ON documents.id = document_chunks.document_id
 	WHERE document_chunks.knowledge_base_id = ?
@@ -363,7 +368,7 @@ const exactVectorSearchSQL = `WITH candidates AS MATERIALIZED (
 		AND documents.deleted_at IS NULL
 		AND document_chunks.embedding IS NOT NULL
 )
-SELECT id AS chunk_id, document_id, filename, content, page_number,
+SELECT id AS chunk_id, document_id, filename, content, page_number, metadata,
 	1 - (embedding <=> ?) AS vector_score
 FROM candidates
 ORDER BY embedding <=> ?
@@ -442,6 +447,7 @@ func searchByVector(db *gorm.DB, kbID uuid.UUID, vector []float32, limit int) ([
 			documents.filename AS filename,
 			document_chunks.content AS content,
 			document_chunks.page_number AS page_number,
+			document_chunks.metadata AS metadata,
 			1 - (document_chunks.embedding <=> ?) AS vector_score
 		`, pgvector.NewVector(vector)).
 		// GORM's Order ignores a bare clause.Expr; it must be wrapped in
@@ -475,6 +481,7 @@ func (r *ChunkRepository) SearchByKeyword(ctx context.Context, kbID uuid.UUID, q
 			documents.filename AS filename,
 			document_chunks.content AS content,
 			document_chunks.page_number AS page_number,
+			document_chunks.metadata AS metadata,
 			0 AS vector_score,
 			ts_rank_cd(document_chunks.search_vector, ?::tsquery, 32) AS keyword_score
 		`, tsquery).

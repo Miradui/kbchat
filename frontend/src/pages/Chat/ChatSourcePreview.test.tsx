@@ -110,6 +110,30 @@ describe('ChatSourcePreview', () => {
     expect(downloadDocument).not.toHaveBeenCalled();
   });
 
+  it('locates a heading-prefixed Markdown chunk by its byte offsets', async () => {
+    const source = '# 产品手册\r\n\r\n## 安装 😀\r\n\r\n安装前请确认 emoji 😀 与中文路径。\r\n\r\n后续章节\r\n';
+    const body = '安装前请确认 emoji 😀 与中文路径。';
+    const normalized = source.replace(/\r\n/gu, '\n');
+    const start = new TextEncoder().encode(normalized.slice(0, normalized.indexOf(body))).length;
+    const end = start + new TextEncoder().encode(body).length;
+    vi.mocked(getDocument).mockResolvedValue({ ...documentItem, filename: '手册.md', fileType: 'md' });
+    vi.mocked(getDocumentPreview).mockResolvedValue({ ...preview, filename: '手册.md', fileType: 'md', kind: 'text', content: source });
+    render(<ChatSourcePreview citation={{ ...citation, filename: '手册.md', pageNumber: null, content: `产品手册 > 安装 😀\n${body}`, startOffset: start, endOffset: end }} index={1} knowledgeBaseId="kb1" onClose={vi.fn()} />);
+
+    const text = await screen.findByLabelText('文档原文');
+    expect(text.querySelector('mark')).toHaveTextContent(body);
+    expect(screen.getByRole('button', { name: '定位到引用' })).toBeInTheDocument();
+  });
+
+  it('still says the excerpt cannot be located when neither offsets nor text match', async () => {
+    vi.mocked(getDocumentPreview).mockResolvedValue({ ...preview, kind: 'text', content: '完全不同的原文' });
+    render(<ChatSourcePreview citation={{ ...citation, pageNumber: null, content: '标题\n别处的内容', startOffset: 400, endOffset: 420 }} index={1} knowledgeBaseId="kb1" onClose={vi.fn()} />);
+
+    const text = await screen.findByLabelText('文档原文');
+    expect(text.querySelector('mark')).toBeNull();
+    expect(screen.getByText('可对照上方摘录阅读原文')).toBeInTheDocument();
+  });
+
   it('checks the current knowledge base before requesting content or bytes', async () => {
     vi.mocked(getDocument).mockResolvedValue({ ...documentItem, knowledgeBaseId: 'another-kb' });
     render(<ChatSourcePreview citation={citation} index={1} knowledgeBaseId="kb1" onClose={vi.fn()} />);

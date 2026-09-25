@@ -104,6 +104,10 @@ type CitationResponse struct {
 	Content     string   `json:"content"`
 	VectorScore float64  `json:"vectorScore"`
 	RerankScore *float64 `json:"rerankScore"`
+	// StartOffset and EndOffset carry the retrieval offsets (see
+	// SearchResultResponse). Citations stored before they existed have neither.
+	StartOffset *int `json:"startOffset,omitempty"`
+	EndOffset   *int `json:"endOffset,omitempty"`
 }
 
 type ChatMessageResponse struct {
