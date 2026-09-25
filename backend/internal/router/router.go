@@ -109,6 +109,7 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	}
 	chatService := service.NewChatService(cfg, chatRepo, knowledgeBaseRepo, retrievalService, chatProvider, titleProvider)
 	chatService.SetUsageRepository(repository.NewModelUsageRepository(db))
+	chatService.SetUserRepository(userRepo)
 	evaluationService := service.NewEvaluationService(repository.NewEvaluationRepository(db), knowledgeBaseRepo, chatService)
 	globalSearchService := service.NewGlobalSearchService(globalSearchRepo)
 	homeService := service.NewHomeService(knowledgeBaseService, documentService, chatService)

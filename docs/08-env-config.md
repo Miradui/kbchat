@@ -95,6 +95,7 @@ VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1
 | `RATE_LIMIT_FAILURE_MODE` | `open` | Redis 计数失败策略：`open` 放行并记录 warning；`closed` 返回 503 |
 | `TRUSTED_PROXY_CIDRS` | 空 | 逗号分隔的可信反向代理 CIDR；只有直连来源可信时才读取 `X-Forwarded-For` |
 | `EMBEDDING_CACHE_TTL` | `24h` | query embedding Redis 缓存 TTL，使用 Go duration 格式 |
+| `MODEL_PRICING` | `{}` | 按模型的百万 token 价格 JSON，用于质量页成本估算 |
 | `JWT_SECRET` | 无 | JWT 签名密钥；必填，须由密码学安全随机源生成至少 32 字节，并替换示例占位值 |
 | `BOOTSTRAP_ADMIN_PASSWORD` | 空 | 仅运维 CLI 显式创建首位系统管理员时使用；至少 8 个字符、最多 72 个 UTF-8 字节。提升现有用户时不读取或覆盖其密码 |
 | `BOOTSTRAP_ADMIN_DISPLAY_NAME` | 指定的用户名 | 仅首位管理员创建时使用，最多 128 个 Unicode 码点；留空使用 `-username` |

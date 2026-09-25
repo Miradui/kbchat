@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 	"gorm.io/datatypes"
 
 	"kbchat/backend/internal/access"
@@ -40,6 +41,7 @@ type ChatService struct {
 	activities     *ActivityRecorder
 	metrics        *observability.Recorder
 	usage          *repository.ModelUsageRepository
+	users          systemRoleLookup
 }
 
 // SetActivityRecorder wires the workspace timeline. Optional; see the
@@ -463,6 +465,26 @@ func (s *ChatService) GetQualityOverview(
 	}, nil
 }
 
+// systemRoleLookup answers "is this user a system administrator". Optional:
+// without it usage is scoped to the caller's reachable knowledge bases only.
+type systemRoleLookup interface {
+	FindByID(ctx context.Context, id uuid.UUID) (*model.User, error)
+}
+
+// SetUserRepository enables the administrator-wide usage view.
+func (s *ChatService) SetUserRepository(users systemRoleLookup) { s.users = users }
+
+func (s *ChatService) isSystemAdmin(ctx context.Context, userID uuid.UUID) (bool, error) {
+	if s.users == nil {
+		return false, nil
+	}
+	user, err := s.users.FindByID(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	return user != nil && user.Role == model.SystemRoleAdmin, nil
+}
+
 func (s *ChatService) GetChatUsage(ctx context.Context, userID uuid.UUID, query dto.ChatUsageQuery) (*dto.ChatUsageResponse, error) {
 	if s.usage == nil {
 		return nil, apperror.New(http.StatusNotImplemented, "USAGE_NOT_CONFIGURED", "用量统计尚未配置")
@@ -487,23 +509,61 @@ func (s *ChatService) GetChatUsage(ctx context.Context, userID uuid.UUID, query 
 			return nil, err
 		}
 	}
-	ids := []uuid.UUID{}
-	if query.KnowledgeBaseID != nil {
-		ids = append(ids, *query.KnowledgeBaseID)
-	}
-	rows, err := s.usage.Aggregate(ctx, userID, ids, query.From, query.To, query.GroupBy)
+	// Same rule as the rest of the quality page: every knowledge base the
+	// caller can read quality data for, or everything for a system admin.
+	admin, err := s.isSystemAdmin(ctx, userID)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
+	scope := repository.UsageScope{
+		ActorID:           userID,
+		MemberRoles:       access.MemberRolesWith(access.CapQualityRead),
+		KnowledgeBaseID:   query.KnowledgeBaseID,
+		AllKnowledgeBases: admin,
+	}
+	rows, err := s.usage.Aggregate(ctx, scope, query.From, query.To, query.GroupBy)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	pricing, _ := config.ParseModelPricing(s.cfg.ModelPricing)
 	items := make([]dto.ChatUsageAggregate, 0, len(rows))
 	var prompt, completion, total int64
 	for _, row := range rows {
-		items = append(items, dto.ChatUsageAggregate{GroupKey: row.GroupKey, PromptTokens: row.PromptTokens, CompletionTokens: row.CompletionTokens, TotalTokens: row.TotalTokens, Calls: row.Calls})
+		item := dto.ChatUsageAggregate{GroupKey: row.GroupKey, GroupLabel: row.GroupLabel, PromptTokens: row.PromptTokens, CompletionTokens: row.CompletionTokens, TotalTokens: row.TotalTokens, Calls: row.Calls}
+		if query.GroupBy == "model" {
+			if price, ok := pricing[row.GroupKey]; ok {
+				cost := estimateUsageCost(price, row.PromptTokens, row.CompletionTokens)
+				item.EstimatedCost = &cost
+			}
+		}
+		items = append(items, item)
 		prompt += row.PromptTokens
 		completion += row.CompletionTokens
 		total += row.TotalTokens
 	}
-	return &dto.ChatUsageResponse{From: query.From, To: query.To, GroupBy: query.GroupBy, Items: items, TotalPrompt: prompt, TotalCompletion: completion, TotalTokens: total}, nil
+	res := &dto.ChatUsageResponse{From: query.From, To: query.To, GroupBy: query.GroupBy, Items: items, TotalPrompt: prompt, TotalCompletion: completion, TotalTokens: total, PricingConfigured: len(pricing) > 0, UnpricedModels: []string{}}
+	if len(pricing) > 0 {
+		byModel, err := s.usage.AggregateByModel(ctx, scope, query.From, query.To)
+		if err != nil {
+			return nil, apperror.Internal(err)
+		}
+		var cost float64
+		for _, totals := range byModel {
+			price, ok := pricing[totals.Model]
+			if !ok {
+				res.UnpricedModels = append(res.UnpricedModels, totals.Model)
+				continue
+			}
+			cost += estimateUsageCost(price, totals.PromptTokens, totals.CompletionTokens)
+		}
+		res.EstimatedCost = &cost
+	}
+	return res, nil
+}
+
+// estimateUsageCost prices tokens at per-million rates.
+func estimateUsageCost(price config.ModelPrice, promptTokens, completionTokens int64) float64 {
+	return float64(promptTokens)/1_000_000*price.Prompt + float64(completionTokens)/1_000_000*price.Completion
 }
 
 // ChatKnowledgeGapCategoryAll requests both categories in one page.
@@ -933,6 +993,7 @@ func (s *ChatService) SendMessage(ctx context.Context, userID, sessionID uuid.UU
 		}
 		return nil, apperror.Internal(err)
 	}
+	s.attachUsageMessage(ctx, generated.usageRecordIDs, assistantMessage)
 	s.updateSessionTitleIfNeeded(ctx, session, content, history)
 
 	return &dto.SendChatMessageResponse{
@@ -1070,6 +1131,7 @@ func (s *ChatService) SendMessageStream(
 		}
 		return apperror.Internal(err)
 	}
+	s.attachUsageMessage(ctx, generated.usageRecordIDs, assistantMessage)
 	s.updateSessionTitleIfNeeded(ctx, session, content, history)
 
 	return sink.Done(&dto.SendChatMessageResponse{
@@ -1238,6 +1300,7 @@ func (s *ChatService) RegenerateMessage(ctx context.Context, userID, sessionID, 
 		}
 		return nil, apperror.Internal(err)
 	}
+	s.attachUsageMessage(ctx, generated.usageRecordIDs, assistantMessage)
 
 	return &dto.RegenerateChatMessageResponse{
 		Message:        toChatMessageResponse(assistantMessage),
@@ -1325,6 +1388,7 @@ func (s *ChatService) EditMessageAndRegenerate(
 		}
 		return nil, apperror.Internal(err)
 	}
+	s.attachUsageMessage(ctx, generated.usageRecordIDs, assistantMessage)
 	return &dto.SendChatMessageResponse{
 		ClientRequestID:  clientRequestID.String(),
 		UserMessage:      toChatMessageResponse(userMessage),
@@ -1359,6 +1423,10 @@ type generatedChatAnswer struct {
 	// chat_answer_status.go: they look identical to the user but need different
 	// responses, and only the server knows which one happened.
 	answerStatus string
+	// usageRecordIDs are the model_usage_records written while generating this
+	// answer. They are created before the assistant message exists, so the
+	// persistence sites attach the message id afterwards.
+	usageRecordIDs []uuid.UUID
 }
 
 // answerHooks lets the streaming path observe generation without forking it.
@@ -1486,12 +1554,14 @@ func (s *ChatService) generateAnswerWithHooks(
 	// break when the provider is down, so its outcome is recorded too. Without
 	// this the diagnostics page would report zero provider failures during an
 	// outage that fails every question before generation is even reached.
+	intentStart := time.Now()
 	intent, intentUsage, err := classifyChatIntentWithUsage(ctx, s.chatProvider, question, history, s.cfg.ChatHistoryLimit)
 	s.metrics.RecordProviderResult(observability.ProviderChat, err)
-	s.recordUsage(ctx, userID, session, "intent", intentUsage, time.Since(generationStart))
+	var usageRecords []uuid.UUID
 	if err != nil {
 		return generatedChatAnswer{}, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "回答生成失败，请稍后重试", err)
 	}
+	usageRecords = appendUsageRecord(usageRecords, s.recordUsage(ctx, userID, session, "intent", intentUsage, time.Since(intentStart)))
 	timing.Intent = intent.Intent
 
 	if intent.Intent == chatIntentConversation {
@@ -1503,12 +1573,13 @@ func (s *ChatService) generateAnswerWithHooks(
 				return generatedChatAnswer{}, err
 			}
 		}
+		answerStart := time.Now()
 		answer, firstToken, usage, err := s.complete(ctx, buildConversationAnswerMessages(question, history, s.cfg.ChatHistoryLimit), hooks.onDelta)
-		s.recordUsage(ctx, userID, session, "answer", usage, time.Since(generationStart))
 		timing.FirstToken = firstToken
 		if err != nil {
 			return generatedChatAnswer{}, chatCompletionError(err)
 		}
+		usageRecords = appendUsageRecord(usageRecords, s.recordUsage(ctx, userID, session, "answer", usage, time.Since(answerStart)))
 		citationJSON, err := json.Marshal(citations)
 		if err != nil {
 			return generatedChatAnswer{}, apperror.Internal(err)
@@ -1524,6 +1595,7 @@ func (s *ChatService) generateAnswerWithHooks(
 			answerStatus: AnswerStatusAnswered,
 			// No retrievalQuery: this branch never reaches retrieval, and an empty
 			// one keeps conversation answers out of rewrite clustering entirely.
+			usageRecordIDs: usageRecords,
 		}, nil
 	}
 
@@ -1578,12 +1650,13 @@ func (s *ChatService) generateAnswerWithHooks(
 			streamHook = gate.write
 		}
 		var usage chatcore.Usage
+		answerStart := time.Now()
 		answer, firstToken, usage, err = s.completeWithOptions(ctx, buildAnswerMessagesWithConfig(question, searchRes.Items, history, s.cfg.ChatHistoryLimit, answerConfig), streamHook, chatcore.Options{Model: answerConfig.Model, Temperature: answerConfig.Temperature})
-		s.recordUsage(ctx, userID, session, "answer", usage, time.Since(generationStart))
 		timing.FirstToken = firstToken
 		if err != nil {
 			return generatedChatAnswer{}, chatCompletionError(err)
 		}
+		usageRecords = appendUsageRecord(usageRecords, s.recordUsage(ctx, userID, session, "answer", usage, time.Since(answerStart)))
 		if hooks.onDelta != nil {
 			if err := gate.flush(); err != nil {
 				return generatedChatAnswer{}, err
@@ -1622,6 +1695,7 @@ func (s *ChatService) generateAnswerWithHooks(
 		intent:         chatIntentKnowledgeBase,
 		retrievalQuery: retrievalQuery,
 		answerStatus:   answerStatus,
+		usageRecordIDs: usageRecords,
 	}, nil
 }
 
@@ -1668,9 +1742,10 @@ func (s *ChatService) updateSessionTitleIfNeeded(ctx context.Context, session *m
 	}
 	titleCtx, cancel := context.WithTimeout(ctx, sessionTitleTimeout)
 	defer cancel()
+	titleStart := time.Now()
 	title, titleUsage, err := generateSessionTitleWithUsage(titleCtx, s.titleProvider, question)
-	if titleUsage.Model != "" {
-		s.recordTitleUsage(ctx, session, titleUsage)
+	if err == nil {
+		s.recordTitleUsage(ctx, session, titleUsage, time.Since(titleStart))
 	}
 	if err != nil || titleCtx.Err() != nil || shouldGenerateSessionTitle(title) || title == fallback {
 		return
@@ -1853,51 +1928,148 @@ func classifyChatIntentWithUsage(ctx context.Context, provider chatcore.Provider
 	return parseChatIntentOutput(raw, question), usage, nil
 }
 
-func (s *ChatService) recordUsage(ctx context.Context, userID uuid.UUID, session *model.ChatSession, purpose string, usage chatcore.Usage, latency time.Duration) {
-	if s.usage == nil || session == nil || usage.Model == "" {
-		return
+// usageProviderName is what model_usage_records.provider carries. The
+// configured MODEL_PROVIDER is the closest thing to a vendor name the server
+// knows; the model column carries the concrete model.
+func (s *ChatService) usageProviderName() string {
+	if provider := strings.TrimSpace(s.cfg.ModelProvider); provider != "" {
+		return provider
+	}
+	return "openai_compatible"
+}
+
+// recordUsage persists one model call. It returns the record id (uuid.Nil when
+// nothing was written) so callers can attach the assistant message later.
+//
+// An evaluation run passes a session with a Nil id: those records carry no
+// session, since a zero UUID would violate the foreign key and the row would be
+// silently lost.
+func (s *ChatService) recordUsage(ctx context.Context, userID uuid.UUID, session *model.ChatSession, purpose string, usage chatcore.Usage, latency time.Duration) uuid.UUID {
+	if s.usage == nil || session == nil {
+		return uuid.Nil
 	}
 	if session.ID == uuid.Nil && purpose == "answer" {
 		purpose = "evaluation"
 	}
-	var prompt, completion, total *int
-	if usage.PromptTokens > 0 {
-		value := usage.PromptTokens
-		prompt = &value
+	record := &model.ModelUsageRecord{
+		ID:               uuid.New(),
+		UserID:           userID,
+		KnowledgeBaseID:  session.KnowledgeBaseID,
+		Purpose:          purpose,
+		Provider:         s.usageProviderName(),
+		Model:            usage.Model,
+		PromptTokens:     usageTokenValue(usage.PromptTokens),
+		CompletionTokens: usageTokenValue(usage.CompletionTokens),
+		TotalTokens:      usageTokenValue(usage.TotalTokens),
+		LatencyMs:        durationMillis(latency),
 	}
-	if usage.CompletionTokens > 0 {
-		value := usage.CompletionTokens
-		completion = &value
+	if record.Model == "" {
+		// A provider that omits the model name still spent tokens; record the
+		// configured model rather than dropping the row.
+		record.Model = s.cfg.ChatModel
 	}
-	if usage.TotalTokens > 0 {
-		value := usage.TotalTokens
-		total = &value
+	if session.ID != uuid.Nil {
+		sessionID := session.ID
+		record.SessionID = &sessionID
 	}
-	_ = s.usage.Create(ctx, &model.ModelUsageRecord{UserID: userID, KnowledgeBaseID: session.KnowledgeBaseID, SessionID: &session.ID, Purpose: purpose, Provider: "chat", Model: usage.Model, PromptTokens: prompt, CompletionTokens: completion, TotalTokens: total, LatencyMs: durationMillis(latency)})
+	return s.persistUsage(ctx, record)
 }
 
-func (s *ChatService) recordTitleUsage(ctx context.Context, session *model.ChatSession, usage titlecore.Usage) {
-	if s.usage == nil || session == nil || usage.Model == "" {
+func (s *ChatService) recordTitleUsage(ctx context.Context, session *model.ChatSession, usage titlecore.Usage, latency time.Duration) uuid.UUID {
+	if s.usage == nil || session == nil || session.ID == uuid.Nil {
+		return uuid.Nil
+	}
+	record := &model.ModelUsageRecord{
+		ID:               uuid.New(),
+		UserID:           session.UserID,
+		KnowledgeBaseID:  session.KnowledgeBaseID,
+		Purpose:          "title",
+		Provider:         s.usageProviderName(),
+		Model:            usage.Model,
+		PromptTokens:     usageTokenValue(usage.PromptTokens),
+		CompletionTokens: usageTokenValue(usage.CompletionTokens),
+		TotalTokens:      usageTokenValue(usage.TotalTokens),
+		LatencyMs:        durationMillis(latency),
+	}
+	if record.Model == "" {
+		record.Model = s.cfg.TitleModel
+	}
+	sessionID := session.ID
+	record.SessionID = &sessionID
+	return s.persistUsage(ctx, record)
+}
+
+// persistUsage writes with a context detached from the request: a client that
+// disconnects the instant the stream finishes must not erase the bill for the
+// tokens that were already spent. Failures are logged, not swallowed.
+func (s *ChatService) persistUsage(ctx context.Context, record *model.ModelUsageRecord) uuid.UUID {
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := s.usage.Create(writeCtx, record); err != nil {
+		if log := s.metrics.Logger(); log != nil {
+			log.Warn("model usage record not written", zap.String("purpose", record.Purpose), zap.Error(err))
+		}
+		return uuid.Nil
+	}
+	return record.ID
+}
+
+// attachUsageMessage backfills message_id once the assistant message has an id.
+func (s *ChatService) attachUsageMessage(ctx context.Context, recordIDs []uuid.UUID, message *model.ChatMessage) {
+	if s.usage == nil || message == nil || message.ID == uuid.Nil || len(recordIDs) == 0 {
 		return
 	}
-	var prompt, completion, total *int
-	if usage.PromptTokens > 0 {
-		value := usage.PromptTokens
-		prompt = &value
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := s.usage.AttachMessage(writeCtx, recordIDs, message.ID); err != nil {
+		if log := s.metrics.Logger(); log != nil {
+			log.Warn("model usage records not linked to message", zap.Error(err))
+		}
 	}
-	if usage.CompletionTokens > 0 {
-		value := usage.CompletionTokens
-		completion = &value
+}
+
+func appendUsageRecord(ids []uuid.UUID, id uuid.UUID) []uuid.UUID {
+	if id == uuid.Nil {
+		return ids
 	}
-	if usage.TotalTokens > 0 {
-		value := usage.TotalTokens
-		total = &value
+	return append(ids, id)
+}
+
+// usageTokenValue keeps 0 as a real count. Providers that report no usage at
+// all leave Model empty and every count at zero; that case is distinguished by
+// the caller, and NULL is reserved for "the provider did not say".
+func usageTokenValue(value int) *int {
+	if value < 0 {
+		return nil
 	}
-	_ = s.usage.Create(ctx, &model.ModelUsageRecord{UserID: session.UserID, KnowledgeBaseID: session.KnowledgeBaseID, SessionID: &session.ID, Purpose: "title", Provider: "title", Model: usage.Model, PromptTokens: prompt, CompletionTokens: completion, TotalTokens: total})
+	copy := value
+	return &copy
+}
+
+// resolveAnswerConfig returns the snapshot an evaluation supplied, or the
+// knowledge base's current configuration.
+func (s *ChatService) resolveAnswerConfig(ctx context.Context, knowledgeBaseID uuid.UUID, snapshot *dto.AnswerConfig) dto.AnswerConfig {
+	if snapshot != nil {
+		return *snapshot
+	}
+	answerConfig := dto.AnswerConfig{AnswerLanguage: "auto"}
+	kb, err := s.knowledgeBases.FindByID(ctx, knowledgeBaseID)
+	if err != nil || kb == nil || len(kb.AnswerConfig) == 0 {
+		return answerConfig
+	}
+	if err := json.Unmarshal(kb.AnswerConfig, &answerConfig); err != nil {
+		if log := s.metrics.Logger(); log != nil {
+			log.Warn("knowledge base answer_config is not valid JSON; using defaults", zap.String("knowledgeBaseId", knowledgeBaseID.String()), zap.Error(err))
+		}
+		return dto.AnswerConfig{AnswerLanguage: "auto"}
+	}
+	return answerConfig
 }
 
 func durationMillis(value time.Duration) *int64 {
-	if value <= 0 {
+	// Zero is a real measurement on a coarse clock; only a negative value means
+	// "not measured".
+	if value < 0 {
 		return nil
 	}
 	ms := value.Milliseconds()

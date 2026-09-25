@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -196,6 +197,9 @@ func (c Config) Validate() error {
 	}
 	if c.RedisAddr != "" && c.EmbeddingCacheTTL <= 0 {
 		return fmt.Errorf("EMBEDDING_CACHE_TTL must be greater than zero")
+	}
+	if _, err := ParseModelPricing(c.ModelPricing); err != nil {
+		return fmt.Errorf("MODEL_PRICING is invalid: %w", err)
 	}
 	return validateStorageConfig(c)
 }
@@ -398,4 +402,33 @@ func normalizedBaseURL(value string) string {
 		return value
 	}
 	return "https://" + value
+}
+
+// ModelPrice is the price of one model in currency units per million tokens.
+type ModelPrice struct {
+	Prompt     float64 `json:"prompt"`
+	Completion float64 `json:"completion"`
+}
+
+// ParseModelPricing decodes MODEL_PRICING, a JSON object keyed by model name:
+// {"gpt-4.1-mini": {"prompt": 0.4, "completion": 1.6}}. An empty value or "{}"
+// means pricing is not configured and callers show token counts only.
+func ParseModelPricing(raw string) (map[string]ModelPrice, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "{}" {
+		return map[string]ModelPrice{}, nil
+	}
+	pricing := map[string]ModelPrice{}
+	if err := json.Unmarshal([]byte(raw), &pricing); err != nil {
+		return nil, err
+	}
+	for name, price := range pricing {
+		if strings.TrimSpace(name) == "" {
+			return nil, fmt.Errorf("model name must not be empty")
+		}
+		if price.Prompt < 0 || price.Completion < 0 {
+			return nil, fmt.Errorf("prices for %q must not be negative", name)
+		}
+	}
+	return pricing, nil
 }

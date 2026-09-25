@@ -349,6 +349,10 @@ pageNumber: 3
 content: ...
 ```
 
+## 模型用量记录点
+
+每次模型调用写入一条 `model_usage_records`，`purpose` 取值：`intent`（意图分类）、`answer`（Chat 最终回答，含对话型回答）、`title`（首问命名）、`evaluation`（评测运行中的回答）。记录在调用返回后立即写入并携带该次调用自身的耗时；Chat 的记录在助手消息落库后回填 `message_id`，评测记录没有 `session_id` 与 `message_id`，只归属知识库。Provider 未返回 `model` 时记录配置的模型名；token 字段来自 Provider `usage`，不做估算。写入使用与请求脱钩的上下文，客户端断开不丢记录；写入失败只记 warning，不影响回答。
+
 ## 无结果处理
 
 如果没有 chunk 达到阈值，应返回：

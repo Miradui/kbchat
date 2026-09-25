@@ -23,21 +23,33 @@ type ChatUsageQuery struct {
 }
 
 type ChatUsageAggregate struct {
-	GroupKey         string `json:"groupKey"`
+	GroupKey string `json:"groupKey"`
+	// GroupLabel is the display name behind the key for knowledgeBase and user
+	// grouping; empty otherwise.
+	GroupLabel       string `json:"groupLabel"`
 	PromptTokens     int64  `json:"promptTokens"`
 	CompletionTokens int64  `json:"completionTokens"`
 	TotalTokens      int64  `json:"totalTokens"`
 	Calls            int64  `json:"calls"`
+	// EstimatedCost is only set when MODEL_PRICING covers the model; for other
+	// groupings it is set when every model in the group is priced.
+	EstimatedCost *float64 `json:"estimatedCost"`
 }
 
 type ChatUsageResponse struct {
-	From        time.Time            `json:"from"`
-	To          time.Time            `json:"to"`
-	GroupBy     string               `json:"groupBy"`
-	Items       []ChatUsageAggregate `json:"items"`
-	TotalPrompt int64                `json:"totalPromptTokens"`
-	TotalCompletion int64            `json:"totalCompletionTokens"`
-	TotalTokens int64                `json:"totalTokens"`
+	From            time.Time            `json:"from"`
+	To              time.Time            `json:"to"`
+	GroupBy         string               `json:"groupBy"`
+	Items           []ChatUsageAggregate `json:"items"`
+	TotalPrompt     int64                `json:"totalPromptTokens"`
+	TotalCompletion int64                `json:"totalCompletionTokens"`
+	TotalTokens     int64                `json:"totalTokens"`
+	// PricingConfigured tells the client whether cost columns are meaningful.
+	PricingConfigured bool `json:"pricingConfigured"`
+	// EstimatedCost is the priced total over every model with a configured
+	// price; unpriced models are listed in UnpricedModels.
+	EstimatedCost  *float64 `json:"estimatedCost"`
+	UnpricedModels []string `json:"unpricedModels"`
 }
 
 // ChatSessionListQuery drives GET /api/v1/chat/sessions. Archived defaults to

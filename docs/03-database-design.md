@@ -461,6 +461,30 @@ CREATE INDEX idx_kb_tag_bindings_tag_id ON knowledge_base_tag_bindings (tag_id);
 3. citations 保存在 assistant 消息的 `citations` 字段。
 4. 不要创建多租户相关表。
 5. 不要把文件二进制内容写入数据库。
-## 迁移 025–027
+## model_usage_records
 
-迁移 025 为 `users` 增加 `status`、`last_login_at`、`created_by`；迁移 026 新增 `model_usage_records` 保存模型调用用途、模型名、token 和延迟；迁移 027 为 `knowledge_bases` 增加 `answer_config`。
+```sql
+CREATE TABLE model_usage_records (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+    session_id UUID REFERENCES chat_sessions(id) ON DELETE SET NULL,
+    message_id UUID REFERENCES chat_messages(id) ON DELETE SET NULL,
+    purpose VARCHAR(32) NOT NULL,
+    provider VARCHAR(64) NOT NULL,
+    model VARCHAR(128) NOT NULL,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    total_tokens INTEGER,
+    latency_ms BIGINT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_model_usage_kb_created ON model_usage_records (knowledge_base_id, created_at);
+CREATE INDEX idx_model_usage_user_created ON model_usage_records (user_id, created_at);
+```
+
+每次模型调用一行：`purpose` 为 `intent` / `answer` / `title` / `evaluation`；`provider` 为 `MODEL_PROVIDER`；`model` 为 Provider 返回的模型名，缺省为配置模型。token 列在 Provider 未返回 usage 时为 NULL，不估算。Chat 调用在助手消息落库后回填 `message_id`；评测调用 `session_id` 与 `message_id` 为 NULL，只归属知识库。`latency_ms` 是该次模型调用自身的耗时。
+
+## 迁移 024–028
+
+迁移 024 为 `document_chunks` 增加 `search_vector` 并把向量索引换为 HNSW；025 为 `users` 增加 `status`、`last_login_at`、`created_by`；026 新增 `model_usage_records`；027 为 `knowledge_bases` 增加 `answer_config`（`systemPromptAddition`、`answerLanguage`、`allowGeneralKnowledge`、`model`、`temperature`）；028 为 `evaluation_runs` 增加 `answer_config` 快照。后端启动时检查这五个迁移对应的列或表，缺失即报错。

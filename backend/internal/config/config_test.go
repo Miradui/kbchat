@@ -279,3 +279,26 @@ func TestExampleEnvironmentMatchesP2RedisDefaults(t *testing.T) {
 		}
 	}
 }
+
+func TestParseModelPricing(t *testing.T) {
+	empty, err := ParseModelPricing("")
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("expected empty pricing to be unconfigured, got %#v err=%v", empty, err)
+	}
+	pricing, err := ParseModelPricing(`{"gpt-4.1-mini":{"prompt":0.4,"completion":1.6}}`)
+	if err != nil {
+		t.Fatalf("parse pricing: %v", err)
+	}
+	if price := pricing["gpt-4.1-mini"]; price.Prompt != 0.4 || price.Completion != 1.6 {
+		t.Fatalf("unexpected price %#v", price)
+	}
+	for _, invalid := range []string{"not json", `{"m":{"prompt":-1}}`, `{"":{"prompt":1}}`} {
+		if _, err := ParseModelPricing(invalid); err == nil {
+			t.Fatalf("expected %q to be rejected", invalid)
+		}
+	}
+	cfg := Config{JWTSecret: "0123456789abcdef0123456789abcdef", MaxUploadSizeMB: 10, ModelPricing: "{bad"}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "MODEL_PRICING") {
+		t.Fatalf("expected Validate to reject bad pricing, got %v", err)
+	}
+}
