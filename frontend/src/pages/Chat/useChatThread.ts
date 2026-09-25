@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError, isRateLimitError } from '../../api/client';
+import { retryNotice } from '../../components/feedback/RetryCountdown';
+import type { RetryNotice } from '../../components/feedback/RetryCountdown';
 import {
   createChatSession,
   editChatMessage,
@@ -21,6 +23,7 @@ import { pendingChatRequestStore } from './pendingChatRequestStore';
 import type { PendingChatRequest } from './pendingChatRequestStore';
 import { pendingChatEditStore } from './pendingChatEditStore';
 import { pendingRegenerationStore } from './pendingRegenerationStore';
+import { createStreamText } from './streamText';
 
 /** Delays for the automatic reconciliation attempts after an unconfirmed write. */
 const AUTO_CHECK_DELAYS_MS = [2000, 5000];
@@ -51,8 +54,7 @@ export type RegenerationState = {
   checking: boolean;
 };
 
-type RateLimitNotice = {
-  message: string;
+type RateLimitNotice = RetryNotice & {
   question: string | null;
 };
 
@@ -92,7 +94,8 @@ export function useChatThread({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [rerankFallback, setRerankFallback] = useState<KnowledgeBaseRerankFallback | null>(null);
   /** Answer text accumulated from the current stream; empty when not streaming. */
-  const [streamingAnswer, setStreamingAnswer] = useState('');
+  const [streamText] = useState(createStreamText);
+  const setStreamingAnswer = streamText.set;
   const [streamingCitations, setStreamingCitations] = useState<Citation[]>([]);
   const [stoppedStream, setStoppedStream] = useState<StoppedStream | null>(null);
   const [rateLimitNotice, setRateLimitNotice] = useState<RateLimitNotice | null>(null);
@@ -119,6 +122,7 @@ export function useChatThread({
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      streamText.dispose();
       loadRequestRef.current += 1;
       sendTokenRef.current = null;
       regenerateTokenRef.current = null;
@@ -131,7 +135,7 @@ export function useChatThread({
       sendAbortRef.current = null;
       cancelRequestedRef.current = null;
     };
-  }, []);
+  }, [streamText]);
 
   const clearAutoChecks = useCallback(() => {
     autoCheckTimersRef.current.forEach((timer) => window.clearTimeout(timer));
@@ -252,7 +256,7 @@ export function useChatThread({
     }
 
     void loadThread(sessionId);
-  }, [clearAutoChecks, loadThread, sessionId]);
+  }, [clearAutoChecks, loadThread, sessionId, setStreamingAnswer]);
 
   /**
    * Refetches the thread and reports whether the pending request landed.
@@ -473,7 +477,7 @@ export function useChatThread({
 
       if (isRateLimitError(caught)) {
         pendingChatRequestStore.clear(targetSessionId, clientRequestId);
-        setRateLimitNotice({ message: caught.message, question });
+        setRateLimitNotice({ ...retryNotice(caught), question });
       } else if (caught instanceof ApiError && isDefinitiveSendFailure(caught)) {
         // The server rejected it outright, so the id is safe to discard.
         pendingChatRequestStore.clear(targetSessionId, clientRequestId);
@@ -533,7 +537,7 @@ export function useChatThread({
     draftKnowledgeBaseId,
     isDraft,
     onSessionCreated,
-    onSessionsChanged,
+    setStreamingAnswer,
     sending,
     sessionId,
     stoppedStream,
@@ -618,7 +622,7 @@ export function useChatThread({
       if (definitive) pendingRegenerationStore.clear(targetSessionId, messageId);
       if (mountedRef.current && activeSessionRef.current === targetSessionId && regenerateTokenRef.current === token) {
         if (rateLimited) {
-          setRateLimitNotice({ message: caught.message, question: null });
+          setRateLimitNotice({ ...retryNotice(caught), question: null });
           setRegeneration(null);
         } else {
           setRegeneration({
@@ -801,10 +805,11 @@ export function useChatThread({
     regeneratingId,
     editingId,
     rerankFallback,
-    streamingAnswer,
+    streamText,
     streamingCitations,
     stoppedStream,
     rateLimitError: rateLimitNotice?.message ?? '',
+    rateLimitNotice,
     rateLimitedQuestion: rateLimitNotice?.question ?? null,
     reload: () => (sessionId ? loadThread(sessionId) : Promise.resolve()),
     send,

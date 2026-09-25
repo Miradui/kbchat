@@ -1,5 +1,5 @@
 import { Check, ChevronDown, Copy, FileText, FileType, Pencil, RotateCw, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -14,6 +14,7 @@ import { formatNullableScore, formatScore } from '../../utils/format';
 import { copyText } from '../../utils/clipboard';
 import { answerStatusNotice } from './answerStatus';
 import { ChatMarkdown } from './ChatMarkdown';
+import { ChatAnswerVersionNavigation } from './ChatAnswerVersionNavigation';
 
 const PREVIEW_LENGTH = 220;
 
@@ -32,6 +33,11 @@ type MessageBubbleProps = {
   feedbackSaving: boolean;
   onFeedback: (messageId: string, rating: ChatFeedbackRating) => void;
   versionNavigation?: ReactNode;
+  versionIndex?: number;
+  versionCount?: number;
+  versionGroupId?: string;
+  versionsDisabled?: boolean;
+  onVersionChange?: (id: string, index: number) => void;
   /** Recovery affordance rendered under this message, if it owns one. */
   recovery?: ReactNode;
   editing?: boolean;
@@ -47,7 +53,7 @@ export function ChatAssistantLabel() {
   return <div className="chat-msg__author"><span><Sparkles aria-hidden="true" /></span><strong>知识助手</strong></div>;
 }
 
-export function MessageBubble({
+export const MessageBubble = memo(function MessageBubble({
   message,
   knowledgeBaseId,
   located = false,
@@ -61,6 +67,7 @@ export function MessageBubble({
   feedbackSaving,
   onFeedback,
   versionNavigation,
+  versionIndex = 0, versionCount = 1, versionGroupId = '', versionsDisabled = false, onVersionChange,
   recovery,
   editing = false,
   editDraft = '',
@@ -213,7 +220,9 @@ export function MessageBubble({
               {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
             </IconButton>
 
-            {versionNavigation}
+            {versionNavigation ?? (versionCount > 1 && onVersionChange ? <ChatAnswerVersionNavigation
+              index={versionIndex} count={versionCount} disabled={versionsDisabled}
+              onChange={(index) => onVersionChange(versionGroupId, index)} /> : null)}
 
             <div aria-label="回答反馈" className="chat-msg__feedback" role="group">
               <IconButton
@@ -271,7 +280,7 @@ export function MessageBubble({
       </div>
     </article>
   );
-}
+});
 
 type CitationCardProps = {
   citation: Citation;

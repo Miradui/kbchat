@@ -3,6 +3,8 @@ import { useEffect, useId, useRef } from 'react';
 import type { FormEvent, KeyboardEvent } from 'react';
 
 import { Button } from '../../components/ui/Button';
+import { RetryCountdown } from '../../components/feedback/RetryCountdown';
+import type { RetryNotice } from '../../components/feedback/RetryCountdown';
 
 const MAX_HEIGHT = 200;
 
@@ -15,6 +17,7 @@ type ChatComposerProps = {
   hint?: string;
   /** A recoverable request error shown next to the input. */
   error?: string;
+  retryNotice?: RetryNotice | null;
   onChange: (value: string) => void;
   onSubmit: () => void;
   onCancel: () => void;
@@ -31,6 +34,7 @@ export function ChatComposer({
   placeholder,
   hint,
   error,
+  retryNotice,
   onChange,
   onSubmit,
   onCancel,
@@ -111,7 +115,7 @@ export function ChatComposer({
           id={errorId}
           role="alert"
         >
-          {error}
+          {retryNotice ? <RetryCountdown notice={retryNotice} /> : error}
         </p>
       )}
     </form>

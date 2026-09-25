@@ -199,7 +199,7 @@ describe('useChatThread send reconciliation', () => {
       await result.current.send('问题');
     });
 
-    expect(result.current.streamingAnswer).toBe('');
+    expect(result.current.streamText.getSnapshot()).toBe('');
     expect(result.current.failedSend).toBeNull();
     expect(result.current.unconfirmedSend?.request.question).toBe('问题');
     expect(pendingChatRequestStore.get(session.id)?.clientRequestId).toBe(

@@ -26,7 +26,7 @@ import {
 } from '../../api/resources';
 import { renderWithRouter } from '../../test/render';
 import { downloadBlob } from '../../utils/download';
-import type { ChatMessage, ChatSession, KnowledgeBase } from '../../types/api';
+import type { ChatMessage, ChatSession, ChatSessionListResponse, SendChatMessageResponse, KnowledgeBase } from '../../types/api';
 import { ChatPage } from './ChatPage';
 
 vi.mock('../../api/resources', () => ({
@@ -54,12 +54,12 @@ vi.mock('../../api/resources', () => ({
 }));
 vi.mock('../../utils/download', () => ({ downloadBlob: vi.fn() }));
 
-const knowledgeBase = {
+const knowledgeBase = {answerConfig: { systemPromptAddition: '', answerLanguage: 'auto' as const, allowGeneralKnowledge: false, model: '' },
   id: 'kb1',
   name: '制度库',
   description: '制度说明',
   visibility: 'private',
-  retrievalConfig: { vectorTopN: 30, rerankTopK: 5, scoreThreshold: 0.3, enableRerank: true },
+  retrievalConfig: {enableKeyword: true,  vectorTopN: 30, rerankTopK: 5, scoreThreshold: 0.3, enableRerank: true },
   createdAt: '2026-07-01T00:00:00Z',
   updatedAt: '2026-07-01T00:00:00Z',
 } satisfies KnowledgeBase;
@@ -155,7 +155,7 @@ beforeEach(() => {
 	window.localStorage.removeItem('rag.chat.pending-regeneration:s1');
 	window.localStorage.removeItem('rag.chat.pending-regeneration:s2');
   Element.prototype.scrollTo = vi.fn();
-  vi.mocked(listChatSessions).mockReset().mockResolvedValue({ items: [session] });
+  vi.mocked(listChatSessions).mockReset().mockResolvedValue({total: ([session]).length, page: 1, pageSize: 20,  items: [session] });
   vi.mocked(listKnowledgeBases).mockReset().mockResolvedValue({ items: [knowledgeBase] });
   vi.mocked(listKnowledgeBaseCategories).mockReset().mockResolvedValue({ items: [] });
   vi.mocked(getWorkspacePreference).mockReset().mockResolvedValue({
@@ -243,10 +243,10 @@ describe('ChatPage', () => {
     const named = { ...session, title: '报销发票提交', updatedAt: '2026-07-01T00:01:00Z' };
     vi.mocked(createChatSession).mockResolvedValue(unnamed);
     vi.mocked(getChatSession).mockResolvedValue(unnamed);
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([]).length, page: 1, pageSize: 20,  items: [] });
     vi.mocked(sendChatMessage).mockImplementation(async () => {
-      vi.mocked(listChatSessions).mockResolvedValue({ items: [named] });
-      return { answer: '回答', citations: [], rerankFallback: null };
+      vi.mocked(listChatSessions).mockResolvedValue({total: ([named]).length, page: 1, pageSize: 20,  items: [named] });
+      return {...replyFields,  answer: '回答', citations: [], rerankFallback: null };
     });
     const user = userEvent.setup();
     renderWithRouter(
@@ -265,11 +265,11 @@ describe('ChatPage', () => {
     const unnamed = { ...session, title: '新会话' };
     const named = { ...session, title: '报销发票提交', updatedAt: '2026-07-01T00:01:00Z' };
     vi.mocked(getChatSession).mockResolvedValue(unnamed);
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [unnamed] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([unnamed]).length, page: 1, pageSize: 20,  items: [unnamed] });
     vi.mocked(sendChatMessage).mockImplementation(async () => {
-      vi.mocked(listChatSessions).mockResolvedValue({ items: [named] });
+      vi.mocked(listChatSessions).mockResolvedValue({total: ([named]).length, page: 1, pageSize: 20,  items: [named] });
       vi.mocked(listChatMessages).mockRejectedValue(new TypeError('Failed to fetch'));
-      return { answer: '回答', citations: [], rerankFallback: null };
+      return {...replyFields,  answer: '回答', citations: [], rerankFallback: null };
     });
     const user = userEvent.setup();
     renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>, ['/chat/s1']);
@@ -284,7 +284,7 @@ describe('ChatPage', () => {
   it('keeps a newer title when an older session detail arrives after the list', async () => {
     const detail = deferred<ChatSession>();
     const named = { ...session, title: '首问自动标题', updatedAt: '2026-07-01T00:01:00Z' };
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [named] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([named]).length, page: 1, pageSize: 20,  items: [named] });
     vi.mocked(getChatSession).mockReturnValue(detail.promise);
     renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>, ['/chat/s1']);
     await findSessionTitle(named.title);
@@ -298,13 +298,13 @@ describe('ChatPage', () => {
     vi.mocked(getChatSession).mockResolvedValue({ ...session, title: '手动名称', updatedAt: '2026-07-01T00:02:00Z' });
     renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>, ['/chat/s1']);
     await findSessionTitle('手动名称');
-    await act(async () => list.resolve({ items: [{ ...session, title: '首问自动标题', updatedAt: '2026-07-01T00:01:00Z' }] }));
+    await act(async () => list.resolve({total: ([{ ...session, title: '首问自动标题', updatedAt: '2026-07-01T00:01:00Z' }]).length, page: 1, pageSize: 20,  items: [{ ...session, title: '首问自动标题', updatedAt: '2026-07-01T00:01:00Z' }] }));
     expect(await findSessionTitle('手动名称')).toBeInTheDocument();
   });
 
   it('renames the right-clicked session, keeps failed edits retryable and preserves the active conversation draft', async () => {
     const other = { ...secondSession, knowledgeBaseId: knowledgeBase.id };
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, other] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([session, other]).length, page: 1, pageSize: 20,  items: [session, other] });
     vi.mocked(updateChatSessionTitle)
       .mockRejectedValueOnce(new ApiError(500, { code: 'RENAME_FAILED', message: '暂时无法修改会话名称' }))
       .mockResolvedValueOnce({ ...other, title: '产品说明' });
@@ -337,7 +337,7 @@ describe('ChatPage', () => {
 
   it('archives a different session from its visible row menu without opening it', async () => {
     const other = { ...secondSession, knowledgeBaseId: knowledgeBase.id };
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, other] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([session, other]).length, page: 1, pageSize: 20,  items: [session, other] });
     vi.mocked(archiveChatSession).mockResolvedValue({ ...other, archivedAt: '2026-07-01T01:00:00Z' });
     const user = userEvent.setup();
     renderWithRouter(<><Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes><LocationProbe /></>, ['/chat/s1']);
@@ -362,7 +362,7 @@ describe('ChatPage', () => {
   });
 
   it('deletes a chosen session from the draft page without requiring an active session', async () => {
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, secondSession] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([session, secondSession]).length, page: 1, pageSize: 20,  items: [session, secondSession] });
     vi.mocked(deleteChatSession).mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderWithRouter(<><Routes><Route path="/chat" element={<ChatPage />} /></Routes><LocationProbe /></>, ['/chat?knowledgeBaseId=kb1']);
@@ -383,12 +383,12 @@ describe('ChatPage', () => {
 
   it('restores an archived row without switching the current conversation', async () => {
     const other = { ...secondSession, knowledgeBaseId: knowledgeBase.id, archivedAt: '2026-07-01T01:00:00Z' };
-    vi.mocked(listChatSessions).mockImplementation(async (params) => ({ items: params?.archived ? [other] : [session] }));
+    vi.mocked(listChatSessions).mockImplementation(async (params) => ({total: (params?.archived ? [other] : [session]).length, page: 1, pageSize: 20,  items: params?.archived ? [other] : [session] }));
     vi.mocked(unarchiveChatSession).mockResolvedValue({ ...other, archivedAt: null });
     const user = userEvent.setup();
     renderWithRouter(<><Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes><LocationProbe /></>, ['/chat/s1']);
     await findSessionTitle('制度问答');
-    await user.click(screen.getByRole('button', { name: '已归档', exact: true }));
+    await user.click(screen.getByRole('button', { name: '已归档' }));
     await user.click(await screen.findByRole('button', { name: '会话“产品问答”的更多操作' }));
     expect(screen.queryByRole('menuitem', { name: '归档会话' })).not.toBeInTheDocument();
     await user.click(screen.getByRole('menuitem', { name: '取消归档' }));
@@ -396,13 +396,13 @@ describe('ChatPage', () => {
     expect(unarchiveChatSession).toHaveBeenCalledExactlyOnceWith(other.id);
     expect(screen.getByText('制度问答', { selector: '.ui-inline-edit__text' })).toBeInTheDocument();
     expect(screen.getByLabelText('当前位置')).toHaveTextContent('/chat/s1');
-    expect(screen.getByRole('button', { name: '已归档', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: '已归档' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('exports the selected row using its own session ID and title', async () => {
     const other = { ...secondSession, knowledgeBaseId: knowledgeBase.id };
     const markdown = new Blob(['产品会话内容'], { type: 'text/markdown' });
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, other] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([session, other]).length, page: 1, pageSize: 20,  items: [session, other] });
     vi.mocked(exportChatSession).mockResolvedValue(markdown);
     const user = userEvent.setup();
     renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>, ['/chat/s1']);
@@ -671,7 +671,7 @@ describe('ChatPage', () => {
     );
 
     const errorText = await screen.findByText('消息加载失败');
-    const status = errorText.closest('[role="status"]');
+    const status = errorText.closest<HTMLElement>('[role="status"]');
     expect(status).not.toBeNull();
     expect(screen.queryByText('选择一个知识库开始提问')).not.toBeInTheDocument();
     expect(screen.queryByText('当前知识库中未找到足够依据。')).not.toBeInTheDocument();
@@ -684,7 +684,7 @@ describe('ChatPage', () => {
   it('keeps knowledge bases usable when the initial session list fails and retries only sessions', async () => {
     vi.mocked(listChatSessions)
       .mockRejectedValueOnce(new Error('offline'))
-      .mockResolvedValueOnce({ items: [session] });
+      .mockResolvedValueOnce({total: ([session]).length, page: 1, pageSize: 20,  items: [session] });
     const user = userEvent.setup();
     renderWithRouter(
       <Routes>
@@ -709,6 +709,7 @@ describe('ChatPage', () => {
   it('keeps sessions usable when the initial knowledge-base list fails and retries only knowledge bases', async () => {
     vi.mocked(listKnowledgeBases)
       .mockRejectedValueOnce(new Error('offline'))
+      .mockRejectedValueOnce(new Error('offline'))
       .mockResolvedValueOnce({ items: [knowledgeBase] });
     const user = userEvent.setup();
     renderWithRouter(
@@ -727,7 +728,7 @@ describe('ChatPage', () => {
     })));
     const sessionCallsBeforeRetry = vi.mocked(listChatSessions).mock.calls.length;
     await user.click(within(alert).getByRole('button', { name: '重试' }));
-    await waitFor(() => expect(listKnowledgeBases).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(listKnowledgeBases).toHaveBeenCalledTimes(3));
     expect(listChatSessions).toHaveBeenCalledTimes(sessionCallsBeforeRetry);
     expect(await screen.findByLabelText('当前知识库')).toHaveValue(knowledgeBase.id);
   });
@@ -757,7 +758,7 @@ describe('ChatPage', () => {
   });
 
   it('does not refresh chat state after an in-flight send outlives the page', async () => {
-    const sendResult = deferred<{ answer: string; citations: []; rerankFallback: null }>();
+    const sendResult = deferred<SendChatMessageResponse>();
     vi.mocked(sendChatMessage).mockReturnValue(sendResult.promise);
     const user = userEvent.setup();
     renderWithRouter(
@@ -779,7 +780,7 @@ describe('ChatPage', () => {
     expect(await screen.findByText('已离开聊天')).toBeInTheDocument();
 
     await act(async () => {
-      sendResult.resolve({ answer: '迟到回答', citations: [], rerankFallback: null });
+      sendResult.resolve({...replyFields,  answer: '迟到回答', citations: [], rerankFallback: null });
       await Promise.resolve();
     });
     expect(listChatMessages).toHaveBeenCalledTimes(1);
@@ -792,7 +793,7 @@ describe('ChatPage', () => {
       knowledgeBaseId: knowledgeBase.id,
     };
     vi.mocked(updateChatSessionTitle).mockReturnValue(titleResult.promise);
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, sameKnowledgeBaseSecondSession] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([session, sameKnowledgeBaseSecondSession]).length, page: 1, pageSize: 20,  items: [session, sameKnowledgeBaseSecondSession] });
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase] });
     vi.mocked(getChatSession).mockImplementation((id) => Promise.resolve(
       id === sameKnowledgeBaseSecondSession.id ? sameKnowledgeBaseSecondSession : session,
@@ -839,7 +840,7 @@ describe('ChatPage', () => {
   });
 
   it('exposes exactly one current session to assistive technology', async () => {
-    vi.mocked(listChatSessions).mockResolvedValue({
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([session, { ...secondSession, knowledgeBaseId: knowledgeBase.id }]).length, page: 1, pageSize: 20,
       items: [session, { ...secondSession, knowledgeBaseId: knowledgeBase.id }],
     });
     renderWithRouter(
@@ -883,7 +884,7 @@ describe('ChatPage', () => {
       archivedAt: '2026-07-01T01:00:00Z',
     });
     vi.mocked(listChatSessions)
-      .mockResolvedValueOnce({ items: [session] })
+      .mockResolvedValueOnce({total: ([session]).length, page: 1, pageSize: 20,  items: [session] })
       .mockRejectedValueOnce(new Error('offline'));
     const user = userEvent.setup();
     renderWithRouter(
@@ -907,7 +908,7 @@ describe('ChatPage', () => {
   });
 
   it('does not let a pre-archive session-list response reinsert the archived session', async () => {
-    const initialSessions = deferred<{ items: ChatSession[] }>();
+    const initialSessions = deferred<ChatSessionListResponse>();
     vi.mocked(listChatSessions).mockReturnValue(initialSessions.promise);
     vi.mocked(archiveChatSession).mockResolvedValue({
       ...session,
@@ -927,7 +928,7 @@ describe('ChatPage', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '归档会话' })).not.toBeInTheDocument());
 
     await act(async () => {
-      initialSessions.resolve({ items: [session] });
+      initialSessions.resolve({ items: [session], total: 1, page: 1, pageSize: 20 });
       await Promise.resolve();
     });
     expect(screen.queryByRole('link', { name: /制度问答/ })).not.toBeInTheDocument();
@@ -936,7 +937,7 @@ describe('ChatPage', () => {
   it('does not let a late archive response replace the session selected afterward', async () => {
     const archiveResult = deferred<ChatSession>();
     vi.mocked(archiveChatSession).mockReturnValue(archiveResult.promise);
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, secondSession] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([session, secondSession]).length, page: 1, pageSize: 20,  items: [session, secondSession] });
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
     vi.mocked(getChatSession).mockImplementation((id) => Promise.resolve(
       id === secondSession.id ? secondSession : session,
@@ -969,7 +970,7 @@ describe('ChatPage', () => {
   it('does not navigate away when a deleted session is no longer active', async () => {
     const deleteResult = deferred<void>();
     vi.mocked(deleteChatSession).mockReturnValue(deleteResult.promise);
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, secondSession] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([session, secondSession]).length, page: 1, pageSize: 20,  items: [session, secondSession] });
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
     vi.mocked(getChatSession).mockImplementation((id) => Promise.resolve(
       id === secondSession.id ? secondSession : session,
@@ -1026,7 +1027,7 @@ describe('ChatPage', () => {
   it('navigates away after a successful delete without depending on a follow-up session refresh', async () => {
     vi.mocked(deleteChatSession).mockResolvedValue(undefined);
     vi.mocked(listChatSessions)
-      .mockResolvedValueOnce({ items: [session] })
+      .mockResolvedValueOnce({total: ([session]).length, page: 1, pageSize: 20,  items: [session] })
       .mockRejectedValueOnce(new Error('offline'));
     const user = userEvent.setup();
     renderWithRouter(
@@ -1648,7 +1649,7 @@ describe('ChatPage', () => {
 
   it('disables session mutations while the routed session detail is loading', async () => {
     const nextSession = deferred<ChatSession>();
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, secondSession] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([session, secondSession]).length, page: 1, pageSize: 20,  items: [session, secondSession] });
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
     vi.mocked(getChatSession).mockImplementation((id) => (
       id === secondSession.id ? nextSession.promise : Promise.resolve(session)
@@ -1675,7 +1676,7 @@ describe('ChatPage', () => {
 
   it('closes a destructive confirmation when switching sessions', async () => {
     const nextSession = deferred<ChatSession>();
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, secondSession] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([session, secondSession]).length, page: 1, pageSize: 20,  items: [session, secondSession] });
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
     vi.mocked(getChatSession).mockImplementation((id) => (
       id === secondSession.id ? nextSession.promise : Promise.resolve(session)
@@ -1701,7 +1702,7 @@ describe('ChatPage', () => {
   it('hides citations from the previous session while the next session is loading', async () => {
     const nextSession = deferred<ChatSession>();
     const nextMessages = deferred<{ items: ChatMessage[] }>();
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, secondSession] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([session, secondSession]).length, page: 1, pageSize: 20,  items: [session, secondSession] });
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
     vi.mocked(getChatSession).mockImplementation((id) => (
       id === secondSession.id ? nextSession.promise : Promise.resolve(session)
@@ -1731,12 +1732,12 @@ describe('ChatPage', () => {
   });
 
   it('locks chat navigation while a message is being sent', async () => {
-    const sendResult = deferred<{ answer: string; citations: []; rerankFallback: null }>();
+    const sendResult = deferred<SendChatMessageResponse>();
     const sameKnowledgeBaseSecondSession = {
       ...secondSession,
       knowledgeBaseId: knowledgeBase.id,
     };
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, sameKnowledgeBaseSecondSession] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([session, sameKnowledgeBaseSecondSession]).length, page: 1, pageSize: 20,  items: [session, sameKnowledgeBaseSecondSession] });
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
     vi.mocked(getChatSession).mockImplementation((id) => Promise.resolve(
       id === sameKnowledgeBaseSecondSession.id ? sameKnowledgeBaseSecondSession : session,
@@ -1768,14 +1769,14 @@ describe('ChatPage', () => {
     await user.click(secondSessionLink);
     expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat/s1');
 
-    sendResult.resolve({ answer: '制度会话回答', citations: [], rerankFallback: null });
+    sendResult.resolve({...replyFields,  answer: '制度会话回答', citations: [], rerankFallback: null });
 
     await waitFor(() => expect(secondSessionLink).not.toHaveAttribute('aria-disabled'));
     expect(screen.getByLabelText('当前知识库')).toBeEnabled();
   });
 
   it('synchronously blocks session mutations when a send starts', async () => {
-    const sendResult = deferred<{ answer: string; citations: []; rerankFallback: null }>();
+    const sendResult = deferred<SendChatMessageResponse>();
     vi.mocked(sendChatMessage).mockReturnValue(sendResult.promise);
     const user = userEvent.setup();
     renderWithRouter(
@@ -1802,7 +1803,7 @@ describe('ChatPage', () => {
     expect(screen.getByRole('button', { name: '会话操作' })).toBeDisabled();
 
     await act(async () => {
-      sendResult.resolve({ answer: '回答', citations: [], rerankFallback: null });
+      sendResult.resolve({...replyFields,  answer: '回答', citations: [], rerankFallback: null });
       await Promise.resolve();
     });
   });
@@ -1849,7 +1850,7 @@ describe('ChatPage', () => {
       knowledgeBaseId: knowledgeBase.id,
     };
     vi.mocked(updateChatSessionTitle).mockReturnValue(titleResult.promise);
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, sameKnowledgeBaseSecondSession] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([session, sameKnowledgeBaseSecondSession]).length, page: 1, pageSize: 20,  items: [session, sameKnowledgeBaseSecondSession] });
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
     const user = userEvent.setup();
     renderWithRouter(
@@ -1882,7 +1883,7 @@ describe('ChatPage', () => {
       ...secondSession,
       knowledgeBaseId: knowledgeBase.id,
     };
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, sameKnowledgeBaseSecondSession] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([session, sameKnowledgeBaseSecondSession]).length, page: 1, pageSize: 20,  items: [session, sameKnowledgeBaseSecondSession] });
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
     vi.mocked(listChatMessages)
       .mockResolvedValueOnce({ items: [] })
@@ -1925,7 +1926,7 @@ describe('ChatPage', () => {
   });
 
   it('clears an uncertain send before composing in another session', async () => {
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, secondSession] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([session, secondSession]).length, page: 1, pageSize: 20,  items: [session, secondSession] });
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
     vi.mocked(getChatSession).mockImplementation((id) => Promise.resolve(
       id === secondSession.id ? secondSession : session,
@@ -2008,7 +2009,7 @@ describe('ChatPage', () => {
 
   it('keeps the typed draft when switching to a knowledge base with existing sessions', async () => {
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, secondSession] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([session, secondSession]).length, page: 1, pageSize: 20,  items: [session, secondSession] });
     const user = userEvent.setup();
 
     renderWithRouter(
@@ -2034,7 +2035,7 @@ describe('ChatPage', () => {
 
   it('creates a session only when the first draft question is submitted', async () => {
     vi.mocked(createChatSession).mockResolvedValue(session);
-    vi.mocked(sendChatMessage).mockResolvedValue({ answer: '回答', citations: [], rerankFallback: null });
+    vi.mocked(sendChatMessage).mockResolvedValue({...replyFields,  answer: '回答', citations: [], rerankFallback: null });
     const user = userEvent.setup();
 
     renderWithRouter(
@@ -2060,7 +2061,7 @@ describe('ChatPage', () => {
 
   it('supports the static draft route used by the application router', async () => {
     vi.mocked(createChatSession).mockResolvedValue(session);
-    vi.mocked(sendChatMessage).mockResolvedValue({ answer: '回答', citations: [], rerankFallback: null });
+    vi.mocked(sendChatMessage).mockResolvedValue({...replyFields,  answer: '回答', citations: [], rerankFallback: null });
     const user = userEvent.setup();
 
     renderWithRouter(
@@ -2099,7 +2100,7 @@ describe('ChatPage', () => {
   it('synchronously locks a draft against duplicate submit events', async () => {
     const createResult = deferred<ChatSession>();
     vi.mocked(createChatSession).mockReturnValue(createResult.promise);
-    vi.mocked(sendChatMessage).mockResolvedValue({ answer: '回答', citations: [], rerankFallback: null });
+    vi.mocked(sendChatMessage).mockResolvedValue({...replyFields,  answer: '回答', citations: [], rerankFallback: null });
     const user = userEvent.setup();
 
     renderWithRouter(
@@ -2161,7 +2162,7 @@ describe('ChatPage', () => {
   });
 
   it('keeps the composer locked while the first draft question is still sending', async () => {
-    const sendResult = deferred<{ answer: string; citations: []; rerankFallback: null }>();
+    const sendResult = deferred<SendChatMessageResponse>();
     const sessionDetail = deferred<ChatSession>();
     vi.mocked(createChatSession).mockResolvedValue(session);
     vi.mocked(getChatSession).mockReturnValue(sessionDetail.promise);
@@ -2194,13 +2195,13 @@ describe('ChatPage', () => {
     expect(screen.getByRole('textbox', { name: '输入问题' })).toBeDisabled();
     expect(screen.getByRole('button', { name: '停止生成' })).toBeEnabled();
 
-    sendResult.resolve({ answer: '回答', citations: [], rerankFallback: null });
+    sendResult.resolve({...replyFields,  answer: '回答', citations: [], rerankFallback: null });
     await waitFor(() => expect(screen.getByRole('textbox', { name: '输入问题' })).toBeEnabled());
   });
 
   it('does not let the draft route load overwrite messages refreshed after sending', async () => {
     const routeMessages = deferred<{ items: ChatMessage[] }>();
-    const sendResult = deferred<{ answer: string; citations: []; rerankFallback: null }>();
+    const sendResult = deferred<SendChatMessageResponse>();
     const refreshedMessages = [{
       id: 'draft-answer',
       sessionId: session.id,
@@ -2229,7 +2230,7 @@ describe('ChatPage', () => {
     await user.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() => expect(listChatMessages).toHaveBeenCalledTimes(1));
 
-    sendResult.resolve({ answer: '首问完成后的回答', citations: [], rerankFallback: null });
+    sendResult.resolve({...replyFields,  answer: '首问完成后的回答', citations: [], rerankFallback: null });
     expect(await screen.findByText('首问完成后的回答')).toBeInTheDocument();
     expect(listChatMessages).toHaveBeenCalledTimes(2);
 
@@ -2246,7 +2247,7 @@ describe('ChatPage', () => {
         code: 'CHAT_COMPLETION_FAILED',
         message: 'chat completion failed',
       }))
-      .mockResolvedValueOnce({ answer: '回答', citations: [], rerankFallback: null });
+      .mockResolvedValueOnce({...replyFields,  answer: '回答', citations: [], rerankFallback: null });
     const user = userEvent.setup();
 
     renderWithRouter(
@@ -2431,7 +2432,7 @@ describe('ChatPage', () => {
       content: '旧检查结果', citations: [], createdAt: '2026-07-01T00:03:00Z',
     };
     let firstSessionLoads = 0;
-    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, secondSession] });
+    vi.mocked(listChatSessions).mockResolvedValue({total: ([session, secondSession]).length, page: 1, pageSize: 20,  items: [session, secondSession] });
     vi.mocked(listKnowledgeBases).mockResolvedValue({
       items: [knowledgeBase, secondKnowledgeBase], total: 2, page: 1, pageSize: 100,
     });
@@ -2484,7 +2485,7 @@ describe('ChatPage', () => {
   it('resends an uncertain question only after explicit confirmation', async () => {
     vi.mocked(sendChatMessage)
       .mockRejectedValueOnce(new Error('network disconnected'))
-      .mockResolvedValueOnce({ answer: '回答', citations: [], rerankFallback: null });
+      .mockResolvedValueOnce({...replyFields,  answer: '回答', citations: [], rerankFallback: null });
     const user = userEvent.setup();
 
     renderWithRouter(
@@ -2546,3 +2547,5 @@ describe('ChatPage', () => {
 		expect(screen.queryByText('发送结果暂时无法确认')).not.toBeInTheDocument();
 	});
 });
+
+const replyFields: Pick<SendChatMessageResponse, 'clientRequestId' | 'userMessage' | 'assistantMessage'> = { clientRequestId: 'fixture-request', userMessage: { id: 'fixture-user', sessionId: 's1', role: 'user', content: '问题', citations: [], createdAt: '2026-07-01T00:00:00Z' }, assistantMessage: { id: 'fixture-assistant', sessionId: 's1', role: 'assistant', content: '回答', citations: [], createdAt: '2026-07-01T00:00:00Z' } };

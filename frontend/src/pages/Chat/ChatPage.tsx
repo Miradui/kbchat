@@ -1,14 +1,9 @@
-import { Archive, ArchiveRestore, Check, Download, Library, MessageSquareText, PanelLeft, Pencil, Search, Sparkles, Trash2 } from 'lucide-react';
+import { Check, Library, MessageSquareText, PanelLeft, Search, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import {
-  archiveChatSession,
-  deleteChatSession,
-  exportChatSession,
   setChatMessageFeedback,
-  unarchiveChatSession,
-  updateChatSessionTitle,
 } from '../../api/resources';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { EmptyState } from '../../components/feedback/EmptyState';
@@ -19,15 +14,14 @@ import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { IconButton } from '../../components/ui/IconButton';
 import { InlineEdit } from '../../components/ui/InlineEdit';
-import { OverflowMenu, type OverflowMenuItem } from '../../components/ui/OverflowMenu';
+import { OverflowMenu } from '../../components/ui/OverflowMenu';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { AppShell } from '../../layouts/AppShell';
-import type { ChatFeedbackDetails, ChatFeedbackRating, ChatMessage, ChatSession, Citation } from '../../types/api';
-import { downloadBlob } from '../../utils/download';
+import type { ChatFeedbackDetails, ChatFeedbackRating, ChatMessage, Citation } from '../../types/api';
 import { formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
 import { ChatComposer } from './ChatComposer';
-import { ChatAnswerVersionNavigation } from './ChatAnswerVersionNavigation';
+import { useEventCallback } from '../../hooks/useEventCallback';
 import { ChatFeedbackDialog } from './ChatFeedbackDialog';
 import { ChatMessageSearch, useChatMessageSearch } from './ChatMessageSearch';
 import { ChatMarkdown } from './ChatMarkdown';
@@ -39,8 +33,10 @@ import { canUnlessUnknown } from '../../utils/access';
 import type { ChatSessionScope } from './ChatSessionRail';
 import { useChatSessions } from './useChatSessions';
 import { useChatThread } from './useChatThread';
+import { useChatInteractionState } from './useChatInteractionState';
+import { useSessionActions } from './useSessionActions';
 import { useChatAnswerVersions } from './useChatAnswerVersions';
-import { useStreamAnnouncement } from './useStreamAnnouncement';
+import { ChatStreamView, StreamAnnouncement } from './ChatStreamView';
 
 /**
  * `/chat` is the draft state and `/chat/:sessionId` is a thread.
@@ -56,26 +52,16 @@ export function ChatPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const isNarrow = useMediaQuery('(max-width: 1080px)');
   const [railOpen, setRailOpen] = useState(false);
-  const [draft, setDraft] = useState('');
-  const [focusedCitation, setFocusedCitation] = useState<{ messageId: string; index: number | null } | null>(null);
-  const [sourcePreview, setSourcePreview] = useState<{ citation: Citation; index: number; scope: string } | null>(null);
+  const railBackdropRef = useRef<HTMLButtonElement>(null);
+  const {
+    draft, setDraft, focusedCitation, setFocusedCitation, sourcePreview, setSourcePreview,
+    feedbackSavingIds, setFeedbackSavingIds, feedbackTarget, setFeedbackTarget,
+    editingMessageId, setEditingMessageId, editingDraft, setEditingDraft,
+  } = useChatInteractionState(sessionId);
   const sourceTriggerRef = useRef<HTMLElement | null>(null);
-  const [confirmArchive, setConfirmArchive] = useState<ChatSession | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<ChatSession | null>(null);
-  const [renameTarget, setRenameTarget] = useState<ChatSession | null>(null);
-  const [sessionActionError, setSessionActionError] = useState('');
-  const [sessionBusy, setSessionBusy] = useState(false);
-  const [sessionExporting, setSessionExporting] = useState(false);
-  const [feedbackSavingIds, setFeedbackSavingIds] = useState<Set<string>>(() => new Set());
-  const [feedbackTarget, setFeedbackTarget] = useState<ChatMessage | null>(null);
-  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
-  const [editingDraft, setEditingDraft] = useState('');
   const messagesRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const activeSessionIdRef = useRef(sessionId);
-  const sessionActionOperationRef = useRef<symbol | null>(null);
-  const sessionBusyRef = useRef(false);
-  const sessionExportOperationRef = useRef<symbol | null>(null);
   const feedbackOperationsRef = useRef<Map<string, symbol>>(new Map());
   const skipSessionScopeSyncRef = useRef(false);
 
@@ -110,10 +96,18 @@ export function ChatPage() {
     onSessionsChanged: () => void reloadSessions(),
   });
 
+  const {
+    confirmArchive, setConfirmArchive, confirmDelete, setConfirmDelete, renameTarget, setRenameTarget,
+    sessionActionError, setSessionActionError, sessionBusy, sessionBusyRef, sessionExporting,
+    renameSession, getSessionActions, confirmArchiveSession, confirmDeleteSession,
+  } = useSessionActions({
+    sessionId, activeSessionIdRef, thread, mergeSession, removeSession, reloadSessions, skipSessionScopeSyncRef,
+  });
+
   useEffect(() => {
     if (!thread.rateLimitedQuestion) return;
     setDraft((current) => current || thread.rateLimitedQuestion || '');
-  }, [thread.rateLimitedQuestion]);
+  }, [thread.rateLimitedQuestion, setDraft]);
 
   const loadedSession = sessionId && thread.session?.id === sessionId ? thread.session : null;
   const listedSession = sessions.find((session) => session.id === sessionId) ?? null;
@@ -156,27 +150,27 @@ export function ChatPage() {
     }, { replace: true });
   }
 
-  function selectAnswerVersion(groupId: string, index: number) {
+  const selectAnswerVersion = useEventCallback((groupId: string, index: number) => {
     stickToBottomRef.current = false;
     answerVersions.selectVersion(groupId, index);
     leaveMessageLocation();
     setFocusedCitation(null);
     setSourcePreview(null);
-  }
+  });
 
-  function regenerateAnswer(messageId: string) {
+  const regenerateAnswer = useEventCallback((messageId: string) => {
     if (sessionBusyRef.current) return;
     leaveMessageLocation();
     void thread.regenerate(messageId);
-  }
+  });
 
-  useEffect(() => { setSourcePreview(null); }, [sourceScope]);
+  useEffect(() => { setSourcePreview(null); }, [sourceScope, setSourcePreview]);
 
-  function openSource(citation: Citation, index: number) {
+  const openSource = useEventCallback((citation: Citation, index: number) => {
     if (!activeKnowledgeBaseId) return;
     sourceTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setSourcePreview({ citation, index, scope: sourceScope });
-  }
+  });
 
   function closeSource() {
     setSourcePreview(null);
@@ -197,38 +191,27 @@ export function ChatPage() {
     }, { replace: true });
   }, [currentSession?.knowledgeBaseId, setSearchParams, urlKnowledgeBaseId]);
 
+  const currentSessionId = currentSession?.id;
+  const currentArchivedAt = currentSession?.archivedAt;
   useEffect(() => {
-    if (!sessionId || !currentSession) return;
+    if (!sessionId || !currentSessionId) return;
     if (skipSessionScopeSyncRef.current) {
       skipSessionScopeSyncRef.current = false;
       return;
     }
-    const nextScope: ChatSessionScope = currentSession.archivedAt ? 'archived' : 'active';
+    const nextScope: ChatSessionScope = currentArchivedAt ? 'archived' : 'active';
     setRailScope((current) => current === nextScope ? current : nextScope);
-  }, [currentSession?.archivedAt, currentSession?.id, sessionId]);
+  }, [currentArchivedAt, currentSessionId, sessionId]);
 
   useEffect(() => {
     if (!isNarrow) setRailOpen(false);
   }, [isNarrow]);
 
   useEffect(() => {
-    setDraft('');
-    setFocusedCitation(null);
-    setEditingMessageId(null);
-    setEditingDraft('');
-    setConfirmArchive(null);
-    setConfirmDelete(null);
-    setRenameTarget(null);
-    setSessionActionError('');
-    sessionActionOperationRef.current = null;
-    sessionBusyRef.current = false;
-    setSessionBusy(false);
-    sessionExportOperationRef.current = null;
-    setSessionExporting(false);
-    feedbackOperationsRef.current.clear();
-    setFeedbackSavingIds(new Set());
-    setFeedbackTarget(null);
+    const operations = feedbackOperationsRef.current;
+    operations.clear();
     stickToBottomRef.current = true;
+    return () => { operations.clear(); };
   }, [sessionId]);
 
   // The home page hands a question over via `?q=`; consume it into the composer.
@@ -241,29 +224,21 @@ export function ChatPage() {
       next.delete('q');
       return next;
     }, { replace: true });
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, setDraft]);
 
   useEffect(() => {
     if (!stickToBottomRef.current || targetMessageId || messageSearch.open) return;
     // `auto` while streaming: a smooth scroll per token never settles.
     messagesRef.current?.scrollTo({
       top: messagesRef.current.scrollHeight,
-      behavior: thread.streamingAnswer ? 'auto' : 'smooth',
+      behavior: thread.sending ? 'auto' : 'smooth',
     });
-  }, [thread.messages, thread.pendingQuestion, thread.streamingAnswer, targetMessageId, messageSearch.open]);
+  }, [thread.messages, thread.pendingQuestion, thread.sending, targetMessageId, messageSearch.open]);
 
   const latestAssistantId = useMemo(
     () => [...thread.messages].reverse().find((message) => message.role === 'assistant')?.id ?? null,
     [thread.messages],
   );
-
-  const streamAnnouncement = useStreamAnnouncement({
-    sending: thread.sending,
-    streamingAnswer: thread.streamingAnswer,
-    streamingCitationCount: thread.streamingCitations.length,
-    stopped: Boolean(thread.stoppedStream),
-    failed: Boolean(thread.failedSend),
-  });
 
   const archived = Boolean(currentSession?.archivedAt);
   const threadInteractionPending = thread.sending
@@ -296,52 +271,26 @@ export function ChatPage() {
     else navigate('/chat');
   }, [navigate]);
 
-  async function runSessionAction(action: (isCurrent: () => boolean) => Promise<void>, failure: string) {
-    if (sessionBusyRef.current || thread.hasPendingWrite()) return;
-    const operation = Symbol('session-action');
-    const operationSessionId = sessionId;
-    sessionActionOperationRef.current = operation;
-    sessionBusyRef.current = true;
-    setSessionBusy(true);
-    setSessionActionError('');
-    const isCurrent = () => sessionActionOperationRef.current === operation
-      && activeSessionIdRef.current === operationSessionId;
-    try {
-      await action(isCurrent);
-    } catch (caught) {
-      if (
-        sessionActionOperationRef.current === operation
-        && activeSessionIdRef.current === operationSessionId
-      ) {
-        setSessionActionError(getErrorMessage(caught, failure));
-      }
-    } finally {
-      if (sessionActionOperationRef.current === operation) {
-        sessionActionOperationRef.current = null;
-        sessionBusyRef.current = false;
-        setSessionBusy(false);
-      }
-    }
-  }
-
   async function handleMessageFeedback(messageId: string, rating: ChatFeedbackRating, details?: ChatFeedbackDetails): Promise<boolean> {
     if (feedbackOperationsRef.current.has(messageId)) return false;
     const operation = Symbol('chat-feedback');
+    const operationSessionId = sessionId;
+    const isCurrent = () => feedbackOperationsRef.current.get(messageId) === operation && activeSessionIdRef.current === operationSessionId;
     feedbackOperationsRef.current.set(messageId, operation);
     setFeedbackSavingIds((current) => new Set(current).add(messageId));
     try {
       const feedback = await (details ? setChatMessageFeedback(messageId, rating, details) : setChatMessageFeedback(messageId, rating));
-      if (feedbackOperationsRef.current.get(messageId) !== operation) return false;
+      if (!isCurrent()) return false;
       thread.updateMessageFeedback(messageId, feedback);
       toast.success(rating === 'positive' ? '已记录“有帮助”' : '已记录“没有帮助”');
       return true;
     } catch (caught) {
-      if (feedbackOperationsRef.current.get(messageId) === operation) {
+      if (isCurrent()) {
         toast.error(getErrorMessage(caught, '回答反馈保存失败'));
       }
       return false;
     } finally {
-      if (feedbackOperationsRef.current.get(messageId) === operation) {
+      if (isCurrent()) {
         feedbackOperationsRef.current.delete(messageId);
         setFeedbackSavingIds((current) => {
           const next = new Set(current);
@@ -352,99 +301,27 @@ export function ChatPage() {
     }
   }
 
-  async function handleSessionExport(targetSession: ChatSession) {
-    if (
-      sessionExportOperationRef.current
-      || sessionBusyRef.current
-      || thread.hasPendingWrite()
-    ) return;
-    const operation = Symbol('chat-session-export');
-    sessionExportOperationRef.current = operation;
-    setSessionExporting(true);
-    setSessionActionError('');
-    try {
-      const blob = await exportChatSession(targetSession.id);
-      if (sessionExportOperationRef.current !== operation) return;
-      downloadBlob(blob, chatExportFilename(targetSession.title));
-      toast.success('会话已导出');
-    } catch (caught) {
-      if (sessionExportOperationRef.current === operation) {
-        setSessionActionError(getErrorMessage(caught, '会话导出失败'));
+  const onMessageFeedback = useEventCallback((messageId: string, rating: ChatFeedbackRating) => {
+    if (rating === 'negative') setFeedbackTarget(thread.messages.find((message) => message.id === messageId) ?? null);
+    else void handleMessageFeedback(messageId, rating);
+  });
+  const startEditing = useEventCallback((messageId: string, content: string) => {
+    if (archived || interactionLocked || thread.editingId || thread.messages.find((message) => message.id === messageId)?.role !== 'user') return;
+    setEditingMessageId(messageId); setEditingDraft(content);
+  });
+  const cancelEditing = useEventCallback(() => {
+    if (thread.editingId) return;
+    setEditingMessageId(null); setEditingDraft('');
+  });
+  const submitEditing = useEventCallback((messageId: string, content: string) => {
+    if (archived || interactionLocked || thread.editingId || !content.trim()) return;
+    void thread.editMessage(messageId, content).then(() => {
+      if (activeSessionIdRef.current === sessionId && editingMessageId === messageId) {
+        setEditingMessageId(null); setEditingDraft(''); toast.success('消息已更新并重新生成');
       }
-    } finally {
-      if (sessionExportOperationRef.current === operation) {
-        sessionExportOperationRef.current = null;
-        setSessionExporting(false);
-      }
-    }
-  }
-
-  function renameSession(target: ChatSession, title: string) {
-    void runSessionAction(async (isCurrent) => {
-      const updated = await updateChatSessionTitle(target.id, title);
-      mergeSession(updated);
-      if (!isCurrent()) return;
-      if (activeSessionIdRef.current === target.id) thread.setSession(updated);
-      setRenameTarget(null);
-      toast.success('会话已重命名');
-    }, '会话标题更新失败');
-  }
-
-  function getSessionActions(target: ChatSession, includeRename = false): OverflowMenuItem[] {
-    return [
-        ...(includeRename ? [{
-          label: '重命名会话',
-          icon: <Pencil aria-hidden="true" />,
-          onSelect: () => {
-            if (sessionBusyRef.current || thread.hasPendingWrite()) return;
-            setSessionActionError('');
-            setRenameTarget(target);
-          },
-        }] : []),
-        target.archivedAt
-          ? {
-            label: '取消归档',
-            icon: <ArchiveRestore aria-hidden="true" />,
-            onSelect: () => void runSessionAction(async (isCurrent) => {
-              const restored = await unarchiveChatSession(target.id);
-              if (!isCurrent()) return;
-              removeSession(target.id);
-              if (activeSessionIdRef.current === target.id) {
-                skipSessionScopeSyncRef.current = true;
-                thread.setSession(restored);
-                void reloadSessions();
-              }
-              // The rail only holds one scope at a time, so refetch instead of
-              // guessing which list the session now belongs to.
-              toast.success('会话已取消归档');
-            }, '取消归档失败'),
-          }
-          : {
-            label: '归档会话',
-            icon: <Archive aria-hidden="true" />,
-            onSelect: () => {
-              if (sessionBusyRef.current || thread.hasPendingWrite()) return;
-              setSessionActionError('');
-              setConfirmArchive(target);
-            },
-          },
-        {
-          label: '导出会话',
-          icon: <Download aria-hidden="true" />,
-          onSelect: () => void handleSessionExport(target),
-        },
-        {
-          label: '删除会话',
-          icon: <Trash2 aria-hidden="true" />,
-          tone: 'danger',
-          onSelect: () => {
-            if (sessionBusyRef.current || thread.hasPendingWrite()) return;
-            setSessionActionError('');
-            setConfirmDelete(target);
-          },
-        },
-    ];
-  }
+    }).catch((caught) => toast.error(getErrorMessage(caught, '消息更新失败，请稍后重试')));
+  });
+  const focusCitation = useEventCallback((messageId: string, index: number | null) => setFocusedCitation({ messageId, index }));
 
   const topbarActions = currentSession ? (
     <OverflowMenu disabled={interactionLocked || sessionExporting} label="会话操作" items={getSessionActions(currentSession)} />
@@ -462,10 +339,13 @@ export function ChatPage() {
     >
       <div className={`chat-layout${railOpen ? ' is-rail-open' : ''}${visibleSource ? ' has-source-preview' : ''}`}>
         {isNarrow && railOpen && (
-          <button aria-hidden="true" className="chat-layout__scrim" onClick={() => setRailOpen(false)} tabIndex={-1} type="button" />
+          <button aria-hidden="true" className="chat-layout__scrim" onClick={() => setRailOpen(false)} ref={railBackdropRef} tabIndex={-1} type="button" />
         )}
 
         <ChatSessionRail
+          backdropRef={railBackdropRef}
+          overlay={isNarrow}
+          open={railOpen}
           activeSessionId={sessionId}
           disabled={interactionLocked}
           actionsDisabled={interactionLocked || sessionExporting}
@@ -543,7 +423,8 @@ export function ChatPage() {
             its text is announced unreliably -- what has to change is the contents, not
             the region. See useStreamAnnouncement for what it is allowed to say.
           */}
-          <p aria-live="polite" className="sr-only" role="status">{streamAnnouncement}</p>
+          <StreamAnnouncement streamText={thread.streamText} sending={thread.sending} citationCount={thread.streamingCitations.length}
+            stopped={Boolean(thread.stoppedStream)} failed={Boolean(thread.failedSend)} />
 
           {sessionActionError && !confirmArchive && !confirmDelete && !renameTarget && <p className="ui-inline-error" role="alert">{sessionActionError}</p>}
           <RerankFallbackNotice fallback={thread.rerankFallback} />
@@ -592,39 +473,17 @@ export function ChatPage() {
                     knowledgeBaseId={activeKnowledgeBaseId || undefined}
                     onOpenCitation={openSource}
                     message={message}
-                    editDraft={editingDraft}
+                    editDraft={editingMessageId === message.id ? editingDraft : ''}
                     editing={editingMessageId === message.id}
                     editSaving={thread.editingId === message.id}
                     feedbackSaving={feedbackSavingIds.has(message.id)}
-                    versionNavigation={versions.length > 1 ? <ChatAnswerVersionNavigation
-                      index={index} count={versions.length} disabled={interactionLocked}
-                      onChange={(nextIndex) => selectAnswerVersion(id, nextIndex)}
-                    /> : undefined}
-                    onFeedback={(messageId, rating) => { if (rating === 'negative') setFeedbackTarget(message); else void handleMessageFeedback(messageId, rating); }}
+                    versionIndex={index} versionCount={versions.length} versionGroupId={id} versionsDisabled={interactionLocked} onVersionChange={selectAnswerVersion}
+                    onFeedback={onMessageFeedback}
                     onEditDraftChange={setEditingDraft}
-                    onStartEdit={(messageId, content) => {
-                      if (archived || interactionLocked || thread.editingId || message.role !== 'user') return;
-                      setEditingMessageId(messageId);
-                      setEditingDraft(content);
-                    }}
-                    onCancelEdit={() => {
-                      if (thread.editingId) return;
-                      setEditingMessageId(null);
-                      setEditingDraft('');
-                    }}
-                    onSubmitEdit={(messageId, content) => {
-                      if (archived || interactionLocked || thread.editingId || !content.trim()) return;
-                      void thread.editMessage(messageId, content).then(() => {
-                        if (activeSessionIdRef.current === sessionId && editingMessageId === messageId) {
-                          setEditingMessageId(null);
-                          setEditingDraft('');
-                          toast.success('消息已更新并重新生成');
-                        }
-                      }).catch((caught) => {
-                        toast.error(getErrorMessage(caught, '消息更新失败，请稍后重试'));
-                      });
-                    }}
-                    onFocusCitation={(messageId, index) => setFocusedCitation({ messageId, index })}
+                    onStartEdit={startEditing}
+                    onCancelEdit={cancelEditing}
+                    onSubmitEdit={submitEditing}
+                    onFocusCitation={focusCitation}
                     onRegenerate={regenerateAnswer}
                     recovery={
                       thread.regeneration?.messageId === message.id
@@ -645,65 +504,11 @@ export function ChatPage() {
                   />
                 ))}
 
-                {(thread.pendingQuestion || thread.streamingAnswer || thread.streamingCitations.length > 0) && (
-                  <>
-                    {thread.pendingQuestion && (
-                      <article className="chat-msg chat-msg--user is-pending">
-                        <div className="chat-msg__body"><p className="chat-msg__content">{thread.pendingQuestion}</p></div>
-                      </article>
-                    )}
-                    <article className="chat-msg chat-msg--assistant is-pending">
-                      <div className="chat-msg__body">
-                        <ChatAssistantLabel />
-                        {/*
-                          Once the first token lands the answer replaces the
-                          skeleton, so the wait is only unexplained for as long
-                          as retrieval actually takes.
-                          See docs/04-api-design.md (POST /chat/sessions/:id/messages/stream).
-                        */}
-                        {thread.streamingAnswer ? (
-                          <ChatMarkdown
-                            citations={thread.streamingCitations}
-                            content={thread.streamingAnswer}
-                            focusedIndex={focusedCitation?.messageId === 'streaming' ? focusedCitation.index : null}
-                            onSelect={(index) => {
-                              setFocusedCitation({ messageId: 'streaming', index });
-                              openSource(thread.streamingCitations[index], index + 1);
-                            }}
-                            streaming
-                          />
-                        ) : (
-                          <>
-                            {/* Visible text only. This element unmounts as soon as the
-                                first token lands, so it cannot be the live region -- the
-                                permanent one near the top of the page announces phases. */}
-                            <p className="chat-msg__content">
-                              {thread.streamingCitations.length > 0
-                                ? '正在生成回答…'
-                                : '正在检索知识库并生成回答…'}
-                            </p>
-                            <LoadingSkeleton columns={1} compact rows={2} />
-                          </>
-                        )}
-                        {thread.streamingCitations.length > 0 && (
-                          <div aria-label="本轮引用来源" className="chat-sources chat-sources--streaming" role="group">
-                            {thread.streamingCitations.map((citation, index) => (
-                              <CitationCard
-                                citation={citation}
-                                focused={focusedCitation?.messageId === 'streaming' && focusedCitation.index === index}
-                                index={index + 1}
-                                key={`${citation.documentId}-${citation.chunkId}-${index}`}
-                                knowledgeBaseId={activeKnowledgeBaseId || undefined}
-                                onOpen={() => openSource(citation, index + 1)}
-                              />
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </article>
-                  </>
-                )}
-
+                <ChatStreamView streamText={thread.streamText} question={thread.pendingQuestion} citations={thread.streamingCitations}
+                  focusedIndex={focusedCitation?.messageId === 'streaming' ? focusedCitation.index : null}
+                  knowledgeBaseId={activeKnowledgeBaseId || undefined}
+                  onFocus={(index) => setFocusedCitation({ messageId: 'streaming', index })} onOpen={openSource}
+                  scrollRef={messagesRef} stickRef={stickToBottomRef} searching={Boolean(targetMessageId) || messageSearch.open} />
                 {thread.stoppedStream && (
                   <>
                     <article className="chat-msg chat-msg--user is-pending">
@@ -813,6 +618,7 @@ export function ChatPage() {
           <ChatComposer
             disabled={!canSend || thread.sending || sessionBusy}
             error={thread.rateLimitError}
+            retryNotice={thread.rateLimitNotice}
             hint={composerHint}
             onCancel={thread.cancelSend}
             onChange={(value) => {
@@ -863,18 +669,7 @@ export function ChatPage() {
             setSessionActionError('');
             setConfirmArchive(null);
           }}
-          onConfirm={() => void runSessionAction(async (isCurrent) => {
-            const target = confirmArchive;
-            const archivedSession = await archiveChatSession(target.id);
-            if (!isCurrent()) return;
-            removeSession(target.id);
-            if (activeSessionIdRef.current === target.id) {
-              skipSessionScopeSyncRef.current = true;
-              thread.setSession(archivedSession);
-            }
-            setConfirmArchive(null);
-            toast.success('会话已归档');
-          }, '会话归档失败')}
+          onConfirm={confirmArchiveSession}
           title="归档会话"
         />
       )}
@@ -892,15 +687,7 @@ export function ChatPage() {
             setSessionActionError('');
             setConfirmDelete(null);
           }}
-          onConfirm={() => void runSessionAction(async (isCurrent) => {
-            const target = confirmDelete;
-            await deleteChatSession(target.id);
-            if (!isCurrent()) return;
-            removeSession(target.id);
-            setConfirmDelete(null);
-            toast.success('会话已删除');
-            if (activeSessionIdRef.current === target.id) navigate('/chat', { replace: true });
-          }, '会话删除失败')}
+          onConfirm={confirmDeleteSession}
           title="删除会话"
         />
       )}
@@ -1059,14 +846,4 @@ function RegenerationNotice({
       </div>
     </div>
   );
-}
-
-function chatExportFilename(title: string): string {
-  const safeTitle = title
-    .trim()
-    .replace(/\.md$/i, '')
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
-    .slice(0, 80)
-    .trim();
-  return `${safeTitle || '会话记录'}.md`;
 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import type { RefObject } from 'react';
 
 type ModalEntry = {
   id: symbol;
@@ -6,6 +7,7 @@ type ModalEntry = {
   originalAriaHidden: string | null;
   originalInert: boolean;
   panel: HTMLElement;
+  backdrop: HTMLElement | null;
   restoreFocus: HTMLElement | null;
 };
 
@@ -88,6 +90,9 @@ function isolateBackgroundForTopModal() {
     Array.from(parent.children).forEach((sibling) => {
       if (sibling === current || !(sibling instanceof HTMLElement)) return;
       if (sibling.matches('[data-modal-live-region]')) return;
+      // A sibling backdrop stays clickable while the panel owns focus. A nested
+      // modal still isolates it because only the top modal's backdrop is exempt.
+      if (sibling === topModal.backdrop) return;
       isolatedBackground.set(sibling, {
         ariaHidden: sibling.getAttribute('aria-hidden'),
         inert: sibling.hasAttribute('inert'),
@@ -130,7 +135,11 @@ function onModalKeyDown(event: KeyboardEvent) {
   }
 }
 
-export function useModalFocus<T extends HTMLElement>(active: boolean, onClose: () => void) {
+export function useModalFocus<T extends HTMLElement>(
+  active: boolean,
+  onClose: () => void,
+  backdropRef?: RefObject<HTMLElement | null>,
+) {
   const panelRef = useRef<T>(null);
   const onCloseRef = useRef(onClose);
 
@@ -150,6 +159,7 @@ export function useModalFocus<T extends HTMLElement>(active: boolean, onClose: (
       originalAriaHidden: panel.getAttribute('aria-hidden'),
       originalInert: panel.hasAttribute('inert'),
       panel,
+      backdrop: backdropRef?.current ?? null,
       restoreFocus: document.activeElement as HTMLElement | null,
     };
 
@@ -211,7 +221,7 @@ export function useModalFocus<T extends HTMLElement>(active: boolean, onClose: (
         }
       }
     };
-  }, [active]);
+  }, [active, backdropRef]);
 
   return panelRef;
 }

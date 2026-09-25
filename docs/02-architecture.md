@@ -48,11 +48,21 @@ Gin Backend
 | `frontend/src/pages` | 页面级数据和交互编排 |
 | `frontend/src/components` | 复用 UI、反馈和跨页面组件 |
 | `frontend/src/api`、`frontend/src/types` | HTTP/SSE/上传客户端与 API 类型 |
-| `frontend/src/store` | 用户、主题、token 与系统能力状态 |
+| `frontend/src/store` | 用户、主题、token、系统能力及共享 QueryClient |
+| `frontend/src/hooks` | 可复用行为与知识库选项查询订阅 |
 | `frontend/src/utils`、`frontend/src/styles` | 通用工具和样式 |
 | `frontend/src/test` | 测试环境和渲染辅助；行为测试与对应实现放在一起 |
 
 页面与深链接约定见 `10-frontend-spec.md`，不把页面实现集中到 `App.tsx`。`deploy/docker-compose.yml` 提供本地 PostgreSQL/pgvector 与 Redis，生产部署见 `13-deployment.md`。
+
+### 前端数据与聊天状态边界
+
+- `api/client.ts` 负责 HTTP、鉴权和错误解析，`api/resources.ts` 负责资源参数与成功写入后的相关查询失效。通用序列化保留搜索词 `all`；枚举“全部”由对应资源函数处理。
+- `store/queryClient.ts` 与 `hooks/useKnowledgeBaseOptions.ts` 共享聊天、文档、质量页的知识库选项请求。key 包含认证 revision、规范化参数和数据源身份，不包含 token；账号变化同步取消并清除旧查询，迟到结果另有 revision 校验。缓存与重试策略见前端规范；第一页选项不能代替完整分页列表。
+- `currentUserStore`、上传任务和聊天写入对账继续由现有专用模块管理。TanStack Query 只接管已迁移的服务端读取，不管理输入草稿、SSE 或待确认写入。
+- `useChatThread` 持有发送、取消、恢复和对账生命周期；每条线程的 `streamText` 缓冲按 50ms 合并发布，`ChatStreamView` 和播报组件独立订阅。历史 `MessageBubble` 使用 memo 和稳定回调，父页面不订阅 token 文本。
+- `useChatInteractionState` 的 reducer 统一重置草稿、编辑、反馈和引用等会话交互；`useSessionActions` 管理改名、归档、恢复、删除、导出的互斥与过期操作。侧栏范围/分页留在页面与 `useChatSessions`。首次发送从草稿导航到正式会话时不得重建请求持有者。
+- 路由与 Markdown/PDF 预览有渲染错误边界；API 错误仍由对应操作处理。CI 分别运行 Hooks lint、测试 TypeScript 检查、测试及生产构建。
 
 ## 请求流
 

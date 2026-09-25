@@ -1,5 +1,6 @@
 import { MessageSquarePlus, PanelLeftClose } from 'lucide-react';
 import { useMemo, useRef } from 'react';
+import type { RefObject } from 'react';
 import { Link } from 'react-router-dom';
 
 import { EmptyState } from '../../components/feedback/EmptyState';
@@ -11,12 +12,16 @@ import { OverflowMenu, type OverflowMenuItem } from '../../components/ui/Overflo
 import { SegmentedControl } from '../../components/ui/SegmentedControl';
 import type { ChatSession, KnowledgeBase } from '../../types/api';
 import { formatRelativeTime, relativeDayBucket } from '../../utils/format';
+import { useModalFocus } from '../../components/ui/useModalFocus';
 
 const BUCKET_ORDER = ['今天', '昨天', '最近 7 天', '更早'];
 
 export type ChatSessionScope = 'active' | 'archived';
 
 type ChatSessionRailProps = {
+  overlay?: boolean;
+  open?: boolean;
+  backdropRef?: RefObject<HTMLElement | null>;
   sessions: ChatSession[];
   sessionTotal: number;
   hasMore: boolean;
@@ -43,6 +48,9 @@ type ChatSessionRailProps = {
 };
 
 export function ChatSessionRail({
+  overlay = false,
+  open = true,
+  backdropRef,
   sessions,
   sessionTotal,
   hasMore,
@@ -67,6 +75,7 @@ export function ChatSessionRail({
   onNavigate,
   onCollapse,
 }: ChatSessionRailProps) {
+  const panelRef = useModalFocus<HTMLElement>(overlay && open, () => onCollapse?.(), backdropRef);
   // Filtering and ordering happen server side now; this only buckets by recency
   // so a long history stays scannable. See docs/04-api-design.md (GET /chat/sessions).
   const groups = useMemo(() => {
@@ -84,7 +93,9 @@ export function ChatSessionRail({
   }, [sessions]);
 
   return (
-    <aside aria-label="会话列表" className="chat-rail">
+    <aside aria-label="会话列表" className="chat-rail" ref={panelRef}
+      role={overlay ? 'dialog' : undefined} aria-modal={overlay && open ? true : undefined}
+      aria-hidden={overlay && !open ? true : undefined} inert={overlay && !open} tabIndex={overlay ? -1 : undefined}>
       <div className="chat-rail__intro"><strong>会话</strong><span>基于你的知识，持续探索</span></div>
       <div className="chat-rail__head">
         <Select
