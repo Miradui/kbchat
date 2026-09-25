@@ -10,6 +10,11 @@ import { ChatSourcePreview } from './ChatSourcePreview';
 
 vi.mock('../../api/resources', () => ({ downloadDocument: vi.fn(), getDocument: vi.fn(), getDocumentPreview: vi.fn() }));
 vi.mock('../../hooks/useMediaQuery', () => ({ useMediaQuery: vi.fn() }));
+vi.mock('../../components/pdf/PdfPreview', () => ({
+  PdfPreview: ({ url, filename, initialPage }: { url: string; filename: string; initialPage?: number | null }) => (
+    <div data-page={initialPage ?? ''} data-testid="pdf-preview" data-url={url} title={`原文：${filename}`} />
+  ),
+}));
 vi.mock('../../utils/download', () => ({ downloadBlob: vi.fn() }));
 
 const documentItem: DocumentItem = { id: 'doc1', knowledgeBaseId: 'kb1', filename: '手册.pdf', fileType: 'pdf', fileSize: 1024, status: 'completed', errorMessage: null, createdAt: '', updatedAt: '' };
@@ -58,7 +63,9 @@ describe('ChatSourcePreview', () => {
   it('loads an authenticated PDF at its cited page and revokes the blob on close', async () => {
     const user = userEvent.setup();
     const view = render(<ChatSourcePreview citation={citation} index={1} knowledgeBaseId="kb1" onClose={vi.fn()} />);
-    expect(await screen.findByTitle('原文：手册.pdf')).toHaveAttribute('src', 'blob:source-preview#page=12&view=FitH');
+    const pdf = await screen.findByTitle('原文：手册.pdf');
+    expect(pdf).toHaveAttribute('data-url', 'blob:source-preview');
+    expect(pdf).toHaveAttribute('data-page', '12');
     expect(getDocumentPreview).toHaveBeenCalledWith('doc1');
     expect(downloadDocument).toHaveBeenCalledWith('doc1');
     expect(screen.getByRole('complementary', { name: '原文预览' })).not.toHaveAttribute('aria-modal');
@@ -74,13 +81,16 @@ describe('ChatSourcePreview', () => {
     const view = render(<ChatSourcePreview citation={citation} index={1} knowledgeBaseId="kb1" onClose={vi.fn()} />);
     await screen.findByTitle('原文：手册.pdf');
     view.rerender(<ChatSourcePreview citation={{ ...citation, chunkId: 'chunk2', pageNumber: 4 }} index={2} knowledgeBaseId="kb1" onClose={vi.fn()} />);
-    expect(screen.getByTitle('原文：手册.pdf')).toHaveAttribute('src', 'blob:source-preview#page=4&view=FitH');
+    expect(screen.getByTitle('原文：手册.pdf')).toHaveAttribute('data-url', 'blob:source-preview');
+    expect(screen.getByTitle('原文：手册.pdf')).toHaveAttribute('data-page', '4');
     expect(downloadDocument).toHaveBeenCalledTimes(1);
   });
 
   it.each([null, 0, -1, 1.5])('does not invent a PDF page when the citation page is %s', async (pageNumber) => {
     render(<ChatSourcePreview citation={{ ...citation, pageNumber }} index={1} knowledgeBaseId="kb1" onClose={vi.fn()} />);
-    expect(await screen.findByTitle('原文：手册.pdf')).toHaveAttribute('src', 'blob:source-preview#view=FitH');
+    const pdf = await screen.findByTitle('原文：手册.pdf');
+    expect(pdf).toHaveAttribute('data-url', 'blob:source-preview');
+    expect(pdf).toHaveAttribute('data-page', '');
     expect(screen.getByText('来源 1 · 未提供页码')).toBeInTheDocument();
   });
 
