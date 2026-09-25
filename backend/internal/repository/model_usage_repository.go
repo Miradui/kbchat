@@ -106,6 +106,8 @@ func (r *ModelUsageRepository) groupExpressions(groupBy string) (string, string)
 		return "strftime('%Y-%m-%d', model_usage_records.created_at)", "''"
 	case "knowledgeBase":
 		return "model_usage_records.knowledge_base_id", "COALESCE(knowledge_bases.name, '')"
+	case "purpose":
+		return "model_usage_records.purpose", "''"
 	case "user":
 		return "model_usage_records.user_id", "COALESCE((SELECT COALESCE(NULLIF(users.display_name, ''), users.username) FROM users WHERE users.id = model_usage_records.user_id), '')"
 	default:

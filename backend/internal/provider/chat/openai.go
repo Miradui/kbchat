@@ -94,7 +94,10 @@ func (p *OpenAICompatibleProvider) ChatWithOptions(ctx context.Context, messages
 	if len(response.Choices) == 0 {
 		return "", chatcore.Usage{}, fmt.Errorf("chat response has no choices")
 	}
-	return response.Choices[0].Message.Content, chatcore.Usage{PromptTokens: response.Usage.PromptTokens, CompletionTokens: response.Usage.CompletionTokens, TotalTokens: response.Usage.TotalTokens, Model: response.Model}, nil
+	// Usage names the model that was requested, not the one the response echoes:
+	// vendors often answer with a canonical alias, and MODEL_PRICING and the
+	// CHAT_ALLOWED_MODELS whitelist are keyed by the configured name.
+	return response.Choices[0].Message.Content, chatcore.Usage{PromptTokens: response.Usage.PromptTokens, CompletionTokens: response.Usage.CompletionTokens, TotalTokens: response.Usage.TotalTokens, Model: model}, nil
 }
 
 func (p *OpenAICompatibleProvider) ChatStream(
@@ -160,7 +163,9 @@ func (p *OpenAICompatibleProvider) ChatStreamWithOptions(
 		if recvErr != nil && !errors.Is(recvErr, io.EOF) {
 			return "", chatcore.Usage{}, fmt.Errorf("decode chat response: %w", recvErr)
 		}
-		return emitBlockingJSON(tracker.bodyBytes(), onDelta)
+		answer, usage, err := emitBlockingJSON(tracker.bodyBytes(), onDelta)
+		usage.Model = model
+		return answer, usage, err
 	}
 
 	var answer strings.Builder
@@ -180,9 +185,6 @@ func (p *OpenAICompatibleProvider) ChatStreamWithOptions(
 			usage.PromptTokens = response.Usage.PromptTokens
 			usage.CompletionTokens = response.Usage.CompletionTokens
 			usage.TotalTokens = response.Usage.TotalTokens
-		}
-		if response.Model != "" {
-			usage.Model = response.Model
 		}
 		for _, choice := range response.Choices {
 			delta := choice.Delta.Content

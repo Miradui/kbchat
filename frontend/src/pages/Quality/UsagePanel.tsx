@@ -25,11 +25,24 @@ const GROUP_OPTIONS: Array<{ value: ChatUsageGroupBy; label: string }> = [
   { value: 'knowledgeBase', label: '按知识库' },
   { value: 'user', label: '按用户' },
   { value: 'model', label: '按模型' },
+  { value: 'purpose', label: '按用途' },
 ];
 
 const GROUP_COLUMN_LABEL: Record<ChatUsageGroupBy, string> = {
-  day: '日期', knowledgeBase: '知识库', user: '用户', model: '模型',
+  day: '日期', knowledgeBase: '知识库', user: '用户', model: '模型', purpose: '用途',
 };
+
+// Purposes are a closed set written by the backend; an unknown one falls back
+// to its raw key so a newer server never renders an empty cell.
+const PURPOSE_LABELS: Record<string, string> = {
+  intent: '意图分类', answer: '回答生成', title: '会话标题', evaluation: '回归评测',
+};
+
+function rowLabel(groupBy: ChatUsageGroupBy, item: ChatUsageItem): string {
+  if (groupBy === 'day') return item.groupKey;
+  if (groupBy === 'purpose') return PURPOSE_LABELS[item.groupKey] ?? item.groupKey;
+  return item.groupLabel || item.groupKey;
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -177,7 +190,7 @@ function UsageTable({ rows, groupBy, showCost }: { rows: ChatUsageItem[]; groupB
         {showCost && <th scope="col">估算成本</th>}
       </tr></thead>
       <tbody>{rows.map((item) => <tr key={item.groupKey}>
-        <td title={groupBy === 'day' ? undefined : item.groupKey}>{groupBy === 'day' ? item.groupKey : item.groupLabel || item.groupKey}</td>
+        <td title={groupBy === 'day' ? undefined : item.groupKey}>{rowLabel(groupBy, item)}</td>
         <td>{formatNumber(item.promptTokens)}</td>
         <td>{formatNumber(item.completionTokens)}</td>
         <td>{formatNumber(item.totalTokens)}</td>

@@ -313,3 +313,40 @@ func TestChatStreamFallbackKeepsModelAndTemperatureOverrides(t *testing.T) {
 		t.Fatalf("fallback must keep the overriding temperature, got %#v", temperatures)
 	}
 }
+
+// Vendors often echo a canonical alias ("deepseek-flash") for the requested
+// name ("deepseek-v4-flash"). Usage records the requested name because pricing
+// and the answer-model whitelist are keyed by it.
+func TestUsageReportsTheRequestedModelNotTheEchoedAlias(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Stream bool `json:"stream"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if request.Stream {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(w, "data: {\"model\":\"vendor-alias\",\"choices\":[{\"delta\":{\"content\":\"流式\"}}]}\n\n"+
+				"data: {\"model\":\"vendor-alias\",\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1,\"total_tokens\":4}}\n\ndata: [DONE]\n\n")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"model":"vendor-alias","choices":[{"message":{"role":"assistant","content":"回答"}}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}`)
+	}))
+	defer server.Close()
+	provider := newOpenAIStreamTestProvider(server.URL)
+
+	_, usage, err := provider.ChatWithOptions(context.Background(), []chatcore.Message{{Role: "user", Content: "问题"}}, chatcore.Options{Model: "kb-model"})
+	if err != nil || usage.Model != "kb-model" || usage.TotalTokens != 7 {
+		t.Fatalf("blocking usage=%#v err=%v", usage, err)
+	}
+	_, usage, err = provider.ChatWithUsage(context.Background(), []chatcore.Message{{Role: "user", Content: "问题"}})
+	if err != nil || usage.Model != provider.model {
+		t.Fatalf("default model usage=%#v err=%v, want %q", usage, err, provider.model)
+	}
+	_, usage, err = provider.ChatStreamWithOptions(context.Background(), []chatcore.Message{{Role: "user", Content: "问题"}}, func(string) error { return nil }, chatcore.Options{Model: "kb-model"})
+	if err != nil || usage.Model != "kb-model" || usage.TotalTokens != 4 {
+		t.Fatalf("stream usage=%#v err=%v", usage, err)
+	}
+}

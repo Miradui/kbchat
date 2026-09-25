@@ -287,7 +287,7 @@ pageSize=20         最大 100
 
 ### GET /chat/quality/usage
 
-范围与质量页其他接口一致：不传 `knowledgeBaseId` 时汇总调用者拥有或以 manager 身份可读质量数据的全部知识库；传入时须对该知识库具备 `quality.read`，否则 403 / 404；系统管理员（`users.role=admin`）看到全部知识库。`from` / `to` 使用 RFC3339，默认最近 7 天（滚动 168 小时）；`groupBy` 为 `day`、`knowledgeBase`、`user` 或 `model`，其他值返回 `VALIDATION_ERROR`。
+范围与质量页其他接口一致：不传 `knowledgeBaseId` 时汇总调用者拥有或以 manager 身份可读质量数据的全部知识库；传入时须对该知识库具备 `quality.read`，否则 403 / 404；系统管理员（`users.role=admin`）看到全部知识库。`from` / `to` 使用 RFC3339，默认最近 7 天（滚动 168 小时）；`groupBy` 为 `day`、`knowledgeBase`、`user`、`model` 或 `purpose`，其他值返回 `VALIDATION_ERROR`。
 
 ```json
 {
@@ -306,7 +306,7 @@ pageSize=20         最大 100
 }
 ```
 
-`groupKey` 按日为 UTC 的 `YYYY-MM-DD`，按知识库 / 用户为 UUID 且 `groupLabel` 为名称或显示名，按模型为模型名。`estimatedCost` 只在 `groupBy=model` 且该模型在 `MODEL_PRICING` 中有价格时按行给出；顶层 `estimatedCost` 为所有有价格模型的合计，`unpricedModels` 列出范围内没有价格的模型，`pricingConfigured=false` 时两者均为空值。Provider 未返回 usage 时 token 字段保持空值并不会估算。
+`groupKey` 按日为 UTC 的 `YYYY-MM-DD`，按知识库 / 用户为 UUID 且 `groupLabel` 为名称或显示名，按模型为请求时使用的模型名（全局配置或知识库覆盖的模型，不是服务商响应里回显的别名），按用途为 `intent` / `answer` / `title` / `evaluation`。`estimatedCost` 只在 `groupBy=model` 且该模型在 `MODEL_PRICING` 中有价格时按行给出；顶层 `estimatedCost` 为所有有价格模型的合计，`unpricedModels` 列出范围内没有价格的模型，`pricingConfigured=false` 时两者均为空值。Provider 未返回 usage 时 token 字段保持空值并不会估算。
 
 ### GET /system/capabilities
 

@@ -58,5 +58,5 @@ func (p *OpenAICompatibleProvider) SummarizeTitleWithUsage(ctx context.Context, 
 	if len(response.Choices) == 0 {
 		return "", titlecore.Usage{}, fmt.Errorf("title response has no choices")
 	}
-	return response.Choices[0].Message.Content, titlecore.Usage{PromptTokens: response.Usage.PromptTokens, CompletionTokens: response.Usage.CompletionTokens, TotalTokens: response.Usage.TotalTokens, Model: response.Model}, nil
+	return response.Choices[0].Message.Content, titlecore.Usage{PromptTokens: response.Usage.PromptTokens, CompletionTokens: response.Usage.CompletionTokens, TotalTokens: response.Usage.TotalTokens, Model: p.model}, nil
 }

@@ -233,6 +233,26 @@ func TestGetChatUsageScopesToReachableKnowledgeBasesAndPricesModels(t *testing.T
 		t.Fatalf("expected a YYYY-MM-DD day key, got %#v", byDay.Items)
 	}
 
+	intent := model.ModelUsageRecord{UserID: owner.ID, KnowledgeBaseID: mine.ID, Purpose: "intent", Provider: "openai_compatible", Model: "priced", PromptTokens: &two, CompletionTokens: &two, TotalTokens: &one, CreatedAt: now}
+	if err := usage.Create(ctx, &intent); err != nil {
+		t.Fatal(err)
+	}
+	byPurpose, err := w.chats.GetChatUsage(ctx, owner.ID, dto.ChatUsageQuery{GroupBy: "purpose"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byPurpose.Items) != 2 {
+		t.Fatalf("expected intent and answer rows, got %#v", byPurpose.Items)
+	}
+	for _, item := range byPurpose.Items {
+		if (item.GroupKey == "answer" && item.Calls != 2) || (item.GroupKey == "intent" && item.Calls != 1) {
+			t.Fatalf("unexpected purpose aggregate %#v", item)
+		}
+	}
+	if _, err := w.chats.GetChatUsage(ctx, owner.ID, dto.ChatUsageQuery{GroupBy: "session"}); err == nil {
+		t.Fatal("expected an unknown groupBy to be rejected")
+	}
+
 	// A system administrator sees every knowledge base.
 	all, err := w.chats.GetChatUsage(ctx, admin.ID, dto.ChatUsageQuery{GroupBy: "knowledgeBase"})
 	if err != nil {

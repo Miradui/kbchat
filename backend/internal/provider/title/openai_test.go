@@ -58,3 +58,20 @@ func TestOpenAICompatibleProviderRejectsMissingTitleAPIKey(t *testing.T) {
 		t.Fatal("expected missing API key error")
 	}
 }
+
+func TestTitleUsageReportsTheConfiguredModel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model":   "vendor-alias",
+			"choices": []map[string]any{{"message": map[string]string{"role": "assistant", "content": "标题"}}},
+			"usage":   map[string]int{"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+		})
+	}))
+	defer server.Close()
+
+	provider := NewOpenAICompatibleProvider(config.Config{TitleBaseURL: server.URL, TitleAPIKey: "test-key", TitleModel: "title-model"})
+	_, usage, err := provider.SummarizeTitleWithUsage(context.Background(), []titlecore.Message{{Role: "user", Content: "问题"}})
+	if err != nil || usage.Model != "title-model" || usage.TotalTokens != 6 {
+		t.Fatalf("usage=%#v err=%v", usage, err)
+	}
+}

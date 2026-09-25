@@ -735,7 +735,7 @@ export type ChatQualityOverview = {
 	withoutCitationsRate: number;
 };
 
-export type ChatUsageGroupBy = 'day' | 'knowledgeBase' | 'user' | 'model';
+export type ChatUsageGroupBy = 'day' | 'knowledgeBase' | 'user' | 'model' | 'purpose';
 
 export type ChatUsageItem = {
   /** "YYYY-MM-DD" (UTC) for day grouping, the UUID for knowledgeBase/user, the model name for model. */

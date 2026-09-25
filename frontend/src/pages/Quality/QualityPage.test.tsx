@@ -30,7 +30,7 @@ vi.mock('../../api/resources', () => ({
 beforeEach(() => {
   currentUserStore.clear();
   vi.mocked(getCurrentUser).mockReset().mockResolvedValue({ id: 'user-1', username: 'admin', displayName: '管理员', role: 'admin' });
-  vi.mocked(getChatUsage).mockReset().mockImplementation(async (params) => (params?.groupBy === 'model' ? usageByModel : usageByDay));
+  vi.mocked(getChatUsage).mockReset().mockImplementation(async (params) => (params?.groupBy === 'model' ? usageByModel : params?.groupBy === 'purpose' ? usageByPurpose : usageByDay));
 });
 
 const usageByDay: ChatUsageResponse = {
@@ -52,6 +52,17 @@ const usageByModel: ChatUsageResponse = {
   ],
   totalPromptTokens: 5000, totalCompletionTokens: 1000, totalTokens: 6000,
   pricingConfigured: true, estimatedCost: 0.0123, unpricedModels: ['local-llm'],
+};
+
+const usageByPurpose: ChatUsageResponse = {
+  from: '2026-09-15T00:00:00Z', to: '2026-09-21T23:59:59Z', groupBy: 'purpose',
+  items: [
+    { groupKey: 'answer', groupLabel: '', promptTokens: 4000, completionTokens: 800, totalTokens: 4800, calls: 9, estimatedCost: null },
+    { groupKey: 'intent', groupLabel: '', promptTokens: 900, completionTokens: 100, totalTokens: 1000, calls: 9, estimatedCost: null },
+    { groupKey: 'future-purpose', groupLabel: '', promptTokens: 100, completionTokens: 100, totalTokens: 200, calls: 1, estimatedCost: null },
+  ],
+  totalPromptTokens: 5000, totalCompletionTokens: 1000, totalTokens: 6000,
+  pricingConfigured: false, estimatedCost: null, unpricedModels: [],
 };
 
 const overview: ChatQualityOverview = {
@@ -361,6 +372,21 @@ describe('QualityPage', () => {
       expect(within(totals).getByText('0.0123')).toBeInTheDocument();
       expect(screen.getByText(/以下模型未配置价格.*local-llm/)).toBeInTheDocument();
       expect(screen.queryByText('未配置 MODEL_PRICING，仅显示 token 数')).not.toBeInTheDocument();
+    });
+
+    it('groups by purpose with readable labels', async () => {
+      const user = userEvent.setup();
+      renderWithRouter(<QualityPage sources={createSources()} />, ['/quality?tab=usage']);
+      await screen.findByRole('img', { name: /token 用量折线图/ });
+
+      await user.click(within(screen.getByRole('group', { name: '分组' })).getByRole('button', { name: '按用途' }));
+
+      await waitFor(() => expect(vi.mocked(getChatUsage)).toHaveBeenLastCalledWith(expect.objectContaining({ groupBy: 'purpose' })));
+      const table = await screen.findByRole('table');
+      expect(await within(table).findByRole('cell', { name: '回答生成' })).toBeInTheDocument();
+      expect(within(table).getByRole('cell', { name: '意图分类' })).toBeInTheDocument();
+      // An unknown purpose from a newer server still shows its key.
+      expect(within(table).getByRole('cell', { name: 'future-purpose' })).toBeInTheDocument();
     });
 
     it('refetches when the range preset changes', async () => {

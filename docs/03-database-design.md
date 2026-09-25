@@ -484,7 +484,7 @@ CREATE INDEX idx_model_usage_kb_created ON model_usage_records (knowledge_base_i
 CREATE INDEX idx_model_usage_user_created ON model_usage_records (user_id, created_at);
 ```
 
-每次模型调用一行：`purpose` 为 `intent` / `answer` / `title` / `evaluation`；`provider` 为 `MODEL_PROVIDER`；`model` 为 Provider 返回的模型名，缺省为配置模型。token 列在 Provider 未返回 usage 时为 NULL，不估算。Chat 调用在助手消息落库后回填 `message_id`；评测调用 `session_id` 与 `message_id` 为 NULL，只归属知识库。`latency_ms` 是该次模型调用自身的耗时。
+每次模型调用一行：`purpose` 为 `intent` / `answer` / `title` / `evaluation`；`provider` 为 `MODEL_PROVIDER`；`model` 为请求时使用的模型名（全局配置或知识库覆盖），不采用服务商响应中回显的别名，以便与 `MODEL_PRICING` 和 `CHAT_ALLOWED_MODELS` 对应；2026-09-26 之前写入的行可能是回显名。token 列在 Provider 未返回 usage 时为 NULL，不估算。Chat 调用在助手消息落库后回填 `message_id`；评测调用 `session_id` 与 `message_id` 为 NULL，只归属知识库。`latency_ms` 是该次模型调用自身的耗时。
 
 ## 迁移 024–028
 

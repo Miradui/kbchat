@@ -492,8 +492,10 @@ func (s *ChatService) GetChatUsage(ctx context.Context, userID uuid.UUID, query 
 	if query.GroupBy == "" {
 		query.GroupBy = "day"
 	}
-	if query.GroupBy != "day" && query.GroupBy != "knowledgeBase" && query.GroupBy != "user" && query.GroupBy != "model" {
-		return nil, apperror.Validation(map[string]any{"groupBy": "groupBy 必须是 day、knowledgeBase、user 或 model"})
+	switch query.GroupBy {
+	case "day", "knowledgeBase", "user", "model", "purpose":
+	default:
+		return nil, apperror.Validation(map[string]any{"groupBy": "groupBy 必须是 day、knowledgeBase、user、model 或 purpose"})
 	}
 	if query.To.IsZero() {
 		query.To = time.Now().UTC()
