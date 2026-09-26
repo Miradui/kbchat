@@ -152,11 +152,7 @@ func newPostgresVectorTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open PostgreSQL test database: %v", err)
 	}
-	schema := "rag_it_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	if err := base.Exec(`CREATE SCHEMA "` + schema + `"`).Error; err != nil {
-		t.Fatalf("create isolated schema: %v", err)
-	}
-	t.Cleanup(func() { _ = base.Exec(`DROP SCHEMA IF EXISTS "` + schema + `" CASCADE`).Error })
+	schema := createPostgresTestSchema(t, base)
 
 	scopedDSN, err := postgresDSNWithSearchPath(dsn, schema+",public")
 	if err != nil {

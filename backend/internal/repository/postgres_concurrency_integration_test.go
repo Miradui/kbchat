@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"errors"
-	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -144,11 +143,7 @@ func newPostgresConcurrencyTestDBs(t *testing.T) (*gorm.DB, *gorm.DB) {
 	if err != nil {
 		t.Fatalf("open PostgreSQL test database: %v", err)
 	}
-	schema := "rag_it_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	if err := base.Exec(`CREATE SCHEMA "` + schema + `"`).Error; err != nil {
-		t.Fatalf("create isolated schema: %v", err)
-	}
-	t.Cleanup(func() { _ = base.Exec(`DROP SCHEMA IF EXISTS "` + schema + `" CASCADE`).Error })
+	schema := createPostgresTestSchema(t, base)
 
 	scopedDSN, err := postgresDSNWithSearchPath(dsn, schema)
 	if err != nil {
@@ -170,20 +165,6 @@ func newPostgresConcurrencyTestDBs(t *testing.T) (*gorm.DB, *gorm.DB) {
 	db1, db2 := open(), open()
 	createPostgresConcurrencyTables(t, db1)
 	return db1, db2
-}
-
-func postgresDSNWithSearchPath(dsn, schema string) (string, error) {
-	if strings.Contains(dsn, "://") {
-		parsed, err := url.Parse(dsn)
-		if err != nil {
-			return "", err
-		}
-		query := parsed.Query()
-		query.Set("search_path", schema)
-		parsed.RawQuery = query.Encode()
-		return parsed.String(), nil
-	}
-	return strings.TrimSpace(dsn) + " search_path=" + schema, nil
 }
 
 func createPostgresConcurrencyTables(t *testing.T, db *gorm.DB) {
