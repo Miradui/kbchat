@@ -127,6 +127,7 @@ function createSources() {
     loadFeedback: vi.fn().mockResolvedValue(feedback),
     loadKnowledgeGaps: vi.fn().mockResolvedValue(gaps),
     loadKnowledgeBases: vi.fn().mockResolvedValue([knowledgeBase]),
+    loadEvaluationCases: vi.fn().mockResolvedValue([]),
   };
 }
 
@@ -252,6 +253,41 @@ describe('QualityPage', () => {
     const noBasis = within(gapList).getByText('支持跨境退货吗？').closest('article');
     expect(within(noBasis as HTMLElement).getByRole('link', { name: /补充资料/ }))
       .toHaveAttribute('href', '/knowledge-bases/kb-1/documents');
+  });
+
+  it('offers every knowledge gap as a prefilled test question', async () => {
+    const user = userEvent.setup();
+    const sources = createSources();
+    renderWithRouter(<QualityPage sources={sources} />, ['/quality']);
+    const gapList = await screen.findByLabelText('知识缺口列表');
+
+    for (const question of ['支持跨境退货吗？', '运费怎么算？', '帮我伪造一份合同', '发票要求']) {
+      const row = within(gapList).getByText(question).closest('article') as HTMLElement;
+      expect(within(row).getByRole('button', { name: '保存为测试问题' })).toBeEnabled();
+    }
+
+    const cluster = within(gapList).getByText('发票要求').closest('article') as HTMLElement;
+    await user.click(within(cluster).getByRole('button', { name: '保存为测试问题' }));
+    expect(sources.loadEvaluationCases).toHaveBeenCalledWith('kb-1');
+    const dialog = await screen.findByRole('dialog', { name: '保存测试问题' });
+    expect(within(dialog).getByRole('textbox', { name: '测试问题' })).toHaveValue('发票要求');
+  });
+
+  it('says a gap question is already in the test set instead of opening a duplicate', async () => {
+    const user = userEvent.setup();
+    const sources = createSources();
+    sources.loadEvaluationCases.mockResolvedValue([{
+      id: 'case-1', knowledgeBaseId: 'kb-1', question: '  支持跨境退货吗？ ', expectedAnswer: '', requiredKeywords: [], requireCitation: true,
+      createdAt: '2026-08-12T00:00:00Z', updatedAt: '2026-08-12T00:00:00Z',
+    }]);
+    renderWithRouter(<QualityPage sources={sources} />, ['/quality']);
+    const gapList = await screen.findByLabelText('知识缺口列表');
+    const row = within(gapList).getByText('支持跨境退货吗？').closest('article') as HTMLElement;
+
+    await user.click(within(row).getByRole('button', { name: '保存为测试问题' }));
+
+    expect(await within(row).findByRole('status')).toHaveTextContent('该问题已在此知识库的测试集中');
+    expect(screen.queryByRole('dialog', { name: '保存测试问题' })).not.toBeInTheDocument();
   });
 
   it('directs ordinary users to an administrator instead of the restricted diagnostics page', async () => {

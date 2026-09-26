@@ -2144,10 +2144,11 @@ MVP 语义：
 `VALIDATION_ERROR`，不会退化成「全部」——把未知筛选条件当成全部，会让调用方看到一个并非
 自己请求的列表。
 
-四个类别，前三类来自 `chat_messages.answer_status`（migration 019），第四类是聚类：
+四个类别，第二、三类来自 `chat_messages.answer_status`（migration 019），第一类按引用判定，第四类是聚类：
 
-1. `no_citations`：`answer_status = 'no_basis'`，即知识型提问检索成功但没有命中，用了固定
-   拒答文案。**补文档能解决。**
+1. `no_citations`：知识型回答（`intent = 'knowledge_base'`）且 citations 为空，`answer_status`
+   不是 `retrieval_failed` / `model_refused`（包括 `no_basis`、019 之前没有状态的行）。即检索
+   没有命中、用了固定拒答文案，或检索命中却没有进入回答的引用。**补文档能解决。**
 2. `retrieval_failed`：`answer_status = 'retrieval_failed'`，检索本身失败（向量化失败、DB
    失败）。**补文档解决不了**，要查的是服务状态，所以必须和上一类分开。
 3. `model_refused`：`answer_status = 'model_refused'`，有引用但模型仍然拒答。同样与知识库

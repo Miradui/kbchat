@@ -33,6 +33,8 @@ import { Pagination } from '../../components/ui/Pagination';
 import { SegmentedControl } from '../../components/ui/SegmentedControl';
 import { AppShell } from '../../layouts/AppShell';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
+import { listEvaluationCases } from '../../api/evaluations';
+import type { EvaluationCase } from '../../types/evaluation';
 import { EvaluationCaseDialog } from './EvaluationCaseDialog';
 import { EvaluationPanel } from './EvaluationPanel';
 import { UsagePanel } from './UsagePanel';
@@ -46,6 +48,7 @@ type QualitySources = {
   loadFeedback: (params: ChatQualityFeedbackParams) => Promise<ChatQualityFeedbackListResponse>;
   loadKnowledgeGaps: (params: ChatKnowledgeGapParams) => Promise<ChatKnowledgeGapListResponse>;
   loadKnowledgeBases: () => Promise<KnowledgeBase[]>;
+  loadEvaluationCases: (knowledgeBaseId: string) => Promise<EvaluationCase[]>;
 };
 
 const defaultSources: QualitySources = {
@@ -53,7 +56,16 @@ const defaultSources: QualitySources = {
   loadFeedback: async (params) => listNegativeChatFeedback(params),
   loadKnowledgeGaps: async (params) => listChatKnowledgeGaps(params),
   loadKnowledgeBases: loadKnowledgeBaseOptions,
+  loadEvaluationCases: async (knowledgeBaseId) => (await listEvaluationCases(knowledgeBaseId)).items,
 };
+
+/** Questions compare equal ignoring surrounding and repeated whitespace. */
+function sameQuestion(a: string, b: string): boolean {
+  const normalize = (text: string) => text.trim().replace(/\s+/gu, ' ');
+  return normalize(a) === normalize(b);
+}
+
+type CaseDraft = { knowledgeBaseId: string; question: string };
 
 /**
  * Each category gets its own label, tone and remedy because the fix differs, and
@@ -129,7 +141,8 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
   const activeTab = searchParams.get('tab') === 'evaluation' ? 'evaluation' : searchParams.get('tab') === 'usage' ? 'usage' : 'feedback';
   const knowledgeBaseId = searchParams.get('knowledgeBaseId') || '';
   const [period, setPeriod] = useState<ChatQualityPeriod>('month');
-  const [caseDraft, setCaseDraft] = useState<ChatQualityFeedbackItem | null>(null);
+  const [caseDraft, setCaseDraft] = useState<CaseDraft | null>(null);
+  const [gapNotice, setGapNotice] = useState<{ key: string; message: string } | null>(null);
   const [hasCitations, setHasCitations] = useState('all');
   const [page, setPage] = useState(1);
   const [gapCategory, setGapCategory] = useState<NonNullable<ChatKnowledgeGapParams['category']>>('all');
@@ -192,6 +205,24 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
         }
       });
   }, [hasCitations, knowledgeBaseId, page, period, sources]);
+
+  async function saveGapAsCase(item: ChatKnowledgeGapItem) {
+    const key = gapKey(item);
+    setGapNotice(null);
+    let existing: EvaluationCase[] = [];
+    try {
+      existing = await sources.loadEvaluationCases(item.knowledgeBaseId);
+    } catch {
+      // The duplicate check is a courtesy; the dialog still saves through the
+      // server, which enforces access and the per-knowledge-base limit.
+    }
+    if (!mounted.current) return;
+    if (existing.some((testCase) => sameQuestion(testCase.question, item.question))) {
+      setGapNotice({ key, message: '该问题已在此知识库的测试集中' });
+      return;
+    }
+    setCaseDraft({ knowledgeBaseId: item.knowledgeBaseId, question: item.question });
+  }
 
   const reloadGaps = useCallback(() => {
     const request = ++gapRequest.current;
@@ -345,7 +376,7 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
               : !feedback || feedback.items.length === 0 ? <EmptyState description="当前周期没有符合筛选条件的负反馈。" title="还没有负反馈" />
                 : <>
                   <div className="quality-feedback__list">
-                    {feedback.items.map((item) => <FeedbackItem item={item} key={item.messageId} onSave={() => setCaseDraft(item)} />)}
+                    {feedback.items.map((item) => <FeedbackItem item={item} key={item.messageId} onSave={() => setCaseDraft({ knowledgeBaseId: item.knowledgeBaseId, question: item.question })} />)}
                   </div>
                   <Pagination onPageChange={setPage} page={feedback.page} pageSize={feedback.pageSize} total={feedback.total} />
                 </>}
@@ -374,7 +405,8 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
               : !gaps || gaps.items.length === 0 ? <EmptyState description={gapEmptyDescription(gapCategory)} title="没有发现知识缺口" />
                 : <>
                   <div className="quality-gaps__list">
-                    {gaps.items.map((item) => <KnowledgeGapItem item={item} canViewDiagnostics={user?.role === 'admin'} key={gapKey(item)} />)}
+                    {gaps.items.map((item) => <KnowledgeGapItem item={item} canViewDiagnostics={user?.role === 'admin'} key={gapKey(item)}
+                      notice={gapNotice?.key === gapKey(item) ? gapNotice.message : ''} onSave={() => void saveGapAsCase(item)} />)}
                   </div>
                   <Pagination onPageChange={setGapPage} page={gaps.page} pageSize={gaps.pageSize} total={gaps.total} />
                 </>}
@@ -460,7 +492,12 @@ function FeedbackItem({ item, onSave }: { item: ChatQualityFeedbackItem; onSave:
   );
 }
 
-function KnowledgeGapItem({ item, canViewDiagnostics }: { item: ChatKnowledgeGapItem; canViewDiagnostics: boolean }) {
+function KnowledgeGapItem({ item, canViewDiagnostics, notice, onSave }: {
+  item: ChatKnowledgeGapItem;
+  canViewDiagnostics: boolean;
+  notice: string;
+  onSave: () => void;
+}) {
   const isCluster = item.category === 'repeated_rewrite';
   const presentation = gapPresentation(item.category);
   const Icon = presentation.icon;
@@ -503,7 +540,9 @@ function KnowledgeGapItem({ item, canViewDiagnostics }: { item: ChatKnowledgeGap
             {presentation.action.label} <ExternalLink aria-hidden="true" />
           </Link>
         )}
+        <Button disabled={!item.question} onClick={onSave} variant="secondary">保存为测试问题</Button>
       </div>
+      {notice && <p className="ui-muted" role="status">{notice}</p>}
     </article>
   );
 }
