@@ -3,6 +3,7 @@ package parser
 import (
 	"fmt"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/ledongthuc/pdf"
 )
@@ -24,7 +25,7 @@ func readPDFPageText(page pdf.Page) (text string, err error) {
 	fonts := make(map[string]pdf.TextEncoding)
 	for _, name := range page.Fonts() {
 		font := page.Font(name)
-		fonts[name] = font.Encoder()
+		fonts[name] = pdfFontEncoding(font)
 	}
 	var output strings.Builder
 	var encoding pdf.TextEncoding
@@ -78,4 +79,44 @@ func readPDFPageText(page pdf.Page) (text string, err error) {
 		}
 	})
 	return output.String(), nil
+}
+
+// These predefined Unicode CMaps encode character codes as big-endian Unicode,
+// not UTF-8. The PDF library currently returns them unchanged. Limit this
+// fallback to known Unicode CMaps; Identity-H and arbitrary CIDs are not Unicode.
+func pdfFontEncoding(font pdf.Font) pdf.TextEncoding {
+	if font.V.Key("Subtype").Name() == "Type0" && font.V.Key("ToUnicode").IsNull() {
+		switch font.V.Key("Encoding").Name() {
+		case "UniGB-UCS2-H", "UniGB-UCS2-V":
+			return pdfUnicodeEncoding{}
+		case "UniGB-UTF16-H", "UniGB-UTF16-V":
+			return pdfUnicodeEncoding{allowSurrogates: true}
+		}
+	}
+	return font.Encoder()
+}
+
+type pdfUnicodeEncoding struct{ allowSurrogates bool }
+
+func (e pdfUnicodeEncoding) Decode(raw string) string {
+	if len(raw)%2 != 0 {
+		panic("odd-length Unicode PDF text")
+	}
+	var out strings.Builder
+	for i := 0; i < len(raw); i += 2 {
+		r := rune(raw[i])<<8 | rune(raw[i+1])
+		if utf16.IsSurrogate(r) {
+			if !e.allowSurrogates || r > 0xDBFF || i+3 >= len(raw) {
+				panic("invalid Unicode PDF surrogate")
+			}
+			next := rune(raw[i+2])<<8 | rune(raw[i+3])
+			if next < 0xDC00 || next > 0xDFFF {
+				panic("invalid Unicode PDF surrogate pair")
+			}
+			r = utf16.DecodeRune(r, next)
+			i += 2
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
 }

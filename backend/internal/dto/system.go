@@ -150,6 +150,7 @@ type SystemVectorSearchStatus struct {
 // a durable history. Status is the worst of the dependency statuses, so a caller
 // can gate on one field.
 type SystemDiagnosticsResponse struct {
+	Embedding         SystemEmbeddingStatus       `json:"embedding"`
 	Status            string                      `json:"status"`
 	CheckedAt         time.Time                   `json:"checkedAt"`
 	Env               string                      `json:"env"`
@@ -164,6 +165,22 @@ type SystemDiagnosticsResponse struct {
 	// MetricsSinceRestart is always true today. It exists so a future durable
 	// metrics store can say otherwise without a breaking contract change.
 	MetricsSinceRestart bool `json:"metricsSinceRestart"`
+}
+
+type SystemEmbeddingGroup struct {
+	Model     *string `json:"model"`
+	Dimension *int    `json:"dimension"`
+	Count     int64   `json:"count"`
+}
+type SystemEmbeddingStatus struct {
+	Status              string                 `json:"status"`
+	Model               string                 `json:"model"`
+	ConfiguredDimension int                    `json:"configuredDimension"`
+	ColumnDimension     *int                   `json:"columnDimension"`
+	TotalDocuments      int64                  `json:"totalDocuments"`
+	UnknownDocuments    int64                  `json:"unknownDocuments"`
+	MismatchedDocuments int64                  `json:"mismatchedDocuments"`
+	Groups              []SystemEmbeddingGroup `json:"groups"`
 }
 
 // SystemHealthResponse is the unauthenticated liveness payload.

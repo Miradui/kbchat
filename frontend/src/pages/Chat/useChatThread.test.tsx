@@ -89,12 +89,14 @@ async function settleEffects() {
 function renderThread() {
   const onSessionCreated = vi.fn();
   const onSessionsChanged = vi.fn();
+  const onAccessLost = vi.fn();
   const hook = renderHook(() => useChatThread({
     sessionId: session.id,
     onSessionCreated,
     onSessionsChanged,
+    onAccessLost,
   }));
-  return { ...hook, onSessionCreated, onSessionsChanged };
+  return { ...hook, onSessionCreated, onSessionsChanged, onAccessLost };
 }
 
 function renderThreadWithChangingSessionsCallback() {
@@ -120,6 +122,31 @@ describe('useChatThread send reconciliation', () => {
       rerankFallback: null,
     });
     resourceMocks.editChatMessage.mockReset();
+  });
+
+  it.each(['send', 'edit', 'regenerate'] as const)('clears an inaccessible thread after %s instead of offering retries', async (operation) => {
+    const original = messagesFor('old');
+    resourceMocks.listChatMessages.mockResolvedValue({ items: original });
+    const denied = new ApiError(404, { code: 'NOT_FOUND', message: 'resource not found' });
+    resourceMocks.sendChatMessageStream.mockRejectedValue(denied);
+    resourceMocks.editChatMessage.mockRejectedValue(denied);
+    resourceMocks.regenerateChatMessage.mockRejectedValue(denied);
+    const { result, onAccessLost } = renderThread();
+    await settleEffects();
+    await act(async () => {
+      if (operation === 'send') await result.current.send('新问题');
+      else if (operation === 'edit') await result.current.editMessage(original[0].id, '修改的问题');
+      else await result.current.regenerate(original[1].id);
+    });
+    expect(result.current.messages).toEqual([]);
+    expect(result.current.session).toBeNull();
+    expect(result.current.failedSend).toBeNull();
+    expect(result.current.unconfirmedSend).toBeNull();
+    expect(result.current.regeneration).toBeNull();
+    expect(result.current.sending).toBe(false);
+    expect(result.current.loadError).toContain('会话已不可访问');
+    expect(onAccessLost).toHaveBeenCalledWith(session.id);
+    expect(pendingChatRequestStore.get(session.id)).toBeNull();
   });
 
   it('replaces the edited user turn and all later messages with the returned pair', async () => {

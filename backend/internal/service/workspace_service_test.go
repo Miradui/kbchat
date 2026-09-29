@@ -64,7 +64,7 @@ func newWorkspaceTestServices(t *testing.T) workspaceTestServices {
 		&model.Document{},
 		&model.DocumentJob{},
 		&model.StorageCleanupJob{},
-		&model.ChatSession{},
+		&model.ChatSession{}, &model.ChatSessionKnowledgeBase{},
 		&model.ChatMessage{},
 		&model.DocumentChunk{},
 	); err != nil {
@@ -2346,4 +2346,8 @@ func mustParseUUID(t *testing.T, value string) uuid.UUID {
 		t.Fatalf("parse uuid %q: %v", value, err)
 	}
 	return id
+}
+
+func (s *failingCleanupStorage) SaveKnowledgeBaseObject(context.Context, string, io.Reader, int64) error {
+	return nil
 }

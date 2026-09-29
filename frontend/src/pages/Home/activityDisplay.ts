@@ -16,7 +16,7 @@ export type ActivityItem = {
  * (`service.Activity*`); an unknown one falls back to the resource type rather
  * than rendering a raw identifier.
  */
-const actionLabels: Record<string, string> = {
+export const actionLabels: Record<string, string> = {
   'knowledgeBase.created': '创建了知识库',
   'knowledgeBase.deleted': '删除了知识库',
   'knowledgeBase.restored': '恢复了知识库',
@@ -32,6 +32,9 @@ const actionLabels: Record<string, string> = {
   'chatSession.restored': '恢复了会话',
   'admin.user.created': '创建了用户',
   'admin.user.updated': '更新了用户',
+  'admin.user.disabled': '禁用了用户',
+  'admin.user.enabled': '启用了用户',
+  'kb.ownership_transferred': '转移了知识库所有权',
   'admin.user.passwordReset': '重置了用户密码',
   'admin.user.roleChanged': '调整了用户角色',
 };

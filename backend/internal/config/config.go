@@ -19,6 +19,8 @@ const (
 	defaultDatabaseURL             = "postgres://rag:rag@localhost:5432/rag?sslmode=disable"
 	defaultRedisAddr               = "localhost:6379"
 	defaultRedisDB                 = 0
+	DefaultRedisOperationTimeout   = 200 * time.Millisecond
+	DefaultRedisFailureCooldown    = 5 * time.Second
 	defaultRateLimitEnabled        = true
 	defaultRateLimitLoginPerMinute = 10
 	defaultRateLimitChatPerMinute  = 30
@@ -66,6 +68,8 @@ type Config struct {
 	RedisAddr               string
 	RedisPassword           string
 	RedisDB                 int
+	RedisOperationTimeout   time.Duration
+	RedisFailureCooldown    time.Duration
 	RateLimitEnabled        bool
 	RateLimitLoginPerMinute int
 	RateLimitChatPerMinute  int
@@ -131,6 +135,8 @@ func Load() Config {
 		RedisAddr:               getEnv("REDIS_ADDR", defaultRedisAddr),
 		RedisPassword:           getEnv("REDIS_PASSWORD", ""),
 		RedisDB:                 getEnvInt("REDIS_DB", defaultRedisDB),
+		RedisOperationTimeout:   getEnvDuration("REDIS_OPERATION_TIMEOUT", DefaultRedisOperationTimeout),
+		RedisFailureCooldown:    getEnvDuration("REDIS_FAILURE_COOLDOWN", DefaultRedisFailureCooldown),
 		RateLimitEnabled:        getEnvBool("RATE_LIMIT_ENABLED", defaultRateLimitEnabled),
 		RateLimitLoginPerMinute: getEnvInt("RATE_LIMIT_LOGIN_PER_MINUTE", defaultRateLimitLoginPerMinute),
 		RateLimitChatPerMinute:  getEnvInt("RATE_LIMIT_CHAT_PER_MINUTE", defaultRateLimitChatPerMinute),
@@ -197,6 +203,12 @@ func (c Config) Validate() error {
 	}
 	if c.RedisAddr != "" && c.EmbeddingCacheTTL <= 0 {
 		return fmt.Errorf("EMBEDDING_CACHE_TTL must be greater than zero")
+	}
+	if c.RedisAddr != "" && c.RedisOperationTimeout <= 0 {
+		return fmt.Errorf("REDIS_OPERATION_TIMEOUT must be greater than zero")
+	}
+	if c.RedisAddr != "" && c.RedisFailureCooldown <= 0 {
+		return fmt.Errorf("REDIS_FAILURE_COOLDOWN must be greater than zero")
 	}
 	if _, err := ParseModelPricing(c.ModelPricing); err != nil {
 		return fmt.Errorf("MODEL_PRICING is invalid: %w", err)

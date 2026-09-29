@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -34,7 +35,8 @@ func TestMinIOStorageIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create MinIO storage: %v", err)
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	if err := fileStorage.EnsureReady(ctx); err != nil {
 		t.Fatalf("ensure MinIO storage ready: %v", err)
 	}
@@ -72,6 +74,29 @@ func TestMinIOStorageIntegration(t *testing.T) {
 	if _, err := fileStorage.Stat(ctx, location); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected deleted object to be missing, got %v", err)
 	}
+
+	t.Run("text_reader_roundtrip", func(t *testing.T) {
+		text := "# 文本导入\n星桥项目日备份保留35天。\n"
+		location := fileStorage.NewKnowledgeBaseFileLocation(uuid.New(), "文本导入.md")
+		t.Cleanup(func() { _ = fileStorage.Delete(context.Background(), location) })
+		if err := fileStorage.SaveKnowledgeBaseObject(ctx, location, strings.NewReader(text), int64(len(text))); err != nil {
+			t.Fatalf("save Reader to MinIO: %v", err)
+		}
+		info, err := fileStorage.Stat(ctx, location)
+		if err != nil || info.Size != int64(len(text)) {
+			t.Fatalf("Reader byte size: info=%#v err=%v", info, err)
+		}
+		read, err := fileStorage.Read(ctx, location)
+		if err != nil || string(read) != text {
+			t.Fatalf("Reader roundtrip: content=%q err=%v", read, err)
+		}
+		if err := fileStorage.Delete(ctx, location); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fileStorage.Stat(ctx, location); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("deleted Reader object: %v", err)
+		}
+	})
 }
 
 func multipartFileHeader(t *testing.T, filename string, content []byte) *multipart.FileHeader {

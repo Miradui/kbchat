@@ -1,15 +1,19 @@
-import { useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useCallback, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { transferKnowledgeBaseOwnership } from '../../api/resources';
+import { TransferOwnershipDialog } from '../../components/TransferOwnershipDialog';
+import { Button } from '../../components/ui/Button';
 
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { AppShell } from '../../layouts/AppShell';
-import { canUnlessUnknown } from '../../utils/access';
+import { canUnlessUnknown, hasCapability } from '../../utils/access';
 import { KnowledgeBaseLayout, KnowledgeBaseLoadFailure } from './KnowledgeBaseLayout';
 import { MembersPanel } from './MembersPanel';
 import { RetrievalConfigForm } from './RetrievalConfigForm';
 import { AnswerConfigForm } from './AnswerConfigForm';
 import { RetrievalTestPanel } from './RetrievalTestPanel';
 import { useKnowledgeBase } from './useKnowledgeBase';
+import { useCurrentUser } from '../../hooks/useCurrentUser';
 
 /**
  * Settings gathers retrieval config, retrieval diagnostics and member permissions.
@@ -22,6 +26,9 @@ export function KnowledgeBaseSettingsPage() {
 }
 
 function KnowledgeBaseSettings() {
+  const [transferring, setTransferring] = useState(false);
+  const navigate = useNavigate();
+  const { user } = useCurrentUser();
   const { knowledgeBase, setKnowledgeBase, loading, error, reload } = useKnowledgeBase();
 
   const handleVisibility = useCallback((visibility: 'private' | 'public') => {
@@ -54,6 +61,11 @@ function KnowledgeBaseSettings() {
           {showMembers && <MembersPanel knowledgeBase={knowledgeBase} onVisibilityChange={handleVisibility} />}
         </div>
         <RetrievalTestPanel knowledgeBase={knowledgeBase} />
+        {hasCapability(knowledgeBase, 'kb.transfer') && <section className="ui-panel" aria-label="所有权管理">
+          <h2>所有权管理</h2><p>将知识库交给其他启用状态的用户。文档和现有成员会保留。</p>
+          <Button variant="danger" onClick={() => setTransferring(true)}>转移所有权</Button>
+        </section>}
+        {transferring && user && <TransferOwnershipDialog ownerId={user.id} description={`将「${knowledgeBase.name}」转移给其他用户。`} onClose={() => setTransferring(false)} onTransfer={(input) => transferKnowledgeBaseOwnership(knowledgeBase.id, input)} onDone={() => navigate('/knowledge-bases')} />}
       </div>
     </KnowledgeBaseLayout>
   );

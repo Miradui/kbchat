@@ -27,7 +27,7 @@ import { hasCapability } from '../../utils/access';
 import { formatBytes, formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
 import { DocumentProgress } from './DocumentProgress';
-import { documentDisplayStatusLabel, documentDisplayStatusTone } from './documentDisplay';
+import { documentDisplayStatusLabel, documentDisplayStatusTone, isTerminalDocumentStatus } from './documentDisplay';
 import { documentFailureCopy, documentStalenessHint } from './documentFailure';
 
 const CHUNK_PAGE_SIZE = 20;
@@ -158,6 +158,33 @@ export function DocumentDetailDrawer({
   }, [documentId, knowledgeBaseId]);
 
   useEffect(() => {
+    if (!document || document.id !== documentId || documentScope !== (knowledgeBaseId ?? '')
+      || isTerminalDocumentStatus(document.status) || document.jobStatus === 'cancelled') return;
+    let active = true;
+    let timer: number;
+    const poll = () => {
+      getDocument(documentId).then((next) => {
+        if (active) setDocument(next);
+      }).catch((caught) => {
+        if (!active) return;
+        if (caught instanceof ApiError && (caught.status === 403 || caught.status === 404)) {
+          setError(previewErrorMessage(caught, '文档已不可访问。'));
+          setDocument(null);
+          setKnowledgeBase(null);
+          setPreview(null);
+          setPreviewUrl('');
+          setChunks([]);
+        } else {
+          // Preserve the content and action errors during a transient read failure.
+          timer = window.setTimeout(poll, 2000);
+        }
+      });
+    };
+    timer = window.setTimeout(poll, 2000);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [document, documentId, documentScope, knowledgeBaseId]);
+
+  useEffect(() => {
     if (!document || document.id !== documentId || documentScope !== (knowledgeBaseId ?? '')) {
       setChunks([]);
       setChunkTotal(0);
@@ -251,9 +278,8 @@ export function DocumentDetailDrawer({
       setDocument(next);
       setChunks([]);
       setChunkTotal(0);
-      setPreview(null);
-      setPreviewUrl('');
-      setPreviewError('');
+      // Reprocessing changes extracted chunks, not the immutable original file.
+      // Keep its preview while the document status is polled to completion.
       toast.success('已开始重新处理文档');
       onChanged?.();
     } catch (caught) {

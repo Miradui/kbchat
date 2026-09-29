@@ -40,6 +40,9 @@ func main() {
 	if err := database.AutoMigrate(ctx, db); err != nil {
 		log.Fatal("database migration failed", zap.Error(err))
 	}
+	if err := repository.NewSystemRepository(db).ValidateEmbeddingDimension(ctx, cfg.EmbeddingDimension); err != nil {
+		log.Fatal("embedding schema incompatible", zap.Error(err))
+	}
 
 	redisClient := cache.Open(cfg)
 	defer func() { _ = redisClient.Close() }()
@@ -68,6 +71,7 @@ func main() {
 		fileStorage,
 	)
 	workerCtx, stopWorker := context.WithCancel(context.Background())
+	documentProcessor.SetEmbeddingIdentity(cfg.EmbeddingModel, cfg.EmbeddingDimension)
 	defer stopWorker()
 	go job.NewWorkerWithOptions(documentRepo, documentProcessor, log, job.Options{
 		Concurrency: cfg.WorkerConcurrency,

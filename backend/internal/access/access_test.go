@@ -26,20 +26,21 @@ func TestEveryCapabilityHasAMinimumRole(t *testing.T) {
 // require editing this table on purpose rather than passing quietly.
 func TestMinRoleMatrix(t *testing.T) {
 	want := map[Capability]Role{
-		CapKnowledgeBaseRead:   RoleViewer,
-		CapKnowledgeBaseSearch: RoleViewer,
-		CapChatUse:             RoleViewer,
-		CapChatExport:          RoleViewer,
-		CapFeedbackWrite:       RoleViewer,
-		CapDocumentRead:        RoleViewer,
-		CapDocumentDownload:    RoleEditor,
-		CapContentWrite:        RoleEditor,
-		CapContentPurge:        RoleManager,
-		CapQualityRead:         RoleManager,
-		CapMembersRead:         RoleManager,
-		CapMembersWrite:        RoleManager,
-		CapKnowledgeBaseWrite:  RoleManager,
-		CapKnowledgeBaseDelete: RoleOwner,
+		CapKnowledgeBaseRead:     RoleViewer,
+		CapKnowledgeBaseSearch:   RoleViewer,
+		CapChatUse:               RoleViewer,
+		CapChatExport:            RoleViewer,
+		CapFeedbackWrite:         RoleViewer,
+		CapDocumentRead:          RoleViewer,
+		CapDocumentDownload:      RoleEditor,
+		CapContentWrite:          RoleEditor,
+		CapContentPurge:          RoleManager,
+		CapQualityRead:           RoleManager,
+		CapMembersRead:           RoleManager,
+		CapMembersWrite:          RoleManager,
+		CapKnowledgeBaseWrite:    RoleManager,
+		CapKnowledgeBaseDelete:   RoleOwner,
+		CapKnowledgeBaseTransfer: RoleOwner,
 	}
 	for capability, wantRole := range want {
 		if got := MinRole(capability); got != wantRole {

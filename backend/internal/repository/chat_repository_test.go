@@ -104,7 +104,7 @@ func TestArchiveSessionDoesNotOverwriteExistingTimestamp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open test database: %v", err)
 	}
-	if err := db.AutoMigrate(&model.ChatSession{}); err != nil {
+	if err := db.AutoMigrate(&model.ChatSession{}, &model.ChatSessionKnowledgeBase{}); err != nil {
 		t.Fatalf("migrate chat session: %v", err)
 	}
 	session := model.ChatSession{
@@ -228,7 +228,7 @@ func newChatRepositoryTestDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(
 		&model.User{},
 		&model.KnowledgeBase{},
-		&model.ChatSession{},
+		&model.ChatSession{}, &model.ChatSessionKnowledgeBase{},
 		&model.ChatMessage{},
 		// The reachability predicate reads the member table, so every query in this
 		// fixture needs it even when the test itself has no members.

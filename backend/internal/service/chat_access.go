@@ -68,8 +68,21 @@ func (s *ChatService) authorizeSessionKnowledgeBase(
 	session *model.ChatSession,
 	capability access.Capability,
 ) error {
-	if _, err := authorizeKnowledgeBase(ctx, s.knowledgeBases, userID, session.KnowledgeBaseID, capability); err != nil {
-		return apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
+	if session.IsAutomatic() && !session.DeletedAt.Valid {
+		// A concurrent turn may have registered additional prompt sources.
+		current, err := s.chats.FindSessionByIDAndUser(ctx, session.ID, userID)
+		if err != nil {
+			return apperror.Internal(err)
+		}
+		if current == nil {
+			return apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
+		}
+		session.KnowledgeBaseLinks = current.KnowledgeBaseLinks
+	}
+	for _, kbID := range session.KnowledgeBaseIDs() {
+		if _, err := authorizeKnowledgeBase(ctx, s.knowledgeBases, userID, kbID, capability); err != nil {
+			return apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
+		}
 	}
 	return nil
 }

@@ -50,7 +50,7 @@ CREATE INDEX idx_users_created_by ON users (created_by);
 
 `users.role` 是系统角色：`user` 为普通用户，`admin` 为系统管理员；与知识库成员的 `viewer` / `editor` / `manager` 以及 `owner_id` 无关。系统管理员可以读取系统诊断，但不会因此取得其他用户知识库或会话的访问权。未知系统角色不能访问诊断。
 
-首位系统管理员通过 `cmd/bootstrap-admin` 显式指定账号初始化，事务级 PostgreSQL advisory lock 串行化首次创建或提升。同名管理员重复执行不修改数据，已有其他管理员时拒绝继续初始化。它只写 `users.role`，不依赖迁移 025 之后的列；之后的账号创建、禁用、角色变更都在 `/admin/users` 上完成（见 [接口设计](04-api-design.md#admin-users)），系统会拒绝禁用或降级最后一位启用的管理员。具体命令见 [部署指南](13-deployment.md#74-初始化系统管理员)。
+首位系统管理员通过 `cmd/bootstrap-admin` 显式指定账号初始化，事务级 PostgreSQL advisory lock 串行化首次创建或提升。同名管理员重复执行不修改数据，已有其他管理员时拒绝继续初始化。提升现有账号只更新角色；创建账号依赖完整的 users 结构（含迁移 025），GORM 的 `CreatedByID` 显式映射 `created_by`；之后的账号创建、禁用、角色变更都在 `/admin/users` 上完成（见 [接口设计](04-api-design.md#admin-users)），系统会拒绝禁用或降级最后一位启用的管理员。具体命令见 [部署指南](13-deployment.md#74-初始化系统管理员)。
 
 ## user_avatars
 
@@ -287,6 +287,7 @@ CREATE TABLE chat_sessions (
     id UUID PRIMARY KEY,
     user_id UUID NOT NULL REFERENCES users(id),
     knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+    scope_mode VARCHAR(16) NOT NULL DEFAULT 'manual' CHECK (scope_mode IN ('auto', 'manual')),
     title VARCHAR(255),
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now(),
@@ -296,6 +297,22 @@ CREATE TABLE chat_sessions (
 ```
 
 当前 `POST /chat/sessions/:id/archive` 设置 `archived_at`，默认会话列表过滤已归档会话；`GET /chat/sessions/:id` 仍可查看归档会话。`DELETE /chat/sessions/:id` 设置 `deleted_at` 进行软删除并保留全部消息；默认列表、详情和消息查询过滤已删除会话。聊天回收站支持列表、恢复、单项永久删除和清空，只有永久删除才会物理删除会话并级联删除消息。
+
+## chat_session_knowledge_bases（迁移 030）
+
+首选库继续存于 `chat_sessions.knowledge_base_id`，此表仅存附加库；旧会话没有附加行，自然保持单库，无需回填或重建向量。
+
+```sql
+CREATE TABLE chat_session_knowledge_bases (
+    session_id UUID NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE RESTRICT,
+    PRIMARY KEY (session_id, knowledge_base_id)
+);
+CREATE INDEX idx_chat_session_knowledge_bases_knowledge_base_id
+    ON chat_session_knowledge_bases (knowledge_base_id);
+```
+
+手动会话及附加库关系在同一个 GORM 创建事务中保存，API 限制总计 1–5 库、禁止重复、范围不可修改。迁移 031 增加 `scope_mode`，旧行默认 manual，不修改已有范围。自动会话由服务显式写 auto；首选库保留用于外键、用量和生命周期，但每轮检索全部可访问库。每轮进入 Prompt 的来源库在输出前，通过锁定会话的 GORM 事务和冲突忽略插入关联表，保守累计历史访问依赖，不受 5 库上限限制。中断、编辑和重生成不删除依赖。按库过滤及永久删除同时匹配首选库和附加库。外键 RESTRICT 防止删库时静默缩小会话范围；repository 必须先删除所有相关会话。软删库或撤权不改关联，只使整段会话不可访问。启动要求此表存在。模型用量仍唯一归属首选库；跨库和自动会话消息不进入单库质量聚合。
 
 ## chat_messages
 
@@ -484,8 +501,14 @@ CREATE INDEX idx_model_usage_kb_created ON model_usage_records (knowledge_base_i
 CREATE INDEX idx_model_usage_user_created ON model_usage_records (user_id, created_at);
 ```
 
-每次模型调用一行：`purpose` 为 `intent` / `answer` / `title` / `evaluation`；`provider` 为 `MODEL_PROVIDER`；`model` 为请求时使用的模型名（全局配置或知识库覆盖），不采用服务商响应中回显的别名，以便与 `MODEL_PRICING` 和 `CHAT_ALLOWED_MODELS` 对应；2026-09-26 之前写入的行可能是回显名。token 列在 Provider 未返回 usage 时为 NULL，不估算。Chat 调用在助手消息落库后回填 `message_id`；评测调用 `session_id` 与 `message_id` 为 NULL，只归属知识库。`latency_ms` 是该次模型调用自身的耗时。
+每次模型调用一行：`purpose` 为 `intent` / `answer` / `title` / `evaluation`；`provider` 为 `MODEL_PROVIDER`；`model` 为请求时使用的模型名（全局配置或知识库覆盖），不采用服务商响应中回显的别名，以便与 `MODEL_PRICING` 和 `CHAT_ALLOWED_MODELS` 对应；2026-09-26 之前写入的行可能是回显名。token 列在 Provider 未返回 usage 时为 NULL，不估算。Chat 的 intent / answer / title 调用在助手消息落库后关联 `message_id`（2026-09-28 之前的标题记录可能为空，不回填）；评测调用 `session_id` 与 `message_id` 为 NULL，只归属知识库。`latency_ms` 是该次模型调用自身的耗时。
 
-## 迁移 024–028
+## 迁移 024–029
 
-迁移 024 为 `document_chunks` 增加 `search_vector` 并把向量索引换为 HNSW；025 为 `users` 增加 `status`、`last_login_at`、`created_by`；026 新增 `model_usage_records`；027 为 `knowledge_bases` 增加 `answer_config`（`systemPromptAddition`、`answerLanguage`、`allowGeneralKnowledge`、`model`、`temperature`）；028 为 `evaluation_runs` 增加 `answer_config` 快照。后端启动时检查这五个迁移对应的列或表，缺失即报错。
+迁移 024 为 `document_chunks` 增加 `search_vector` 并把向量索引换为 HNSW；025 为 `users` 增加 `status`、`last_login_at`、`created_by`；026 新增 `model_usage_records`；027 为 `knowledge_bases` 增加 `answer_config`（`systemPromptAddition`、`answerLanguage`、`allowGeneralKnowledge`、`model`、`temperature`）；028 为 `evaluation_runs` 增加 `answer_config` 快照。029 为 documents 增加 embedding_model 与 embedding_dimension；后端启动时检查这些迁移对应的列或表，缺失即报错。
+
+### 文档向量来源（迁移 029）
+
+`029_document_embedding_identity.sql` 给 `documents` 增加可空的 `embedding_model VARCHAR(128)`、`embedding_dimension INTEGER`。存量记录保持 NULL，表示来源未知；禁止用当前配置回填旧向量的来源。processor 发布新 chunks 时在同一个事务里写入实际配置的模型和校验过的维度，失败不会把未发布的来源标成有效。诊断按模型和维度统计有效文档。
+
+启动和 doctor 查询 `pg_attribute.atttypmod`，按当前 search_path 解析 `document_chunks.embedding`；必须与 `EMBEDDING_DIMENSION` 一致，否则拒绝启动。模型切换与重建步骤见 [部署指南](13-deployment.md#embedding-模型切换与重建)。

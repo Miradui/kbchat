@@ -30,6 +30,15 @@ func (h *AdminUserHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
+func (h *AdminUserHandler) ListActivities(c *gin.Context) {
+	res, err := h.users.ListActivities(c.Request.Context(), queryInt(c, "page", 1), queryInt(c, "pageSize", 20))
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
 func (h *AdminUserHandler) Create(c *gin.Context) {
 	actor, ok := middleware.CurrentUserID(c)
 	if !ok {

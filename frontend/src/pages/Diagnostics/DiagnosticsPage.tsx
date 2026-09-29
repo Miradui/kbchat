@@ -19,6 +19,7 @@ import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { MetricStrip } from '../../components/ui/MetricStrip';
 import { AppShell } from '../../layouts/AppShell';
+import { EmbeddingInventoryPanel } from './EmbeddingInventoryPanel';
 
 type DiagnosticsSources = {
   loadDiagnostics: () => Promise<SystemDiagnostics>;
@@ -339,6 +340,7 @@ function DiagnosticsContent({ sources, onForbidden }: { sources: DiagnosticsSour
                   )}
                 </section>
 
+                {diagnostics.embedding && <EmbeddingInventoryPanel value={diagnostics.embedding} />}
                 <section aria-label="模型 Provider" className="ui-panel diagnostics-section diagnostics-providers">
                   <h2>模型 Provider</h2>
                   {/* Stated plainly, because a panel that looks like a probe result

@@ -19,12 +19,14 @@ import (
 )
 
 type SearchResult struct {
-	ChunkID     uuid.UUID
-	DocumentID  uuid.UUID
-	Filename    string
-	Content     string
-	PageNumber  *int
-	VectorScore float64
+	KnowledgeBaseID   uuid.UUID
+	KnowledgeBaseName string
+	ChunkID           uuid.UUID
+	DocumentID        uuid.UUID
+	Filename          string
+	Content           string
+	PageNumber        *int
+	VectorScore       float64
 	// KeywordScore is set only for chunks the keyword stage returned; FusionScore
 	// only when both stages ran and were fused. Nil means the stage did not
 	// see the chunk, which is different from a score of zero.
@@ -90,11 +92,17 @@ func (r *ChunkRepository) ReplaceByDocument(ctx context.Context, documentID uuid
 // against CancelActiveJob on the document row: cancellation that committed
 // first prevents all chunk writes, while a publication that commits first makes
 // a later cancel non-cancellable because the job is already completed.
+type EmbeddingIdentity struct {
+	Model     string
+	Dimension int
+}
+
 func (r *ChunkRepository) PublishByDocument(
 	ctx context.Context,
 	documentID uuid.UUID,
 	jobID uuid.UUID,
 	chunks []model.DocumentChunk,
+	identity ...EmbeddingIdentity,
 ) error {
 	if err := validateReplacementChunks(documentID, chunks); err != nil {
 		return err
@@ -111,13 +119,14 @@ func (r *ChunkRepository) PublishByDocument(
 		}
 
 		now := time.Now()
+		values := map[string]any{"status": "completed", "error_message": "", "updated_at": now}
+		if len(identity) > 0 {
+			values["embedding_model"] = identity[0].Model
+			values["embedding_dimension"] = identity[0].Dimension
+		}
 		documentResult := tx.Model(&model.Document{}).
 			Where("id = ?", documentID).
-			Updates(map[string]any{
-				"status":        "completed",
-				"error_message": "",
-				"updated_at":    now,
-			})
+			Updates(values)
 		if documentResult.Error != nil {
 			return documentResult.Error
 		}

@@ -91,10 +91,14 @@ func (s *DocumentService) UploadWithOptions(
 	if err := s.validateFile(file); err != nil {
 		return nil, err
 	}
+	return s.uploadSource(ctx, ownerID, kbID, documentSource{Filename: file.Filename, Size: file.Size, Open: func() (io.ReadCloser, error) { return file.Open() }}, options)
+}
+
+func (s *DocumentService) uploadSource(ctx context.Context, ownerID, kbID uuid.UUID, file documentSource, options DocumentUploadOptions) (*dto.DocumentResponse, error) {
 
 	// Hashed and checked before anything is written: a duplicate is then rejected
 	// without an object to clean up, and without a storage reservation to cancel.
-	contentHash, err := hashUploadedFile(file)
+	contentHash, err := hashDocumentSource(file)
 	if err != nil {
 		return nil, apperror.Wrap(http.StatusInternalServerError, "DOCUMENT_UPLOAD_FAILED", "document upload failed", err)
 	}
@@ -112,7 +116,7 @@ func (s *DocumentService) UploadWithOptions(
 	if err := s.storageCleanup.Reserve(ctx, storagePath, time.Now().Add(uploadStorageReservationDelay)); err != nil {
 		return nil, apperror.Wrap(http.StatusInternalServerError, "DOCUMENT_UPLOAD_FAILED", "document upload failed", err)
 	}
-	if err := s.storage.SaveKnowledgeBaseFile(ctx, storagePath, file); err != nil {
+	if err := s.saveDocumentSource(ctx, storagePath, file); err != nil {
 		if cleanupErr := s.cleanupUploadedFile(ctx, storagePath); cleanupErr != nil {
 			err = errors.Join(err, fmt.Errorf("delete uploaded file: %w", cleanupErr))
 		} else {

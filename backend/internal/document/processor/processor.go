@@ -41,12 +41,19 @@ const (
 )
 
 type Processor struct {
-	documents *repository.DocumentRepository
-	chunks    *repository.ChunkRepository
-	parser    parser.Parser
-	splitter  *splitter.Splitter
-	embedder  embedding.Provider
-	storage   storage.Storage
+	documents          *repository.DocumentRepository
+	chunks             *repository.ChunkRepository
+	parser             parser.Parser
+	splitter           *splitter.Splitter
+	embedder           embedding.Provider
+	storage            storage.Storage
+	embeddingModel     string
+	embeddingDimension int
+}
+
+// SetEmbeddingIdentity is configured before the worker starts, never per job.
+func (p *Processor) SetEmbeddingIdentity(model string, dimension int) {
+	p.embeddingModel, p.embeddingDimension = model, dimension
 }
 
 func New(
@@ -177,6 +184,9 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 		}
 
 		for i, vector := range embeddings {
+			if p.embeddingDimension > 0 && len(vector) != p.embeddingDimension {
+				return fmt.Errorf("%w: vector dimension %d, expected %d", ErrEmbeddingFailed, len(vector), p.embeddingDimension)
+			}
 			part := parts[start+i]
 			metadata, err := buildChunkMetadata(part)
 			if err != nil {
@@ -203,7 +213,11 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := p.chunks.PublishByDocument(ctx, document.ID, job.ID, rows); err != nil {
+	var identity []repository.EmbeddingIdentity
+	if p.embeddingModel != "" && p.embeddingDimension > 0 {
+		identity = append(identity, repository.EmbeddingIdentity{Model: p.embeddingModel, Dimension: p.embeddingDimension})
+	}
+	if err := p.chunks.PublishByDocument(ctx, document.ID, job.ID, rows, identity...); err != nil {
 		return err
 	}
 	return nil

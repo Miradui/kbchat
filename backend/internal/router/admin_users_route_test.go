@@ -42,7 +42,7 @@ func newAdminUsersFixture(t *testing.T) adminUsersFixture {
 	t.Helper()
 	cfg := adminUsersRouteConfig()
 	db := testDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.Activity{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Activity{}, &model.KnowledgeBase{}, &model.KnowledgeBaseMember{}); err != nil {
 		t.Fatal(err)
 	}
 	admin, adminToken := createRouteUser(t, cfg, db, model.SystemRoleAdmin)
@@ -86,6 +86,7 @@ type adminUsersEndpoint struct {
 
 func adminUsersEndpoints() []adminUsersEndpoint {
 	return []adminUsersEndpoint{
+		{"activities", http.MethodGet, func(adminUsersFixture) string { return "/api/v1/admin/activities" }, "", http.StatusOK},
 		{"list", http.MethodGet, func(adminUsersFixture) string { return "/api/v1/admin/users" }, "", http.StatusOK},
 		{"create", http.MethodPost, func(adminUsersFixture) string { return "/api/v1/admin/users" }, `{"username":"route-created","displayName":"Route Created"}`, http.StatusCreated},
 		{"update", http.MethodPut, func(f adminUsersFixture) string { return "/api/v1/admin/users/" + f.target.ID.String() }, `{"displayName":"Renamed","status":"active"}`, http.StatusOK},

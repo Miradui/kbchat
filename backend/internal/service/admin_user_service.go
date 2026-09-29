@@ -22,6 +22,8 @@ import (
 const (
 	ActivityAdminUserCreated       = "admin.user.created"
 	ActivityAdminUserUpdated       = "admin.user.updated"
+	ActivityAdminUserDisabled      = "admin.user.disabled"
+	ActivityAdminUserEnabled       = "admin.user.enabled"
 	ActivityAdminUserPasswordReset = "admin.user.passwordReset"
 	ActivityAdminUserRoleChanged   = "admin.user.roleChanged"
 	adminGeneratedPasswordLength   = 14
@@ -35,6 +37,8 @@ var adminUsernamePattern = regexp.MustCompile(`^[A-Za-z0-9._@-]{3,64}$`)
 type AdminUserService struct {
 	users      *repository.UserRepository
 	activities *ActivityRecorder
+	log        *repository.ActivityRepository
+	ownership  *KnowledgeBaseService
 }
 
 func NewAdminUserService(users *repository.UserRepository) *AdminUserService {
@@ -43,6 +47,39 @@ func NewAdminUserService(users *repository.UserRepository) *AdminUserService {
 
 func (s *AdminUserService) SetActivityRecorder(recorder *ActivityRecorder) {
 	s.activities = recorder
+}
+
+// SetActivityLog enables ListActivities.
+func (s *AdminUserService) SetActivityLog(log *repository.ActivityRepository) {
+	s.log = log
+}
+
+// ListActivities is the shared system administration log: every
+// administrator's admin.* entries, so an action taken by one admin is visible
+// to the others. The route is RequireSystemAdmin.
+func (s *AdminUserService) ListActivities(ctx context.Context, page, pageSize int) (*dto.AdminActivityListResponse, error) {
+	page, pageSize = normalizeAdminPage(page, pageSize)
+	res := &dto.AdminActivityListResponse{Items: []dto.AdminActivityResponse{}, Page: page, PageSize: pageSize}
+	if s.log == nil {
+		return res, nil
+	}
+	items, total, err := s.log.ListAdmin(ctx, (page-1)*pageSize, pageSize)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	res.Total = total
+	for _, item := range items {
+		res.Items = append(res.Items, dto.AdminActivityResponse{
+			ID:           item.ID.String(),
+			Action:       item.Action,
+			ResourceType: item.ResourceType,
+			ResourceID:   item.ResourceID.String(),
+			ResourceName: item.ResourceName,
+			Actor:        dto.AdminActivityUser{ID: item.UserID.String(), Username: item.ActorUsername, DisplayName: item.ActorDisplayName},
+			CreatedAt:    item.CreatedAt,
+		})
+	}
+	return res, nil
 }
 
 func (s *AdminUserService) List(ctx context.Context, query dto.AdminUserListQuery) (*dto.AdminUserListResponse, error) {
@@ -54,8 +91,21 @@ func (s *AdminUserService) List(ctx context.Context, query dto.AdminUserListQuer
 	}
 	page, pageSize := normalizeAdminPage(query.Page, query.PageSize)
 	items := make([]dto.AdminUserResponse, 0, len(users))
+	counts := map[uuid.UUID]int64{}
+	if s.ownership != nil {
+		ids := make([]uuid.UUID, len(users))
+		for i := range users {
+			ids[i] = users[i].ID
+		}
+		counts, err = s.ownership.repo.CountOwned(ctx, ids)
+		if err != nil {
+			return nil, apperror.Internal(err)
+		}
+	}
 	for i := range users {
-		items = append(items, adminUserResponse(&users[i]))
+		item := adminUserResponse(&users[i])
+		item.OwnedKnowledgeBaseCount = counts[users[i].ID]
+		items = append(items, item)
 	}
 	return &dto.AdminUserListResponse{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
 }
@@ -127,7 +177,18 @@ func (s *AdminUserService) Update(ctx context.Context, actorID, targetID uuid.UU
 	if err != nil {
 		return nil, mapAdminUserError(err)
 	}
-	s.record(ctx, actorID, ActivityAdminUserUpdated, user)
+	// Disabling and enabling are what an audit reader looks for, so they get
+	// their own actions; a name change alone stays "updated".
+	wasActive := current.Status == "" || current.Status == "active"
+	switch {
+	case wasActive && req.Status == "disabled":
+		s.record(ctx, actorID, ActivityAdminUserDisabled, user)
+	case !wasActive && req.Status == "active":
+		s.record(ctx, actorID, ActivityAdminUserEnabled, user)
+	}
+	if current.DisplayName != displayName {
+		s.record(ctx, actorID, ActivityAdminUserUpdated, user)
+	}
 	res := adminUserResponse(user)
 	return &res, nil
 }

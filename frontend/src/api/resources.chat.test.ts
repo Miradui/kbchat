@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { apiRequest } from './client';
-import { sendChatMessage } from './resources';
+import { createChatSession, sendChatMessage } from './resources';
 
 vi.mock('./client', () => ({ apiRequest: vi.fn(), apiBlobRequest: vi.fn() }));
 
@@ -22,4 +22,10 @@ describe('chat resources', () => {
       },
     });
   });
+});
+
+
+it('creates automatic sessions without an implicit first knowledge base', () => {
+  void createChatSession(undefined, '');
+  expect(apiRequest).toHaveBeenCalledWith('/chat/sessions', {method: 'POST', body: {scopeMode: 'auto', title: ''}});
 });

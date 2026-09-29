@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -91,6 +92,11 @@ func assertPostgresRestoreWaitsAndLoses(
 	t.Helper()
 	locked := make(chan struct{})
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	// A failing assertion must also release the paused transaction. Otherwise
+	// t.Cleanup waits forever while closing its single-connection pool.
+	defer unblock()
 	var paused atomic.Bool
 	callbackName := "test:pause-postgres-lock-" + uuid.NewString()
 	if err := db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
@@ -113,6 +119,8 @@ func assertPostgresRestoreWaitsAndLoses(
 	go func() { deleteDone <- permanentDelete() }()
 	select {
 	case <-locked:
+	case err := <-deleteDone:
+		t.Fatalf("permanent delete ended before acquiring the expected row lock: %v", err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("permanent delete did not acquire the expected row lock")
 	}
@@ -124,12 +132,22 @@ func assertPostgresRestoreWaitsAndLoses(
 		t.Fatalf("restore returned before the permanent-delete lock was released: %v", err)
 	case <-time.After(150 * time.Millisecond):
 	}
-	close(release)
-	if err := <-deleteDone; err != nil {
-		t.Fatalf("permanent delete: %v", err)
+	unblock()
+	select {
+	case err := <-deleteDone:
+		if err != nil {
+			t.Fatalf("permanent delete: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("permanent delete did not finish after releasing its row lock")
 	}
-	if err := <-restoreDone; !errors.Is(err, wantRestoreError) {
-		t.Fatalf("expected restore loser error %v, got %v", wantRestoreError, err)
+	select {
+	case err := <-restoreDone:
+		if !errors.Is(err, wantRestoreError) {
+			t.Fatalf("expected restore loser error %v, got %v", wantRestoreError, err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("restore did not finish after releasing the permanent-delete lock")
 	}
 }
 
@@ -171,11 +189,13 @@ func createPostgresConcurrencyTables(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	statements := []string{
 		`CREATE TABLE users (id UUID PRIMARY KEY, username TEXT, password_hash TEXT)`,
-		`CREATE TABLE knowledge_bases (id UUID PRIMARY KEY, owner_id UUID, name TEXT, deleted_at TIMESTAMPTZ)`,
+		`CREATE TABLE knowledge_bases (id UUID PRIMARY KEY, owner_id UUID, name TEXT, updated_at TIMESTAMPTZ, deleted_at TIMESTAMPTZ)`,
 		`CREATE TABLE documents (id UUID PRIMARY KEY, knowledge_base_id UUID, uploader_id UUID, filename TEXT, storage_path TEXT, status TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, deleted_at TIMESTAMPTZ)`,
 		`CREATE TABLE document_jobs (id UUID PRIMARY KEY, document_id UUID, job_type TEXT, status TEXT, progress SMALLINT NOT NULL DEFAULT 0)`,
+		`CREATE TABLE storage_cleanup_jobs (id UUID PRIMARY KEY, storage_path TEXT UNIQUE, retry_count INT, next_attempt_at TIMESTAMPTZ, locked_at TIMESTAMPTZ, lease_token UUID, last_error TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ)`,
 		`CREATE TABLE document_chunks (id UUID PRIMARY KEY, document_id UUID, knowledge_base_id UUID)`,
-		`CREATE TABLE chat_sessions (id UUID PRIMARY KEY, user_id UUID, knowledge_base_id UUID, title TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, deleted_at TIMESTAMPTZ)`,
+		`CREATE TABLE chat_sessions (id UUID PRIMARY KEY, user_id UUID, knowledge_base_id UUID, scope_mode VARCHAR(16) NOT NULL DEFAULT 'manual', title TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, deleted_at TIMESTAMPTZ)`,
+		`CREATE TABLE chat_session_knowledge_bases (session_id UUID REFERENCES chat_sessions(id) ON DELETE CASCADE, knowledge_base_id UUID REFERENCES knowledge_bases(id), PRIMARY KEY(session_id, knowledge_base_id))`,
 		`CREATE TABLE chat_messages (id UUID PRIMARY KEY, session_id UUID, role TEXT, content TEXT)`,
 		`CREATE TABLE knowledge_base_members (knowledge_base_id UUID, user_id UUID)`,
 		`CREATE TABLE knowledge_base_favorites (knowledge_base_id UUID, user_id UUID)`,

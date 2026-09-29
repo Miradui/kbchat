@@ -61,6 +61,28 @@ function renderDialog(props: Partial<React.ComponentProps<typeof DocumentImportD
 }
 
 describe('DocumentImportDialog', () => {
+  it('validates a text draft, queues it and uses the text API with duplicate confirmation', async () => {
+    const user = userEvent.setup();
+    const onUpload = vi.fn();
+    const onCreateText = vi.fn().mockRejectedValueOnce(duplicateError()).mockResolvedValueOnce(documentFor(new File(['# 说明\n正文'], '笔记.md')));
+    const onClose = vi.fn();
+    renderDialog({ onUpload, onCreateText, onClose });
+    await user.click(screen.getByRole('button', { name: '粘贴文本' }));
+    await user.click(screen.getByRole('button', { name: '加入导入清单' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('标题须为');
+    await user.type(screen.getByLabelText('文档标题'), '笔记');
+    await user.click(screen.getByRole('button', { name: '加入导入清单' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('正文不能为空');
+    await user.type(screen.getByLabelText('正文'), '# 说明\n正文');
+    await user.click(screen.getByRole('button', { name: '加入导入清单' }));
+    await user.click(screen.getByRole('button', { name: '开始导入' }));
+    await screen.findByRole('button', { name: '保留两份' });
+    expect(onCreateText).toHaveBeenCalledWith('kb1', { title: '笔记', content: '# 说明\n正文', format: 'md' }, expect.any(AbortSignal));
+    await user.click(screen.getByRole('button', { name: '保留两份' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(onCreateText).toHaveBeenLastCalledWith('kb1', expect.objectContaining({ allowDuplicate: true }), expect.any(AbortSignal));
+    expect(onUpload).not.toHaveBeenCalled();
+  });
   it('requires an explicit target for a global import', async () => {
     const user = userEvent.setup();
     renderDialog({

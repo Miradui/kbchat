@@ -238,6 +238,28 @@ async function submitWithAutomaticChecksPaused() {
 }
 
 describe('ChatPage', () => {
+  it('clears messages, source preview and cached options when a send discovers revoked access', async () => {
+    vi.mocked(listChatMessages).mockResolvedValue({ items: historicalAnswers });
+    const user = userEvent.setup();
+    renderWithRouter(<><LocationProbe /><Routes><Route path="/chat/:sessionId?" element={<ChatPage />} /></Routes></>, ['/chat/s1?knowledgeBaseId=kb1']);
+    const answer = (await screen.findByText('新回答')).closest('article')!;
+    await user.click(within(answer).getByRole('button', { name: '1 条来源' }));
+    await user.click(screen.getByRole('button', { name: '打开来源：新制度.pdf，p.5' }));
+    await screen.findByLabelText('文档原文');
+    vi.mocked(listChatSessions).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 50 });
+    // Even an unavailable options refresh must not keep the denied cached option.
+    vi.mocked(listKnowledgeBases).mockRejectedValue(new Error('offline'));
+    vi.mocked(sendChatMessage).mockRejectedValue(new ApiError(404, { code: 'NOT_FOUND', message: 'resource not found' }));
+    await user.type(screen.getByRole('textbox', { name: '输入问题' }), '继续提问');
+    await user.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(screen.getByLabelText('当前位置')).toHaveTextContent(/^\/chat$/));
+    expect(screen.queryByText('新回答')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('文档原文')).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: '制度库' })).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: '输入问题' })).toBeDisabled();
+    expect(screen.getByText('会话已不可访问，可能已删除或访问权限发生变化。')).toBeInTheDocument();
+  });
+
   it('updates both the rail and header from the first question without reloading the page', async () => {
     const unnamed = { ...session, title: '新会话' };
     const named = { ...session, title: '报销发票提交', updatedAt: '2026-07-01T00:01:00Z' };
@@ -1984,7 +2006,7 @@ describe('ChatPage', () => {
     await user.click(await screen.findByRole('button', { name: '新建对话' }));
 
     expect(createChatSession).not.toHaveBeenCalled();
-    expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat?knowledgeBaseId=kb1');
+    expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent(/^\/chat$/);
   });
 
   it('opens a draft when switching to a knowledge base without sessions', async () => {
@@ -2496,6 +2518,7 @@ describe('ChatPage', () => {
     );
 
     const input = await screen.findByRole('textbox', { name: '输入问题' });
+    await waitFor(() => expect(input).not.toBeDisabled());
     await user.type(input, '需要确认重发的问题');
     await submitWithAutomaticChecksPaused();
     expect(sendChatMessage).toHaveBeenCalledTimes(1);
@@ -2549,3 +2572,117 @@ describe('ChatPage', () => {
 });
 
 const replyFields: Pick<SendChatMessageResponse, 'clientRequestId' | 'userMessage' | 'assistantMessage'> = { clientRequestId: 'fixture-request', userMessage: { id: 'fixture-user', sessionId: 's1', role: 'user', content: '问题', citations: [], createdAt: '2026-07-01T00:00:00Z' }, assistantMessage: { id: 'fixture-assistant', sessionId: 's1', role: 'assistant', content: '回答', citations: [], createdAt: '2026-07-01T00:00:00Z' } };
+
+describe('automatic conversations', () => {
+  it('asks immediately by default and retains auto mode after creation and reload', async () => {
+    const automatic: ChatSession = { ...session, scopeMode: 'auto' };
+    vi.mocked(createChatSession).mockResolvedValue(automatic);
+    vi.mocked(getChatSession).mockResolvedValue(automatic);
+    vi.mocked(listChatSessions).mockResolvedValue({items:[automatic],total:1,page:1,pageSize:20});
+    vi.mocked(sendChatMessage).mockResolvedValue({...replyFields,answer:'自动回答',citations:[],rerankFallback:null});
+    const user = userEvent.setup();
+    renderWithRouter(<><Routes><Route path="/chat" element={<ChatPage/>}/><Route path="/chat/:sessionId" element={<ChatPage/>}/></Routes><LocationProbe/></>, ['/chat']);
+    const input = await screen.findByRole('textbox', {name:'输入问题'});
+    await waitFor(() => expect(input).toBeEnabled());
+    expect(screen.getByRole('button', {name:'自动检索全部可访问知识库'})).toHaveAttribute('aria-pressed','true');
+    await user.type(input, '产品恢复需要多久？');
+    await user.click(screen.getByRole('button', {name:'发送'}));
+    await waitFor(() => expect(createChatSession).toHaveBeenCalledWith(undefined, ''));
+    await waitFor(() => expect(screen.getByLabelText('当前位置')).toHaveTextContent(/^\/chat\/s1$/));
+    expect(screen.getByText('自动检索 · 每轮匹配知识库')).toBeInTheDocument();
+    expect(screen.getByLabelText('当前知识库')).toHaveValue('');
+    expect(within(screen.getByRole('navigation', {name:'面包屑'})).getByText('自动检索')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', {name:'输入问题'})).toHaveAttribute('placeholder','直接提问，自动检索相关知识库…');
+  });
+
+  it('can return from a selected scope to automatic retrieval without losing the draft', async () => {
+    vi.mocked(listKnowledgeBases).mockResolvedValue({items:[knowledgeBase, secondKnowledgeBase]});
+    const user = userEvent.setup();
+    renderWithRouter(<><Routes><Route path="/chat" element={<ChatPage/>}/></Routes><LocationProbe/></>, ['/chat']);
+    const input = await screen.findByRole('textbox', {name:'输入问题'});
+    await waitFor(() => expect(input).toBeEnabled());
+    await user.type(input, '对比两份规定');
+    await user.click(screen.getByRole('button', {name:/制度库.*制度说明/}));
+    await user.click(screen.getByRole('button', {name:/产品库.*制度说明/}));
+    expect(screen.getByText('已指定 2 个知识库，本会话仅在所选范围内检索。')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', {name:'自动检索全部可访问知识库'}));
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent(/^\/chat$/);
+    expect(input).toHaveValue('对比两份规定');
+    expect(screen.getByRole('button', {name:/产品库.*制度说明/})).toHaveAttribute('aria-pressed','false');
+  });
+
+  it('opens a newly used library source before session metadata has refreshed', async () => {
+    const automatic: ChatSession = {...session,scopeMode:'auto',knowledgeBaseIds:['kb1']};
+    vi.mocked(getChatSession).mockResolvedValue(automatic);
+    vi.mocked(listChatSessions).mockResolvedValue({items:[automatic],total:1,page:1,pageSize:20});
+    const cite = {documentId:'auto-doc',chunkId:'auto-chunk',filename:'新产品.md',content:'恢复18分钟',pageNumber:null,vectorScore:.8,rerankScore:.9,knowledgeBaseId:'kb2',knowledgeBaseName:'产品库'};
+    vi.mocked(listChatMessages).mockResolvedValue({items:[{...secondSessionMessage,sessionId:'s1',content:'恢复18分钟 [source: 1]',citations:[cite]}]});
+    vi.mocked(getDocument).mockResolvedValue({id:'auto-doc',knowledgeBaseId:'kb2',filename:'新产品.md',fileType:'md',fileSize:100,status:'completed',errorMessage:null,createdAt:'',updatedAt:''});
+    vi.mocked(getDocumentPreview).mockResolvedValue({id:'auto-doc',filename:'新产品.md',kind:'text',fileType:'md',contentType:'text/plain',content:'新产品原文：恢复18分钟',downloadUrl:''});
+    const user=userEvent.setup();
+    renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage/>}/></Routes>,['/chat/s1']);
+    await user.click(await screen.findByRole('button',{name:'1 条来源'}));
+    await user.click(screen.getByRole('button',{name:/打开来源：新产品/}));
+    expect(await screen.findByText('新产品原文：',{exact:false})).toBeInTheDocument();
+  });
+});
+
+
+describe('cross-base conversations', () => {
+  it('creates a fixed multi-base scope from the selected cards', async () => {
+    const multi = { ...session, knowledgeBaseIds: ['kb1', 'kb2'], knowledgeBases: [{id:'kb1',name:'制度库'},{id:'kb2',name:'产品库'}] };
+    vi.mocked(listKnowledgeBases).mockResolvedValue({items:[knowledgeBase,secondKnowledgeBase]});
+    vi.mocked(createChatSession).mockResolvedValue(multi);
+    vi.mocked(getChatSession).mockResolvedValue(multi);
+    vi.mocked(sendChatMessage).mockResolvedValue({...replyFields,answer:'跨库回答',citations:[],rerankFallback:null});
+    const user=userEvent.setup();
+    renderWithRouter(<Routes><Route path="/chat" element={<ChatPage/>}/><Route path="/chat/:sessionId" element={<ChatPage/>}/></Routes>,['/chat?knowledgeBaseId=kb1']);
+    await user.click(await screen.findByRole('button',{name:/产品库/}));
+    expect(screen.getByRole('button',{name:/制度库.*制度说明/})).toHaveAttribute('aria-pressed','true');
+    await user.type(screen.getByRole('textbox',{name:'输入问题'}),'两个库有什么规定');
+    await user.click(screen.getByRole('button',{name:'发送'}));
+    await waitFor(()=>expect(createChatSession).toHaveBeenCalledWith(['kb1','kb2'],''));
+    await waitFor(()=>expect(screen.getByText('跨库会话 · 制度库、产品库')).toBeInTheDocument());
+  });
+
+  it('opens a citation in the secondary base and clears the entire scope on revocation', async () => {
+    const multi={...session,knowledgeBaseIds:['kb1','kb2'],knowledgeBases:[{id:'kb1',name:'制度库'},{id:'kb2',name:'产品库'}]};
+    vi.mocked(listKnowledgeBases).mockResolvedValue({items:[knowledgeBase,secondKnowledgeBase]});
+    vi.mocked(getChatSession).mockResolvedValue(multi);
+    vi.mocked(listChatSessions).mockResolvedValue({items:[multi],total:1,page:1,pageSize:20});
+    const cite={documentId:'doc-secondary',chunkId:'chunk-secondary',filename:'产品规则.md',content:'恢复18分钟',pageNumber:null,vectorScore:.8,rerankScore:.9,knowledgeBaseId:'kb2',knowledgeBaseName:'产品库'};
+    vi.mocked(listChatMessages).mockResolvedValue({items:[{...secondSessionMessage,sessionId:'s1',content:'恢复18分钟 [source: 1]',citations:[cite]}]});
+    vi.mocked(getDocument).mockResolvedValue({id:'doc-secondary',knowledgeBaseId:'kb2',filename:'产品规则.md',fileType:'md',fileSize:100,status:'completed',errorMessage:null,createdAt:'',updatedAt:''});
+    vi.mocked(getDocumentPreview).mockResolvedValue({id:'doc-secondary',filename:'产品规则.md',kind:'text',fileType:'md',contentType:'text/plain',content:'原文：恢复18分钟',downloadUrl:''});
+    const user=userEvent.setup();
+    renderWithRouter(<><Routes><Route path="/chat" element={<ChatPage/>}/><Route path="/chat/:sessionId" element={<ChatPage/>}/></Routes><LocationProbe/></>,['/chat/s1']);
+    await user.click(await screen.findByRole('button',{name:'1 条来源'}));
+    await user.click(screen.getByRole('button',{name:/打开来源：产品规则/}));
+    expect(await screen.findByText('原文：', {exact:false})).toBeInTheDocument();
+    expect(screen.queryByText('该文档不属于当前会话的知识库，请重新选择来源。')).not.toBeInTheDocument();
+    vi.mocked(sendChatMessage).mockRejectedValue(new ApiError(404,{code:'RESOURCE_NOT_FOUND',message:'resource not found'}));
+    vi.mocked(listKnowledgeBases).mockRejectedValue(new Error('refresh unavailable'));
+    await user.type(screen.getByRole('textbox',{name:'输入问题'}),'继续');
+    await user.click(screen.getByRole('button',{name:'发送'}));
+    await waitFor(()=>expect(screen.getByLabelText('当前位置')).toHaveTextContent(/^\/chat$/));
+    expect(screen.queryByText('跨库会话 · 制度库、产品库')).not.toBeInTheDocument();
+    expect(screen.queryByText('原文：恢复18分钟')).not.toBeInTheDocument();
+  });
+});
+
+
+it('finishes a rejected multi-base draft without leaving a stuck send', async () => {
+  vi.mocked(listKnowledgeBases).mockResolvedValue({items:[knowledgeBase,secondKnowledgeBase]});
+  vi.mocked(createChatSession).mockRejectedValue(new ApiError(404,{code:'KNOWLEDGE_BASE_NOT_FOUND',message:'not found'}));
+  const user=userEvent.setup();
+  renderWithRouter(<><Routes><Route path="/chat" element={<ChatPage/>}/></Routes><LocationProbe/></>,['/chat?knowledgeBaseId=kb1&knowledgeBaseIds=kb1,kb2']);
+  const input=await screen.findByRole('textbox',{name:'输入问题'});
+  await waitFor(()=>expect(input).not.toBeDisabled());
+  vi.mocked(listKnowledgeBases).mockRejectedValue(new Error('refresh unavailable'));
+  await user.type(input,'跨库提问');
+  await user.click(screen.getByRole('button',{name:'发送'}));
+  await waitFor(()=>expect(screen.getByLabelText('当前位置')).toHaveTextContent(/^\/chat$/));
+  expect(sendChatMessage).not.toHaveBeenCalled();
+  expect(screen.queryByRole('button',{name:'停止生成'})).not.toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'发送'})).toBeDisabled();
+});

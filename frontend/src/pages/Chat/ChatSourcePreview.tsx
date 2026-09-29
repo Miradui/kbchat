@@ -113,7 +113,7 @@ export function ChatSourcePreview({ citation, index, knowledgeBaseId, canDownloa
         {citation.filename.toLowerCase().endsWith('.docx') ? <FileType aria-hidden="true" /> : <FileText aria-hidden="true" />}
         <div>
           <h3>{state?.document.filename ?? citation.filename}</h3>
-          <p>来源 {index} · {pageNumber ? `第 ${pageNumber} 页` : '未提供页码'}</p>
+          <p>{citation.knowledgeBaseName && `${citation.knowledgeBaseName} · `}来源 {index} · {pageNumber ? `第 ${pageNumber} 页` : '未提供页码'}</p>
         </div>
       </div>
       <details className="chat-preview__excerpt" open>

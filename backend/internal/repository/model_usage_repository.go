@@ -66,7 +66,13 @@ func (r *ModelUsageRepository) Aggregate(ctx context.Context, scope UsageScope, 
 	query := r.scoped(ctx, scope, from, to).
 		Select(group + " AS group_key, " + label + " AS group_label, COALESCE(SUM(model_usage_records.prompt_tokens),0) AS prompt_tokens, COALESCE(SUM(model_usage_records.completion_tokens),0) AS completion_tokens, COALESCE(SUM(model_usage_records.total_tokens),0) AS total_tokens, COUNT(*) AS calls")
 	var rows []UsageAggregate
-	err := query.Group(group).Group(label).Order("group_key asc").Scan(&rows).Error
+	query = query.Group(group)
+	// PostgreSQL rejects a bare string constant in GROUP BY. A constant label
+	// already has the same value throughout every group and needs no grouping.
+	if label != "''" {
+		query = query.Group(label)
+	}
+	err := query.Order("group_key asc").Scan(&rows).Error
 	return rows, err
 }
 

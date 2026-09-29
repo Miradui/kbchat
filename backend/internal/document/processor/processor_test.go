@@ -782,3 +782,7 @@ func decodeChunkMetadata(t *testing.T, raw []byte) map[string]any {
 	}
 	return metadata
 }
+
+func (s *materializingStorage) SaveKnowledgeBaseObject(context.Context, string, io.Reader, int64) error {
+	return errors.New("not implemented")
+}

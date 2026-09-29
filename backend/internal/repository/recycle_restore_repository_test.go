@@ -113,7 +113,7 @@ func TestKnowledgeBaseBatchRestoreRollsBackWhenOneKnowledgeBaseLeavesRecycleBin(
 func migrateKnowledgeBasePermanentDeleteDependencies(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	if err := db.AutoMigrate(
-		&model.ChatSession{},
+		&model.ChatSession{}, &model.ChatSessionKnowledgeBase{},
 		&model.ChatMessage{},
 		&model.KnowledgeBaseMember{},
 		&model.KnowledgeBaseFavorite{},

@@ -56,6 +56,27 @@ func (h *DocumentHandler) Upload(c *gin.Context) {
 	c.JSON(http.StatusCreated, res)
 }
 
+func (h *DocumentHandler) CreateText(c *gin.Context) {
+	actor, id, ok := userAndKnowledgeBaseID(c)
+	if !ok {
+		return
+	}
+	// A JSON character may be encoded as a six-byte escape. The service enforces
+	// the decoded content limit; this bounds the request before JSON decoding.
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, h.maxUploadRequestBytes*6)
+	var req dto.TextDocumentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		RespondError(c, apperror.Validation(map[string]any{"body": "文本请求无效或过大"}))
+		return
+	}
+	res, err := h.documents.CreateText(c.Request.Context(), actor, id, req)
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, res)
+}
+
 func (h *DocumentHandler) UploadGlobal(c *gin.Context) {
 	h.limitUploadBody(c)
 	userID, ok := currentUserIDOrError(c)

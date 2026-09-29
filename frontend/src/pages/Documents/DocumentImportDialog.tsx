@@ -2,6 +2,7 @@ import { Minimize2, Square, Upload, X } from 'lucide-react';
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiError } from '../../api/client';
+import { createTextDocument } from '../../api/resources';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { useToast } from '../../components/feedback/ToastProvider';
 import { useUnsavedChangesWarning } from '../../components/feedback/useUnsavedChangesWarning';
@@ -9,7 +10,7 @@ import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
 import { IconButton } from '../../components/ui/IconButton';
 import { useSystemCapabilities } from '../../hooks/useSystemCapabilities';
-import type { DocumentDuplicateDetails, DocumentItem, SystemCapabilities } from '../../types/api';
+import type { DocumentDuplicateDetails, DocumentItem, SystemCapabilities, TextDocumentInput } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
 import { formatRelativeTime } from '../../utils/format';
 import { formatDocumentBytes } from './documentDisplay';
@@ -45,6 +46,7 @@ function extensionSummary(extensions: string[]): string {
  * misdescribe what happened.
  */
 type ImportItem = {
+  text?: TextDocumentInput;
   error: string;
   file: File;
   key: string;
@@ -60,6 +62,7 @@ type KnowledgeBaseOption = {
 };
 
 type DocumentImportDialogProps = {
+  onCreateText?: (knowledgeBaseId: string, input: TextDocumentInput, signal?: AbortSignal) => Promise<DocumentItem>;
   fixedKnowledgeBaseId?: string;
   fixedKnowledgeBaseName?: string;
   initialKnowledgeBaseId?: string;
@@ -101,6 +104,7 @@ export function DocumentImportDialog({
   onClose,
   onKnowledgeBaseChange,
   onUpload,
+  onCreateText,
   onReplace,
   onUploaded,
   open,
@@ -120,6 +124,12 @@ export function DocumentImportDialog({
   const [uploading, setUploading] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [targetLocked, setTargetLocked] = useState(false);
+  const [mode, setMode] = useState<'file' | 'text'>('file');
+  const [textTitle, setTextTitle] = useState('');
+  const [textContent, setTextContent] = useState('');
+  const [textFormat, setTextFormat] = useState<'md' | 'txt'>('md');
+  const hasTextDraft = Boolean(textTitle || textContent);
+  const textBytes = new Blob([textContent]).size;
 
   useEffect(() => {
     const opening = open && !wasOpenRef.current;
@@ -141,6 +151,7 @@ export function DocumentImportDialog({
     setUploading(false);
     setConfirmDiscard(false);
     setTargetLocked(false);
+    setMode('file'); setTextTitle(''); setTextContent(''); setTextFormat('md');
     setKnowledgeBaseId(
       fixedKnowledgeBaseId
       ?? (knowledgeBases.some((item) => item.id === initialKnowledgeBaseId)
@@ -162,7 +173,7 @@ export function DocumentImportDialog({
     [items],
   );
 
-  useUnsavedChangesWarning(open && items.some((item) => item.status !== 'succeeded'));
+  useUnsavedChangesWarning(open && (hasTextDraft || items.some((item) => item.status !== 'succeeded')));
 
   const knowledgeBaseName = (fixedKnowledgeBaseId ? fixedKnowledgeBaseName : undefined) || knowledgeBases.find((item) => item.id === knowledgeBaseId)?.name || '目标知识库';
   useEffect(() => {
@@ -179,7 +190,7 @@ export function DocumentImportDialog({
       onMinimize?.();
       return;
     }
-    if (items.length > 0) {
+    if (items.length > 0 || hasTextDraft) {
       setConfirmDiscard(true);
       return;
     }
@@ -274,7 +285,7 @@ export function DocumentImportDialog({
         status: 'uploading',
       }));
       try {
-        const document = await onUpload(knowledgeBaseId, item.file, (progress) => {
+        const document = await uploadItem(item, (progress) => {
           if (operationRef.current !== operation) return;
           setItems((current) => updateImportItem(current, item.key, {
             progress: clampProgress(progress),
@@ -422,7 +433,7 @@ export function DocumentImportDialog({
     try {
       const document = choice === 'replace' && onReplace
         ? await onReplace(existingId, item.file, onProgress, controller.signal)
-        : await onUpload(knowledgeBaseId, item.file, onProgress, controller.signal, { allowDuplicate: true });
+        : await uploadItem(item, onProgress, controller.signal, { allowDuplicate: true });
       if (operationRef.current !== operation) return;
       setItems((current) => updateImportItem(current, item.key, {
         duplicate: undefined,
@@ -480,6 +491,21 @@ export function DocumentImportDialog({
     }
   }
 
+  function uploadItem(item: ImportItem, onProgress: (progress: number) => void, signal?: AbortSignal, options?: { allowDuplicate?: boolean }) {
+    if (item.text) return (onCreateText ?? createTextDocument)(knowledgeBaseId, { ...item.text, ...options }, signal);
+    return options ? onUpload(knowledgeBaseId, item.file, onProgress, signal, options) : onUpload(knowledgeBaseId, item.file, onProgress, signal);
+  }
+
+  function addText() {
+    const title = textTitle.trim();
+    if (!title || Array.from(title).length > 200) { setValidationError('标题须为 1–200 个字符。'); return; }
+    if (!textContent.trim()) { setValidationError('正文不能为空。'); return; }
+    if (textBytes > upload.maxFileBytes) { setValidationError('正文大小超过上传限制。'); return; }
+    const file = new File([textContent], `${title}.${textFormat}`, { type: MIME_BY_EXTENSION[textFormat] });
+    setItems((current) => [...current, { file, text: { title, content: textContent, format: textFormat }, key: `text-${crypto.randomUUID()}`, error: '', progress: 0, status: 'pending' }]);
+    setTextTitle(''); setTextContent(''); setValidationError('');
+  }
+
   return (
     <>
       <Dialog
@@ -516,7 +542,18 @@ export function DocumentImportDialog({
           </label>
         )}
 
-        <button
+        <div role="group" aria-label="导入方式">
+          <Button aria-pressed={mode === 'file'} disabled={uploading} onClick={() => setMode('file')} variant="secondary">上传文件</Button>
+          <Button aria-pressed={mode === 'text'} disabled={uploading} onClick={() => setMode('text')} variant="secondary">粘贴文本</Button>
+        </div>
+        {mode === 'text' && <div style={{ display: 'grid', gap: 'var(--s-3)' }}>
+          <label>文档标题<input className="ui-input" aria-label="文档标题" value={textTitle} disabled={uploading} onChange={(event) => setTextTitle(event.target.value)} /></label>
+          <label>文本格式<select className="ui-select" aria-label="文本格式" value={textFormat} disabled={uploading} onChange={(event) => setTextFormat(event.target.value as 'md' | 'txt')}><option value="md">Markdown</option><option value="txt">纯文本</option></select></label>
+          <label>正文<textarea className="ui-textarea" aria-label="正文" rows={8} value={textContent} disabled={uploading} onChange={(event) => setTextContent(event.target.value)} /></label>
+          <p className="ui-muted">{formatDocumentBytes(textBytes)} / {formatDocumentBytes(upload.maxFileBytes)}。加入清单后点击“开始导入”。</p>
+          <Button disabled={uploading} onClick={addText} variant="secondary">加入导入清单</Button>
+        </div>}
+        {mode === 'file' && <><button
           aria-label="拖放或选择文档"
           className="doc-import__dropzone"
           data-autofocus={fixedKnowledgeBaseId ? '' : undefined}
@@ -542,6 +579,7 @@ export function DocumentImportDialog({
           onChange={handleFileInput}
           type="file"
         />
+        </>}
 
         {validationError && <p className="ui-inline-error" role="alert">{validationError}</p>}
 
@@ -609,7 +647,7 @@ export function DocumentImportDialog({
             <>
               <Button onClick={closeSafely} variant="secondary">取消</Button>
               <Button
-                disabled={!knowledgeBaseId || (pendingCount === 0 && failedCount === 0)}
+                disabled={!knowledgeBaseId || hasTextDraft || (pendingCount === 0 && failedCount === 0)}
                 onClick={() => void handleSubmit()}
               >
                 {failedCount > 0 && pendingCount === 0 ? '重试失败项' : '开始导入'}

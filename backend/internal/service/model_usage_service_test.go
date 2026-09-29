@@ -14,6 +14,7 @@ import (
 	"kbchat/backend/internal/dto"
 	"kbchat/backend/internal/model"
 	"kbchat/backend/internal/repository"
+	titlecore "kbchat/backend/internal/title"
 )
 
 // usageProvider reports token usage and records the options it was called
@@ -69,6 +70,39 @@ func listUsageRecords(t *testing.T, w workspaceTestServices) []model.ModelUsageR
 		t.Fatal(err)
 	}
 	return records
+}
+
+type usageTitleProvider struct{}
+
+func (usageTitleProvider) SummarizeTitle(context.Context, []titlecore.Message) (string, error) {
+	return "退货规则", nil
+}
+func (usageTitleProvider) SummarizeTitleWithUsage(context.Context, []titlecore.Message) (string, titlecore.Usage, error) {
+	return "退货规则", titlecore.Usage{Model: "title-model", PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12}, nil
+}
+
+func TestTitleUsageLinksToPersistedFirstAnswer(t *testing.T) {
+	w, _, _ := usageTestServices(t)
+	w.chats.titleProvider = usageTitleProvider{}
+	owner := createWorkspaceUser(t, w.db, "owner")
+	kb := createWorkspaceKB(t, w.db, owner.ID, uuid.Nil, "库", "private", time.Now())
+	session := model.ChatSession{UserID: owner.ID, KnowledgeBaseID: kb.ID, Title: defaultChatSessionTitle}
+	if err := w.db.Create(&session).Error; err != nil {
+		t.Fatal(err)
+	}
+	res, err := w.chats.SendMessage(context.Background(), owner.ID, session.ID, dto.SendChatMessageRequest{Content: "退货规则是什么", ClientRequestID: uuid.NewString()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range listUsageRecords(t, w) {
+		if row.Purpose == "title" {
+			if row.MessageID == nil || row.MessageID.String() != res.AssistantMessage.ID || row.Model != "title-model" {
+				t.Fatalf("title usage not linked: %+v", row)
+			}
+			return
+		}
+	}
+	t.Fatal("title usage missing")
 }
 
 func TestChatUsageRecordsIntentAndAnswerLinkedToTheMessage(t *testing.T) {

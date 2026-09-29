@@ -105,6 +105,50 @@ beforeEach(() => {
 });
 
 describe('DocumentDetailDrawer', () => {
+  it('updates a reprocessed document to completion while keeping its original preview', async () => {
+    vi.mocked(getDocumentPreview).mockResolvedValue({ id: 'doc1', filename: '制度.pdf', fileType: 'pdf', contentType: 'text/plain', kind: 'text', content: '原文预览保持可读', downloadUrl: '' });
+    vi.mocked(listDocumentChunks).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
+    vi.mocked(reprocessDocument).mockResolvedValue({ ...document, status: 'parsing', progress: 10 });
+    renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
+    await screen.findByText('原文预览保持可读');
+    vi.useFakeTimers();
+    try {
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: '重新处理' })); });
+      expect(screen.getByText('原文预览保持可读')).toBeInTheDocument();
+      vi.mocked(getDocument).mockRejectedValueOnce(new Error('temporary progress failure')).mockResolvedValue({ ...document, progress: 100, jobStatus: 'completed' });
+      vi.mocked(listDocumentChunks).mockResolvedValue({ items: [{ ...sourceChunk, content: '重新处理完成后的片段' }], total: 1, page: 1, pageSize: 20 });
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      expect(screen.getByText('原文预览保持可读')).toBeInTheDocument();
+      expect(screen.queryByText('temporary progress failure')).not.toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      expect(screen.getByText('重新处理完成后的片段')).toBeInTheDocument();
+      expect(screen.getByText('原文预览保持可读')).toBeInTheDocument();
+      expect(screen.getAllByText('已完成').length).toBeGreaterThan(0);
+      const calls = vi.mocked(getDocument).mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+      expect(getDocument).toHaveBeenCalledTimes(calls);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('ignores an in-flight progress response after switching documents', async () => {
+    const progress = deferred<DocumentItem>();
+    vi.mocked(reprocessDocument).mockResolvedValue({ ...document, status: 'parsing' });
+    vi.mocked(getDocument).mockResolvedValueOnce(document).mockReturnValueOnce(progress.promise).mockResolvedValue({ ...document, id: 'doc2', filename: '另一份文档.pdf' });
+    vi.mocked(listDocumentChunks).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
+    renderWithRouter(<DocumentSwitchHarness />);
+    await screen.findByText('制度.pdf');
+    await screen.findByRole('button', { name: '重新处理' });
+    vi.useFakeTimers();
+    try {
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: '重新处理' })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: '打开另一文档', hidden: true })); });
+      await act(async () => { progress.resolve(document); });
+      expect(screen.getByText('另一份文档.pdf')).toBeInTheDocument();
+      expect(screen.queryByText('制度.pdf')).not.toBeInTheDocument();
+    } finally { vi.useRealTimers(); }
+  });
+
   it('keeps PDF text readable for a viewer without fetching the original or offering writes', async () => {
     vi.mocked(getKnowledgeBase).mockResolvedValue({ id: 'kb1', capabilities: ['document.read'] } as Awaited<ReturnType<typeof getKnowledgeBase>>);
     vi.mocked(getDocumentPreview).mockResolvedValue({ id: document.id, filename: document.filename, fileType: 'pdf', contentType: 'application/pdf', kind: 'file', downloadUrl: '/documents/doc1/download' });

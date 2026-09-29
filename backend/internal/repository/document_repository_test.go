@@ -163,7 +163,7 @@ func TestKnowledgeBasePermanentDeleteLocksKnowledgeBaseThenDocumentsBeforeDeleti
 	db := newDocumentRepositoryTestDB(t)
 	if err := db.AutoMigrate(
 		&model.DocumentChunk{},
-		&model.ChatSession{},
+		&model.ChatSession{}, &model.ChatSessionKnowledgeBase{},
 		&model.ChatMessage{},
 		&model.KnowledgeBaseMember{},
 		&model.KnowledgeBaseFavorite{},

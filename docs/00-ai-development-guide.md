@@ -169,3 +169,10 @@ citations 只能来自最终进入 Prompt 的 rerank chunks。禁止引用未参
 `backend/internal/service/chat_provider_integration_test.go` 默认跳过。显式设置 `RAG_TEST_CHAT_PROVIDER=1`、`RAG_TEST_CHAT_BASE_URL`、`RAG_TEST_CHAT_API_KEY` 和逗号分隔的 `RAG_TEST_CHAT_MODELS` 后，在 backend 目录运行 `go test ./internal/service -run '^TestRealChatProviderRefusalContract$' -count=1 -v`。密钥只从环境读取，不写入命令、文档或提交。
 
 此测试使用生产回答提示词和拒答处理器，向指定服务发送合成的有依据、资料不足和隐私骚扰问题，分别检查流式与非流式回答；不打开数据库。它会产生真实模型调用及可能的费用，只在任务已授权的目标上启用。结果仅证明所测模型与提示词的合同遵从，不替代完整检索、意图分类或设备验收。
+
+`backend/internal/provider/rerank/real_provider_integration_test.go` 同样默认跳过。显式设置 `RAG_TEST_RERANK_PROVIDER=1`、`RAG_TEST_RERANK_BASE_URL`、`RAG_TEST_RERANK_API_KEY`、`RAG_TEST_RERANK_MODEL` 后，在 backend 目录运行 `go test ./internal/provider/rerank -run '^TestRealRerankProviderContract$' -count=1 -v`。仅向已授权的真实服务发送三组中英文合成问题及干扰文档，不打开数据库；检查目标文档首位、ID 完整且不重复、有限分数与降序结果。测试会产生真实调用和可能的费用，密钥仅从环境读取。样本通过不代表业务语料总体质量提升或阈值已校准；完整检索、Prompt 与 citations 链路需要独立验收。
+
+
+`backend/internal/service/chat_grounding_integration_test.go` 使用同一组显式 `RAG_TEST_CHAT_*` 端点、密钥与模型设置，另设 `RAG_TEST_CHAT_GROUNDING=1` 后运行 `go test ./internal/service -run '^TestRealChatGroundingContract$' -count=1 -v`。默认跳过，不访问数据库；9 类合成依据问题各检查 JSON/SSE，共 18 次真实调用。覆盖部分依据、冲突与范围差异、文档指令、历史误导、补充提示词、严格建议边界与常识标注。断言检查关键内容并接受等价资料不足措辞，输出仍需人工审读；不将词面匹配视为事实证明。运行范围与费用授权遵循上述真实模型边界。
+
+MinIO 集成测试同时覆盖 multipart 和 UTF-8 文本 Reader 的真实存取、字节数与删除；必须显式指定本次测试 bucket，不能对业务 bucket 做清空操作。2026-09-29 的隔离环境与浏览器验收见 [回答依据与实际使用验收](20-grounding-acceptance.md)。

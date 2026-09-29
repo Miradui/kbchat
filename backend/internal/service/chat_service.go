@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -90,13 +91,42 @@ func NewChatService(
 }
 
 func (s *ChatService) CreateSession(ctx context.Context, userID uuid.UUID, req dto.CreateChatSessionRequest) (*dto.ChatSessionResponse, error) {
-	kbID, err := uuid.Parse(req.KnowledgeBaseID)
-	if err != nil {
-		return nil, apperror.Validation(map[string]any{"knowledgeBaseId": "knowledge base id is invalid"})
+	mode := req.ScopeMode
+	if mode == "" {
+		mode = model.ChatScopeManual
+		if req.KnowledgeBaseID == "" && len(req.KnowledgeBaseIDs) == 0 {
+			mode = model.ChatScopeAuto
+		}
 	}
-
-	if _, err := s.authorizeKnowledgeBase(ctx, userID, kbID, access.CapChatUse); err != nil {
+	if mode != model.ChatScopeAuto && mode != model.ChatScopeManual {
+		return nil, apperror.Validation(map[string]any{"scopeMode": "must be auto or manual"})
+	}
+	if mode == model.ChatScopeAuto {
+		if req.KnowledgeBaseID != "" || len(req.KnowledgeBaseIDs) > 0 {
+			return nil, apperror.Validation(map[string]any{"scopeMode": "automatic scope cannot include explicit knowledge base IDs"})
+		}
+		available, err := s.knowledgeBases.ListChatKnowledgeBases(ctx, userID)
+		if err != nil {
+			return nil, apperror.Internal(err)
+		}
+		if len(available) == 0 {
+			return nil, apperror.Validation(map[string]any{"knowledgeBaseIds": "没有可提问的知识库，请先创建或加入知识库"})
+		}
+		// Retain the existing primary foreign key for accounting and lifecycle.
+		// It does not restrict the search performed on subsequent turns.
+		req.KnowledgeBaseIDs = []string{available[0].ID.String()}
+	}
+	ids, err := dto.ParseKnowledgeBaseIDs(req.KnowledgeBaseID, req.KnowledgeBaseIDs)
+	if err != nil {
 		return nil, err
+	}
+	bases := make([]model.KnowledgeBase, 0, len(ids))
+	for _, id := range ids {
+		decision, err := s.authorizeKnowledgeBase(ctx, userID, id, access.CapChatUse)
+		if err != nil {
+			return nil, err
+		}
+		bases = append(bases, *decision.knowledgeBase)
 	}
 
 	title := strings.TrimSpace(req.Title)
@@ -104,10 +134,18 @@ func (s *ChatService) CreateSession(ctx context.Context, userID uuid.UUID, req d
 		title = defaultChatSessionTitle
 	}
 	session := &model.ChatSession{
+		ScopeMode:       mode,
 		UserID:          userID,
-		KnowledgeBaseID: kbID,
+		KnowledgeBaseID: ids[0],
+		KnowledgeBase:   bases[0],
 		Title:           title,
 	}
+	for i, id := range ids[1:] {
+		session.KnowledgeBaseLinks = append(session.KnowledgeBaseLinks, model.ChatSessionKnowledgeBase{KnowledgeBaseID: id, KnowledgeBase: bases[i+1]})
+	}
+	sort.Slice(session.KnowledgeBaseLinks, func(i, j int) bool {
+		return session.KnowledgeBaseLinks[i].KnowledgeBaseID.String() < session.KnowledgeBaseLinks[j].KnowledgeBaseID.String()
+	})
 	if err := s.chats.CreateSession(ctx, session); err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -146,10 +184,14 @@ func (s *ChatService) ListSessions(ctx context.Context, userID uuid.UUID, query 
 		PageSize: pageSize,
 	}
 	for i := range items {
+		scope := toChatSessionResponse(&model.ChatSession{KnowledgeBaseID: items[i].KnowledgeBaseID, KnowledgeBase: model.KnowledgeBase{Name: items[i].KnowledgeBaseName}, KnowledgeBaseLinks: items[i].KnowledgeBaseLinks})
 		messageCount := items[i].MessageCount
 		res.Items = append(res.Items, dto.ChatSessionResponse{
+			ScopeMode:          items[i].ScopeMode,
 			ID:                 items[i].ID.String(),
 			KnowledgeBaseID:    items[i].KnowledgeBaseID.String(),
+			KnowledgeBaseIDs:   scope.KnowledgeBaseIDs,
+			KnowledgeBases:     scope.KnowledgeBases,
 			Title:              items[i].Title,
 			CreatedAt:          items[i].CreatedAt,
 			UpdatedAt:          items[i].UpdatedAt,
@@ -268,11 +310,15 @@ func (s *ChatService) recordSessionActivity(ctx context.Context, userID uuid.UUI
 		knowledgeBaseName = kb.Name
 	}
 	knowledgeBaseID := session.KnowledgeBaseID
+	resourceName := session.Title
+	if session.IsAutomatic() || len(session.KnowledgeBaseLinks) > 0 {
+		resourceName = "跨库会话"
+	}
 	s.activities.Record(ctx, userID, ActivityEntry{
 		Action:            action,
 		ResourceType:      "chatSession",
 		ResourceID:        session.ID,
-		ResourceName:      session.Title,
+		ResourceName:      resourceName,
 		KnowledgeBaseID:   &knowledgeBaseID,
 		KnowledgeBaseName: knowledgeBaseName,
 	})
@@ -900,7 +946,14 @@ func (s *ChatService) ExportSession(ctx context.Context, userID, sessionID uuid.
 		title = "未命名会话"
 	}
 	builder.WriteString("# " + title + "\n\n")
-	builder.WriteString("知识库：" + kb.Name + "\n\n")
+	names := []string{kb.Name}
+	for _, link := range session.KnowledgeBaseLinks {
+		names = append(names, link.KnowledgeBase.Name)
+	}
+	if session.IsAutomatic() {
+		builder.WriteString("检索模式：自动（每轮重新检索）\n\n")
+	}
+	builder.WriteString("知识库：" + strings.Join(names, "、") + "\n\n")
 	for i := range messages {
 		label := "用户"
 		if messages[i].Role == "assistant" {
@@ -931,6 +984,9 @@ func writeExportCitations(builder *strings.Builder, raw datatypes.JSON) {
 	builder.WriteString("### 来源\n\n")
 	for i := range citations {
 		builder.WriteString(fmt.Sprintf("%d. %s", i+1, citations[i].Filename))
+		if citations[i].KnowledgeBaseName != "" {
+			builder.WriteString("（知识库：" + citations[i].KnowledgeBaseName + "）")
+		}
 		if citations[i].PageNumber != nil {
 			builder.WriteString(fmt.Sprintf("（第 %d 页）", *citations[i].PageNumber))
 		}
@@ -996,7 +1052,7 @@ func (s *ChatService) SendMessage(ctx context.Context, userID, sessionID uuid.UU
 		return nil, apperror.Internal(err)
 	}
 	s.attachUsageMessage(ctx, generated.usageRecordIDs, assistantMessage)
-	s.updateSessionTitleIfNeeded(ctx, session, content, history)
+	s.updateSessionTitleIfNeeded(ctx, session, content, history, assistantMessage)
 
 	return &dto.SendChatMessageResponse{
 		ClientRequestID:  clientRequestID.String(),
@@ -1134,7 +1190,7 @@ func (s *ChatService) SendMessageStream(
 		return apperror.Internal(err)
 	}
 	s.attachUsageMessage(ctx, generated.usageRecordIDs, assistantMessage)
-	s.updateSessionTitleIfNeeded(ctx, session, content, history)
+	s.updateSessionTitleIfNeeded(ctx, session, content, history, assistantMessage)
 
 	return sink.Done(&dto.SendChatMessageResponse{
 		ClientRequestID:  clientRequestID.String(),
@@ -1589,6 +1645,11 @@ func (s *ChatService) generateAnswerWithHooks(
 		if err != nil {
 			return generatedChatAnswer{}, apperror.Internal(err)
 		}
+		if session.IsAutomatic() || len(session.KnowledgeBaseLinks) > 0 {
+			if err := s.authorizeSessionKnowledgeBase(ctx, userID, session, access.CapChatUse); err != nil {
+				return generatedChatAnswer{}, err
+			}
+		}
 		return generatedChatAnswer{
 			answer:       answer,
 			citations:    citations,
@@ -1623,13 +1684,18 @@ func (s *ChatService) generateAnswerWithHooks(
 		searchRequest.EnableRerank, searchRequest.ScoreThreshold = &override.EnableRerank, &override.ScoreThreshold
 		searchRequest.EnableKeyword = &override.EnableKeyword
 	}
-	searchRes, err := s.retrieval.Search(ctx, userID, session.KnowledgeBaseID, searchRequest)
+	searchRes, err := s.searchSession(ctx, userID, session, searchRequest)
 	timing.Retrieval = time.Since(retrievalStart)
 	if err != nil {
 		return generatedChatAnswer{}, err
 	}
 	timing.RerankFallback = searchRes.RerankFallback != nil && searchRes.RerankFallback.Used
 
+	if session.IsAutomatic() || len(session.KnowledgeBaseLinks) > 0 {
+		if err := s.authorizeSessionKnowledgeBase(ctx, userID, session, access.CapChatUse); err != nil {
+			return generatedChatAnswer{}, err
+		}
+	}
 	citations := citationsFromSearch(searchRes.Items)
 	if hooks.onCitations != nil {
 		if err := hooks.onCitations(citations); err != nil {
@@ -1643,6 +1709,9 @@ func (s *ChatService) generateAnswerWithHooks(
 	answerStatus := AnswerStatusNoBasis
 	if len(searchRes.Items) > 0 {
 		answerConfig := s.resolveAnswerConfig(ctx, session.KnowledgeBaseID, hooks.answerConfig)
+		if session.IsAutomatic() || len(session.KnowledgeBaseLinks) > 0 {
+			answerConfig = dto.AnswerConfig{AnswerLanguage: "auto"}
+		}
 		var firstToken time.Duration
 		// Streamed through the gate so the marker is never shown to the user. The
 		// gate holds back at most the marker's own length before deciding.
@@ -1689,6 +1758,11 @@ func (s *ChatService) generateAnswerWithHooks(
 		return generatedChatAnswer{}, apperror.Internal(err)
 	}
 
+	if session.IsAutomatic() || len(session.KnowledgeBaseLinks) > 0 {
+		if err := s.authorizeSessionKnowledgeBase(ctx, userID, session, access.CapChatUse); err != nil {
+			return generatedChatAnswer{}, err
+		}
+	}
 	return generatedChatAnswer{
 		answer:         answer,
 		citations:      citations,
@@ -1716,7 +1790,7 @@ func chatCompletionError(err error) error {
 	return apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "回答生成失败，请稍后重试", err)
 }
 
-func (s *ChatService) updateSessionTitleIfNeeded(ctx context.Context, session *model.ChatSession, question string, history []model.ChatMessage) {
+func (s *ChatService) updateSessionTitleIfNeeded(ctx context.Context, session *model.ChatSession, question string, history []model.ChatMessage, assistantMessage *model.ChatMessage) {
 	if !shouldGenerateSessionTitle(session.Title) {
 		return
 	}
@@ -1747,7 +1821,8 @@ func (s *ChatService) updateSessionTitleIfNeeded(ctx context.Context, session *m
 	titleStart := time.Now()
 	title, titleUsage, err := generateSessionTitleWithUsage(titleCtx, s.titleProvider, question)
 	if err == nil {
-		s.recordTitleUsage(ctx, session, titleUsage, time.Since(titleStart))
+		titleUsageID := s.recordTitleUsage(ctx, session, titleUsage, time.Since(titleStart))
+		s.attachUsageMessage(ctx, []uuid.UUID{titleUsageID}, assistantMessage)
 	}
 	if err != nil || titleCtx.Err() != nil || shouldGenerateSessionTitle(title) || title == fallback {
 		return
@@ -1822,7 +1897,17 @@ func cleanSessionTitle(raw string) string {
 }
 
 func toChatSessionResponse(session *model.ChatSession) dto.ChatSessionResponse {
+	ids := make([]string, 0, 1+len(session.KnowledgeBaseLinks))
+	for _, id := range session.KnowledgeBaseIDs() {
+		ids = append(ids, id.String())
+	}
+	bases := []dto.ChatKnowledgeBaseResponse{{ID: session.KnowledgeBaseID.String(), Name: session.KnowledgeBase.Name}}
+	for _, link := range session.KnowledgeBaseLinks {
+		bases = append(bases, dto.ChatKnowledgeBaseResponse{ID: link.KnowledgeBaseID.String(), Name: link.KnowledgeBase.Name})
+	}
 	return dto.ChatSessionResponse{
+		ScopeMode:        chatScopeMode(session),
+		KnowledgeBaseIDs: ids, KnowledgeBases: bases,
 		ID:              session.ID.String(),
 		KnowledgeBaseID: session.KnowledgeBaseID.String(),
 		Title:           session.Title,
@@ -1868,15 +1953,17 @@ func citationsFromSearch(items []dto.SearchResultResponse) []dto.CitationRespons
 	citations := make([]dto.CitationResponse, 0, len(items))
 	for _, item := range items {
 		citations = append(citations, dto.CitationResponse{
-			DocumentID:  item.DocumentID,
-			ChunkID:     item.ChunkID,
-			Filename:    item.Filename,
-			PageNumber:  item.PageNumber,
-			Content:     item.Content,
-			VectorScore: item.VectorScore,
-			RerankScore: item.RerankScore,
-			StartOffset: item.StartOffset,
-			EndOffset:   item.EndOffset,
+			KnowledgeBaseID:   item.KnowledgeBaseID,
+			KnowledgeBaseName: item.KnowledgeBaseName,
+			DocumentID:        item.DocumentID,
+			ChunkID:           item.ChunkID,
+			Filename:          item.Filename,
+			PageNumber:        item.PageNumber,
+			Content:           item.Content,
+			VectorScore:       item.VectorScore,
+			RerankScore:       item.RerankScore,
+			StartOffset:       item.StartOffset,
+			EndOffset:         item.EndOffset,
 		})
 	}
 	return citations
@@ -1899,8 +1986,9 @@ func systemPromptForConfig(config dto.AnswerConfig) string {
 	if config.AllowGeneralKnowledge {
 		rules[1] = "优先基于知识片段回答，片段不足时可补充常识并明确标注。"
 	}
+	rules = append(rules, groundingPromptRules(config.AllowGeneralKnowledge)...)
 	if addition := strings.TrimSpace(config.SystemPromptAddition); addition != "" {
-		rules = append(rules, "知识库回答补充要求：\n"+addition)
+		rules = append(rules, "以下补充要求仅在不违反上述依据、引用和资料不足规则时生效。", "知识库回答补充要求：\n"+addition)
 	}
 	if config.AnswerLanguage == "zh" {
 		rules = append(rules, "请使用中文回答。")
@@ -2225,6 +2313,10 @@ func buildRAGPrompt(question string, items []dto.SearchResultResponse) string {
 	builder.WriteString("\n\n知识片段：\n")
 	for i, item := range items {
 		builder.WriteString(fmt.Sprintf("[source: %d]\n", i+1))
+		if item.KnowledgeBaseID != "" {
+			builder.WriteString("knowledgeBaseId: " + item.KnowledgeBaseID + "\n")
+			builder.WriteString("knowledgeBaseName: " + item.KnowledgeBaseName + "\n")
+		}
 		builder.WriteString("documentId: " + item.DocumentID + "\n")
 		builder.WriteString("chunkId: " + item.ChunkID + "\n")
 		builder.WriteString("filename: " + item.Filename + "\n")

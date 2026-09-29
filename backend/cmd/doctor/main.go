@@ -34,6 +34,14 @@ func main() {
 		log.Fatal("database ping failed", zap.Error(err))
 	}
 	log.Info("database connected")
+	dimension, err := repository.NewSystemRepository(db).EmbeddingColumnDimension(ctx)
+	if err != nil {
+		log.Fatal("read embedding column failed", zap.Error(err))
+	}
+	log.Info("embedding dimensions", zap.Int("column", dimension), zap.Int("configured", cfg.EmbeddingDimension))
+	if err := repository.CheckEmbeddingDimension(dimension, cfg.EmbeddingDimension); err != nil {
+		log.Fatal("embedding schema incompatible", zap.Error(err))
+	}
 
 	// A filtered HNSW scan can come back short before pgvector 0.8.0; retrieval
 	// then reruns it exhaustively, which is correct but slower on large

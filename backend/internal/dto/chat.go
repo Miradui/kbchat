@@ -7,8 +7,10 @@ import (
 )
 
 type CreateChatSessionRequest struct {
-	KnowledgeBaseID string `json:"knowledgeBaseId" binding:"required"`
-	Title           string `json:"title"`
+	ScopeMode        string   `json:"scopeMode"`
+	KnowledgeBaseID  string   `json:"knowledgeBaseId"`
+	KnowledgeBaseIDs []string `json:"knowledgeBaseIds"`
+	Title            string   `json:"title"`
 }
 
 type UpdateChatSessionRequest struct {
@@ -63,12 +65,15 @@ type ChatSessionListQuery struct {
 }
 
 type ChatSessionResponse struct {
-	ID              string     `json:"id"`
-	KnowledgeBaseID string     `json:"knowledgeBaseId"`
-	Title           string     `json:"title"`
-	CreatedAt       time.Time  `json:"createdAt"`
-	UpdatedAt       time.Time  `json:"updatedAt"`
-	ArchivedAt      *time.Time `json:"archivedAt"`
+	ScopeMode        string                      `json:"scopeMode"`
+	KnowledgeBaseIDs []string                    `json:"knowledgeBaseIds"`
+	KnowledgeBases   []ChatKnowledgeBaseResponse `json:"knowledgeBases"`
+	ID               string                      `json:"id"`
+	KnowledgeBaseID  string                      `json:"knowledgeBaseId"`
+	Title            string                      `json:"title"`
+	CreatedAt        time.Time                   `json:"createdAt"`
+	UpdatedAt        time.Time                   `json:"updatedAt"`
+	ArchivedAt       *time.Time                  `json:"archivedAt"`
 	// The three fields below are only populated by the session list endpoint.
 	// Single-session responses (create/get/update/archive/unarchive) omit them
 	// because they do not join the knowledge base or aggregate messages.
@@ -97,13 +102,15 @@ type EditChatMessageRequest struct {
 }
 
 type CitationResponse struct {
-	DocumentID  string   `json:"documentId"`
-	ChunkID     string   `json:"chunkId"`
-	Filename    string   `json:"filename"`
-	PageNumber  *int     `json:"pageNumber"`
-	Content     string   `json:"content"`
-	VectorScore float64  `json:"vectorScore"`
-	RerankScore *float64 `json:"rerankScore"`
+	KnowledgeBaseID   string   `json:"knowledgeBaseId,omitempty"`
+	KnowledgeBaseName string   `json:"knowledgeBaseName,omitempty"`
+	DocumentID        string   `json:"documentId"`
+	ChunkID           string   `json:"chunkId"`
+	Filename          string   `json:"filename"`
+	PageNumber        *int     `json:"pageNumber"`
+	Content           string   `json:"content"`
+	VectorScore       float64  `json:"vectorScore"`
+	RerankScore       *float64 `json:"rerankScore"`
 	// StartOffset and EndOffset carry the retrieval offsets (see
 	// SearchResultResponse). Citations stored before they existed have neither.
 	StartOffset *int `json:"startOffset,omitempty"`

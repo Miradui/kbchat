@@ -20,7 +20,8 @@ const (
 	// Owner-only: deleting the container is not the same act as tidying what is
 	// inside it, and a delegated manager should not be able to remove the thing
 	// they were delegated over.
-	CapKnowledgeBaseDelete Capability = "kb.delete"
+	CapKnowledgeBaseDelete   Capability = "kb.delete"
+	CapKnowledgeBaseTransfer Capability = "kb.transfer"
 
 	// CapDocumentRead covers the document list, detail, preview and chunks.
 	CapDocumentRead Capability = "document.read"
@@ -86,7 +87,8 @@ var minRole = map[Capability]Role{
 	CapMembersWrite:       RoleManager,
 	CapKnowledgeBaseWrite: RoleManager,
 
-	CapKnowledgeBaseDelete: RoleOwner,
+	CapKnowledgeBaseDelete:   RoleOwner,
+	CapKnowledgeBaseTransfer: RoleOwner,
 }
 
 // Capabilities is every capability this build knows about, used by the matrix
@@ -96,6 +98,7 @@ var Capabilities = []Capability{
 	CapKnowledgeBaseSearch,
 	CapKnowledgeBaseWrite,
 	CapKnowledgeBaseDelete,
+	CapKnowledgeBaseTransfer,
 	CapDocumentRead,
 	CapDocumentDownload,
 	CapContentWrite,

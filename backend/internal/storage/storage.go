@@ -24,6 +24,7 @@ type ObjectInfo struct {
 type Storage interface {
 	NewKnowledgeBaseFileLocation(uuid.UUID, string) string
 	SaveKnowledgeBaseFile(context.Context, string, *multipart.FileHeader) error
+	SaveKnowledgeBaseObject(context.Context, string, io.Reader, int64) error
 	Delete(context.Context, string) error
 	Open(context.Context, string) (io.ReadCloser, ObjectInfo, error)
 	Read(context.Context, string) ([]byte, error)
@@ -123,6 +124,10 @@ func (s *RoutedStorage) NewKnowledgeBaseFileLocation(kbID uuid.UUID, filename st
 
 func (s *RoutedStorage) SaveKnowledgeBaseFile(ctx context.Context, location string, file *multipart.FileHeader) error {
 	return s.backend(location).SaveKnowledgeBaseFile(ctx, location, file)
+}
+
+func (s *RoutedStorage) SaveKnowledgeBaseObject(ctx context.Context, location string, reader io.Reader, size int64) error {
+	return s.backend(location).SaveKnowledgeBaseObject(ctx, location, reader, size)
 }
 
 func (s *RoutedStorage) Delete(ctx context.Context, location string) error {

@@ -221,7 +221,7 @@ func TestSendChatMessageRequiresUUIDClientRequestID(t *testing.T) {
 func TestArchiveChatSessionReturnsArchivedSession(t *testing.T) {
 	cfg := config.Config{AppEnv: "test", ServerPort: "0", JWTSecret: "this-is-a-long-router-test-secret-1234", JWTExpiresIn: "1h"}
 	db := testDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.KnowledgeBase{}, &model.ChatSession{}, &model.KnowledgeBaseMember{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.KnowledgeBase{}, &model.ChatSession{}, &model.ChatSessionKnowledgeBase{}, &model.KnowledgeBaseMember{}); err != nil {
 		t.Fatalf("migrate archive test tables: %v", err)
 	}
 	user := model.User{Username: "archive-owner", PasswordHash: "hash"}
@@ -260,7 +260,7 @@ func TestFeedbackAndExportEndpointsReturnHTTPContracts(t *testing.T) {
 		&model.KnowledgeBase{},
 		&model.Document{},
 		&model.DocumentChunk{},
-		&model.ChatSession{},
+		&model.ChatSession{}, &model.ChatSessionKnowledgeBase{},
 		&model.ChatMessage{},
 		// Authorization reads the member table on every knowledge base check.
 		&model.KnowledgeBaseMember{},

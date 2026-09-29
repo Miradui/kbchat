@@ -323,13 +323,13 @@ cd /opt/rag/app/backend
 
 ### 7.4 初始化系统管理员
 
-升级到 2026-09-20 之后的版本还需依次执行 025–028：
+升级到 2026-09-20 之后的版本还需依次执行 025–029：
 
 ```bash
-for m in 025_user_status_and_admin.sql 026_model_usage_records.sql 027_kb_answer_config.sql 028_evaluation_answer_config.sql; do ./bin/rag-migrate -migration $m; done
+for m in 025_user_status_and_admin.sql 026_model_usage_records.sql 027_kb_answer_config.sql 028_evaluation_answer_config.sql 029_document_embedding_identity.sql; do ./bin/rag-migrate -migration $m; done
 ```
 
-025 为 `users` 增加状态与最近登录时间；026 新建 `model_usage_records`；027 为 `knowledge_bases` 增加 `answer_config`；028 为 `evaluation_runs` 增加 `answer_config` 快照。四个迁移都是 `ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS`，可重复执行，耗时与表锁都很短。新版 backend 启动时会检查 024–028 对应的列与表，缺失时直接报错并指出需要的迁移文件。
+025 为 `users` 增加状态与最近登录时间；026 新建 `model_usage_records`；027 为 `knowledge_bases` 增加 `answer_config`；028 为 `evaluation_runs` 增加 `answer_config` 快照。029 增加文档向量来源，存量值保持未知。这些迁移都是 `ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS`，可重复执行，耗时与表锁都很短。新版 backend 启动时会检查 024–029 对应的列与表，缺失时直接报错并指出需要的迁移文件。
 
 先执行数据库迁移，再通过 CLI 指定首位系统管理员。新部署可直接创建账号，密码至少 8 个字符、最多 72 个 UTF-8 字节：
 
@@ -597,3 +597,38 @@ try_files $uri $uri/ /index.html;
 - 自动化发布、滚动升级和一键回滚。
 
 在这些能力补齐前，不应宣称当前仓库支持完整的一键容器化生产部署。
+
+## Embedding 模型切换与重建
+
+升级前执行 `go run ./cmd/migrate -migration 029_document_embedding_identity.sql`。迁移可重复执行，只增加两个可空列，不改存量向量。新版 server 在启动 worker 前验证向量列维度，doctor 同样报告不匹配。
+
+在 backend 目录执行：
+
+```powershell
+go run ./cmd/reembed -dry-run
+go run ./cmd/reembed -kb <知识库UUID> -dry-run -batch 100
+go run ./cmd/reembed -batch 100
+go run ./cmd/reembed -only-mismatched=false -batch 100
+```
+
+`-kb` 缺省扫描全部知识库；`-batch` 为 1–1000，默认 100。默认只选择来源未知或模型/维度不匹配的文档（含仍可检索的历史版本），跳过已删除知识库、已删除文档和已有 pending/running 处理任务。`-dry-run` 不迁移、不写库；正常模式在文档锁内复查条件，再通过现有重处理队列排队。CLI 输出 selected/queued；它不等待 worker 完成。重复执行会跳过活动任务和已经匹配的文档。通过诊断与文档状态确认完成和失败项。
+
+同维度换模型：暂停对外检索，修改模型配置，启动单个 worker，先 dry-run 后执行 reembed；完成后确认未知/不匹配归零并用样例问答复验再开放。若重建期间继续查询，新旧向量混用会降低质量。只改配置不会自动重建。
+
+改维度：备份数据库和源文件、停止写入与检索，准备针对实际目标维度的 SQL 迁移。先移除 HNSW 索引，清空旧向量（旧维度不能直接当作新维度向量），把列类型改为 `vector(目标维度)`，重建 `vector_cosine_ops` HNSW 索引并更新配置；经 doctor 校验后执行 `reembed -only-mismatched=false`，全部完成并验证后再开放。该维护操作应作为单独的部署变更审核，不能用 029 代替。重处理会更换 chunk ID；旧 citations 保留内容/页码/偏移，但其 chunkId 跳转可能失效。
+
+当前 document worker 仍要求单实例。部署多实例或重叠滚动发布之前必须完成 P14 租约与 fencing；共享文件需要 MinIO，诊断指标仍按进程统计，Redis 故障默认放行。
+
+
+## 多库会话发布（迁移 030）
+
+新版服务启动前，在已有 029 的基础上执行 `go run ./cmd/migrate -migration 030_chat_session_knowledge_bases.sql`（backend目录）；已有数据库按7.3逐项升级，不使用不带参数的迁移命令。迁移可重复执行；旧会话继续单库，已有文档无需重新 Embedding。必须同时发布支持新响应字段的前端与后端；旧后端只校验首选库，创建跨库会话后不能降级运行旧后端。
+
+最初多库验收仅在隔离 schema 执行001–030；用户随后于2026-09-29授权更新当前数据库，postgres/public 已执行029/030/031。根 `.env` 保持原值，尤其 `RERANK_ENABLED=false`；标准精排需要部署者启用真实 Rerank 配置。所有库继续共享 Embedding，禁止直接切模型而保留不同空间的旧向量。多库不改变单实例 worker 限制。
+
+
+## 自动检索发布（迁移 031）
+
+在 030 基础上执行 `031_chat_automatic_scope.sql`（入口 `cd backend; go run ./cmd/migrate -migration 031_chat_automatic_scope.sql`），同时发布前后端。迁移可重复执行，现有会话保持 manual，新建无范围会话默认 auto；不重建向量。自动会话必须由支持每轮授权与历史依赖累计的后端处理，不能降级到不识别 scope_mode 的版本。
+
+代码验证使用本地 fixture。用户随后授权更新当前数据库，已于2026-09-29对配置中的 postgres/public 执行029/030/031；所需表、字段、默认值和约束及启动结构检查通过，15个旧会话全部保持manual，业务行数不变。根 `.env` 未修改，本次未重启后端或启动worker；应用需运行对应新版前后端。Rerank 继续受全局开关控制；不要把关闭状态的结果标为已精排。

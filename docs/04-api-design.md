@@ -380,7 +380,9 @@ knowledgeBase.created / knowledgeBase.deleted / knowledgeBase.restored
 document.uploaded / document.deleted / document.restored / document.moved / document.cancelled
 member.added / member.roleChanged / member.removed
 chatSession.deleted / chatSession.restored
-admin.user.created / admin.user.updated / admin.user.passwordReset / admin.user.roleChanged
+admin.user.created / admin.user.updated / admin.user.disabled / admin.user.enabled
+admin.user.passwordReset / admin.user.roleChanged
+kb.ownership_transferred
 ```
 
 `admin.user.*` 只由系统管理员在 `/admin/users` 上的操作写入，`resourceType=user`、`resourceName` 为目标用户名，没有 `knowledgeBaseId`。
@@ -438,6 +440,7 @@ admin.user.created / admin.user.updated / admin.user.passwordReset / admin.user.
 | `kb.search` | 检索该知识库，含全局搜索命中 | ✓ | ✓ | ✓ | ✓ |
 | `kb.write` | 修改名称、描述、分类、标签、visibility | | | ✓ | ✓ |
 | `kb.delete` | 软删除与恢复知识库 | | | | ✓ |
+| `kb.transfer` | 转移知识库所有权 | | | | ✓ |
 | `document.read` | 文档列表、详情、预览、分块 | ✓ | ✓ | ✓ | ✓ |
 | `document.download` | 下载原始上传文件 | | ✓ | ✓ | ✓ |
 | `content.write` | 上传、替换、改元数据、重新处理、软删除与恢复 | | ✓ | ✓ | ✓ |
@@ -1386,7 +1389,7 @@ pageSize=20
 }
 ```
 
-`total` 是当前 `type` 筛选下的总命中数。`type=all` 时，知识库和文档按更新时间、chunk 按创建时间排序，并以 ID 作为稳定次序键，再按知识库、文档、chunk 轮转输出，避免单一类型占满分页。越界页返回空 `items`，但保留真实 `total/page/pageSize`。该接口为关键词搜索；语义检索仍使用知识库内 `POST /knowledge-bases/:kbId/search`。
+`total` 是当前 `type` 筛选下的总命中数。`type=all` 时，知识库和文档按更新时间、chunk 按创建时间排序，并以 ID 作为稳定次序键，再按知识库、文档、chunk 轮转输出，避免单一类型占满分页。越界页返回空 `items`，但保留真实 `total/page/pageSize`。该接口为关键词搜索；语义检索使用单库 `POST /knowledge-bases/:kbId/search` 或多库 `POST /knowledge-bases/search`。
 
 **highlights 的偏移量口径**
 
@@ -1600,7 +1603,36 @@ limit=10
 }
 ```
 
+## 多知识库语义检索
+
+`POST /knowledge-bases/search` 接收 `knowledgeBaseIds`（1–5 个不重复 UUID）以及单库 SearchRequest 的全部字段。所有库逐一检查 `kb.search`，任一库不可访问则整个请求失败，鉴权全部完成后才调用模型。`GET /search` 仍是关键词全局搜索。
+
+```json
+{"knowledgeBaseIds":["kb_a_uuid","kb_b_uuid"],"query":"两个库中的规定分别是什么？","debug":true}
+```
+
+只选一个库沿用单库设置；多个库使用系统检索默认值，显式请求字段可覆盖，仍服从全局 Rerank/关键词开关与上限。每库召回向量和关键词后在库内融合，各库轮流提供候选，空库不占名额；总候选最多 `max(vectorTopN, 库数)`，再统一 Rerank、阈值过滤和 TopK。统一 Embedding，查询只向量化一次。精排失败策略沿用 strict/fallback；任何库关键词失败时全体改用向量候选，避免混用分数尺度。
+
+返回原 SearchResponse，每个 `items` 增加 `knowledgeBaseId`、`knowledgeBaseName`。debug 的召回阶段包含各库原始候选，精排/最终阶段对应合并后的全局列表。单库接口也返回来源库字段。
+
 ## Chat
+
+### 自动检索与手动多库会话合同（迁移 030/031）
+
+创建增加 `scopeMode: "auto" | "manual"`。不传范围和模式（例如 `{}`）默认自动；`{"scopeMode":"auto"}` 每轮检索调用者当前拥有或具备 `chat.use` 的全部未删除知识库，支持根据问题使用不同库、后续新建/新授权的库，不受手动 5 库上限或前端列表分页限制。没有可提问库时返回 400 `VALIDATION_ERROR`。自动模式同时传入非空库 ID、未知模式均返回 400。
+
+手动模式支持 `knowledgeBaseIds`（1–5 个不重复 UUID）；旧 `knowledgeBaseId` 继续支持。只传库 ID 时推断为 manual；明确 manual 却不传库 ID 返回 400。两个字段同时提供时，单值必须等于数组首项。逐库要求 `chat.use`，不跳过无权限库。手动范围和会话模式创建后固定，改为另一种模式/手动范围需新建对话；自动模式的本轮来源可随问题变化。
+
+所有创建、详情、列表、重命名、归档/取消归档、恢复响应包含 `scopeMode`、`knowledgeBaseIds` 和 `knowledgeBases: [{id,name}]`。旧 `knowledgeBaseId` 保留为首选库，负责用量归属；其余库按 ID 排序返回，不具有优先回答意义。自动会话为兼容现有外键和用量模型，在创建时从可访问库中按创建时间降序、ID 升序选一个首选库；该库也是会话生命周期依赖，但不限定检索范围。自动模式的 `knowledgeBaseIds` 表示首选库与历次送入回答 Prompt 的来源库累计集合，不是本轮检索范围；本轮来源以消息 citations 为准。
+
+自动检索在输出引用或调用回答模型前，将本轮进入 Prompt 的来源库去重追加到附加关联表，先检查当前权限。关联只增加、不因换库、编辑或重生成移除；中断/失败的生成可能留下保守的访问依赖。未进入 Prompt 且非首选库的已扫描库不成为历史依赖。单库质量/缺口视图也排除只有一个关联库的自动会话。
+
+所有会话操作同时检查 `user_id` 和每个关联库所需能力。任一库撤权或软删除，整段会话从列表/回收站隐藏，详情、消息、发送（JSON/SSE）、反馈、编辑、重新生成和导出不可访问；会话 ID 入口统一 404 `RESOURCE_NOT_FOUND`。恢复权限/知识库后原会话可重新访问。永久删除任一关联库会删除整段跨库会话及消息，不缩小范围后保留旧历史。系统管理员不绕过这些规则。
+
+自动模式（即使当前仅一个库）和手动跨库问答使用系统检索参数、默认 Chat 模型和严格依据规则（自动语言、禁止常识补充），不合并单库提示词、模型或阈值。手动单库问答继续沿用该库配置。统一精排后的片段是唯一引用来源；citations 增加 `knowledgeBaseId`、`knowledgeBaseName`，旧历史引用可缺失。导出列出全部库和引用所属库；同名文档按库、文档 ID、片段 ID 区分。
+
+跨库 intent/answer/title 用量只计入首选库一次，用户/模型/用途统计不重复；不是每库成本分摊。单库质量概览、负反馈列表、知识缺口和从缺口保存评测的入口排除跨库会话，避免向单库管理者暴露其他库资料。评测运行仍以单库为单位。跨库会话活动使用通用名称“跨库会话”，不把问题生成的标题复制到活动记录。
+
 
 ### POST /chat/sessions
 
@@ -1619,7 +1651,7 @@ limit=10
 
 ### GET /chat/sessions
 
-只返回当前用户会话，并要求关联知识库仍存在且归当前用户所有。
+只返回当前用户会话，并要求全部关联知识库仍存在且当前用户具有 `chat.use`。
 
 查询参数：
 
@@ -1627,7 +1659,7 @@ limit=10
 GET /chat/sessions?knowledgeBaseId=&archived=false&q=&page=1&pageSize=20
 ```
 
-- `knowledgeBaseId`：限定某个知识库，缺省返回全部
+- `knowledgeBaseId`：筛选范围包含该库的会话（含作为附加库的跨库会话），缺省返回全部
 - `archived`：`false`（默认）只返回未归档会话，`true` 只返回已归档会话；不支持一次返回两者
 - `q`：按会话标题模糊匹配，不检索消息内容（消息内容检索走 `GET /search`）
 - `page` / `pageSize`：默认 `1` / `20`，`pageSize` 上限 100
@@ -1661,7 +1693,7 @@ GET /chat/sessions?knowledgeBaseId=&archived=false&q=&page=1&pageSize=20
 
 ### GET /chat/sessions/:id
 
-返回当前用户的单个会话。必须校验 session 属于当前用户，且知识库属于当前用户。
+返回当前用户的单个会话。必须校验 session 属于当前用户，且对每个关联知识库均具有 `chat.use`。
 
 ```json
 {
@@ -1701,7 +1733,7 @@ Markdown 按消息创建时间升序包含会话标题、`知识库：<名称>`�
 
 ### DELETE /chat/sessions/:id
 
-**软删除**当前用户会话，会话进入聊天回收站。必须校验 session 属于当前用户，且知识库属于当前用户。
+**软删除**当前用户会话，会话进入聊天回收站。必须校验 session 属于当前用户，且对每个关联知识库均具有 `chat.use`。
 
 **消息会保留**：恢复后应该拿回原来的对话，一个没有历史的会话与新建会话无法区分。消息只在永久删除时才清理。
 
@@ -1747,7 +1779,7 @@ Markdown 按消息创建时间升序包含会话标题、`知识库：<名称>`�
 
 ### POST /chat/sessions/:id/archive
 
-归档当前用户会话。必须校验 session 属于当前用户，且知识库属于当前用户。归档后默认 `GET /chat/sessions` 不再返回该会话，但 `GET /chat/sessions/:id` 仍可查看详情并返回 `archivedAt`。该接口幂等。
+归档当前用户会话。必须校验 session 属于当前用户，且对每个关联知识库均具有 `chat.use`。归档后默认 `GET /chat/sessions` 不再返回该会话，但 `GET /chat/sessions/:id` 仍可查看详情并返回 `archivedAt`。该接口幂等。
 
 成功响应为 `200 OK`，返回归档后的会话；重复归档返回同一个 `archivedAt`：
 
@@ -1764,7 +1796,7 @@ Markdown 按消息创建时间升序包含会话标题、`知识库：<名称>`�
 
 ### POST /chat/sessions/:id/unarchive
 
-归档的反向操作，把会话放回默认列表。必须校验 session 属于当前用户，且知识库属于当前用户。该接口幂等：对未归档会话调用直接返回当前会话。
+归档的反向操作，把会话放回默认列表。必须校验 session 属于当前用户，且对每个关联知识库均具有 `chat.use`。该接口幂等：对未归档会话调用直接返回当前会话。
 
 成功响应为 `200 OK`，`archivedAt` 为 `null`：
 
@@ -1781,7 +1813,7 @@ Markdown 按消息创建时间升序包含会话标题、`知识库：<名称>`�
 
 ### GET /chat/sessions/:id/messages
 
-必须校验 session 属于当前用户，且知识库属于当前用户。
+必须校验 session 属于当前用户，且对每个关联知识库均具有 `chat.use`。
 
 消息项包含 `clientRequestId`；历史消息或 regenerate 产生的 assistant 消息可为 `null`。客户端用该字段确定性核对发送结果，不得按消息数量或文本相等推测。
 
@@ -2627,3 +2659,30 @@ OpenAI 兼容接口里没有免费的 ping。为了检查而发一次 completion
 - 跨知识库列表的可达性写在查询里，角色集合来自 `access.MemberRolesWith`
 - 知识库回收站保持 owner 独有，不走矩阵（回收站是 owner 的私有空间）
 - 本阶段不引入组织树、SSO 或通用策略引擎
+
+## 管理员操作记录与知识库转移
+
+`GET /admin/activities` 由 `RequireSystemAdmin` 保护，未登录 401，非管理员 403 `SYSTEM_ADMIN_REQUIRED`。查询 `page=1&pageSize=20`，每页最大 100。返回 `{items,total,page,pageSize}`，只包含 `admin.` 前缀活动，按时间倒序，覆盖所有操作者。每项为 `{id,action,resourceType,resourceId,resourceName,actor:{id,username,displayName},createdAt}`。不公开其他用户的知识库活动。禁用和启用分别记录 `admin.user.disabled`、`admin.user.enabled`；显示名实际变化时才记录 `admin.user.updated`。
+
+`GET /admin/users` 的每项新增 `ownedKnowledgeBaseCount`，包括已软删除的知识库。以下转移接口都接收 `{newOwnerId,keepPreviousOwnerAsManager}`，成功返回 200 `{transferredCount}`：
+
+| 接口 | 权限与范围 |
+| --- | --- |
+| `POST /knowledge-bases/:id/transfer-ownership` | `kb.transfer`，仅当前所有者，知识库须未删除；无权限成员 403，陌生人或已删除资源 404 |
+| `POST /admin/users/:id/transfer-knowledge-bases` | 系统管理员，将该用户所有知识库（含回收站）作为一个原子批次转移 |
+
+新所有者必须存在、启用且与旧所有者不同，否则 400 `TRANSFER_TARGET_INVALID`；管理员入口的原用户不存在返回 404 `USER_NOT_FOUND`。锁内检测到单库所有权或状态已变化返回 409 `OWNERSHIP_CHANGED`。事务按固定顺序锁定用户与知识库行，整个批次成功或回滚。新所有者原成员行移除；`keepPreviousOwnerAsManager=true` 时旧所有者成为 manager，否则移除其成员身份。分类不属于新所有者时清空；标签、收藏、浏览历史、其他成员、文档与会话保持。会话仍须同时满足知识库访问与 `chat_sessions.user_id` 校验。`updated_by_id` 记录操作者；为操作者和新所有者记录 `kb.ownership_transferred`，同一人只记一次。
+
+## 粘贴文本创建文档
+
+`POST /knowledge-bases/:id/documents/text` 要求 `content.write`，请求：
+
+```json
+{"title":"设备维护手册","content":"# 维护\n每 90 天检查一次。","format":"md","allowDuplicate":false}
+```
+
+`title` trim 后 1–200 个 Unicode 字符；非法文件名字符替换为下划线，再追加扩展名。`format` 仅 `md` / `txt`，缺省 `md`；正文不能全为空白，UTF-8 字节数不超过 `MAX_UPLOAD_SIZE_MB`。非法输入返回 `VALIDATION_ERROR`。正文原始字节参与哈希与存储；与 multipart 上传共享查重、清理预留、文档和任务事务、活动记录与后台处理。成功 201，响应与上传文档相同；重复内容返回 409 `DOCUMENT_DUPLICATE_CONTENT`，`allowDuplicate=true` 可明确保留重复副本。
+
+## Embedding 诊断
+
+`GET /system/diagnostics` 新增 `embedding`：`status`、`model`、`configuredDimension`、`columnDimension`、`totalDocuments`、`unknownDocuments`、`mismatchedDocuments`、`groups`。每个 group 为 `{model,dimension,count}`；未知值为 null。只统计知识库和文档均未删除、状态 completed 的文档，包含仍可检索的历史版本。未知与不匹配分别计数；有任一异常时为 degraded，查询失败为 down，不能把失败解释为零文档。原有管理员权限保持。

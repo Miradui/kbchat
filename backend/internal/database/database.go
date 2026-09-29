@@ -125,12 +125,19 @@ func validateSchema(ctx context.Context, db *gorm.DB) error {
 		}{
 			{&model.DocumentChunk{}, "search_vector", "024_hybrid_search.sql"},
 			{&model.User{}, "status", "025_user_status_and_admin.sql"},
+			{&model.User{}, "created_by", "025_user_status_and_admin.sql"},
 			{&model.KnowledgeBase{}, "answer_config", "027_kb_answer_config.sql"},
 			{&model.EvaluationRun{}, "answer_config", "028_evaluation_answer_config.sql"},
+			{&model.Document{}, "embedding_model", "029_document_embedding_identity.sql"},
+			{&model.Document{}, "embedding_dimension", "029_document_embedding_identity.sql"},
+			{&model.ChatSession{}, "scope_mode", "031_chat_automatic_scope.sql"},
 		} {
 			if !migrator.HasColumn(required.model, required.column) {
 				return fmt.Errorf("database schema incompatible: missing %s; apply migration %s", required.column, required.migration)
 			}
+		}
+		if !migrator.HasTable(&model.ChatSessionKnowledgeBase{}) {
+			return fmt.Errorf("database schema incompatible: missing chat_session_knowledge_bases; apply migration 030_chat_session_knowledge_bases.sql")
 		}
 		if !migrator.HasTable(&model.ModelUsageRecord{}) {
 			return fmt.Errorf("database schema incompatible: missing model_usage_records; apply migration 026_model_usage_records.sql")
@@ -152,6 +159,7 @@ func autoMigrateModels() []any {
 		&model.StorageCleanupJob{},
 		&model.DocumentChunk{},
 		&model.ChatSession{},
+		&model.ChatSessionKnowledgeBase{},
 		&model.ChatMessage{},
 		&model.EvaluationCase{},
 		&model.EvaluationRun{},

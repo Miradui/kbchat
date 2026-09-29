@@ -217,6 +217,7 @@ function SessionItem({ session, active, disabled, actionsDisabled, items, onNavi
         <span className="ui-truncate">{title}</span>
         {session.lastMessagePreview && <span className="chat-rail__preview ui-truncate">{session.lastMessagePreview}</span>}
         <small>
+          {session.scopeMode === 'auto' ? '自动检索 · ' : (session.knowledgeBaseIds?.length ?? 0) > 1 && `${session.knowledgeBaseIds?.length} 个知识库 · `}
           {formatRelativeTime(session.updatedAt || session.createdAt)}
           {session.messageCount !== undefined && ` · ${session.messageCount} 条消息`}
         </small>

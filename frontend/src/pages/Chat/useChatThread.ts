@@ -61,8 +61,11 @@ type RateLimitNotice = RetryNotice & {
 type UseChatThreadOptions = {
   sessionId?: string;
   draftKnowledgeBaseId?: string;
+  draftKnowledgeBaseIds?: string[];
+  draftScopeMode?: 'auto' | 'manual';
   onSessionCreated: (session: ChatSession) => void;
   onSessionsChanged: () => void;
+  onAccessLost?: (sessionId: string) => void;
 };
 
 /**
@@ -77,8 +80,11 @@ type UseChatThreadOptions = {
 export function useChatThread({
   sessionId,
   draftKnowledgeBaseId,
+  draftKnowledgeBaseIds,
+  draftScopeMode = 'manual',
   onSessionCreated,
   onSessionsChanged,
+  onAccessLost,
 }: UseChatThreadOptions) {
   const isDraft = !sessionId;
   const [session, setSession] = useState<ChatSession | null>(null);
@@ -117,6 +123,8 @@ export function useChatThread({
   const reconcileSequenceRef = useRef(0);
   const onSessionsChangedRef = useRef(onSessionsChanged);
   onSessionsChangedRef.current = onSessionsChanged;
+  const onAccessLostRef = useRef(onAccessLost);
+  onAccessLostRef.current = onAccessLost;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -143,6 +151,27 @@ export function useChatThread({
     reconcileSequenceRef.current += 1;
     sendCheckTokenRef.current = null;
   }, []);
+
+  const handleAccessLost = useCallback((caught: unknown, targetSessionId: string) => {
+    if (!(caught instanceof ApiError) || (caught.status !== 403 && caught.status !== 404)) return false;
+    clearAutoChecks();
+    pendingChatRequestStore.clear(targetSessionId);
+    pendingChatEditStore.clear(targetSessionId);
+    pendingRegenerationStore.clear(targetSessionId);
+    setMessages([]);
+    setSession(null);
+    setFailedSend(null);
+    setUnconfirmedSend(null);
+    setRegeneration(null);
+    setStoppedStream(null);
+    setSending(false);
+    setPendingQuestion('');
+    setStreamingAnswer('');
+    setStreamingCitations([]);
+    setLoadError('会话已不可访问，可能已删除或访问权限发生变化。');
+    onAccessLostRef.current?.(targetSessionId);
+    return true;
+  }, [clearAutoChecks, setStreamingAnswer]);
 
   const loadThread = useCallback(async (targetSessionId: string) => {
     const request = ++loadRequestRef.current;
@@ -267,13 +296,13 @@ export function useChatThread({
     sequence: number,
   ): Promise<ReconcileResult> => {
     const targetSessionId = pending.sessionId;
-    if (activeSessionRef.current !== targetSessionId) return 'unknown';
+    if ((activeSessionRef.current ?? '') !== targetSessionId) return 'unknown';
 
     try {
       const response = await listChatMessages(targetSessionId);
       if (
         !mountedRef.current
-        || activeSessionRef.current !== targetSessionId
+        || (activeSessionRef.current ?? '') !== targetSessionId
         || reconcileSequenceRef.current !== sequence
       ) return 'unknown';
       setMessages(response.items);
@@ -343,7 +372,7 @@ export function useChatThread({
     ) return;
     if (unconfirmedSend && !options.resend) return;
     if (stoppedStream && !stoppedStream.resumable && !options.resend) return;
-    if (isDraft && !draftKnowledgeBaseId) return;
+    if (isDraft && draftScopeMode !== 'auto' && !draftKnowledgeBaseId && !draftKnowledgeBaseIds?.length) return;
 
     const token = Symbol('send-message');
     sendTokenRef.current = token;
@@ -369,7 +398,7 @@ export function useChatThread({
 
     try {
       if (isDraft) {
-        const created = await createChatSession(draftKnowledgeBaseId as string, '');
+        const created = await createChatSession(draftScopeMode === 'auto' ? undefined : draftKnowledgeBaseIds?.length ? draftKnowledgeBaseIds : draftKnowledgeBaseId, '');
         if (!mountedRef.current || sendTokenRef.current !== token) return;
         targetSessionId = created.id;
         activeSessionRef.current = created.id;
@@ -427,13 +456,15 @@ export function useChatThread({
       }
     } catch (caught) {
       if (streamController && sendAbortRef.current === streamController) sendAbortRef.current = null;
-      if (!mountedRef.current || sendTokenRef.current !== token || activeSessionRef.current !== targetSessionId) {
+      if (!mountedRef.current || sendTokenRef.current !== token || (activeSessionRef.current ?? '') !== targetSessionId) {
         return;
       }
       const userCancelled = cancelRequestedRef.current === token;
       cancelRequestedRef.current = null;
       sendTokenRef.current = null;
       if (draftSendSessionRef.current === targetSessionId) draftSendSessionRef.current = null;
+
+      if (handleAccessLost(caught, targetSessionId)) return;
 
       if (userCancelled && messageRequestStarted) {
         const pending: PendingChatRequest = {
@@ -498,7 +529,7 @@ export function useChatThread({
       return;
     }
 
-    if (!mountedRef.current || sendTokenRef.current !== token || activeSessionRef.current !== targetSessionId) {
+    if (!mountedRef.current || sendTokenRef.current !== token || (activeSessionRef.current ?? '') !== targetSessionId) {
       if (draftSendSessionRef.current === targetSessionId) draftSendSessionRef.current = null;
       return;
     }
@@ -534,7 +565,10 @@ export function useChatThread({
     }
   }, [
     clearAutoChecks,
+    handleAccessLost,
     draftKnowledgeBaseId,
+    draftKnowledgeBaseIds,
+    draftScopeMode,
     isDraft,
     onSessionCreated,
     setStreamingAnswer,
@@ -603,7 +637,7 @@ export function useChatThread({
     try {
       const response = await regenerateChatMessage(targetSessionId, messageId);
       pendingRegenerationStore.clear(targetSessionId, messageId);
-      if (!mountedRef.current || activeSessionRef.current !== targetSessionId || regenerateTokenRef.current !== token) {
+      if (!mountedRef.current || (activeSessionRef.current ?? '') !== targetSessionId || regenerateTokenRef.current !== token) {
         return;
       }
       setRerankFallback(response.rerankFallback?.used ? response.rerankFallback : null);
@@ -621,6 +655,7 @@ export function useChatThread({
       const definitive = rateLimited || (caught instanceof ApiError && isDefinitiveSendFailure(caught));
       if (definitive) pendingRegenerationStore.clear(targetSessionId, messageId);
       if (mountedRef.current && activeSessionRef.current === targetSessionId && regenerateTokenRef.current === token) {
+        if (handleAccessLost(caught, targetSessionId)) return;
         if (rateLimited) {
           setRateLimitNotice({ ...retryNotice(caught), question: null });
           setRegeneration(null);
@@ -643,7 +678,7 @@ export function useChatThread({
         if (mountedRef.current) setRegeneratingId(null);
       }
     }
-  }, [messages, onSessionsChanged, sessionId]);
+  }, [handleAccessLost, messages, onSessionsChanged, sessionId]);
 
   const checkRegeneration = useCallback(async () => {
     if (
@@ -731,7 +766,7 @@ export function useChatThread({
         clientRequestId,
       });
       pendingChatEditStore.clear(targetSessionId, clientRequestId);
-      if (!mountedRef.current || activeSessionRef.current !== targetSessionId || editTokenRef.current !== token) return;
+      if (!mountedRef.current || (activeSessionRef.current ?? '') !== targetSessionId || editTokenRef.current !== token) return;
       setMessages((current) => {
         const index = current.findIndex((message) => message.id === messageId);
         if (index < 0) return [response.userMessage, response.assistantMessage];
@@ -741,6 +776,8 @@ export function useChatThread({
       setRerankFallback(response.rerankFallback?.used ? response.rerankFallback : null);
       onSessionsChangedRef.current();
     } catch (caught) {
+      if (mountedRef.current && activeSessionRef.current === targetSessionId && editTokenRef.current === token
+        && handleAccessLost(caught, targetSessionId)) return;
       if (caught instanceof ApiError && isDefinitiveSendFailure(caught)) {
         pendingChatEditStore.clear(targetSessionId, clientRequestId);
         throw caught;
@@ -770,7 +807,7 @@ export function useChatThread({
         if (mountedRef.current) setEditingId(null);
       }
     }
-  }, [sessionId]);
+  }, [handleAccessLost, sessionId]);
 
   const cancelSend = useCallback(() => {
     if (!sendAbortRef.current || !sendTokenRef.current) return;

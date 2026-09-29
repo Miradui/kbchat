@@ -28,30 +28,40 @@ func (s *LocalStorage) NewKnowledgeBaseFileLocation(kbID uuid.UUID, filename str
 }
 
 func (s *LocalStorage) SaveKnowledgeBaseFile(ctx context.Context, target string, file *multipart.FileHeader) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-		return err
-	}
-
 	src, err := file.Open()
 	if err != nil {
 		return err
 	}
 	defer src.Close()
+	return s.SaveKnowledgeBaseObject(ctx, target, src, file.Size)
+}
 
+func (s *LocalStorage) SaveKnowledgeBaseObject(ctx context.Context, target string, reader io.Reader, size int64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if size < 0 {
+		return fmt.Errorf("invalid object size")
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		return err
+	}
 	dst, err := os.Create(target)
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
-
-	if _, err := io.Copy(dst, src); err != nil {
-		return err
+	n, copyErr := io.Copy(dst, io.LimitReader(contextReader{ctx: ctx, reader: reader}, size+1))
+	closeErr := dst.Close()
+	if copyErr != nil {
+		return copyErr
 	}
-
-	return nil
+	if closeErr != nil {
+		return closeErr
+	}
+	if n != size {
+		return fmt.Errorf("object size mismatch: got %d, want %d", n, size)
+	}
+	return ctx.Err()
 }
 
 func (s *LocalStorage) Delete(ctx context.Context, path string) error {

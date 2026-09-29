@@ -112,3 +112,7 @@ func (s *memoryDocumentStorage) Materialize(_ context.Context, location string) 
 	}
 	return temporary.Name(), func() { _ = os.Remove(temporary.Name()) }, nil
 }
+
+func (s *memoryDocumentStorage) SaveKnowledgeBaseObject(context.Context, string, io.Reader, int64) error {
+	return fmt.Errorf("not implemented")
+}

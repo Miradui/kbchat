@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -80,4 +81,43 @@ func writePDFTextFixture(t *testing.T, objects []string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+func TestPDFPredefinedUnicodeCMaps(t *testing.T) {
+	for _, tc := range []struct {
+		name, code, want string
+		corrupt          bool
+	}{
+		{"UniGB-UCS2-H", "661F686559074EFD4FDD7559003300355929", "星桥备份保留35天", false},
+		{"UniGB-UCS2-V", "59074EFD", "备份", false},
+		{"UniGB-UTF16-H", "5907D840DC00", "备𠀀", false},
+		{"UniGB-UTF16-V", "4EFD", "份", false},
+		{"UniGB-UCS2-H", "59074E", "", true},
+		{"UniGB-UCS2-H", "D840DC00", "", true},
+		{"UniGB-UTF16-H", "D8400041", "", true},
+		{"UniGB-UTF16-H", "DC00", "", true},
+	} {
+		t.Run(tc.name+"/"+tc.code, func(t *testing.T) {
+			path := writePDFTextFixture(t, []string{
+				"<< /Type /Catalog /Pages 2 0 R >>",
+				"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+				"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+				fmt.Sprintf("<< /Type /Font /Subtype /Type0 /BaseFont /STSong-Light /Encoding /%s /DescendantFonts [6 0 R] >>", tc.name),
+				pdfTextFixtureStream("BT /F1 12 Tf <" + tc.code + "> Tj ET"),
+				"<< /Type /Font /Subtype /CIDFontType0 /BaseFont /STSong-Light /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 0 >> >>",
+			})
+			doc, err := NewDefaultParser().ParseDocument(path, "pdf")
+			if tc.corrupt {
+				if err == nil || !errors.Is(err, ErrCorruptFile) {
+					t.Fatalf("expected corrupt text, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(doc.Segments) != 1 || doc.Segments[0].Content != tc.want || *doc.Segments[0].PageNumber != 1 {
+				t.Fatalf("unexpected decoded page: %#v", doc)
+			}
+		})
+	}
 }

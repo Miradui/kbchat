@@ -505,20 +505,14 @@ func permanentDeleteKnowledgeBase(tx *gorm.DB, kbID uuid.UUID) error {
 		}
 	}
 	var sessionIDs []uuid.UUID
-	if err := tx.Unscoped().
-		Model(&model.ChatSession{}).
-		Where("knowledge_base_id = ?", kbID).
+	if err := chatContainsBase(tx.Unscoped().Model(&model.ChatSession{}), kbID).
 		Pluck("id", &sessionIDs).Error; err != nil {
 		return err
 	}
-	if len(sessionIDs) > 0 {
-		if err := tx.Where("session_id IN ?", sessionIDs).Delete(&model.ChatMessage{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Unscoped().Where("id IN ?", sessionIDs).Delete(&model.ChatSession{}).Error; err != nil {
-			return err
-		}
+	if err := permanentDeleteChatSessions(tx, sessionIDs); err != nil {
+		return err
 	}
+
 	if err := tx.Where("knowledge_base_id = ?", kbID).Delete(&model.KnowledgeBaseMember{}).Error; err != nil {
 		return err
 	}

@@ -204,7 +204,7 @@ func newStatusFixture(t *testing.T) statusFixture {
 		&model.KnowledgeBaseMember{},
 		&model.Document{},
 		&model.DocumentChunk{},
-		&model.ChatSession{},
+		&model.ChatSession{}, &model.ChatSessionKnowledgeBase{},
 		&model.ChatMessage{},
 	); err != nil {
 		t.Fatalf("migrate status mapping tables: %v", err)

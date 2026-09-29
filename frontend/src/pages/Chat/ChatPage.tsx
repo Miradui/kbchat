@@ -17,7 +17,8 @@ import { InlineEdit } from '../../components/ui/InlineEdit';
 import { OverflowMenu } from '../../components/ui/OverflowMenu';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { AppShell } from '../../layouts/AppShell';
-import type { ChatFeedbackDetails, ChatFeedbackRating, ChatMessage, Citation } from '../../types/api';
+import type { ChatFeedbackDetails, ChatFeedbackRating, ChatMessage, Citation, KnowledgeBase } from '../../types/api';
+import { knowledgeBaseOptionsKey, queryClient } from '../../store/queryClient';
 import { formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
 import { ChatComposer } from './ChatComposer';
@@ -64,8 +65,11 @@ export function ChatPage() {
   const activeSessionIdRef = useRef(sessionId);
   const feedbackOperationsRef = useRef<Map<string, symbol>>(new Map());
   const skipSessionScopeSyncRef = useRef(false);
+  const activeScopeRef = useRef<string[]>([]);
 
   const urlKnowledgeBaseId = searchParams.get('knowledgeBaseId') ?? '';
+  const manyParam = searchParams.get('knowledgeBaseIds') ?? '';
+  const draftKnowledgeBaseIds = useMemo(() => manyParam ? [...new Set(manyParam.split(',').filter(Boolean))].slice(0, 5) : urlKnowledgeBaseId ? [urlKnowledgeBaseId] : [], [manyParam, urlKnowledgeBaseId]);
   const targetMessageId = searchParams.get('messageId') ?? '';
   const [railScope, setRailScope] = useState<ChatSessionScope>('active');
 
@@ -88,12 +92,32 @@ export function ChatPage() {
 
   const thread = useChatThread({
     sessionId,
-    draftKnowledgeBaseId: urlKnowledgeBaseId || knowledgeBases[0]?.id,
+    draftKnowledgeBaseId: urlKnowledgeBaseId || undefined,
+    draftScopeMode: draftKnowledgeBaseIds.length ? 'manual' : 'auto',
+    draftKnowledgeBaseIds: draftKnowledgeBaseIds.length > 1 ? draftKnowledgeBaseIds : undefined,
     onSessionCreated: (session) => {
       mergeSession(session);
       navigate(`/chat/${session.id}`, { replace: true });
     },
     onSessionsChanged: () => void reloadSessions(),
+    onAccessLost: (targetSessionId) => {
+      setSourcePreview(null);
+      setFocusedCitation(null);
+      setDraft('');
+      const inaccessible = new Set(activeScopeRef.current);
+      for (const item of sessions) {
+        if (item.id === targetSessionId || (item.knowledgeBaseIds ?? [item.knowledgeBaseId]).some((id) => inaccessible.has(id))) removeSession(item.id);
+      }
+      toast.error('会话已不可访问，可能已删除或访问权限发生变化。');
+      void (async () => {
+        await queryClient.cancelQueries({ queryKey: knowledgeBaseOptionsKey });
+        if ((activeSessionIdRef.current ?? '') !== targetSessionId) return;
+        queryClient.setQueriesData<KnowledgeBase[]>({ queryKey: knowledgeBaseOptionsKey },
+          (items) => items?.filter((item) => !inaccessible.has(item.id)));
+        navigate('/chat', { replace: true });
+        void reloadKnowledgeBases();
+      })();
+    },
   });
 
   const {
@@ -121,7 +145,12 @@ export function ChatPage() {
     ?? urlKnowledgeBaseId
     ?? '';
   const activeKnowledgeBase = knowledgeBases.find((item) => item.id === activeKnowledgeBaseId);
-  const sourceScope = `${sessionId ?? ''}:${activeKnowledgeBaseId}`;
+  const activeKnowledgeBaseIds = currentSession?.knowledgeBaseIds ?? (currentSession ? [currentSession.knowledgeBaseId] : draftKnowledgeBaseIds);
+  const activeKnowledgeBases = activeKnowledgeBaseIds.map((id) => knowledgeBases.find((kb) => kb.id === id) ?? currentSession?.knowledgeBases?.find((kb) => kb.id === id)).filter((kb) => kb !== undefined);
+  activeScopeRef.current = activeKnowledgeBaseIds;
+  const multiBase = activeKnowledgeBaseIds.length > 1;
+  const automaticScope = currentSession ? currentSession.scopeMode === 'auto' : !sessionId && draftKnowledgeBaseIds.length === 0;
+  const sourceScope = `${sessionId ?? ''}:${automaticScope ? 'auto' : activeKnowledgeBaseIds.join(',')}`;
   const visibleSource = sourcePreview?.scope === sourceScope ? sourcePreview : null;
 
   const locateMessage = useCallback((messageId: string, focus: boolean) => {
@@ -167,7 +196,7 @@ export function ChatPage() {
   useEffect(() => { setSourcePreview(null); }, [sourceScope, setSourcePreview]);
 
   const openSource = useEventCallback((citation: Citation, index: number) => {
-    if (!activeKnowledgeBaseId) return;
+    if (!automaticScope && !activeKnowledgeBaseIds.includes(citation.knowledgeBaseId ?? activeKnowledgeBaseId)) return;
     sourceTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setSourcePreview({ citation, index, scope: sourceScope });
   });
@@ -182,14 +211,22 @@ export function ChatPage() {
   // another knowledge base re-points the filter instead of silently disagreeing
   // with the list. See docs/04-api-design.md (GET /chat/sessions).
   useEffect(() => {
+    if (currentSession?.scopeMode === 'auto') {
+      if (urlKnowledgeBaseId || manyParam) setSearchParams((current) => {
+        const next = new URLSearchParams(current);
+        next.delete('knowledgeBaseId'); next.delete('knowledgeBaseIds');
+        return next;
+      }, { replace: true });
+      return;
+    }
     const sessionKnowledgeBaseId = currentSession?.knowledgeBaseId;
-    if (!sessionKnowledgeBaseId || sessionKnowledgeBaseId === urlKnowledgeBaseId) return;
+    if (!sessionKnowledgeBaseId || sessionKnowledgeBaseId === urlKnowledgeBaseId || currentSession?.knowledgeBaseIds?.includes(urlKnowledgeBaseId)) return;
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
       next.set('knowledgeBaseId', sessionKnowledgeBaseId);
       return next;
     }, { replace: true });
-  }, [currentSession?.knowledgeBaseId, setSearchParams, urlKnowledgeBaseId]);
+  }, [currentSession?.knowledgeBaseId, currentSession?.knowledgeBaseIds, currentSession?.scopeMode, manyParam, setSearchParams, urlKnowledgeBaseId]);
 
   const currentSessionId = currentSession?.id;
   const currentArchivedAt = currentSession?.archivedAt;
@@ -248,7 +285,7 @@ export function ChatPage() {
     || Boolean(thread.stoppedStream?.checking)
     || Boolean(thread.regeneration?.checking);
   const interactionLocked = thread.loading || sessionBusy || threadInteractionPending;
-  const canSend = Boolean(activeKnowledgeBase)
+  const canSend = (automaticScope ? knowledgeBases.length > 0 : Boolean(activeKnowledgeBase) && activeKnowledgeBaseIds.every((id) => knowledgeBases.some((kb) => kb.id === id)))
     && !archived
     && !thread.loading
     && !sessionBusy
@@ -256,10 +293,10 @@ export function ChatPage() {
     && !thread.unconfirmedSend
     && (!thread.stoppedStream || thread.stoppedStream.resumable);
 
-  const composerHint = !activeKnowledgeBase
+  const composerHint = knowledgeBases.length === 0 ? '还没有知识库。先创建一个知识库并导入文档。' : !activeKnowledgeBase && !automaticScope
     ? knowledgeBases.length === 0
       ? '还没有知识库。先创建一个知识库并导入文档。'
-      : '先在左侧选择一个知识库。'
+      : '先选择 1–5 个知识库。'
     : archived
       ? '这个会话已归档，内容仍可查看。'
       : undefined;
@@ -332,7 +369,7 @@ export function ChatPage() {
       active="chat"
       breadcrumbs={[
         { label: 'AI 问答', to: '/chat' },
-        ...(activeKnowledgeBase ? [{ label: activeKnowledgeBase.name }] : []),
+        ...(automaticScope ? [{ label: '自动检索' }] : activeKnowledgeBase ? [{ label: activeKnowledgeBase.name }] : []),
       ]}
       flush
       topbarActions={topbarActions}
@@ -351,7 +388,7 @@ export function ChatPage() {
           actionsDisabled={interactionLocked || sessionExporting}
           getSessionActions={(target) => getSessionActions(target, true)}
           error={sessionStore.sessionsError}
-          knowledgeBaseId={activeKnowledgeBaseId}
+          knowledgeBaseId={automaticScope ? '' : activeKnowledgeBaseId}
           knowledgeBases={knowledgeBases}
           knowledgeBasesError={sessionStore.knowledgeBasesError}
           loading={sessionStore.sessionsLoading}
@@ -365,7 +402,7 @@ export function ChatPage() {
           onNewChat={() => {
             if (sessionBusyRef.current || thread.hasPendingWrite()) return;
             setRailOpen(false);
-            selectKnowledgeBase(activeKnowledgeBaseId);
+            selectKnowledgeBase('');
           }}
           onRetry={() => void reloadSessions()}
           hasMore={sessionStore.hasMoreSessions}
@@ -402,7 +439,9 @@ export function ChatPage() {
                 <Badge tone="neutral">已归档 {formatDateTime(currentSession.archivedAt)}</Badge>
               )}
             </div>
-            {activeKnowledgeBase && (
+            {automaticScope && <span className="chat-main__kb" title="每轮根据问题检索当前可访问的知识库"><Sparkles aria-hidden="true" />自动检索 · 每轮匹配知识库</span>}
+            {!automaticScope && multiBase && <span className="chat-main__kb" title={activeKnowledgeBases.map((kb) => kb.name).join('、')}><span className="ui-truncate">跨库会话 · {activeKnowledgeBases.map((kb) => kb.name).join('、')}</span></span>}
+            {!automaticScope && !multiBase && activeKnowledgeBase && (
               <Link className="chat-main__kb" to={`/knowledge-bases/${activeKnowledgeBase.id}`}>
                 <Library aria-hidden="true" />
                 <span className="ui-truncate">{activeKnowledgeBase.name}</span>
@@ -450,8 +489,15 @@ export function ChatPage() {
                 <ChatEmptyState
                   knowledgeBases={knowledgeBases}
                   loading={sessionStore.knowledgeBasesLoading}
-                  onSelect={selectKnowledgeBase}
-                  selectedId={activeKnowledgeBaseId}
+                  onSelect={(id) => {
+                    if (interactionLocked) return;
+                    const ids = draftKnowledgeBaseIds.includes(id) ? draftKnowledgeBaseIds.filter((value) => value !== id) : [...draftKnowledgeBaseIds, id];
+                    if (ids.length > 5) { toast.error('每个会话最多选择 5 个知识库。'); return; }
+                    setSearchParams(ids.length ? { knowledgeBaseId: ids[0], ...(ids.length > 1 ? { knowledgeBaseIds: ids.join(',') } : {}) } : {});
+                  }}
+                  onAutomatic={() => { if (!interactionLocked) setSearchParams({}); }}
+                  selectedIds={draftKnowledgeBaseIds}
+                  disabled={interactionLocked}
                 />
               )
             ) : (
@@ -637,18 +683,18 @@ export function ChatPage() {
               }
               void thread.send(question);
             }}
-            placeholder={activeKnowledgeBase ? `向「${activeKnowledgeBase.name}」提问…` : '选择知识库后开始提问…'}
+            placeholder={automaticScope ? '直接提问，自动检索相关知识库…' : multiBase ? `向 ${activeKnowledgeBaseIds.length} 个知识库提问…` : activeKnowledgeBase ? `向「${activeKnowledgeBase.name}」提问…` : '选择知识库后开始提问…'}
             sending={thread.sending}
             value={draft}
           />
         </section>
         {visibleSource && (
           <ChatSourcePreview
-            canDownload={canUnlessUnknown(activeKnowledgeBase, 'document.download')}
+            canDownload={canUnlessUnknown(knowledgeBases.find((kb) => kb.id === (visibleSource.citation.knowledgeBaseId ?? activeKnowledgeBaseId)), 'document.download')}
             citation={visibleSource.citation}
             index={visibleSource.index}
             key={`${sourceScope}:${visibleSource.citation.documentId}`}
-            knowledgeBaseId={activeKnowledgeBaseId}
+            knowledgeBaseId={visibleSource.citation.knowledgeBaseId ?? activeKnowledgeBaseId}
             onClose={closeSource}
           />
         )}
@@ -701,13 +747,17 @@ export function ChatPage() {
 function ChatEmptyState({
   knowledgeBases,
   loading,
-  selectedId,
+  selectedIds,
+  disabled,
   onSelect,
+  onAutomatic,
 }: {
   knowledgeBases: Array<{ id: string; name: string; description: string }>;
   loading: boolean;
-  selectedId: string;
+  selectedIds: string[];
+  disabled: boolean;
   onSelect: (id: string) => void;
+  onAutomatic: () => void;
 }) {
   if (loading) return <LoadingSkeleton announce columns={2} rows={3} />;
 
@@ -724,13 +774,16 @@ function ChatEmptyState({
   return (
     <div className="chat-launcher">
       <span className="chat-launcher__mark"><Sparkles aria-hidden="true" /></span>
-      <h2>选择一个知识库开始提问</h2>
-      <p>回答只依据所选知识库中的文档，并在下方标注来源。</p>
+      <h2>{selectedIds.length ? '在指定知识库中提问' : '直接提问，自动查找资料'}</h2>
+      <p>{selectedIds.length ? '本会话仅检索所选知识库，回答会标注资料来源。' : '每轮根据问题检索可访问的知识库，回答会标注资料来源。'}</p>
+      <Button aria-pressed={selectedIds.length === 0} disabled={disabled} onClick={onAutomatic} variant={selectedIds.length === 0 ? 'primary' : 'secondary'}>自动检索全部可访问知识库</Button>
+      <p>也可以指定范围：选择 1–5 个知识库。</p>
       <div aria-label="可提问的知识库" className="chat-launcher__list">
         {knowledgeBases.map((knowledgeBase) => (
           <button
-            aria-pressed={selectedId === knowledgeBase.id}
-            className={selectedId === knowledgeBase.id ? 'chat-launcher__item is-selected' : 'chat-launcher__item'}
+            aria-pressed={selectedIds.includes(knowledgeBase.id)}
+            className={selectedIds.includes(knowledgeBase.id) ? 'chat-launcher__item is-selected' : 'chat-launcher__item'}
+            disabled={disabled || (selectedIds.length >= 5 && !selectedIds.includes(knowledgeBase.id))}
             key={knowledgeBase.id}
             onClick={() => onSelect(knowledgeBase.id)}
             type="button"
@@ -740,11 +793,11 @@ function ChatEmptyState({
               <strong>{knowledgeBase.name}</strong>
               <small>{knowledgeBase.description || '未填写描述'}</small>
             </span>
-            {selectedId === knowledgeBase.id && <Check aria-hidden="true" className="chat-launcher__selected" />}
+            {selectedIds.includes(knowledgeBase.id) && <Check aria-hidden="true" className="chat-launcher__selected" />}
           </button>
         ))}
       </div>
-      <p className="chat-launcher__hint">{selectedId ? '已选择知识库，在下方输入你的第一个问题。' : '选择知识库后即可开始，历史会话保存在左侧。'}</p>
+      <p className="chat-launcher__hint">{selectedIds.length ? `已指定 ${selectedIds.length} 个知识库，本会话仅在所选范围内检索。` : '当前为自动模式，可以直接提问；不同问题可以使用不同知识库。'}</p>
     </div>
   );
 }

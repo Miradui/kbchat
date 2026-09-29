@@ -2,6 +2,9 @@ import { invalidateKnowledgeBaseOptionsAfter } from '../store/queryClient';
 import { ApiError, apiBlobRequest, apiEventStream, apiRequest, apiUploadRequest } from './client';
 import type {
   ActivityListResponse,
+  AdminActivityListResponse,
+  TransferOwnershipInput,
+  TextDocumentInput,
   AdminUser,
   AdminUserCreateInput,
   AdminUserListResponse,
@@ -369,6 +372,18 @@ export function listAdminUsers(params: { q?: string; status?: string; role?: str
   return apiRequest<AdminUserListResponse>(withQuery('/admin/users', params));
 }
 
+export function listAdminActivities(params: { page?: number; pageSize?: number } = {}): Promise<AdminActivityListResponse> {
+  return apiRequest<AdminActivityListResponse>(withQuery('/admin/activities', params));
+}
+
+export function transferKnowledgeBaseOwnership(id: string, input: TransferOwnershipInput): Promise<{ transferredCount: number }> {
+  return invalidateKnowledgeBaseOptionsAfter(apiRequest<{ transferredCount: number }>(`/knowledge-bases/${id}/transfer-ownership`, { method: 'POST', body: input }));
+}
+
+export function transferUserKnowledgeBases(id: string, input: TransferOwnershipInput): Promise<{ transferredCount: number }> {
+  return invalidateKnowledgeBaseOptionsAfter(apiRequest<{ transferredCount: number }>(`/admin/users/${id}/transfer-knowledge-bases`, { method: 'POST', body: input }));
+}
+
 export function createAdminUser(input: AdminUserCreateInput): Promise<{ user: AdminUser; initialPassword: string }> {
   return apiRequest<{ user: AdminUser; initialPassword: string }>('/admin/users', { method: 'POST', body: input });
 }
@@ -435,6 +450,10 @@ export function listGlobalDocuments(
 
 export function getDocument(id: string, signal?: AbortSignal): Promise<DocumentItem> {
   return apiRequest<DocumentItem>(`/documents/${id}`, { signal });
+}
+
+export function createTextDocument(knowledgeBaseId: string, input: TextDocumentInput, signal?: AbortSignal): Promise<DocumentItem> {
+  return apiRequest<DocumentItem>(`/knowledge-bases/${knowledgeBaseId}/documents/text`, { method: 'POST', body: input, signal });
 }
 
 export function getDocumentPreview(id: string): Promise<DocumentPreviewResponse> {
@@ -648,10 +667,11 @@ export function searchKnowledgeBase(
   });
 }
 
-export function createChatSession(knowledgeBaseId: string, title: string): Promise<ChatSession> {
+export function createChatSession(knowledgeBaseId: string | string[] | undefined, title: string): Promise<ChatSession> {
   return apiRequest<ChatSession>('/chat/sessions', {
     method: 'POST',
-    body: { knowledgeBaseId, title },
+    body: knowledgeBaseId === undefined ? { scopeMode: 'auto', title }
+      : Array.isArray(knowledgeBaseId) ? { knowledgeBaseIds: knowledgeBaseId, title } : { knowledgeBaseId, title },
   });
 }
 

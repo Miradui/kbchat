@@ -14,9 +14,15 @@ export type User = {
   lastLoginAt?: string | null;
 };
 
-export type AdminUser = User & { status: 'active' | 'disabled'; createdAt: string };
+export type AdminUser = User & { status: 'active' | 'disabled'; createdAt: string; ownedKnowledgeBaseCount: number };
 export type AdminUserListResponse = { items: AdminUser[]; total: number; page: number; pageSize: number };
 export type AdminUserCreateInput = { username: string; displayName?: string; password?: string };
+export type TransferOwnershipInput = { newOwnerId: string; keepPreviousOwnerAsManager: boolean };
+export type AdminActivity = {
+  id: string; action: string; resourceType: string; resourceId: string; resourceName: string;
+  actor: { id: string; username: string; displayName: string }; createdAt: string;
+};
+export type AdminActivityListResponse = { items: AdminActivity[]; total: number; page: number; pageSize: number };
 
 export type LoginResponse = {
   token: string;
@@ -294,6 +300,7 @@ export type Capability =
   | 'kb.read'
   | 'kb.write'
   | 'kb.delete'
+  | 'kb.transfer'
   | 'kb.search'
   | 'members.read'
   | 'members.write'
@@ -319,6 +326,7 @@ export type DocumentStatus =
   | 'failed';
 
 export type DocumentJobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type TextDocumentInput = { title: string; content: string; format: 'md' | 'txt'; allowDuplicate?: boolean };
 
 /**
  * The closed set written to `documents.error_code`. `unsupported_type` never
@@ -554,6 +562,8 @@ export type KnowledgeBaseSearchRequest = {
 };
 
 export type KnowledgeBaseSearchResult = {
+  knowledgeBaseId?: string;
+  knowledgeBaseName?: string;
   chunkId: string;
   documentId: string;
   filename: string;
@@ -631,6 +641,9 @@ export type KnowledgeBaseSearchDebug = {
 };
 
 export type ChatSession = {
+  scopeMode?: 'auto' | 'manual';
+  knowledgeBaseIds?: string[];
+  knowledgeBases?: Array<{ id: string; name: string }>;
   id: string;
   knowledgeBaseId: string;
   title: string;
@@ -662,6 +675,8 @@ export type ChatSessionListResponse = {
 };
 
 export type Citation = {
+  knowledgeBaseId?: string;
+  knowledgeBaseName?: string;
   documentId: string;
   chunkId: string;
   filename: string;
@@ -959,6 +974,12 @@ export type SystemVectorSearchStatus = {
   exactFallbacks: number;
 };
 
+export type SystemEmbeddingStatus = {
+  status: SystemDependencyState; model: string; configuredDimension: number; columnDimension: number | null;
+  totalDocuments: number; unknownDocuments: number; mismatchedDocuments: number;
+  groups: Array<{ model: string | null; dimension: number | null; count: number }>;
+};
+
 export type SystemDiagnostics = {
   status: SystemDependencyState;
   checkedAt: string;
@@ -974,6 +995,7 @@ export type SystemDiagnostics = {
   rateLimitTriggers: Record<string, number>;
   embeddingCache: SystemEmbeddingCacheMetrics;
   vectorSearch: SystemVectorSearchStatus;
+  embedding?: SystemEmbeddingStatus;
   /** Latency, fallback, rate-limit and cache counters reset on restart. */
   metricsSinceRestart: boolean;
 };

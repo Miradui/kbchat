@@ -234,6 +234,8 @@ func TestConfigValidateRejectsInvalidP2RedisSettings(t *testing.T) {
 		RateLimitChatPerMinute:  30,
 		RateLimitFailureMode:    "open",
 		EmbeddingCacheTTL:       24 * time.Hour,
+		RedisOperationTimeout:   DefaultRedisOperationTimeout,
+		RedisFailureCooldown:    DefaultRedisFailureCooldown,
 	}
 
 	tests := []struct {
@@ -246,6 +248,8 @@ func TestConfigValidateRejectsInvalidP2RedisSettings(t *testing.T) {
 		{name: "failure mode", mutate: func(c *Config) { c.RateLimitFailureMode = "sometimes" }, want: "RATE_LIMIT_FAILURE_MODE"},
 		{name: "trusted proxy", mutate: func(c *Config) { c.TrustedProxyCIDRs = []string{"not-a-cidr"} }, want: "TRUSTED_PROXY_CIDRS"},
 		{name: "cache ttl", mutate: func(c *Config) { c.EmbeddingCacheTTL = 0 }, want: "EMBEDDING_CACHE_TTL"},
+		{name: "redis timeout", mutate: func(c *Config) { c.RedisOperationTimeout = 0 }, want: "REDIS_OPERATION_TIMEOUT"},
+		{name: "redis cooldown", mutate: func(c *Config) { c.RedisFailureCooldown = -time.Second }, want: "REDIS_FAILURE_COOLDOWN"},
 	}
 
 	for _, tt := range tests {
@@ -266,6 +270,8 @@ func TestExampleEnvironmentMatchesP2RedisDefaults(t *testing.T) {
 		t.Fatalf("read example environment: %v", err)
 	}
 	want := map[string]string{
+		"REDIS_OPERATION_TIMEOUT":     "200ms",
+		"REDIS_FAILURE_COOLDOWN":      "5s",
 		"RATE_LIMIT_ENABLED":          "true",
 		"RATE_LIMIT_LOGIN_PER_MINUTE": "10",
 		"RATE_LIMIT_CHAT_PER_MINUTE":  "30",

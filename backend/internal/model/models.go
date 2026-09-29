@@ -18,7 +18,7 @@ type User struct {
 	Role         string     `gorm:"size:32;default:user" json:"role"`
 	Status       string     `gorm:"size:16;not null;default:active;index" json:"status"`
 	LastLoginAt  *time.Time `json:"lastLoginAt"`
-	CreatedByID  *uuid.UUID `gorm:"type:uuid;index" json:"createdById"`
+	CreatedByID  *uuid.UUID `gorm:"column:created_by;type:uuid;index" json:"createdById"`
 	CreatedAt    time.Time  `json:"createdAt"`
 	UpdatedAt    time.Time  `json:"updatedAt"`
 }
@@ -140,17 +140,19 @@ type KnowledgeBaseWorkspacePreference struct {
 }
 
 type Document struct {
-	ID              uuid.UUID     `gorm:"type:uuid;primaryKey" json:"id"`
-	KnowledgeBaseID uuid.UUID     `gorm:"type:uuid;not null;index" json:"knowledgeBaseId"`
-	KnowledgeBase   KnowledgeBase `gorm:"foreignKey:KnowledgeBaseID" json:"-"`
-	UploaderID      uuid.UUID     `gorm:"type:uuid;not null;index" json:"uploaderId"`
-	Uploader        User          `gorm:"foreignKey:UploaderID" json:"-"`
-	Filename        string        `gorm:"size:255;not null" json:"filename"`
-	FileType        string        `gorm:"size:32" json:"fileType"`
-	FileSize        int64         `json:"fileSize"`
-	StoragePath     string        `gorm:"not null" json:"storagePath"`
-	Status          string        `gorm:"size:32;default:uploaded" json:"status"`
-	ErrorMessage    string        `json:"errorMessage"`
+	EmbeddingModel     *string       `gorm:"size:128" json:"-"`
+	EmbeddingDimension *int          `json:"-"`
+	ID                 uuid.UUID     `gorm:"type:uuid;primaryKey" json:"id"`
+	KnowledgeBaseID    uuid.UUID     `gorm:"type:uuid;not null;index" json:"knowledgeBaseId"`
+	KnowledgeBase      KnowledgeBase `gorm:"foreignKey:KnowledgeBaseID" json:"-"`
+	UploaderID         uuid.UUID     `gorm:"type:uuid;not null;index" json:"uploaderId"`
+	Uploader           User          `gorm:"foreignKey:UploaderID" json:"-"`
+	Filename           string        `gorm:"size:255;not null" json:"filename"`
+	FileType           string        `gorm:"size:32" json:"fileType"`
+	FileSize           int64         `json:"fileSize"`
+	StoragePath        string        `gorm:"not null" json:"storagePath"`
+	Status             string        `gorm:"size:32;default:uploaded" json:"status"`
+	ErrorMessage       string        `json:"errorMessage"`
 	// ContentHash is SHA-256 of the uploaded bytes, hex encoded. Nullable because
 	// pre-migration rows were never hashed; a NULL never matches a new upload, so
 	// duplicate detection fails open rather than blocking a legitimate file.
@@ -224,16 +226,18 @@ type DocumentChunk struct {
 }
 
 type ChatSession struct {
-	ID              uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
-	UserID          uuid.UUID      `gorm:"type:uuid;not null;index" json:"userId"`
-	User            User           `gorm:"foreignKey:UserID" json:"-"`
-	KnowledgeBaseID uuid.UUID      `gorm:"type:uuid;not null;index" json:"knowledgeBaseId"`
-	KnowledgeBase   KnowledgeBase  `gorm:"foreignKey:KnowledgeBaseID" json:"-"`
-	Title           string         `gorm:"size:255" json:"title"`
-	CreatedAt       time.Time      `json:"createdAt"`
-	UpdatedAt       time.Time      `json:"updatedAt"`
-	ArchivedAt      *time.Time     `gorm:"index" json:"archivedAt"`
-	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+	ScopeMode          string                     `gorm:"size:16;not null;default:manual" json:"scopeMode"`
+	KnowledgeBaseLinks []ChatSessionKnowledgeBase `gorm:"foreignKey:SessionID;constraint:OnDelete:CASCADE" json:"-"`
+	ID                 uuid.UUID                  `gorm:"type:uuid;primaryKey" json:"id"`
+	UserID             uuid.UUID                  `gorm:"type:uuid;not null;index" json:"userId"`
+	User               User                       `gorm:"foreignKey:UserID" json:"-"`
+	KnowledgeBaseID    uuid.UUID                  `gorm:"type:uuid;not null;index" json:"knowledgeBaseId"`
+	KnowledgeBase      KnowledgeBase              `gorm:"foreignKey:KnowledgeBaseID" json:"-"`
+	Title              string                     `gorm:"size:255" json:"title"`
+	CreatedAt          time.Time                  `json:"createdAt"`
+	UpdatedAt          time.Time                  `json:"updatedAt"`
+	ArchivedAt         *time.Time                 `gorm:"index" json:"archivedAt"`
+	DeletedAt          gorm.DeletedAt             `gorm:"index" json:"-"`
 }
 
 func (s *ChatSession) BeforeCreate(_ *gorm.DB) error {

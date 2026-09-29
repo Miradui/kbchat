@@ -201,6 +201,11 @@ func contractCases() []contractCase {
 			func(t *testing.T, ctx context.Context, f contractFixture, actor uuid.UUID) error {
 				return f.services.kbs.Delete(ctx, actor, f.kbID)
 			}},
+		{"knowledgeBase.transfer", access.CapKnowledgeBaseTransfer, "KNOWLEDGE_BASE_NOT_FOUND",
+			func(t *testing.T, ctx context.Context, f contractFixture, actor uuid.UUID) error {
+				_, err := f.services.kbs.TransferOwnership(ctx, actor, f.kbID, dto.TransferOwnershipRequest{NewOwnerID: f.actors[access.RoleViewer]})
+				return err
+			}},
 		{"knowledgeBase.batchDelete", access.CapKnowledgeBaseDelete, "KNOWLEDGE_BASE_NOT_FOUND",
 			func(t *testing.T, ctx context.Context, f contractFixture, actor uuid.UUID) error {
 				_, err := f.services.kbs.BatchDelete(ctx, actor, dto.KnowledgeBaseBatchRequest{
@@ -271,6 +276,11 @@ func contractCases() []contractCase {
 			func(t *testing.T, ctx context.Context, f contractFixture, actor uuid.UUID) error {
 				_, err := f.services.documents.Upload(ctx, actor, f.kbID,
 					createUploadFile(t, "contract-upload.md", "content"))
+				return err
+			}},
+		{"document.text", access.CapContentWrite, "KNOWLEDGE_BASE_NOT_FOUND",
+			func(t *testing.T, ctx context.Context, f contractFixture, actor uuid.UUID) error {
+				_, err := f.services.documents.CreateText(ctx, actor, f.kbID, dto.TextDocumentRequest{Title: "note", Content: "# heading\nbody"})
 				return err
 			}},
 		{"document.update", access.CapContentWrite, "DOCUMENT_NOT_FOUND",

@@ -31,6 +31,7 @@ func TestPostgresSearchByKeywordRanksExactCodesAndScopesToKnowledgeBase(t *testi
 			chunk_index INT NOT NULL,
 			content TEXT NOT NULL,
 			page_number INT,
+			metadata JSONB,
 			search_vector tsvector
 		)`,
 		`CREATE INDEX idx_chunks_search_vector ON document_chunks USING gin (search_vector)`,

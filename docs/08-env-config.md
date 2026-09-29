@@ -19,6 +19,8 @@ DATABASE_URL=postgres://rag:rag@localhost:5432/rag?sslmode=disable
 REDIS_ADDR=localhost:6379
 REDIS_PASSWORD=
 REDIS_DB=0
+REDIS_OPERATION_TIMEOUT=200ms
+REDIS_FAILURE_COOLDOWN=5s
 RATE_LIMIT_ENABLED=true
 RATE_LIMIT_LOGIN_PER_MINUTE=10
 RATE_LIMIT_CHAT_PER_MINUTE=30
@@ -89,6 +91,8 @@ VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1
 | `REDIS_ADDR` | `localhost:6379` | Redis 地址 |
 | `REDIS_PASSWORD` | 空 | Redis 密码 |
 | `REDIS_DB` | `0` | Redis DB |
+| `REDIS_OPERATION_TIMEOUT` | `200ms` | 单次 Redis 命令的总等待预算，覆盖连接、握手、连接池和读写；必须为正 Go duration，不自动重试命令或连接 |
+| `REDIS_FAILURE_COOLDOWN` | `5s` | Redis 连接/超时失败后暂停访问的时间；到期仅放行一个恢复探测，成功后恢复缓存和限流；必须为正 Go duration |
 | `RATE_LIMIT_ENABLED` | `true` | 是否启用登录 IP 与聊天用户限流 |
 | `RATE_LIMIT_LOGIN_PER_MINUTE` | `10` | 同一客户端 IP 每分钟登录请求上限 |
 | `RATE_LIMIT_CHAT_PER_MINUTE` | `30` | 同一用户每分钟回答生成请求上限，普通发送、流式发送、重新生成与编辑重生成合计 |
@@ -146,6 +150,8 @@ VITE_API_BASE_URL=http://127.0.0.1:8080/api/v1
 `TRUSTED_PROXY_CIDRS` 留空时忽略所有 `X-Forwarded-For`。配置后，只有 TCP 直连地址落在可信网段时才从右向左检查代理链并取首个不可信地址；值必须是 CIDR，例如 `127.0.0.1/32` 或 Nginx 所在的私网网段，不能写裸 IP。
 
 检索按 `embed:<model>:<dimension>:<endpoint hash>:<sha256(normalized query)>` 缓存 query vector，模型名、`EMBEDDING_DIMENSION` 与 `EMBEDDING_BASE_URL` 任一变化都会自然失效旧缓存。规范化只折叠首尾和连续 Unicode 空白，同一规范化文本也用于实际 Embedding 调用；向量以版本化二进制格式保存。缓存命中不产生 Provider 调用指标，读写失败始终降级为直接调用 Provider。Redis 停止时，`open` 模式仍允许登录和聊天，`closed` 模式的受限接口返回 `RATE_LIMIT_UNAVAILABLE`；embedding 缓存两种模式都只降级。
+
+缓存、限流和诊断共享同一客户端的故障冷却状态。每次命令最多等待 `REDIS_OPERATION_TIMEOUT`（默认200ms，调度开销另计），不自动重试；连接失败或超时后进入默认5秒冷却，期间直接返回不可用错误，避免缓存读失败后又等待写入或下一次限流。冷却到期的首个命令探测恢复，其余并发请求继续执行既有故障策略；探测失败重新冷却，成功则恢复。客户端请求自身取消不触发冷却；缓存未命中和 Lua `NOSCRIPT` 等 Redis 正常错误响应也不触发，以保留脚本首次加载和过期语义。跨地域或高延迟 Redis 可按实测调整等待预算。
 
 ## Embedding 维度约束
 
@@ -205,3 +211,7 @@ fallback
 ### P4–P6 配置
 
 `CHAT_ALLOWED_MODELS` 是可选的逗号分隔回答模型白名单；`MODEL_PRICING` 可选地提供按百万 token 的 prompt/completion 价格 JSON，用于质量页成本估算。
+
+## Embedding 配置变更
+
+`EMBEDDING_DIMENSION` 除校验 Provider 返回值外，还在 server 启动和 doctor 中与数据库向量列声明比较，不一致时拒绝启动。升级先执行迁移 029。仅改 `EMBEDDING_MODEL` 也必须重建历史向量；诊断列出未知来源与不匹配文档数，`go run ./cmd/reembed -dry-run` 可先盘点。完整操作流程见 [部署指南](13-deployment.md#embedding-模型切换与重建)。

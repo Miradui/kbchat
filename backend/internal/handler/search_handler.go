@@ -43,3 +43,26 @@ func (h *SearchHandler) Search(c *gin.Context) {
 
 	c.JSON(http.StatusOK, res)
 }
+
+func (h *SearchHandler) SearchMany(c *gin.Context) {
+	userID, ok := currentUserIDOrError(c)
+	if !ok {
+		return
+	}
+	var req dto.MultiSearchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		RespondError(c, apperror.Validation(map[string]any{"body": "request body is invalid"}))
+		return
+	}
+	ids, err := dto.ParseKnowledgeBaseIDs("", req.KnowledgeBaseIDs)
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	res, err := h.retrieval.SearchMany(c.Request.Context(), userID, ids, req.SearchRequest)
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}

@@ -221,3 +221,12 @@
    不要为了「信息更清楚」把无立场的情况改成 403。
 7. 知识库能力不足的 403 `FORBIDDEN`，其 `details` 必须带 `role`、`capability`、`requiredRole`，由
    `authz.ForbiddenCapability` 统一构造，不要在各处手写。
+
+## 所有权转移
+
+| HTTP | 错误码 | 含义 |
+| --- | --- | --- |
+| 400 | `TRANSFER_TARGET_INVALID` | 新所有者不存在、已禁用、为空或与原所有者相同 |
+| 409 | `OWNERSHIP_CHANGED` | 加锁复查时单库所有权或状态已变化，应刷新后重试 |
+
+管理员入口的原用户不存在使用 `USER_NOT_FOUND`；权限仍使用现有 401 / 403 / 404 合同。

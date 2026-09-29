@@ -274,7 +274,7 @@ func TestAdminUserServiceRecordsActivities(t *testing.T) {
 	if err := services.db.Where("user_id = ?", admin.ID).Order("created_at asc").Find(&activities).Error; err != nil {
 		t.Fatal(err)
 	}
-	want := []string{ActivityAdminUserCreated, ActivityAdminUserUpdated, ActivityAdminUserPasswordReset, ActivityAdminUserRoleChanged}
+	want := []string{ActivityAdminUserCreated, ActivityAdminUserDisabled, ActivityAdminUserUpdated, ActivityAdminUserPasswordReset, ActivityAdminUserRoleChanged}
 	if len(activities) != len(want) {
 		t.Fatalf("recorded %d activities, want %d", len(activities), len(want))
 	}

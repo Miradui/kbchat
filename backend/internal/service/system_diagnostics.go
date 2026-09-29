@@ -143,6 +143,7 @@ func (s *SystemService) Diagnostics(ctx context.Context) *dto.SystemDiagnosticsR
 		RateLimitTriggers:   snapshot.RateLimitTriggers,
 		EmbeddingCache:      embeddingCacheMetrics(snapshot.EmbeddingCacheResult),
 		VectorSearch:        s.vectorSearchStatus(ctx, snapshot),
+		Embedding:           s.embeddingStatus(ctx),
 		MetricsSinceRestart: true,
 	}
 }

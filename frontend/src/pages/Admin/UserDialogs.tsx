@@ -207,6 +207,7 @@ export function EditUserDialog({ user, isSelf, onClose, onSaved }: EditUserDialo
             <option value="disabled">已禁用</option>
           </Select>
         </Field>
+        {status === 'disabled' && Boolean(user?.ownedKnowledgeBaseCount) && <p role="note">该用户拥有 {user?.ownedKnowledgeBaseCount} 个知识库（含回收站），建议先转移给其他启用用户。</p>}
         {submitError && <p className="ui-dialog__error" role="alert">{submitError}</p>}
         <div className="ui-dialog__actions">
           <Button disabled={busy} onClick={onClose} variant="secondary">取消</Button>

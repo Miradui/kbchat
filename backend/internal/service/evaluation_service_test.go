@@ -142,7 +142,7 @@ func TestEvaluationUsesSharedPipelineAndSeparatesRuleFailureFromProviderFailure(
 			t.Fatalf("lost config override: %+v", req)
 		}
 	}
-	for _, table := range []any{&model.ChatSession{}, &model.ChatMessage{}} {
+	for _, table := range []any{&model.ChatSession{}, &model.ChatSessionKnowledgeBase{}, &model.ChatMessage{}} {
 		var count int64
 		w.db.Model(table).Count(&count)
 		if count != 0 {

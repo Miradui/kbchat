@@ -16,6 +16,9 @@ import type { AdminUser } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
 import { CreateUserDialog, EditUserDialog, PasswordResultDialog } from './UserDialogs';
 import type { PasswordResult } from './UserDialogs';
+import { AdminActivities } from './AdminActivities';
+import { transferUserKnowledgeBases } from '../../api/resources';
+import { TransferOwnershipDialog } from '../../components/TransferOwnershipDialog';
 
 const DEFAULT_PAGE_SIZE = 20;
 
@@ -39,7 +42,7 @@ type PendingAction =
 const actionCopy: Record<PendingAction['kind'], { title: string; description: (user: AdminUser) => string; confirm: string; failure: string }> = {
   disable: {
     title: '禁用用户',
-    description: (user) => `禁用 ${user.username} 后，该账号无法登录，已登录的会话会在下一次请求时失效。数据会保留，可以随时重新启用。`,
+    description: (user) => `禁用 ${user.username} 后，该账号无法登录，已登录的会话会在下一次请求时失效。数据会保留，可以随时重新启用。${user.ownedKnowledgeBaseCount ? ` 该用户拥有 ${user.ownedKnowledgeBaseCount} 个知识库（含回收站），建议先转移给其他启用用户。` : ''}`,
     confirm: '禁用',
     failure: '禁用用户失败',
   },
@@ -59,6 +62,8 @@ const actionCopy: Record<PendingAction['kind'], { title: string; description: (u
 
 function AdminUsersContent({ currentUserId }: { currentUserId: string }) {
   const [items, setItems] = useState<AdminUser[]>([]);
+  const [activityRevision, setActivityRevision] = useState(0);
+  const [transferring, setTransferring] = useState<AdminUser | null>(null);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
@@ -106,6 +111,11 @@ function AdminUsersContent({ currentUserId }: { currentUserId: string }) {
 
   useEffect(() => { void load(); }, [load, page, pageSize, query, role, status]);
 
+  async function reloadAfterAction() {
+    setActivityRevision((value) => value + 1);
+    await load();
+  }
+
   // A filter change restarts from the first page; otherwise a narrower result
   // set could leave the user parked on an empty page.
   function updateFilter(setter: (value: string) => void) {
@@ -116,7 +126,7 @@ function AdminUsersContent({ currentUserId }: { currentUserId: string }) {
     setError('');
     try {
       await updateAdminUser(item.id, { displayName: item.displayName, status: 'active' });
-      await load();
+      await reloadAfterAction();
     } catch (caught) {
       setError(getErrorMessage(caught, '启用用户失败'));
     }
@@ -126,7 +136,7 @@ function AdminUsersContent({ currentUserId }: { currentUserId: string }) {
     setError('');
     try {
       await updateAdminUserRole(item.id, 'admin');
-      await load();
+      await reloadAfterAction();
     } catch (caught) {
       setError(getErrorMessage(caught, '更新用户角色失败'));
     }
@@ -146,7 +156,7 @@ function AdminUsersContent({ currentUserId }: { currentUserId: string }) {
         setPasswordResult({ username: pending.user.username, password: result.password });
       }
       setPending(null);
-      await load();
+      await reloadAfterAction();
     } catch (caught) {
       setPendingError(getErrorMessage(caught, actionCopy[pending.kind].failure));
     } finally {
@@ -201,6 +211,7 @@ function AdminUsersContent({ currentUserId }: { currentUserId: string }) {
                       <td data-label="操作">
                         <div style={{ display: 'flex', gap: 'var(--s-1)', flexWrap: 'wrap' }}>
                           <Button aria-label={`编辑 ${item.username}`} leadingIcon={<Pencil aria-hidden="true" />} onClick={() => setEditing(item)} variant="ghost">编辑</Button>
+                          <Button aria-label={`转移 ${item.username} 的知识库`} disabled={!item.ownedKnowledgeBaseCount} onClick={() => setTransferring(item)} variant="ghost">转移知识库（{item.ownedKnowledgeBaseCount ?? 0}）</Button>
                           {/* The signed-in administrator cannot disable, demote or
                               reset themselves; the server refuses these with
                               ADMIN_SELF_MUTATION, so the buttons are not offered. */}
@@ -235,15 +246,18 @@ function AdminUsersContent({ currentUserId }: { currentUserId: string }) {
         )}
       </section>
 
+      <AdminActivities revision={activityRevision} />
+      {transferring && <TransferOwnershipDialog ownerId={transferring.id} description={`转移 ${transferring.username} 拥有的全部 ${transferring.ownedKnowledgeBaseCount} 个知识库，包含回收站中的知识库。`} onTransfer={(input) => transferUserKnowledgeBases(transferring.id, input)} onClose={() => setTransferring(null)} onDone={() => { setTransferring(null); void reloadAfterAction(); }} />}
+
       <CreateUserDialog
         onClose={() => setCreateOpen(false)}
-        onCreated={(result) => { setCreateOpen(false); setPasswordResult(result); void load(); }}
+        onCreated={(result) => { setCreateOpen(false); setPasswordResult(result); void reloadAfterAction(); }}
         open={createOpen}
       />
       <EditUserDialog
         isSelf={editing?.id === currentUserId}
         onClose={() => setEditing(null)}
-        onSaved={() => { setEditing(null); void load(); }}
+        onSaved={() => { setEditing(null); void reloadAfterAction(); }}
         user={editing}
       />
       {pending && (

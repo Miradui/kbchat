@@ -8,6 +8,9 @@ import {
   createAdminUser,
   getCurrentUser,
   listAdminUsers,
+  listAdminActivities,
+  searchUsers,
+  transferUserKnowledgeBases,
   resetAdminUserPassword,
   updateAdminUser,
   updateAdminUserRole,
@@ -22,6 +25,9 @@ vi.mock('../../api/resources', () => ({
   logout: vi.fn().mockResolvedValue(undefined),
   searchSuggest: vi.fn().mockResolvedValue({ items: [] }),
   listAdminUsers: vi.fn(),
+  listAdminActivities: vi.fn(),
+  searchUsers: vi.fn(),
+  transferUserKnowledgeBases: vi.fn(),
   createAdminUser: vi.fn(),
   updateAdminUser: vi.fn(),
   resetAdminUserPassword: vi.fn(),
@@ -63,6 +69,7 @@ function user(overrides: Partial<AdminUser> = {}): AdminUser {
     status: 'active',
     lastLoginAt: null,
     createdAt: '2026-09-01T00:00:00Z',
+    ownedKnowledgeBaseCount: 0,
     ...overrides,
   };
 }
@@ -92,10 +99,28 @@ beforeEach(() => {
   vi.mocked(resetAdminUserPassword).mockReset();
   vi.mocked(updateAdminUserRole).mockReset();
   clipboardMocks.copyText.mockReset().mockResolvedValue(undefined);
+  vi.mocked(listAdminActivities).mockReset().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
   mockList([selfRow, user()]);
 });
 
 describe('UsersPage', () => {
+  it('warns about owned knowledge bases before disabling and can transfer them', async () => {
+    mockList([user({ ownedKnowledgeBaseCount: 2 })]);
+    vi.mocked(searchUsers).mockResolvedValue({ items: [{ id: 'new', username: 'new', displayName: '新所有者' }] });
+    vi.mocked(transferUserKnowledgeBases).mockResolvedValue({ transferredCount: 2 });
+    renderUsersPage();
+    const actor = userEvent.setup();
+    await actor.click(await screen.findByRole('button', { name: '禁用 alice' }));
+    const confirmation = screen.getByRole('dialog', { name: '禁用用户' });
+    expect(confirmation).toHaveTextContent('拥有 2 个知识库（含回收站）');
+    await actor.click(within(confirmation).getByRole('button', { name: '取消' }));
+    await actor.click(screen.getByRole('button', { name: '转移 alice 的知识库' }));
+    expect(screen.getByRole('dialog', { name: '转移所有权' })).toHaveTextContent('全部 2 个知识库');
+    await screen.findByRole('option', { name: '新所有者（new）' });
+    await actor.selectOptions(screen.getByLabelText('新所有者'), 'new');
+    await actor.click(screen.getByRole('button', { name: '确认转移' }));
+    await waitFor(() => expect(transferUserKnowledgeBases).toHaveBeenCalledWith('user-1', { newOwnerId: 'new', keepPreviousOwnerAsManager: true }));
+  });
   it.each(['success', 'failure'])('ignores an older list %s after a newer search finishes', async (outcome) => {
     let resolveOld!: (value: Awaited<ReturnType<typeof listAdminUsers>>) => void;
     let rejectOld!: (error: Error) => void;
@@ -148,7 +173,7 @@ describe('UsersPage', () => {
   it('renders the list for an administrator and shows the nav entry', async () => {
     renderUsersPage();
     expect(await screen.findByRole('heading', { name: '用户管理' })).toBeInTheDocument();
-    const table = await screen.findByRole('table');
+    const table = await screen.findByRole('table', { name: /用户列表/ });
     expect(within(table).getByText('alice')).toBeInTheDocument();
     expect(within(table).getByText('Alice')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '用户管理' })).toHaveAttribute('href', '/admin/users');
@@ -159,7 +184,7 @@ describe('UsersPage', () => {
     const typing = userEvent.setup();
     mockList([selfRow, user()], 45);
     renderUsersPage();
-    await screen.findByRole('table');
+    await screen.findByRole('table', { name: /用户列表/ });
 
     await typing.click(screen.getByRole('button', { name: '下一页' }));
     await waitFor(() => {
@@ -186,7 +211,7 @@ describe('UsersPage', () => {
     const clicking = userEvent.setup();
     mockList([user()], 45, 1, 20);
     renderUsersPage();
-    await screen.findByRole('table');
+    await screen.findByRole('table', { name: /用户列表/ });
     const pagination = screen.getByRole('navigation', { name: '分页' });
     expect(within(pagination).getByText('共 45 条')).toBeInTheDocument();
     expect(within(pagination).getByRole('button', { name: '上一页' })).toBeDisabled();
@@ -200,7 +225,7 @@ describe('UsersPage', () => {
 
   it('hides disable, role and reset actions on the current administrator row', async () => {
     renderUsersPage();
-    const table = await screen.findByRole('table');
+    const table = await screen.findByRole('table', { name: /用户列表/ });
     const rows = within(table).getAllByRole('row');
     const selfRowElement = rows.find((row) => within(row).queryByText('admin'));
     const otherRow = rows.find((row) => within(row).queryByText('alice'));
@@ -221,7 +246,7 @@ describe('UsersPage', () => {
     it('requires a username and enforces the server minimum password length', async () => {
       const typing = userEvent.setup();
       renderUsersPage();
-      await screen.findByRole('table');
+      await screen.findByRole('table', { name: /用户列表/ });
       await typing.click(screen.getByRole('button', { name: '创建用户' }));
       const dialog = await screen.findByRole('dialog', { name: '创建用户' });
 
@@ -250,7 +275,7 @@ describe('UsersPage', () => {
         initialPassword: 'Generated#Pass1',
       });
       renderUsersPage();
-      await screen.findByRole('table');
+      await screen.findByRole('table', { name: /用户列表/ });
       await typing.click(screen.getByRole('button', { name: '创建用户' }));
       const dialog = await screen.findByRole('dialog', { name: '创建用户' });
       await typing.type(within(dialog).getByLabelText('用户名'), 'bob');
@@ -277,7 +302,7 @@ describe('UsersPage', () => {
       const typing = userEvent.setup();
       vi.mocked(createAdminUser).mockRejectedValue(new ApiError(409, { code: 'USERNAME_EXISTS', message: '用户名已存在' }));
       renderUsersPage();
-      await screen.findByRole('table');
+      await screen.findByRole('table', { name: /用户列表/ });
       await typing.click(screen.getByRole('button', { name: '创建用户' }));
       const dialog = await screen.findByRole('dialog', { name: '创建用户' });
       await typing.type(within(dialog).getByLabelText('用户名'), 'alice');
@@ -290,7 +315,7 @@ describe('UsersPage', () => {
     const clicking = userEvent.setup();
     vi.mocked(resetAdminUserPassword).mockResolvedValue({ user: user(), password: 'Reset#Pass9' });
     renderUsersPage();
-    await screen.findByRole('table');
+    await screen.findByRole('table', { name: /用户列表/ });
     await clicking.click(screen.getByRole('button', { name: '重置 alice 的密码' }));
 
     const confirm = await screen.findByRole('dialog', { name: '重置密码' });
@@ -312,7 +337,7 @@ describe('UsersPage', () => {
     vi.mocked(updateAdminUser).mockResolvedValue(user({ status: 'disabled' }));
     vi.mocked(updateAdminUserRole).mockResolvedValue(user());
     renderUsersPage();
-    await screen.findByRole('table');
+    await screen.findByRole('table', { name: /用户列表/ });
 
     await clicking.click(screen.getByRole('button', { name: '禁用 alice' }));
     const disable = await screen.findByRole('dialog', { name: '禁用用户' });
@@ -336,7 +361,7 @@ describe('UsersPage', () => {
     mockList([selfRow, user({ role: 'admin' })]);
     vi.mocked(updateAdminUserRole).mockRejectedValue(new ApiError(409, { code: 'LAST_ADMIN_REQUIRED', message: '不能撤销最后一位系统管理员' }));
     renderUsersPage();
-    await screen.findByRole('table');
+    await screen.findByRole('table', { name: /用户列表/ });
     await clicking.click(screen.getByRole('button', { name: '撤销 alice 的管理员' }));
     const revoke = await screen.findByRole('dialog', { name: '撤销管理员' });
     await clicking.click(within(revoke).getByRole('button', { name: '撤销管理员' }));
@@ -348,7 +373,7 @@ describe('UsersPage', () => {
     const typing = userEvent.setup();
     vi.mocked(updateAdminUser).mockResolvedValue(user({ displayName: 'Alice Liddell', status: 'disabled' }));
     renderUsersPage();
-    await screen.findByRole('table');
+    await screen.findByRole('table', { name: /用户列表/ });
     await typing.click(screen.getByRole('button', { name: '编辑 alice' }));
     const dialog = await screen.findByRole('dialog', { name: '编辑用户' });
 
@@ -373,7 +398,7 @@ describe('UsersPage', () => {
   it('locks the status control when editing the current administrator', async () => {
     const clicking = userEvent.setup();
     renderUsersPage();
-    await screen.findByRole('table');
+    await screen.findByRole('table', { name: /用户列表/ });
     await clicking.click(screen.getByRole('button', { name: '编辑 admin' }));
     const dialog = await screen.findByRole('dialog', { name: '编辑用户' });
     expect(within(dialog).getByLabelText('状态')).toBeDisabled();

@@ -295,8 +295,9 @@ export function CitationCard({ citation, focused, index, knowledgeBaseId, onOpen
   const long = citation.content.length > PREVIEW_LENGTH;
   const preview = long ? `${citation.content.slice(0, PREVIEW_LENGTH).trimEnd()}…` : citation.content;
   const pageLabel = citation.pageNumber ? `p.${citation.pageNumber}` : '无页码';
-  const href = knowledgeBaseId
-    ? `/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents?documentId=${encodeURIComponent(citation.documentId)}&chunkId=${encodeURIComponent(citation.chunkId)}`
+  const sourceKnowledgeBaseId = citation.knowledgeBaseId ?? knowledgeBaseId;
+  const href = sourceKnowledgeBaseId
+    ? `/knowledge-bases/${encodeURIComponent(sourceKnowledgeBaseId)}/documents?documentId=${encodeURIComponent(citation.documentId)}&chunkId=${encodeURIComponent(citation.chunkId)}`
     : null;
 
   useEffect(() => {
@@ -337,6 +338,7 @@ export function CitationCard({ citation, focused, index, knowledgeBaseId, onOpen
         <span className="chat-source__page">{pageLabel}</span>
       </header>
 
+      {citation.knowledgeBaseName && <small>知识库：{citation.knowledgeBaseName}</small>}
       <p>{preview}</p>
 
       <footer>

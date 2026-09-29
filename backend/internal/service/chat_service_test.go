@@ -628,7 +628,7 @@ func newChatServiceTestDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(
 		&model.User{},
 		&model.KnowledgeBase{},
-		&model.ChatSession{},
+		&model.ChatSession{}, &model.ChatSessionKnowledgeBase{},
 		&model.ChatMessage{},
 	); err != nil {
 		t.Fatalf("auto migrate: %v", err)

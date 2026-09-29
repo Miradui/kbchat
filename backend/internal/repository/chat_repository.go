@@ -36,10 +36,12 @@ func NewChatRepository(db *gorm.DB) *ChatRepository {
 }
 
 func (r *ChatRepository) CreateSession(ctx context.Context, session *model.ChatSession) error {
-	return r.db.WithContext(ctx).Create(session).Error
+	return r.db.WithContext(ctx).Omit("KnowledgeBase", "KnowledgeBaseLinks.KnowledgeBase").Create(session).Error
 }
 
 type ChatSessionListItem struct {
+	ScopeMode          string
+	KnowledgeBaseLinks []model.ChatSessionKnowledgeBase `gorm:"-"`
 	ID                 uuid.UUID
 	KnowledgeBaseID    uuid.UUID
 	KnowledgeBaseName  string
@@ -67,6 +69,7 @@ func (r *ChatRepository) ListSessions(ctx context.Context, userID uuid.UUID, mem
 			Joins("JOIN knowledge_bases ON knowledge_bases.id = chat_sessions.knowledge_base_id").
 			Where("chat_sessions.user_id = ?", userID).
 			Where(reachableKnowledgeBaseCondition(r.db, userID, memberRoles)).
+			Where(reachableChatLinks(userID, memberRoles)).
 			Where("knowledge_bases.deleted_at IS NULL").
 			Where("chat_sessions.deleted_at IS NULL")
 		if query.Archived {
@@ -75,7 +78,7 @@ func (r *ChatRepository) ListSessions(ctx context.Context, userID uuid.UUID, mem
 			db = db.Where("chat_sessions.archived_at IS NULL")
 		}
 		if query.KnowledgeBaseID != nil {
-			db = db.Where("chat_sessions.knowledge_base_id = ?", *query.KnowledgeBaseID)
+			db = chatContainsBase(db, *query.KnowledgeBaseID)
 		}
 		if query.Q != "" {
 			db = db.Where("LOWER(chat_sessions.title) LIKE ?", "%"+strings.ToLower(query.Q)+"%")
@@ -94,6 +97,7 @@ func (r *ChatRepository) ListSessions(ctx context.Context, userID uuid.UUID, mem
 	err := base().
 		Select(`
 			chat_sessions.id AS id,
+			chat_sessions.scope_mode AS scope_mode,
 			chat_sessions.knowledge_base_id AS knowledge_base_id,
 			knowledge_bases.name AS knowledge_base_name,
 			chat_sessions.title AS title,
@@ -115,12 +119,16 @@ func (r *ChatRepository) ListSessions(ctx context.Context, userID uuid.UUID, mem
 		Limit(limit).
 		Offset(offset).
 		Scan(&items).Error
+	if err == nil {
+		err = r.loadListLinks(ctx, items)
+	}
 	return items, total, err
 }
 
 func (r *ChatRepository) FindSessionByIDAndUser(ctx context.Context, sessionID, userID uuid.UUID) (*model.ChatSession, error) {
 	var session model.ChatSession
 	err := r.db.WithContext(ctx).
+		Preload("KnowledgeBase").Preload("KnowledgeBaseLinks", func(db *gorm.DB) *gorm.DB { return db.Order("knowledge_base_id") }).Preload("KnowledgeBaseLinks.KnowledgeBase").
 		Where("id = ? AND user_id = ?", sessionID, userID).
 		Where("deleted_at IS NULL").
 		First(&session).Error
@@ -192,6 +200,7 @@ func (r *ChatRepository) FindDeletedSessionByIDAndUser(ctx context.Context, sess
 	var session model.ChatSession
 	err := r.db.WithContext(ctx).
 		Unscoped().
+		Preload("KnowledgeBase").Preload("KnowledgeBaseLinks", func(db *gorm.DB) *gorm.DB { return db.Order("knowledge_base_id") }).Preload("KnowledgeBaseLinks.KnowledgeBase").
 		Where("id = ? AND user_id = ?", sessionID, userID).
 		Where("deleted_at IS NOT NULL").
 		First(&session).Error
@@ -307,6 +316,7 @@ func deletedChatSessionsScope(db *gorm.DB, userID uuid.UUID, memberRoles []strin
 		Joins("JOIN knowledge_bases ON knowledge_bases.id = chat_sessions.knowledge_base_id").
 		Where("chat_sessions.user_id = ?", userID).
 		Where(reachableKnowledgeBaseCondition(db, userID, memberRoles)).
+		Where(reachableChatLinks(userID, memberRoles)).
 		Where("knowledge_bases.deleted_at IS NULL").
 		Where("chat_sessions.deleted_at IS NOT NULL")
 }
@@ -316,6 +326,9 @@ func permanentDeleteChatSessions(tx *gorm.DB, sessionIDs []uuid.UUID) error {
 		return nil
 	}
 	if err := tx.Where("session_id IN ?", sessionIDs).Delete(&model.ChatMessage{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("session_id IN ?", sessionIDs).Delete(&model.ChatSessionKnowledgeBase{}).Error; err != nil {
 		return err
 	}
 	return tx.Unscoped().Where("id IN ?", sessionIDs).Delete(&model.ChatSession{}).Error
@@ -345,6 +358,7 @@ func (r *ChatRepository) FindMessageByIDAndOwner(ctx context.Context, messageID,
 		Where("chat_sessions.user_id = ?", ownerID).
 		Where("chat_sessions.deleted_at IS NULL").
 		Where(reachableKnowledgeBaseCondition(r.db, ownerID, memberRoles)).
+		Where(reachableChatLinks(ownerID, memberRoles)).
 		Where("knowledge_bases.deleted_at IS NULL").
 		First(&message).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -890,6 +904,7 @@ func chatQualityScope(db *gorm.DB, filter ChatQualityFilter) *gorm.DB {
 		Where("chat_messages.role = ?", "assistant").
 		Where("chat_sessions.deleted_at IS NULL").
 		Where(reachableKnowledgeBaseCondition(db, filter.ActorID, filter.MemberRoles)).
+		Where(singleBaseChatSQL).
 		Where("knowledge_bases.deleted_at IS NULL").
 		Where("chat_messages.created_at >= ? AND chat_messages.created_at < ?", filter.StartAt, filter.EndAt)
 	if filter.KnowledgeBaseID != nil {

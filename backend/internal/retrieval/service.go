@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 	"gorm.io/datatypes"
 
 	"kbchat/backend/internal/access"
@@ -112,19 +111,49 @@ func NewService(
 }
 
 func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.SearchRequest) (*dto.SearchResponse, error) {
+	return s.SearchMany(ctx, ownerID, []uuid.UUID{kbID}, req)
+}
+
+func (s *Service) SearchMany(ctx context.Context, ownerID uuid.UUID, kbIDs []uuid.UUID, req dto.SearchRequest) (*dto.SearchResponse, error) {
+	return s.searchBases(ctx, ownerID, kbIDs, req, false)
+}
+
+// SearchAutomatic is an internal chat entry point. The service supplies all
+// currently accessible bases; each is authorized again here before model work.
+func (s *Service) SearchAutomatic(ctx context.Context, ownerID uuid.UUID, kbIDs []uuid.UUID, req dto.SearchRequest) (*dto.SearchResponse, error) {
+	return s.searchBases(ctx, ownerID, kbIDs, req, true)
+}
+
+func (s *Service) searchBases(ctx context.Context, ownerID uuid.UUID, kbIDs []uuid.UUID, req dto.SearchRequest, automatic bool) (*dto.SearchResponse, error) {
 	if req.ScoreThreshold != nil && (*req.ScoreThreshold < 0 || *req.ScoreThreshold > 1) {
 		return nil, apperror.Validation(map[string]any{"scoreThreshold": "must be between 0 and 1"})
 	}
-	// Search is kb.search, not kb.read: a viewer may retrieve, and this is the same
-	// check the chat path makes before answering, so a member cannot reach through
-	// retrieval what they could not reach through chat.
-	decision, err := authz.KnowledgeBase(ctx, s.knowledgeBases, ownerID, kbID, access.CapKnowledgeBaseSearch)
-	if err != nil {
-		return nil, err
+	if len(kbIDs) == 0 || (!automatic && len(kbIDs) > dto.MaxChatKnowledgeBases) {
+		return nil, apperror.Validation(map[string]any{"knowledgeBaseIds": "provide 1 to 5 knowledge bases"})
 	}
-	kb := decision.KnowledgeBase
-
-	options := s.resolveSearchOptions(kb, req)
+	bases := make([]*model.KnowledgeBase, 0, len(kbIDs))
+	seen := map[uuid.UUID]bool{}
+	for _, kbID := range kbIDs {
+		if kbID == uuid.Nil || seen[kbID] {
+			return nil, apperror.Validation(map[string]any{"knowledgeBaseIds": "IDs must be valid and unique"})
+		}
+		seen[kbID] = true
+		decision, err := authz.KnowledgeBase(ctx, s.knowledgeBases, ownerID, kbID, access.CapKnowledgeBaseSearch)
+		if err != nil {
+			return nil, err
+		}
+		bases = append(bases, decision.KnowledgeBase)
+	}
+	// Canonical order keeps quotas and ties independent of request order.
+	sort.Slice(bases, func(i, j int) bool { return bases[i].ID.String() < bases[j].ID.String() })
+	policy := bases[0]
+	if automatic || len(bases) > 1 {
+		policy = &model.KnowledgeBase{}
+	}
+	options := s.resolveSearchOptions(policy, req)
+	if !automatic && options.vectorTopN < len(bases) {
+		options.vectorTopN = len(bases)
+	}
 
 	// Timed from here rather than from function entry: the authorization lookup
 	// above is not retrieval work, and including it would make the metric partly a
@@ -136,66 +165,13 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 		return nil, apperror.Wrap(500, "EMBEDDING_FAILED", "知识检索暂时不可用，请稍后重试", err)
 	}
 
-	vectorCandidates, err := s.chunks.SearchByVector(ctx, kbID, queryVector, options.vectorTopN)
+	recalled, err := s.recallBases(ctx, bases, queryVector, options, req, automatic)
 	if err != nil {
-		return nil, apperror.Internal(err)
+		return nil, err
 	}
-	vectorCandidates = limitSearchResults(vectorCandidates, options.vectorTopN)
-	vectorCandidates, exactFallback, err := s.completeVectorRecall(ctx, kbID, queryVector, options.vectorTopN, vectorCandidates)
-	if err != nil {
-		return nil, apperror.Internal(err)
-	}
-
-	// Keyword recall runs after the vector stage rather than concurrently: the
-	// two queries share the same pool and the keyword one is cheap, so the
-	// simpler sequential code is not worth trading for a goroutine here.
-	keywordCandidates := []repository.SearchResult{}
-	keywordStageStatus := "disabled"
-	fusionStageStatus := "skipped"
-	var fused []fusedCandidate
-	keywordFailed := false
-	if options.enableKeyword {
-		keywordStart := time.Now()
-		keywordCandidates, err = s.chunks.SearchByKeyword(ctx, kbID, req.Query, options.vectorTopN)
-		s.metrics.RecordProviderResult(observability.ProviderKeyword, err)
-		if err != nil {
-			// Keyword recall is an addition to vector recall, not a prerequisite:
-			// a broken GIN index or a missing search_vector column must not take
-			// down retrieval that worked before hybrid search existed. The stage
-			// is reported as failed in debug output and the vector list is used
-			// alone, with vector-score thresholds as before.
-			if log := s.metrics.Logger(); log != nil {
-				log.Warn("keyword recall failed; falling back to vector recall", zap.String("knowledgeBaseId", kbID.String()), zap.Error(err))
-			}
-			keywordFailed = true
-			keywordCandidates = nil
-			keywordStageStatus = "failed"
-			fusionStageStatus = "skipped"
-			fused = fuseByReciprocalRank(vectorCandidates, nil, options.vectorTopN)
-			for i := range fused {
-				fused[i].FusionScore = nil
-			}
-		} else {
-			s.metrics.ObserveSince(observability.MetricKeyword, keywordStart)
-			keywordCandidates = limitSearchResults(keywordCandidates, options.vectorTopN)
-			keywordStageStatus = "completed"
-			fusionStageStatus = "completed"
-			fused = fuseByReciprocalRank(vectorCandidates, keywordCandidates, options.vectorTopN)
-		}
-	} else {
-		fused = fuseByReciprocalRank(vectorCandidates, nil, options.vectorTopN)
-		for i := range fused {
-			fused[i].FusionScore = nil
-		}
-	}
-	rerankInput := searchResultsOf(fused)
-
-	// Without a successful Rerank the threshold has to be applied to whatever
-	// score ordered the list. That is the vector score when keyword recall is
-	// off (unchanged behavior) and the normalized fusion score when it is on,
-	// because a keyword-only chunk has no vector score to compare.
+	rerankInput := recalled.rerankInput
 	thresholdScore := scoreVector
-	if options.enableKeyword && !keywordFailed {
+	if recalled.fusionStageStatus == "completed" {
 		thresholdScore = scoreFusion
 	}
 
@@ -237,16 +213,18 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 	for _, item := range candidates {
 		start, end := chunkSourceOffsets(item.Metadata)
 		items = append(items, dto.SearchResultResponse{
-			ChunkID:      item.ChunkID.String(),
-			DocumentID:   item.DocumentID.String(),
-			Filename:     item.Filename,
-			Content:      item.Content,
-			PageNumber:   item.PageNumber,
-			VectorScore:  item.VectorScore,
-			KeywordScore: item.KeywordScore,
-			RerankScore:  item.RerankScore,
-			StartOffset:  start,
-			EndOffset:    end,
+			KnowledgeBaseID:   item.KnowledgeBaseID.String(),
+			KnowledgeBaseName: item.KnowledgeBaseName,
+			ChunkID:           item.ChunkID.String(),
+			DocumentID:        item.DocumentID.String(),
+			Filename:          item.Filename,
+			Content:           item.Content,
+			PageNumber:        item.PageNumber,
+			VectorScore:       item.VectorScore,
+			KeywordScore:      item.KeywordScore,
+			RerankScore:       item.RerankScore,
+			StartOffset:       start,
+			EndOffset:         end,
 		})
 	}
 
@@ -254,20 +232,10 @@ func (s *Service) Search(ctx context.Context, ownerID, kbID uuid.UUID, req dto.S
 
 	res := &dto.SearchResponse{Items: items, RerankFallback: rerankFallback}
 	if req.Debug {
-		res.Debug = buildSearchDebugResponse(searchDebugInput{
-			query:              req.Query,
-			vectorCandidates:   vectorCandidates,
-			exactFallback:      exactFallback,
-			keywordCandidates:  keywordCandidates,
-			keywordStageStatus: keywordStageStatus,
-			fused:              fused,
-			fusionStageStatus:  fusionStageStatus,
-			rerankInput:        rerankInput,
-			rerankCandidates:   rerankCandidates,
-			rerankStageStatus:  rerankStageStatus,
-			finalCandidates:    candidates,
-			rerankFallback:     rerankFallback,
-		})
+		recalled.query = req.Query
+		recalled.rerankCandidates, recalled.rerankStageStatus = rerankCandidates, rerankStageStatus
+		recalled.finalCandidates, recalled.rerankFallback = candidates, rerankFallback
+		res.Debug = buildSearchDebugResponse(recalled)
 	}
 	return res, nil
 }

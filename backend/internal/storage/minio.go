@@ -121,23 +121,26 @@ func (s *MinIOStorage) NewKnowledgeBaseFileLocation(kbID uuid.UUID, filename str
 }
 
 func (s *MinIOStorage) SaveKnowledgeBaseFile(ctx context.Context, location string, file *multipart.FileHeader) error {
-	operationCtx, cancel := s.operationContext(ctx)
-	defer cancel()
-	if err := s.ensureBucket(operationCtx); err != nil {
-		return err
-	}
 	source, err := file.Open()
 	if err != nil {
 		return err
 	}
 	defer source.Close()
+	return s.SaveKnowledgeBaseObject(ctx, location, source, file.Size)
+}
 
+func (s *MinIOStorage) SaveKnowledgeBaseObject(ctx context.Context, location string, source io.Reader, size int64) error {
+	operationCtx, cancel := s.operationContext(ctx)
+	defer cancel()
+	if err := s.ensureBucket(operationCtx); err != nil {
+		return err
+	}
 	key, err := s.objectKey(location)
 	if err != nil {
 		return err
 	}
 	contentType := mime.TypeByExtension(path.Ext(key))
-	if _, err := s.client.PutObject(operationCtx, s.bucket, key, source, file.Size, minio.PutObjectOptions{ContentType: contentType}); err != nil {
+	if _, err := s.client.PutObject(operationCtx, s.bucket, key, source, size, minio.PutObjectOptions{ContentType: contentType}); err != nil {
 		return fmt.Errorf("put MinIO object: %w", err)
 	}
 	return nil

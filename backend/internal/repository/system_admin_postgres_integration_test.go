@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -23,7 +24,16 @@ func TestPostgresSystemAdminBootstrapSerializesFirstAdmin(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			db1, db2 := newPostgresConcurrencyTestDBs(t)
-			if err := db1.AutoMigrate(&model.User{}); err != nil {
+			// Mirror the pre-P4 SQL schema and apply the actual migration so model
+			// column naming mistakes cannot be hidden by GORM AutoMigrate.
+			if err := db1.Exec(`ALTER TABLE users ADD COLUMN display_name TEXT, ADD COLUMN avatar_url TEXT, ADD COLUMN role TEXT DEFAULT 'user', ADD COLUMN created_at TIMESTAMPTZ, ADD COLUMN updated_at TIMESTAMPTZ`).Error; err != nil {
+				t.Fatal(err)
+			}
+			migration, err := os.ReadFile("../../migrations/025_user_status_and_admin.sql")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db1.Exec(string(migration)).Error; err != nil {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -92,5 +102,26 @@ func TestPostgresSystemAdminBootstrapSerializesFirstAdmin(t *testing.T) {
 				t.Fatalf("expected exactly one administrator, got %d", admins)
 			}
 		})
+	}
+}
+
+func TestPostgresLastActiveAdministratorIsProtected(t *testing.T) {
+	db, _ := newPostgresConcurrencyTestDBs(t)
+	if err := db.AutoMigrate(&model.User{}); err != nil {
+		t.Fatal(err)
+	}
+	active := model.User{Username: "active-admin", PasswordHash: "fixture", Role: model.SystemRoleAdmin, Status: "active"}
+	disabled := model.User{Username: "disabled-admin", PasswordHash: "fixture", Role: model.SystemRoleAdmin, Status: "disabled"}
+	for _, user := range []*model.User{&active, &disabled} {
+		if err := db.Create(user).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	repo := NewUserRepository(db)
+	if _, err := repo.UpdateAdminProfile(context.Background(), active.ID, "admin", "disabled"); !errors.Is(err, ErrAdminLastAdmin) {
+		t.Fatalf("disable: %v", err)
+	}
+	if _, err := repo.UpdateAdminRole(context.Background(), disabled.ID, active.ID, model.SystemRoleUser); !errors.Is(err, ErrAdminLastAdmin) {
+		t.Fatalf("demote: %v", err)
 	}
 }
