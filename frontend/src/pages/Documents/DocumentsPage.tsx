@@ -22,6 +22,7 @@ import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
 import { Checkbox, Field, Input, Select } from '../../components/ui/Field';
+import { PageHeading } from '../../components/ui/PageHeading';
 import { DebouncedSearchInput } from '../../components/ui/DebouncedSearchInput';
 import { useKnowledgeBaseOptions } from '../../hooks/useKnowledgeBaseOptions';
 import { IconButton } from '../../components/ui/IconButton';
@@ -335,19 +336,16 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
 
   return (
     <div className="doc-page">
-      <header className="ui-page-heading doc-page__heading">
-        <div className="ui-page-heading__copy">
-          {scopeKnowledgeBaseId ? <h2>文档资料</h2> : <h1>文档资料</h1>}
-          <p>管理原始资料，查看处理进度与可用于问答的内容。</p>
-        </div>
-        <Button
+      <PageHeading className="doc-page__heading" title="文档资料" level={scopeKnowledgeBaseId ? 2 : 1}
+        description="管理原始资料，查看处理进度与可用于问答的内容。"
+        actions={<Button
           disabled={uploadTargets.length === 0}
           leadingIcon={<Upload aria-hidden="true" />}
           onClick={openImport}
         >
           导入文档
-        </Button>
-      </header>
+        </Button>}
+      />
       <div className="doc-toolbar">
         {knowledgeBaseOptions.error && <p className="ui-inline-error" role="alert">{knowledgeBaseOptions.error}<Button variant="link" onClick={() => void knowledgeBaseOptions.reload()}>重试知识库列表</Button></p>}
         <div className="ui-toolbar">
@@ -548,7 +546,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
               <thead>
                 <tr>
                   <th className="ui-table__select">
-                    <Checkbox
+                    <Checkbox touchTarget
                       aria-label="选择当前页全部文档"
                       checked={allSelected}
                       disabled={writableItems.length === 0}
@@ -571,7 +569,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
                   return (
                     <tr data-busy={pending || undefined} data-selected={selected.has(document.id) || undefined} key={document.id}>
                       <td className="ui-table__select" data-label="选择">
-                        <Checkbox
+                        <Checkbox touchTarget
                           aria-label={`选择 ${document.filename}`}
                           checked={selected.has(document.id)}
                           disabled={!writable}

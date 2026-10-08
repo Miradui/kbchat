@@ -50,6 +50,17 @@ function deferred<T>() {
 }
 
 describe('HomePage', () => {
+  it('shows unavailable task status and restores it with a local retry', async () => {
+    const user = userEvent.setup();
+    const sources = createSources();
+    vi.mocked(sources.loadSummary).mockRejectedValueOnce(new Error('offline')).mockResolvedValue(createSummary({ documents: [{ ...document, status: 'parsing' }] }));
+    renderWithRouter(<HomePage sources={sources} />);
+    await user.click(await screen.findByRole('button', { name: '重试处理中状态' }));
+    expect(await screen.findByText('1 个文档正在处理')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重试失败文档状态' })).toBeInTheDocument();
+    expect(sources.loadActivities).toHaveBeenCalledTimes(1);
+  });
+
   it('does not present a deliberately cancelled document as a processing failure', async () => {
     const sources = createSources();
     vi.mocked(sources.loadSummary).mockResolvedValue(createSummary({

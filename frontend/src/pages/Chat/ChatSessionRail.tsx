@@ -96,10 +96,10 @@ export function ChatSessionRail({
     <aside aria-label="会话列表" className="chat-rail" ref={panelRef}
       role={overlay ? 'dialog' : undefined} aria-modal={overlay && open ? true : undefined}
       aria-hidden={overlay && !open ? true : undefined} inert={overlay && !open} tabIndex={overlay ? -1 : undefined}>
-      <div className="chat-rail__intro"><strong>会话</strong><span>基于你的知识，持续探索</span></div>
+      <div className="chat-rail__intro"><strong>会话</strong><span>按知识库筛选历史会话</span></div>
       <div className="chat-rail__head">
         <Select
-          aria-label="当前知识库"
+          aria-label="筛选历史会话的知识库"
           disabled={disabled || knowledgeBases.length === 0}
           onChange={(event) => onKnowledgeBaseChange(event.target.value)}
           value={knowledgeBaseId}
@@ -135,7 +135,7 @@ export function ChatSessionRail({
 
       <SegmentedControl
         disabled={disabled}
-        label="会话范围"
+        label="会话状态"
         onChange={onScopeChange}
         options={[
           { value: 'active', label: '活跃' },

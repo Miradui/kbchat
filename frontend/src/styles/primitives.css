@@ -162,6 +162,8 @@
   margin: 0;
   width: 15px;
 }
+.ui-checkbox-target { align-items: center; cursor: pointer; display: inline-flex; flex: 0 0 auto; justify-content: center; }
+.ui-checkbox-target:has(:disabled) { cursor: not-allowed; }
 .ui-checkbox:disabled { cursor: not-allowed; opacity: 0.5; }
 
 .ui-switch-row { align-items: center; cursor: pointer; display: flex; gap: var(--s-2); }
@@ -353,7 +355,7 @@
 
 /* A consistent introduction for collection and utility pages. */
 .ui-page-heading { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-4); justify-content: space-between; margin: 0 auto var(--s-6); max-width: var(--content-max); }
-.ui-page-heading__copy { display: grid; gap: var(--s-2); min-width: 0; }
+.ui-page-heading__copy { display: grid; gap: var(--s-1); min-width: 0; }
 .ui-page-heading h1, .ui-page-heading h2 { color: var(--text); font-size: var(--t-title); font-weight: 650; letter-spacing: -0.025em; }
 .ui-page-heading p { color: var(--text-muted); font-size: var(--t-body); }
 .ui-eyebrow { align-items: center; color: var(--accent); display: inline-flex; font-size: var(--t-micro); font-weight: 650; gap: var(--s-2); letter-spacing: 0.1em; }
@@ -414,6 +416,7 @@
   transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
 }
 
+button.ui-metrics__item { border: 1px solid var(--line); min-height: var(--control-h); padding: var(--s-1) var(--s-3); }
 button.ui-metrics__item:not(:disabled):hover { background: var(--surface-hover); color: var(--text); }
 .ui-metrics__item strong { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 600; }
 .ui-metrics__item[aria-pressed='true'] { background: var(--accent-wash); color: var(--accent); }

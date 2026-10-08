@@ -81,6 +81,10 @@
     width: 22px;
   }
 
+  /* Standalone table/card selections use a label so the native tick stays small. */
+  .ui-checkbox-target { min-height: var(--touch); min-width: var(--touch); }
+  .ui-checkbox-target .ui-checkbox { height: var(--s-4); width: var(--s-4); }
+
   /*
     In card layout the select cell is a full-width row, so give it the touch height --
     the checkbox sits at its right edge and the extra height makes it easier to hit

@@ -9,7 +9,7 @@
 
 .chat-layout__scrim { display: none; }
 
-@media (min-width: 1381px) {
+@media (min-width: 1600px) {
   .chat-layout.has-source-preview { grid-template-columns: var(--chat-rail-w) minmax(0, 1fr) var(--chat-preview-w); }
 }
 
@@ -30,11 +30,11 @@
 .chat-preview__excerpt blockquote { color: var(--text-secondary); line-height: var(--lh-normal); margin-top: var(--s-2); max-height: calc(var(--s-20) * 2); overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; }
 .chat-preview__toolbar { align-items: center; color: var(--text-muted); display: flex; flex: 0 0 auto; flex-wrap: wrap; font-size: var(--t-small); gap: var(--s-2); justify-content: space-between; }
 .chat-preview__toolbar small { font-size: var(--t-micro); }
-.chat-preview__text { background: var(--surface-sunken); border: 1px solid var(--line); border-radius: var(--r-sm); flex: 1; font-family: var(--font); font-size: var(--t-body); line-height: 1.85; min-height: 0; overflow: auto; overflow-wrap: anywhere; padding: var(--s-4); white-space: pre-wrap; }
+.chat-preview__text { background: var(--surface-sunken); border: 1px solid var(--line); border-radius: var(--r-sm); flex: 1; font-family: var(--font); font-size: var(--t-lead); line-height: var(--lh-reading); min-height: 0; overflow: auto; overflow-wrap: anywhere; padding: var(--s-4); white-space: pre-wrap; }
 .chat-preview__text mark { background: var(--accent-wash); border-bottom: 1px solid var(--accent); color: var(--text); }
 .chat-preview__body > .pdf-preview { flex: 1; min-height: 0; }
 .chat-preview__error { align-items: flex-start; color: var(--text-muted); display: flex; flex-direction: column; font-size: var(--t-body); gap: var(--s-3); }
-@media (max-width: 1380px) {
+@media (max-width: 1599px) {
   .chat-preview__text, .chat-preview__body > .pdf-preview { min-height: calc(var(--s-20) * 3); }
 }
 
@@ -137,7 +137,7 @@
   align-items: center;
   background: var(--accent-wash);
   border: 1px solid var(--accent-line);
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);
   color: var(--accent);
   display: inline-flex;
   flex: 0 1 auto;
@@ -366,11 +366,11 @@ a.chat-source__link:hover { color: var(--accent); }
   text-align: center;
   width: 100%;
 }
-.chat-launcher__mark { align-items: center; background: var(--accent-wash); border: 1px solid var(--accent-line); border-radius: var(--r-xl); color: var(--accent); display: flex; height: var(--s-16); justify-content: center; margin-bottom: var(--s-3); width: var(--s-16); }
+.chat-launcher__mark { align-items: center; background: var(--accent-wash); border: 1px solid var(--accent-line); border-radius: var(--r-xl); color: var(--accent); display: flex; height: var(--s-12); justify-content: center; margin-bottom: var(--s-1); width: var(--s-12); }
 .chat-launcher__mark > svg { height: var(--s-8); width: var(--s-8); }
 .chat-launcher h2 { font-size: var(--t-title); }
 .chat-launcher > p { color: var(--text-muted); font-size: var(--t-body); }
-.chat-launcher__list { display: grid; gap: var(--s-3); grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: var(--s-5); width: 100%; }
+.chat-launcher__list { display: grid; gap: var(--s-2); grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: var(--s-2); width: 100%; }
 .chat-launcher__list > :only-child { grid-column: 1 / -1; }
 .chat-launcher__hint { margin-top: var(--s-2); }
 .chat-launcher__item {
@@ -466,7 +466,8 @@ a.chat-source__link:hover { color: var(--accent); }
   .chat-composer { padding: var(--s-2) var(--s-3) var(--s-3); }
   .chat-composer__hint { display: none; }
   .chat-msg__body { max-width: 100%; }
-  .chat-main__kb { display: none; }
+  .chat-main__head { flex-wrap: wrap; }
+  .chat-main__kb { max-width: 100%; margin-left: auto; }
 
   /*
     A citation header is index + filename + page label on one row. On a phone that

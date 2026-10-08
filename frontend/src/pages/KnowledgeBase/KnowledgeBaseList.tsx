@@ -92,7 +92,7 @@ export function KnowledgeBaseTable({
         <thead>
           <tr>
             <th className="ui-table__select">
-              <Checkbox
+              <Checkbox touchTarget
                 aria-label="选择当前页全部知识库"
                 checked={allSelected}
                 ref={element => { if (element) element.indeterminate = selected.size > 0 && !allSelected; }}
@@ -114,7 +114,7 @@ export function KnowledgeBaseTable({
             return (
               <tr data-busy={handlers.isPending(item.id) || undefined} data-selected={selected.has(item.id) || undefined} key={item.id}>
                 <td className="ui-table__select" data-label="选择">
-                  <Checkbox
+                  <Checkbox touchTarget
                     aria-label={`选择 ${item.name}`}
                     checked={selected.has(item.id)}
                     disabled={handlers.isPending(item.id)}
@@ -172,7 +172,7 @@ export function KnowledgeBaseCards({ items, selected, handlers }: ListProps) {
             key={item.id}
           >
             <header className="kb-card__head">
-              <Checkbox
+              <Checkbox touchTarget
                 aria-label={`选择 ${item.name}`}
                 checked={selected.has(item.id)}
                 disabled={handlers.isPending(item.id)}

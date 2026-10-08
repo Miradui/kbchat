@@ -27,6 +27,7 @@ import { hasCapability } from '../../utils/access';
 import { formatBytes, formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
 import { DocumentProgress } from './DocumentProgress';
+import { DocumentReadingPreview } from './DocumentReadingPreview';
 import { documentDisplayStatusLabel, documentDisplayStatusTone, isTerminalDocumentStatus } from './documentDisplay';
 import { documentFailureCopy, documentStalenessHint } from './documentFailure';
 
@@ -77,6 +78,9 @@ export function DocumentDetailDrawer({
   const [error, setError] = useState('');
   const [previewError, setPreviewError] = useState('');
   const [chunkError, setChunkError] = useState('');
+  const [previewAttempt, setPreviewAttempt] = useState(0);
+  const [chunkAttempt, setChunkAttempt] = useState(0);
+  const [detailAttempt, setDetailAttempt] = useState(0);
   const submitting = operation !== null;
   const canDownload = hasCapability(knowledgeBase, 'document.download');
   const canWrite = hasCapability(knowledgeBase, 'content.write');
@@ -130,20 +134,6 @@ export function DocumentDetailDrawer({
         });
         if (!mounted) return;
         setKnowledgeBase(currentKnowledgeBase);
-        const previewResponse = await getDocumentPreview(documentId).catch((caught) => {
-          if (mounted) setPreviewError(previewErrorMessage(caught, '文档预览加载失败'));
-          return null;
-        });
-        if (!mounted) return;
-        setPreview(previewResponse);
-        if (previewResponse?.kind === 'file' && hasCapability(currentKnowledgeBase, 'document.download')) {
-          try {
-            const blob = await downloadDocument(documentId);
-            if (mounted) setPreviewUrl(URL.createObjectURL(blob));
-          } catch (caught) {
-            if (mounted) setPreviewError(previewErrorMessage(caught, '文件预览加载失败'));
-          }
-        }
       })
       .catch((caught) => {
         if (mounted) setError(previewErrorMessage(caught, '文档详情加载失败'));
@@ -155,7 +145,28 @@ export function DocumentDetailDrawer({
     return () => {
       mounted = false;
     };
-  }, [documentId, knowledgeBaseId]);
+  }, [documentId, knowledgeBaseId, detailAttempt]);
+
+  // Retry only the preview, preserving the current chunk page and reading position.
+  const previewReady = !loading && document?.id === documentId && documentScope === (knowledgeBaseId ?? '');
+  useEffect(() => {
+    if (!previewReady) return;
+    let active = true;
+    setPreview(null);
+    setPreviewUrl('');
+    setPreviewError('');
+    void getDocumentPreview(documentId).then(async (response) => {
+      if (!active) return;
+      setPreview(response);
+      if (response.kind === 'file' && canDownload) {
+        const blob = await downloadDocument(documentId);
+        if (active) setPreviewUrl(URL.createObjectURL(blob));
+      }
+    }).catch((caught) => {
+      if (active) setPreviewError(previewErrorMessage(caught, '文档预览加载失败'));
+    });
+    return () => { active = false; };
+  }, [previewReady, documentId, knowledgeBaseId, canDownload, previewAttempt]);
 
   useEffect(() => {
     if (!document || document.id !== documentId || documentScope !== (knowledgeBaseId ?? '')
@@ -220,7 +231,7 @@ export function DocumentDetailDrawer({
     return () => {
       mounted = false;
     };
-  }, [chunkId, chunkPage, chunkQuery, document, documentId, documentScope, knowledgeBaseId]);
+  }, [chunkId, chunkPage, chunkQuery, document, documentId, documentScope, knowledgeBaseId, chunkAttempt]);
 
   /**
    * Bring the cited chunk into view and put focus on it.
@@ -234,11 +245,11 @@ export function DocumentDetailDrawer({
    * Only ever runs for a deep link (`chunkId` set), and only once per chunk, so it
    * cannot yank focus back after the user has moved on.
    */
+  // Preview content sits above the chunks. Wait for its initial layout so a late
+  // response cannot push the already-focused citation below the visible area.
+  const previewSettled = Boolean(previewError || (preview && (preview.kind !== 'file' || !canDownload || previewUrl)));
   useEffect(() => {
-    // The ref check is the one doing the work. `!chunkId` and `chunksLoading` are both
-    // already covered by `sourceChunkRef` being null in those states -- kept because
-    // they state the precondition, not because removing them changes behaviour.
-    if (!chunkId || chunksLoading || focusedChunkRef.current === chunkId) return;
+    if (!chunkId || chunksLoading || !previewSettled || focusedChunkRef.current === chunkId) return;
     const target = sourceChunkRef.current;
     if (!target) return;
 
@@ -252,7 +263,7 @@ export function DocumentDetailDrawer({
       block: 'center',
     });
     target.focus({ preventScroll: true });
-  }, [chunkId, chunks, chunksLoading]);
+  }, [chunkId, chunks, chunksLoading, previewSettled]);
 
   useEffect(() => () => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -358,6 +369,7 @@ export function DocumentDetailDrawer({
   return (
     <>
       <Drawer
+        className="doc-detail"
         onClose={() => {
           if (!submitting) onClose();
         }}
@@ -369,21 +381,23 @@ export function DocumentDetailDrawer({
           <LoadingSkeleton announce compact columns={2} rows={6} />
         ) : (
           <>
-            {error && <p className="ui-inline-error" role="alert">{error}</p>}
+            {error && <div className="ui-inline-error" role="alert">{error}{!document && <Button variant="link" onClick={() => setDetailAttempt((value) => value + 1)}>重新加载详情</Button>}</div>}
             {document && (
               <>
                 <section className="doc-detail__head">
                   <span className="ui-kb-glyph ui-kb-glyph--lg" aria-hidden="true">{document.fileType.toLowerCase() === 'docx' ? <FileType /> : <FileText />}</span>
                   <div className="ui-cell-stack">
                     <strong>{document.filename}</strong>
-                    <small>{knowledgeBaseName ?? document.knowledgeBaseId}</small>
+                    <small>{knowledgeBaseName ?? knowledgeBase?.name ?? document.knowledgeBaseId}</small>
                   </div>
                   <Badge tone={documentDisplayStatusTone(document.status, document.jobStatus)}>
                     {documentDisplayStatusLabel(document.status, document.jobStatus)}
                   </Badge>
                 </section>
 
-                <DocumentProgress document={document} />
+                <div className={document.status === 'completed' ? 'doc-detail__progress is-complete' : 'doc-detail__progress'}>
+                  <DocumentProgress document={document} />
+                </div>
 
                 {document.status === 'failed' && failure && (
                   <div
@@ -454,18 +468,18 @@ export function DocumentDetailDrawer({
                 </div>
                 {accessError && <p className="ui-inline-error" role="alert">{accessError}</p>}
 
-                <section className="ui-panel">
+                <section className="doc-detail__section">
                   <div className="ui-panel__head">
                     <h3>预览</h3>
                     <span className="ui-panel__head-note">{preview?.contentType || '原始上传文件'}</span>
                   </div>
                   <div className={`ui-panel__body doc-preview${preview?.kind === 'file' ? ' doc-preview--file' : ''}`}>
                     {previewError ? (
-                      <p className="ui-inline-error" role="alert">{previewError}</p>
+                      <div className="ui-inline-error" role="alert"><p>{previewError}</p><Button onClick={() => setPreviewAttempt((value) => value + 1)} variant="secondary">重试预览</Button></div>
                     ) : !preview ? (
                       <LoadingSkeleton announce compact columns={1} rows={3} />
                     ) : preview.kind === 'text' ? (
-                      <pre className="doc-preview__text">{preview.content || ''}</pre>
+                      <DocumentReadingPreview key={documentId} content={preview.content || ''} fileType={preview.fileType} />
                     ) : !canDownload ? (
                       <p className="ui-muted">可阅读下方内容片段；下载原始文件需要编辑者及以上权限。</p>
                     ) : previewUrl ? (
@@ -484,7 +498,7 @@ export function DocumentDetailDrawer({
                   </div>
                 </section>
 
-                <section className="ui-panel">
+                <section className="doc-detail__section">
                   <div className="ui-panel__head">
                     <h3>{chunkId ? '引用来源片段' : '内容片段'}</h3>
                     {chunkId ? (
@@ -503,7 +517,7 @@ export function DocumentDetailDrawer({
                   </div>
                   <div className="ui-panel__body">
                     {chunkError ? (
-                      <p className="ui-inline-error" role="alert">{chunkError}</p>
+                      <div className="ui-inline-error" role="alert"><p>{chunkError}</p><Button onClick={() => setChunkAttempt((value) => value + 1)} variant="secondary">重试片段</Button></div>
                     ) : chunksLoading ? (
                       <LoadingSkeleton announce compact columns={1} rows={4} />
                     ) : chunks.length === 0 ? (

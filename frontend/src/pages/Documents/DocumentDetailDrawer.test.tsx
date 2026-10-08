@@ -483,8 +483,38 @@ describe('DocumentDetailDrawer', () => {
     vi.mocked(listDocumentChunks).mockRejectedValue(new Error('offline'));
     renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
 
-    expect(await screen.findByText('内容片段加载失败')).toHaveAttribute('role', 'alert');
-    expect(await screen.findByText('文档预览加载失败')).toHaveAttribute('role', 'alert');
+    expect((await screen.findByText('内容片段加载失败')).closest('[role="alert"]')).not.toBeNull();
+    expect((await screen.findByText('文档预览加载失败')).closest('[role="alert"]')).not.toBeNull();
+  });
+
+  it('retries failed previews and chunks independently without reloading document metadata', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getDocumentPreview).mockRejectedValueOnce(new Error('offline'));
+    vi.mocked(listDocumentChunks).mockRejectedValueOnce(new Error('offline')).mockResolvedValue({ items: [sourceChunk], total: 1, page: 1, pageSize: 20 });
+    renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
+    await user.click(await screen.findByRole('button', { name: '重试预览' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: '重试预览' })).not.toBeInTheDocument());
+    expect(listDocumentChunks).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('button', { name: '重试片段' }));
+    expect(await screen.findByText(sourceChunk.content)).toBeInTheDocument();
+    expect(getDocument).toHaveBeenCalledTimes(1);
+    expect(getDocumentPreview).toHaveBeenCalledTimes(2);
+  });
+
+  it('discards a late preview retry after switching documents', async () => {
+    const user = userEvent.setup();
+    const pending = deferred<Awaited<ReturnType<typeof getDocumentPreview>>>();
+    vi.mocked(getDocumentPreview).mockRejectedValueOnce(new Error('offline')).mockReturnValueOnce(pending.promise)
+      .mockResolvedValue({ id: 'doc2', filename: '新文档.txt', fileType: 'txt', kind: 'text', contentType: 'text/plain', content: '新文档正文', downloadUrl: '' });
+    vi.mocked(getDocument).mockResolvedValueOnce(document).mockResolvedValue({ ...document, id: 'doc2', filename: '新文档.txt' });
+    vi.mocked(listDocumentChunks).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
+    renderWithRouter(<DocumentSwitchHarness />);
+    await user.click(await screen.findByRole('button', { name: '重试预览' }));
+    fireEvent.click(screen.getByRole('button', { name: '打开另一文档', hidden: true }));
+    await screen.findByText('新文档正文');
+    await act(async () => pending.resolve({ id: 'doc1', filename: document.filename, fileType: 'txt', kind: 'text', contentType: 'text/plain', content: '迟到的旧文档正文', downloadUrl: '' }));
+    expect(screen.queryByText('迟到的旧文档正文')).not.toBeInTheDocument();
+    expect(screen.getByText('新文档正文')).toBeInTheDocument();
   });
 
   it('keeps a delete failure inside the open confirmation dialog', async () => {
@@ -621,6 +651,31 @@ describe('DocumentDetailDrawer citation landing', () => {
     // preventScroll, so the focus call does not fight the smooth scroll it just started.
     expect(source).toHaveAttribute('tabindex', '-1');
     expect(source).toHaveAccessibleName('引用来源片段 #3');
+  });
+
+  it('waits for a late preview before positioning the cited chunk', async () => {
+    const scrollIntoView = stubScrollIntoView();
+    const preview = deferred<Awaited<ReturnType<typeof getDocumentPreview>>>();
+    vi.mocked(getDocumentPreview).mockReturnValue(preview.promise);
+    vi.mocked(listDocumentChunks).mockResolvedValue({ items: [sourceChunk], total: 1, page: 1, pageSize: 20 });
+    renderWithRouter(<DocumentDetailDrawer chunkId="chunk1" documentId="doc1" onClose={vi.fn()} />);
+
+    const source = (await screen.findByText(sourceChunk.content)).closest('article');
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(source).not.toHaveFocus();
+    await act(async () => preview.resolve({ id: 'doc1', filename: '制度.md', fileType: 'md', contentType: 'text/markdown', kind: 'text', content: '# 制度\n\n正文'.repeat(100), downloadUrl: '' }));
+    await waitFor(() => expect(source).toHaveFocus());
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  });
+
+  it('still positions the cited chunk when the preview fails', async () => {
+    const scrollIntoView = stubScrollIntoView();
+    vi.mocked(getDocumentPreview).mockRejectedValue(new Error('offline'));
+    vi.mocked(listDocumentChunks).mockResolvedValue({ items: [sourceChunk], total: 1, page: 1, pageSize: 20 });
+    renderWithRouter(<DocumentDetailDrawer chunkId="chunk1" documentId="doc1" onClose={vi.fn()} />);
+    const source = (await screen.findByText(sourceChunk.content)).closest('article');
+    await waitFor(() => expect(source).toHaveFocus());
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
   });
 
   it('skips the smooth scroll when reduced motion is preferred', async () => {

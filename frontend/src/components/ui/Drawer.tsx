@@ -12,11 +12,12 @@ type DrawerProps = {
   /** Rendered on the right of the header, before the close button. */
   headerActions?: ReactNode;
   wide?: boolean;
+  className?: string;
   onClose: () => void;
   children: ReactNode;
 };
 
-export function Drawer({ open, title, headerActions, wide = false, onClose, children }: DrawerProps) {
+export function Drawer({ open, title, headerActions, wide = false, className = '', onClose, children }: DrawerProps) {
   const titleId = useId();
   const panelRef = useModalFocus<HTMLElement>(open, onClose);
 
@@ -32,7 +33,7 @@ export function Drawer({ open, title, headerActions, wide = false, onClose, chil
       <aside
         aria-labelledby={titleId}
         aria-modal="true"
-        className={wide ? 'ui-drawer ui-drawer--wide' : 'ui-drawer'}
+        className={`${wide ? 'ui-drawer ui-drawer--wide' : 'ui-drawer'} ${className}`.trim()}
         ref={panelRef}
         role="dialog"
         tabIndex={-1}

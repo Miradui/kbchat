@@ -27,6 +27,7 @@ import { MetricStrip } from '../../components/ui/MetricStrip';
 import { Pagination } from '../../components/ui/Pagination';
 import { Checkbox } from '../../components/ui/Field';
 import { useEntityMutation } from '../../hooks/useEntityMutation';
+import { PageHeading } from '../../components/ui/PageHeading';
 import { AppShell } from '../../layouts/AppShell';
 import type {
   KnowledgeBase,
@@ -336,13 +337,9 @@ export function KnowledgeBaseListPage() {
 
   return (
     <AppShell active="knowledge-bases" breadcrumbs={[{ label: '知识库' }]}>
-      <header className="ui-page-heading">
-        <div className="ui-page-heading__copy">
-          <h1>知识库</h1>
-          <p>按主题整理资料，构建可以随时提问的知识空间。</p>
-        </div>
-        <Button leadingIcon={<Plus aria-hidden="true" />} onClick={openCreate}>新建知识库</Button>
-      </header>
+      <PageHeading title="知识库" description="按主题整理资料，构建可以随时提问的知识空间。"
+        actions={<Button leadingIcon={<Plus aria-hidden="true" />} onClick={openCreate}>新建知识库</Button>}
+      />
       <div className="kb-page" aria-busy={busy || undefined}>
         <CategoryPanel
           controller={categories}

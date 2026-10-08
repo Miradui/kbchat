@@ -9,6 +9,7 @@ import { ErrorState } from '../../components/feedback/ErrorState';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { Button } from '../../components/ui/Button';
 import { Pagination } from '../../components/ui/Pagination';
+import { PageHeading } from '../../components/ui/PageHeading';
 import { AppShell } from '../../layouts/AppShell';
 import { SearchCombobox, suggestionHref } from './SearchCombobox';
 import { searchGuidance } from './searchGuidance';
@@ -241,12 +242,7 @@ export function SearchPage() {
   return (
     <AppShell active="search" breadcrumbs={[{ label: '搜索' }]}>
       <div className="search-page">
-        <header className="ui-page-heading search-page__heading">
-          <div className="ui-page-heading__copy">
-            <h1>搜索你的知识</h1>
-            <p>通过关键词查找知识库、文档和原文片段。</p>
-          </div>
-        </header>
+        <PageHeading className="search-page__heading" title="搜索你的知识" description="搜索名称与原文关键词，查找知识库、文档和内容片段。" />
         <form className="search-page__form" onSubmit={handleSubmit} role="search">
           <SearchCombobox
             onChange={setDraft}

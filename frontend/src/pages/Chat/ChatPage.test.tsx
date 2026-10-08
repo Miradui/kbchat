@@ -715,7 +715,7 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    expect(await screen.findByLabelText('当前知识库')).toHaveValue(knowledgeBase.id);
+    expect(await screen.findByLabelText('筛选历史会话的知识库')).toHaveValue(knowledgeBase.id);
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('会话列表加载失败');
     expect(screen.queryByText('当前知识库暂无会话。')).not.toBeInTheDocument();
@@ -752,7 +752,7 @@ describe('ChatPage', () => {
     await user.click(within(alert).getByRole('button', { name: '重试' }));
     await waitFor(() => expect(listKnowledgeBases).toHaveBeenCalledTimes(3));
     expect(listChatSessions).toHaveBeenCalledTimes(sessionCallsBeforeRetry);
-    expect(await screen.findByLabelText('当前知识库')).toHaveValue(knowledgeBase.id);
+    expect(await screen.findByLabelText('筛选历史会话的知识库')).toHaveValue(knowledgeBase.id);
   });
 
   it('switches the session rail to archived when opening an archived deep link', async () => {
@@ -1716,7 +1716,7 @@ describe('ChatPage', () => {
     await clickSessionAction(user, '删除会话');
     expect(screen.getByRole('dialog', { name: '删除会话' })).toHaveTextContent('制度问答');
 
-    await user.selectOptions(screen.getByLabelText('当前知识库'), secondKnowledgeBase.id);
+    await user.selectOptions(screen.getByLabelText('筛选历史会话的知识库'), secondKnowledgeBase.id);
 
     expect(screen.queryByRole('dialog', { name: '删除会话' })).not.toBeInTheDocument();
   });
@@ -1782,7 +1782,7 @@ describe('ChatPage', () => {
     await user.click(screen.getByRole('button', { name: '发送' }));
     expect(await screen.findAllByText('制度会话问题')).toHaveLength(1);
 
-    expect(screen.getByLabelText('当前知识库')).toBeDisabled();
+    expect(screen.getByLabelText('筛选历史会话的知识库')).toBeDisabled();
     screen.getAllByRole('button', { name: '新建对话' }).forEach((button) => {
       expect(button).toBeDisabled();
     });
@@ -1794,7 +1794,7 @@ describe('ChatPage', () => {
     sendResult.resolve({...replyFields,  answer: '制度会话回答', citations: [], rerankFallback: null });
 
     await waitFor(() => expect(secondSessionLink).not.toHaveAttribute('aria-disabled'));
-    expect(screen.getByLabelText('当前知识库')).toBeEnabled();
+    expect(screen.getByLabelText('筛选历史会话的知识库')).toBeEnabled();
   });
 
   it('synchronously blocks session mutations when a send starts', async () => {
@@ -1890,7 +1890,7 @@ describe('ChatPage', () => {
 
     const otherSession = screen.getByRole('link', { name: /产品问答/ });
     expect(otherSession).toHaveAttribute('aria-disabled', 'true');
-    expect(screen.getByLabelText('当前知识库')).toBeDisabled();
+    expect(screen.getByLabelText('筛选历史会话的知识库')).toBeDisabled();
     screen.getAllByRole('button', { name: '新建对话' }).forEach((button) => expect(button).toBeDisabled());
     await user.click(otherSession);
     expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat/s1');
@@ -1937,7 +1937,7 @@ describe('ChatPage', () => {
 
     expect(screen.queryByRole('dialog', { name: '删除会话' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '重命名会话' })).not.toBeInTheDocument();
-    expect(screen.getByLabelText('当前知识库')).toBeDisabled();
+    expect(screen.getByLabelText('筛选历史会话的知识库')).toBeDisabled();
     const otherSession = screen.getByRole('link', { name: /产品问答/ });
     expect(otherSession).toHaveAttribute('aria-disabled', 'true');
     await user.click(otherSession);
@@ -2023,7 +2023,7 @@ describe('ChatPage', () => {
       ['/chat/s1'],
     );
 
-    await user.selectOptions(await screen.findByLabelText('当前知识库'), 'kb2');
+    await user.selectOptions(await screen.findByLabelText('筛选历史会话的知识库'), 'kb2');
 
     expect(createChatSession).not.toHaveBeenCalled();
     expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat?knowledgeBaseId=kb2');
@@ -2047,7 +2047,7 @@ describe('ChatPage', () => {
 
     const input = await screen.findByRole('textbox', { name: '输入问题' });
     await user.type(input, '请对比两份制度');
-    await user.selectOptions(await screen.findByLabelText('当前知识库'), secondKnowledgeBase.id);
+    await user.selectOptions(await screen.findByLabelText('筛选历史会话的知识库'), secondKnowledgeBase.id);
 
     expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat?knowledgeBaseId=kb2');
     expect(screen.getByRole('textbox', { name: '输入问题' })).toHaveValue('请对比两份制度');
@@ -2589,8 +2589,8 @@ describe('automatic conversations', () => {
     await user.click(screen.getByRole('button', {name:'发送'}));
     await waitFor(() => expect(createChatSession).toHaveBeenCalledWith(undefined, ''));
     await waitFor(() => expect(screen.getByLabelText('当前位置')).toHaveTextContent(/^\/chat\/s1$/));
-    expect(screen.getByText('自动检索 · 每轮匹配知识库')).toBeInTheDocument();
-    expect(screen.getByLabelText('当前知识库')).toHaveValue('');
+    expect(within(screen.getByRole('region', { name: '问答会话' })).getByText('自动检索')).toBeInTheDocument();
+    expect(screen.getByLabelText('筛选历史会话的知识库')).toHaveValue('');
     expect(within(screen.getByRole('navigation', {name:'面包屑'})).getByText('自动检索')).toBeInTheDocument();
     expect(screen.getByRole('textbox', {name:'输入问题'})).toHaveAttribute('placeholder','直接提问，自动检索相关知识库…');
   });
@@ -2642,7 +2642,8 @@ describe('cross-base conversations', () => {
     await user.type(screen.getByRole('textbox',{name:'输入问题'}),'两个库有什么规定');
     await user.click(screen.getByRole('button',{name:'发送'}));
     await waitFor(()=>expect(createChatSession).toHaveBeenCalledWith(['kb1','kb2'],''));
-    await waitFor(()=>expect(screen.getByText('跨库会话 · 制度库、产品库')).toBeInTheDocument());
+    await waitFor(()=>expect(screen.getByText('手动 · 2 个知识库')).toBeInTheDocument());
+    expect(await screen.findByTitle('制度库、产品库')).toBeInTheDocument();
   });
 
   it('opens a citation in the secondary base and clears the entire scope on revocation', async () => {

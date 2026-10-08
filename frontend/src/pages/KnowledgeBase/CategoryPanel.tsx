@@ -1,11 +1,12 @@
-import { Plus, Settings2 } from 'lucide-react';
-import { useState } from 'react';
+import { ChevronDown, Plus, Settings2 } from 'lucide-react';
+import { useId, useState } from 'react';
 
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { useToast } from '../../components/feedback/ToastProvider';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { Button } from '../../components/ui/Button';
 import { IconButton } from '../../components/ui/IconButton';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
 import type { KnowledgeBaseCategory } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
 import { CategoryDialog } from './CategoryDialog';
@@ -52,6 +53,9 @@ export function CategoryPanel({
   const [deleteTarget, setDeleteTarget] = useState<KnowledgeBaseCategory | null>(null);
   const [deleteError, setDeleteError] = useState('');
   const [deleting, setDeleting] = useState(false);
+  const isCompact = useMediaQuery('(max-width: 900px)');
+  const [expanded, setExpanded] = useState(false);
+  const bodyId = useId();
 
   const flat = flattenCategories(categories);
   const parentOptions = form?.id
@@ -122,17 +126,18 @@ export function CategoryPanel({
   return (
     <aside aria-label="知识库分类" className="cat-panel">
       <div className="cat-panel__head">
-        <strong>分类</strong>
+        {isCompact ? <button aria-controls={bodyId} aria-expanded={expanded} className="cat-panel__disclosure" onClick={() => setExpanded((value) => !value)} type="button"><ChevronDown aria-hidden="true" /><span>分类 · {flat.find((category) => category.id === selectedId)?.label.trim() ?? '全部'}</span></button> : <strong>分类</strong>}
         <IconButton
           aria-pressed={managing}
           className={managing ? 'is-on' : undefined}
           label={managing ? '退出分类管理' : '管理分类'}
-          onClick={() => setManaging((value) => !value)}
+          onClick={() => { setManaging((value) => !value); setExpanded(true); }}
         >
           <Settings2 aria-hidden="true" />
         </IconButton>
       </div>
 
+      <div className="cat-panel__body" hidden={isCompact && !expanded} id={bodyId}>
       <button
         aria-current={selectedId === '' ? 'true' : undefined}
         className={selectedId === '' ? 'cat-panel__all is-selected' : 'cat-panel__all'}
@@ -178,6 +183,8 @@ export function CategoryPanel({
           新建分类
         </Button>
       )}
+
+      </div>
 
       <CategoryDialog
         error={formError}

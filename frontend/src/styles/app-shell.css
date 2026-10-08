@@ -22,13 +22,13 @@
 
 /* ---------------- Rail ---------------- */
 .rail {
-  background: var(--surface);
+  background: var(--surface-sunken);
   border-right: 1px solid var(--line);
   display: grid;
   grid-template-rows: auto auto 1fr auto;
   height: 100dvh;
   min-width: 0;
-  padding: var(--s-6) var(--s-4) var(--s-4);
+  padding: var(--s-5) var(--s-3) var(--s-3);
   position: sticky;
   top: 0;
   z-index: 50;
@@ -55,12 +55,11 @@
 
 .rail__mark {
   border-radius: var(--r-lg);
-  box-shadow: var(--shadow-popover);
   display: block;
   flex: 0 0 auto;
-  height: var(--s-12);
+  height: var(--s-10);
   transition: filter var(--fast) var(--ease);
-  width: var(--s-12);
+  width: var(--s-10);
 }
 .rail__brand:hover .rail__mark { filter: brightness(1.06); }
 .rail__brand-text { display: grid; gap: var(--s-1); min-width: 0; }
@@ -83,10 +82,10 @@
 
 .rail__cta {
   align-items: center;
-  background: var(--accent);
-  border: 1px solid var(--accent);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
   border-radius: var(--r-sm);
-  color: var(--text-on-accent);
+  color: var(--text);
   display: flex;
   font-size: var(--t-body);
   font-weight: 550;
@@ -95,10 +94,10 @@
   padding: 0 var(--s-4);
   transition: background var(--fast) var(--ease);
 }
-.rail__cta:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.rail__cta:hover { background: var(--surface-hover); border-color: var(--accent-line); }
 .rail__cta > svg { height: var(--icon-md); width: var(--icon-md); }
 
-.rail__nav { align-content: start; display: grid; gap: var(--s-6); margin-top: var(--s-8); overflow-y: auto; }
+.rail__nav { align-content: start; display: grid; gap: var(--s-6); margin-top: var(--s-5); overflow-y: auto; }
 .rail__group { display: grid; gap: var(--s-1); }
 .rail__group-label {
   color: var(--text-muted);
@@ -154,7 +153,7 @@
   border-bottom: 1px solid var(--line);
   display: flex;
   gap: var(--s-3);
-  padding: 0 var(--s-10);
+  padding: 0 var(--s-8);
   position: sticky;
   top: 0;
   z-index: 40;
@@ -212,7 +211,7 @@ kbd.topbar__kbd,
 .topbar__menu-button { display: none; }
 
 /* ---------------- Content ---------------- */
-.app__content { min-width: 0; padding: var(--s-8) var(--s-10) var(--s-12); }
+.app__content { min-width: 0; padding: var(--s-6) var(--s-8) var(--s-12); }
 .app__content--flush { padding: 0; }
 
 /* ---------------- Command palette ---------------- */

@@ -27,9 +27,10 @@ export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSel
   },
 );
 
-export const Checkbox = forwardRef<HTMLInputElement, Omit<InputHTMLAttributes<HTMLInputElement>, 'type'>>(
-  function Checkbox({ className, ...props }, ref) {
-    return <input {...props} className={classNames('ui-checkbox', className)} ref={ref} type="checkbox" />;
+export const Checkbox = forwardRef<HTMLInputElement, Omit<InputHTMLAttributes<HTMLInputElement>, 'type'> & { touchTarget?: boolean }>(
+  function Checkbox({ className, touchTarget = false, ...props }, ref) {
+    const input = <input {...props} className={classNames('ui-checkbox', className)} ref={ref} type="checkbox" />;
+    return touchTarget ? <label className="ui-checkbox-target">{input}</label> : input;
   },
 );
 

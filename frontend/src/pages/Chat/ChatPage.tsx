@@ -439,12 +439,12 @@ export function ChatPage() {
                 <Badge tone="neutral">已归档 {formatDateTime(currentSession.archivedAt)}</Badge>
               )}
             </div>
-            {automaticScope && <span className="chat-main__kb" title="每轮根据问题检索当前可访问的知识库"><Sparkles aria-hidden="true" />自动检索 · 每轮匹配知识库</span>}
-            {!automaticScope && multiBase && <span className="chat-main__kb" title={activeKnowledgeBases.map((kb) => kb.name).join('、')}><span className="ui-truncate">跨库会话 · {activeKnowledgeBases.map((kb) => kb.name).join('、')}</span></span>}
+            {automaticScope && <span className="chat-main__kb" title="每轮根据问题检索当前可访问的知识库"><Sparkles aria-hidden="true" /><span className="ui-truncate">自动检索</span></span>}
+            {!automaticScope && multiBase && <span className="chat-main__kb" title={activeKnowledgeBases.map((kb) => kb.name).join('、')}><span className="ui-truncate">手动 · {activeKnowledgeBaseIds.length} 个知识库</span></span>}
             {!automaticScope && !multiBase && activeKnowledgeBase && (
               <Link className="chat-main__kb" to={`/knowledge-bases/${activeKnowledgeBase.id}`}>
                 <Library aria-hidden="true" />
-                <span className="ui-truncate">{activeKnowledgeBase.name}</span>
+                <span className="ui-truncate">手动 · {activeKnowledgeBase.name}</span>
               </Link>
             )}
             {sessionId && <IconButton aria-expanded={messageSearch.open} label="查找会话消息" ref={messageSearch.triggerRef} onClick={messageSearch.openSearch}><Search aria-hidden="true" /></IconButton>}
@@ -797,7 +797,7 @@ function ChatEmptyState({
           </button>
         ))}
       </div>
-      <p className="chat-launcher__hint">{selectedIds.length ? `已指定 ${selectedIds.length} 个知识库，本会话仅在所选范围内检索。` : '当前为自动模式，可以直接提问；不同问题可以使用不同知识库。'}</p>
+      {selectedIds.length > 0 && <p className="chat-launcher__hint">已指定 {selectedIds.length} 个知识库，本会话仅在所选范围内检索。</p>}
     </div>
   );
 }

@@ -93,7 +93,7 @@ export function HomePage({ sources }: { sources?: HomeSources }) {
           </Link>
           <Link to="/documents?intent=upload">
             <span className="home-quick__icon"><Upload aria-hidden="true" /></span>
-            <span><strong>导入文档</strong><small>添加 PDF、Markdown 或 TXT</small></span>
+            <span><strong>导入文档</strong><small>添加 PDF、DOCX、Markdown 或 TXT</small></span>
             <ArrowRight aria-hidden="true" />
           </Link>
           <Link to="/chat">
@@ -103,9 +103,11 @@ export function HomePage({ sources }: { sources?: HomeSources }) {
           </Link>
         </nav>
 
-        {/* Only rendered when something actually needs a decision. */}
-        {needsAttention && (
+        {(needsAttention || documents.error || failedDocuments.error || documents.loading || failedDocuments.loading) && (
           <section aria-label="需要处理" className="home-attention">
+            {(documents.loading || failedDocuments.loading) && !needsAttention && <LoadingSkeleton announce compact columns={1} rows={1} />}
+            {documents.error && <div className="home-attention__error" role="alert"><span>处理中状态暂不可用：{documents.error}</span><Button variant="secondary" onClick={documents.reload}>重试处理中状态</Button></div>}
+            {failedDocuments.error && <div className="home-attention__error" role="alert"><span>失败文档状态暂不可用：{failedDocuments.error}</span><Button variant="secondary" onClick={failedDocuments.reload}>重试失败文档状态</Button></div>}
             {actionableFailures.length > 0 && (
               <Link className="home-attention__row is-danger" to="/documents?status=failed">
                 <AlertTriangle aria-hidden="true" />
