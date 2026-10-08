@@ -200,6 +200,25 @@ func (h *DocumentHandler) ListGlobal(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
+func (h *DocumentHandler) CountsGlobal(c *gin.Context) {
+	userID, ok := currentUserIDOrError(c)
+	if !ok {
+		return
+	}
+	var knowledgeBaseID *string
+	if value := c.Query("knowledgeBaseId"); value != "" {
+		knowledgeBaseID = &value
+	}
+	res, err := h.documents.CountsGlobal(c.Request.Context(), userID, dto.DocumentCountsQuery{
+		Q: c.Query("q"), KnowledgeBaseID: knowledgeBaseID, FileType: c.Query("fileType"),
+	})
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
 func (h *DocumentHandler) BatchDelete(c *gin.Context) {
 	userID, ok := currentUserIDOrError(c)
 	if !ok {

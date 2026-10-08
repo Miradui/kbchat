@@ -59,6 +59,7 @@ docx
 无 `ToUnicode` 的 Type0 字体若明确使用 `UniGB-UCS2-H/V` 或 `UniGB-UTF16-H/V`，按该 CMap 的大端 Unicode 编码读取，保留中文与页码；畸形长度、非法代理对拒绝解析。不把 `Identity-H` 或任意 CID 猜成 Unicode，也不宣称支持所有 PDF CMap。
 
 3. 当前 PDF 解析只提取可读取文本，不包含 OCR、版面树、跨栏阅读顺序修复或表格重建。
+   每次完整解析记录 `totalPages`、`textPages` 和 `pagesWithoutText`；空白/BOM-only 页被跳过但记录原物理页码。解析中断或编码错误不保存不完整的页摘要。成功解析的摘要通过当前运行任务守卫，在切片和 Embedding 前保存到 `documents.pdf_text_summary`，因此全空 PDF 后续报 `empty_content`、或 Embedding 失败时仍可向用户解释未提取页面。重处理排队及解析开始清除旧摘要，旧文档未重新解析时保持未知；不自动补 OCR、回填或重建向量。
 4. DOCX 读取 OOXML 的 `word/document.xml`、`word/styles.xml` 和可选的 `word/numbering.xml`，只提取正文段落、Heading 1–6、列表和表格；输出为 Markdown segment 交给同一切片器。页眉页脚、批注、修订删除内容、图片、公式、文本框和 OCR 不进入索引。合并单元格只保留左上角值，其余单元格留空。
 5. DOCX 必须是扩展名为 `.docx` 且具有 ZIP 魔数的 OOXML 包；`.doc`、损坏 ZIP 和加密文档会进入 `corrupt_file` 失败分类。预览接口返回解析后的文本，不还原版式。
 

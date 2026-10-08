@@ -1,11 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { apiRequest } from './client';
-import { globalSearch, listKnowledgeBases, listAdminUsers, listGlobalDocuments } from './resources';
+import { getDocumentCounts, globalSearch, listKnowledgeBases, listAdminUsers, listGlobalDocuments } from './resources';
 
 vi.mock('./client', () => ({ apiRequest: vi.fn(), apiBlobRequest: vi.fn() }));
 
 describe('search resources', () => {
+  it('requests document counts with scope, literal search and cancellation', () => {
+    const controller = new AbortController();
+    void getDocumentCounts({ q: 'all', knowledgeBaseId: 'kb1', fileType: 'pdf' }, controller.signal);
+    expect(apiRequest).toHaveBeenCalledWith('/documents/counts?q=all&knowledgeBaseId=kb1&fileType=pdf', { signal: controller.signal });
+  });
   it('preserves a literal all search while omitting only all-valued enum filters', () => {
     void globalSearch({ query: 'all', type: 'all' });
     void listKnowledgeBases({ q: 'all', scope: 'all', visibility: 'all' });

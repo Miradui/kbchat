@@ -8,21 +8,22 @@ import (
 )
 
 type DocumentResponse struct {
-	ID              string     `json:"id"`
-	KnowledgeBaseID string     `json:"knowledgeBaseId"`
-	Filename        string     `json:"filename"`
-	FileType        string     `json:"fileType"`
-	FileSize        int64      `json:"fileSize"`
-	Status          string     `json:"status"`
-	ErrorMessage    *string    `json:"errorMessage"`
-	JobStatus       string     `json:"jobStatus"`
-	Progress        int        `json:"progress"`
-	Stage           string     `json:"stage"`
-	RetryCount      int        `json:"retryCount"`
-	MaxRetries      int        `json:"maxRetries"`
-	NextRetryAt     *time.Time `json:"nextRetryAt"`
-	CreatedAt       time.Time  `json:"createdAt"`
-	UpdatedAt       time.Time  `json:"updatedAt"`
+	PDFTextSummary  *PDFTextSummary `json:"pdfTextSummary"`
+	ID              string          `json:"id"`
+	KnowledgeBaseID string          `json:"knowledgeBaseId"`
+	Filename        string          `json:"filename"`
+	FileType        string          `json:"fileType"`
+	FileSize        int64           `json:"fileSize"`
+	Status          string          `json:"status"`
+	ErrorMessage    *string         `json:"errorMessage"`
+	JobStatus       string          `json:"jobStatus"`
+	Progress        int             `json:"progress"`
+	Stage           string          `json:"stage"`
+	RetryCount      int             `json:"retryCount"`
+	MaxRetries      int             `json:"maxRetries"`
+	NextRetryAt     *time.Time      `json:"nextRetryAt"`
+	CreatedAt       time.Time       `json:"createdAt"`
+	UpdatedAt       time.Time       `json:"updatedAt"`
 
 	// ErrorCode is a closed set (see model.DocumentErrorCode*) so the client can
 	// give specific advice per failure. ErrorMessage stays the human sentence; the
@@ -41,6 +42,12 @@ type DocumentResponse struct {
 	StaleAfterDays int `json:"staleAfterDays"`
 }
 
+type PDFTextSummary struct {
+	TotalPages       int   `json:"totalPages"`
+	TextPages        int   `json:"textPages"`
+	PagesWithoutText []int `json:"pagesWithoutText"`
+}
+
 type GlobalDocumentListQuery struct {
 	Q               string
 	KnowledgeBaseID *string
@@ -49,6 +56,19 @@ type GlobalDocumentListQuery struct {
 	Sort            string
 	Page            int
 	PageSize        int
+}
+
+type DocumentCountsQuery struct {
+	Q               string
+	KnowledgeBaseID *string
+	FileType        string
+}
+
+type DocumentCountsResponse struct {
+	Total      int64 `json:"total"`
+	Completed  int64 `json:"completed"`
+	Processing int64 `json:"processing"`
+	Failed     int64 `json:"failed"`
 }
 
 type GlobalDocumentResponse struct {

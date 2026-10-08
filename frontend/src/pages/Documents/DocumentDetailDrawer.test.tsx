@@ -105,15 +105,30 @@ beforeEach(() => {
 });
 
 describe('DocumentDetailDrawer', () => {
+  it('shows partial PDF extraction to a viewer without requesting the original file', async () => {
+    vi.mocked(getKnowledgeBase).mockResolvedValue({ id: 'kb1', capabilities: ['document.read'] } as Awaited<ReturnType<typeof getKnowledgeBase>>);
+    vi.mocked(getDocument).mockResolvedValue({ ...document, pdfTextSummary: { totalPages: 4, textPages: 2, pagesWithoutText: [2, 4] } });
+    vi.mocked(getDocumentPreview).mockResolvedValue({ id: 'doc1', filename: '制度.pdf', fileType: 'pdf', contentType: 'application/pdf', kind: 'file', downloadUrl: '/documents/doc1/download' });
+    vi.mocked(listDocumentChunks).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
+    renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
+    expect(await screen.findByRole('note', { name: 'PDF 文字提取情况' })).toHaveTextContent('未提取页码：2、4');
+    await waitFor(() => expect(getDocumentPreview).toHaveBeenCalled());
+    expect(downloadDocument).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: '下载' })).not.toBeInTheDocument();
+  });
+
   it('updates a reprocessed document to completion while keeping its original preview', async () => {
+    vi.mocked(getDocument).mockResolvedValue({ ...document, pdfTextSummary: { totalPages: 4, textPages: 2, pagesWithoutText: [2, 4] } });
     vi.mocked(getDocumentPreview).mockResolvedValue({ id: 'doc1', filename: '制度.pdf', fileType: 'pdf', contentType: 'text/plain', kind: 'text', content: '原文预览保持可读', downloadUrl: '' });
     vi.mocked(listDocumentChunks).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
     vi.mocked(reprocessDocument).mockResolvedValue({ ...document, status: 'parsing', progress: 10 });
     renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
     await screen.findByText('原文预览保持可读');
+    expect(screen.getByRole('note', { name: 'PDF 文字提取情况' })).toBeInTheDocument();
     vi.useFakeTimers();
     try {
       await act(async () => { fireEvent.click(screen.getByRole('button', { name: '重新处理' })); });
+      expect(screen.queryByRole('note', { name: 'PDF 文字提取情况' })).not.toBeInTheDocument();
       expect(screen.getByText('原文预览保持可读')).toBeInTheDocument();
       vi.mocked(getDocument).mockRejectedValueOnce(new Error('temporary progress failure')).mockResolvedValue({ ...document, progress: 100, jobStatus: 'completed' });
       vi.mocked(listDocumentChunks).mockResolvedValue({ items: [{ ...sourceChunk, content: '重新处理完成后的片段' }], total: 1, page: 1, pageSize: 20 });

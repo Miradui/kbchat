@@ -225,6 +225,22 @@ func (s *DocumentService) ListGlobal(ctx context.Context, ownerID uuid.UUID, que
 	return &res, nil
 }
 
+func (s *DocumentService) CountsGlobal(ctx context.Context, actorID uuid.UUID, query dto.DocumentCountsQuery) (*dto.DocumentCountsResponse, error) {
+	repoQuery, err := toGlobalDocumentRepoQuery(dto.GlobalDocumentListQuery{
+		Q: query.Q, KnowledgeBaseID: query.KnowledgeBaseID, FileType: query.FileType,
+	})
+	if err != nil {
+		return nil, err
+	}
+	counts, err := s.documents.CountsForActor(ctx, actorID, access.MemberRolesWith(access.CapDocumentRead), repoQuery)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+	return &dto.DocumentCountsResponse{
+		Total: counts.Total, Completed: counts.Completed, Processing: counts.Processing, Failed: counts.Failed,
+	}, nil
+}
+
 func (s *DocumentService) Get(ctx context.Context, ownerID, documentID uuid.UUID) (*dto.DocumentResponse, error) {
 	document, err := s.authorizeDocument(ctx, ownerID, documentID, access.CapDocumentRead)
 	if err != nil {
@@ -335,6 +351,7 @@ func (s *DocumentService) Reprocess(ctx context.Context, ownerID, documentID uui
 	if created {
 		document.Status = "uploaded"
 		document.ErrorMessage = ""
+		document.PDFTextSummary = nil
 	}
 	res := toDocumentResponse(document, job, s.maxDocumentRetries(), s.staleAfterDays())
 	return &res, nil
@@ -739,6 +756,7 @@ func toDocumentResponse(document *model.Document, job *model.DocumentJob, maxRet
 	progress := documentProgress(document.Status, job, maxRetries)
 
 	return dto.DocumentResponse{
+		PDFTextSummary:  documentPDFTextSummary(document),
 		ID:              document.ID.String(),
 		KnowledgeBaseID: document.KnowledgeBaseID.String(),
 		Filename:        document.Filename,
@@ -760,6 +778,28 @@ func toDocumentResponse(document *model.Document, job *model.DocumentJob, maxRet
 		IsStale:         isStaleDocument(document, staleAfterDays, time.Now()),
 		StaleAfterDays:  staleAfterDays,
 	}
+}
+
+func documentPDFTextSummary(document *model.Document) *dto.PDFTextSummary {
+	if document.FileType != "pdf" || len(document.PDFTextSummary) == 0 {
+		return nil
+	}
+	var summary dto.PDFTextSummary
+	if json.Unmarshal(document.PDFTextSummary, &summary) != nil || summary.TotalPages <= 0 || summary.TextPages < 0 ||
+		summary.TextPages+len(summary.PagesWithoutText) != summary.TotalPages {
+		return nil
+	}
+	previous := 0
+	for _, page := range summary.PagesWithoutText {
+		if page <= previous || page > summary.TotalPages {
+			return nil
+		}
+		previous = page
+	}
+	if summary.PagesWithoutText == nil {
+		summary.PagesWithoutText = []int{}
+	}
+	return &summary
 }
 
 func stringValue(value *string) string {

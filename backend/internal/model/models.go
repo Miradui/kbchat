@@ -140,19 +140,21 @@ type KnowledgeBaseWorkspacePreference struct {
 }
 
 type Document struct {
-	EmbeddingModel     *string       `gorm:"size:128" json:"-"`
-	EmbeddingDimension *int          `json:"-"`
-	ID                 uuid.UUID     `gorm:"type:uuid;primaryKey" json:"id"`
-	KnowledgeBaseID    uuid.UUID     `gorm:"type:uuid;not null;index" json:"knowledgeBaseId"`
-	KnowledgeBase      KnowledgeBase `gorm:"foreignKey:KnowledgeBaseID" json:"-"`
-	UploaderID         uuid.UUID     `gorm:"type:uuid;not null;index" json:"uploaderId"`
-	Uploader           User          `gorm:"foreignKey:UploaderID" json:"-"`
-	Filename           string        `gorm:"size:255;not null" json:"filename"`
-	FileType           string        `gorm:"size:32" json:"fileType"`
-	FileSize           int64         `json:"fileSize"`
-	StoragePath        string        `gorm:"not null" json:"storagePath"`
-	Status             string        `gorm:"size:32;default:uploaded" json:"status"`
-	ErrorMessage       string        `json:"errorMessage"`
+	// NULL means no page extraction record, including documents parsed before migration 032.
+	PDFTextSummary     datatypes.JSON `gorm:"type:jsonb;default:null" json:"-"`
+	EmbeddingModel     *string        `gorm:"size:128" json:"-"`
+	EmbeddingDimension *int           `json:"-"`
+	ID                 uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
+	KnowledgeBaseID    uuid.UUID      `gorm:"type:uuid;not null;index" json:"knowledgeBaseId"`
+	KnowledgeBase      KnowledgeBase  `gorm:"foreignKey:KnowledgeBaseID" json:"-"`
+	UploaderID         uuid.UUID      `gorm:"type:uuid;not null;index" json:"uploaderId"`
+	Uploader           User           `gorm:"foreignKey:UploaderID" json:"-"`
+	Filename           string         `gorm:"size:255;not null" json:"filename"`
+	FileType           string         `gorm:"size:32" json:"fileType"`
+	FileSize           int64          `json:"fileSize"`
+	StoragePath        string         `gorm:"not null" json:"storagePath"`
+	Status             string         `gorm:"size:32;default:uploaded" json:"status"`
+	ErrorMessage       string         `json:"errorMessage"`
 	// ContentHash is SHA-256 of the uploaded bytes, hex encoded. Nullable because
 	// pre-migration rows were never hashed; a NULL never matches a new upload, so
 	// duplicate detection fails open rather than blocking a legitimate file.

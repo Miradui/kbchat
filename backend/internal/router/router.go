@@ -277,6 +277,7 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	protected.POST("/knowledge-bases/:id/documents/text", documentHandler.CreateText)
 	protected.GET("/knowledge-bases/:id/documents", documentHandler.List)
 	protected.GET("/documents", documentHandler.ListGlobal)
+	protected.GET("/documents/counts", documentHandler.CountsGlobal)
 	protected.GET("/documents/recycle-bin", documentHandler.ListRecycleBin)
 	protected.POST("/documents/recycle-bin/empty", documentHandler.EmptyRecycleBin)
 	protected.DELETE("/documents/recycle-bin/:id", documentHandler.PermanentDelete)

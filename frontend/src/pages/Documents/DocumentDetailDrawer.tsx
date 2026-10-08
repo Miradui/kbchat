@@ -28,6 +28,7 @@ import { formatBytes, formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
 import { DocumentProgress } from './DocumentProgress';
 import { DocumentReadingPreview } from './DocumentReadingPreview';
+import { PdfTextNotice } from './PdfTextNotice';
 import { documentDisplayStatusLabel, documentDisplayStatusTone, isTerminalDocumentStatus } from './documentDisplay';
 import { documentFailureCopy, documentStalenessHint } from './documentFailure';
 
@@ -410,6 +411,8 @@ export function DocumentDetailDrawer({
                     <p>{failure.advice}</p>
                   </div>
                 )}
+
+                {document.fileType.toLowerCase() === 'pdf' && <PdfTextNotice summary={document.pdfTextSummary} />}
 
                 {stalenessHint && (
                   <p className="ui-inline-notice" role="note">

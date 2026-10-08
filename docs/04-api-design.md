@@ -1043,6 +1043,18 @@ pageSize
 
 `supersededById` 非空表示这一行是历史版本，已被该 id 的文档取代。
 
+### GET /documents/counts
+
+返回当前用户具有 `document.read` 权限的文档状态统计，复用文档列表的所有者/成员、软删除、关键词和文件类型过滤；系统管理员身份及知识库公开标记不会扩大可读范围。
+
+支持 `q`、`knowledgeBaseId`、`fileType`。`q` 匹配文件名或知识库名称，与列表一致；非法知识库 ID 返回 400。指定不可访问或不存在的知识库时返回全零，保持全局列表的过滤语义。`status`、排序及分页不影响统计，供状态筛选按钮展示所有桶。
+
+```json
+{ "total": 12, "completed": 6, "processing": 4, "failed": 2 }
+```
+
+四个数字由一次条件聚合查询得到，属于同一查询快照；不读取文档条目或任务详情。`processing` 包含 uploaded/parsing/chunking/embedding，`failed` 包含状态为 failed 的取消任务；空结果各项为 0。列表与统计仍是两个独立请求，统计加载失败不能把未知数量显示为 0。
+
 ### POST /documents/batch-delete
 
 批量软删除当前用户拥有的文档，采用 all-or-nothing 语义。
@@ -1199,6 +1211,16 @@ field: allowDuplicate=true
 ### GET /documents/:id
 
 需要所属知识库的 `document.read`。
+
+文档详情及单文档创建/重处理响应新增可空的 `pdfTextSummary`：
+
+```json
+{ "pdfTextSummary": { "totalPages": 4, "textPages": 2, "pagesWithoutText": [2, 3] } }
+```
+
+记录最近一次成功 PDF 解析的总页数、提取到文字的页数和未提取文字的物理页码（从 1 开始，升序）。所有页均有文字时数组为空。非 PDF、历史文档无记录、解析未完成或摘要无效时为 `null`；列表不返回此字段。只读成员可读取摘要，原文件下载仍要求 `document.download`。
+
+新重处理任务排队后立即返回 `pdfTextSummary=null`；本次解析完成后刷新。解析结果在切片/Embedding 前保存，即使全空 PDF 报 `empty_content` 或后续 Embedding 失败，也可展示已知页信息。不将未提取到文字等同于扫描件、损坏或已完成 OCR。
 
 ### GET /documents/:id/download
 

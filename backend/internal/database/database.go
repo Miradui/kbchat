@@ -130,6 +130,7 @@ func validateSchema(ctx context.Context, db *gorm.DB) error {
 			{&model.EvaluationRun{}, "answer_config", "028_evaluation_answer_config.sql"},
 			{&model.Document{}, "embedding_model", "029_document_embedding_identity.sql"},
 			{&model.Document{}, "embedding_dimension", "029_document_embedding_identity.sql"},
+			{&model.Document{}, "pdf_text_summary", "032_document_pdf_text_summary.sql"},
 			{&model.ChatSession{}, "scope_mode", "031_chat_automatic_scope.sql"},
 		} {
 			if !migrator.HasColumn(required.model, required.column) {

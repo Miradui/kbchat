@@ -228,3 +228,8 @@
 .doc-guidance__text { display: grid; flex: 1 1 240px; gap: 2px; }
 .doc-guidance__text strong { color: var(--text); font-size: var(--t-body); font-weight: 550; }
 .doc-guidance__text span { font-size: var(--t-small); }
+.doc-detail__pdf-text { display: block; }
+.doc-detail__pdf-text p { margin: 0; }
+.doc-detail__pdf-text p + p, .doc-detail__pdf-text details + p { margin-top: 6px; }
+.doc-detail__pdf-text summary { cursor: pointer; margin-top: 6px; }
+.doc-detail__pdf-pages { overflow-wrap: anywhere; max-height: 12rem; overflow-y: auto; }

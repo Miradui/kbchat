@@ -298,7 +298,8 @@ func TestProcessPersistsStructuredPDFPages(t *testing.T) {
 	pageOne := 1
 	pageThree := 3
 	parsed := parser.ParsedDocument{
-		FileType: "pdf",
+		FileType:       "pdf",
+		PDFTextSummary: &parser.PDFTextSummary{TotalPages: 3, TextPages: 2, PagesWithoutText: []int{2}},
 		Segments: []parser.Segment{
 			{Content: "first physical page", PageNumber: &pageOne},
 			{Content: "third physical page", PageNumber: &pageThree},
@@ -315,6 +316,17 @@ func TestProcessPersistsStructuredPDFPages(t *testing.T) {
 
 	if err := processor.Process(context.Background(), &fixture.job); err != nil {
 		t.Fatalf("process PDF: %v", err)
+	}
+	stored, err := fixture.documents.FindByID(context.Background(), fixture.document.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary parser.PDFTextSummary
+	if err := json.Unmarshal(stored.PDFTextSummary, &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.TotalPages != 3 || summary.TextPages != 2 || len(summary.PagesWithoutText) != 1 || summary.PagesWithoutText[0] != 2 {
+		t.Fatalf("PDF summary did not survive publication: %#v", summary)
 	}
 
 	chunks, err := fixture.chunks.ListByDocument(context.Background(), fixture.document.ID)

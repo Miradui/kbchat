@@ -182,6 +182,7 @@ CREATE TABLE documents (
     storage_path TEXT NOT NULL,
     status VARCHAR(32) DEFAULT 'uploaded',
     error_message TEXT,
+    pdf_text_summary JSONB,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now(),
     deleted_at TIMESTAMPTZ NULL
@@ -198,6 +199,10 @@ embedding
 completed
 failed
 ```
+
+`documents.pdf_text_summary` 由迁移 032 引入，保存 PDF 最近一次成功解析的 `{totalPages, textPages, pagesWithoutText}`；页码为从 1 开始的物理页码，数组升序且不重复。仅空白或 BOM 的页记入未提取文字页，不能据此断言扫描件或损坏。非 PDF、旧文档和未完成解析时为 SQL NULL，表示未知，不表示已完整提取。
+
+重新处理排队及开始解析时清除旧摘要；解析成功后、切片和向量化前写入，因此全空 PDF 的 `empty_content` 或后续 Embedding 失败仍保留本次解析结果。写入复用当前运行任务守卫，取消或失效任务不能覆盖结果。迁移不回填、不重建向量；详情响应返回摘要，列表不携带页码数组。
 
 ## document_chunks
 

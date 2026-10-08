@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
-import { listGlobalDocuments } from '../../api/resources';
+import { getDocumentCounts, listGlobalDocuments } from '../../api/resources';
 import type { DocumentSort, DocumentStatusFilter, GlobalDocumentItem } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
 import { documentStatuses, isTerminalDocumentStatus } from './documentDisplay';
@@ -115,10 +115,7 @@ export function useDocumentList(scopeKnowledgeBaseId?: string) {
     }
   }, [filters]);
 
-  /**
-   * Real totals for the status strip. Computed from three `total`-only queries
-   * rather than counting the current page, which would under-report on page 2.
-   */
+  // All buckets share one server query; list pagination and status do not filter them.
   const loadCounts = useCallback(async () => {
     const request = ++countRequestRef.current;
     countAbortRef.current?.abort();
@@ -128,22 +125,11 @@ export function useDocumentList(scopeKnowledgeBaseId?: string) {
       q: filters.q || undefined,
       knowledgeBaseId: filters.knowledgeBaseId || undefined,
       fileType: filters.fileType || undefined,
-      page: 1,
-      pageSize: 1,
     };
     try {
-      const [all, completed, failed] = await Promise.all([
-        listGlobalDocuments(base, controller.signal),
-        listGlobalDocuments({ ...base, status: 'completed' }, controller.signal),
-        listGlobalDocuments({ ...base, status: 'failed' }, controller.signal),
-      ]);
+      const response = await getDocumentCounts(base, controller.signal);
       if (!mountedRef.current || countRequestRef.current !== request) return;
-      setCounts({
-        total: all.total,
-        completed: completed.total,
-        failed: failed.total,
-        processing: Math.max(0, all.total - completed.total - failed.total),
-      });
+      setCounts(response);
     } catch {
       if (mountedRef.current && countRequestRef.current === request) {
         setCounts({ total: null, completed: null, processing: null, failed: null });

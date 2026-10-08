@@ -19,7 +19,7 @@ import {
 } from '../../api/resources';
 import { ApiError } from '../../api/client';
 import { renderWithRouter } from '../../test/render';
-import type { DocumentItem, KnowledgeBase } from '../../types/api';
+import type { DocumentCountsResponse, DocumentItem, KnowledgeBase } from '../../types/api';
 import { DocumentsPage } from './DocumentsPage';
 
 const documentListMocks = vi.hoisted(() => ({
@@ -46,6 +46,7 @@ vi.mock('../../api/resources', () => ({
     },
   }),
   getWorkspacePreference: vi.fn(),
+  getDocumentCounts: documentListMocks.counts,
   listDocuments: documentListMocks.primary,
   listGlobalDocuments: vi.fn(async (params: {
     knowledgeBaseId?: string;
@@ -53,9 +54,7 @@ vi.mock('../../api/resources', () => ({
     pageSize?: number;
     status?: string;
   } = {}) => {
-    const response = params.pageSize === 1
-      ? await documentListMocks.counts(params)
-      : await documentListMocks.primary(params.knowledgeBaseId ?? '', params);
+    const response = await documentListMocks.primary(params.knowledgeBaseId ?? '', params);
     return {
       ...response,
       items: response.items ?? [],
@@ -140,7 +139,7 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
-  documentListMocks.counts.mockReset().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 1 });
+  documentListMocks.counts.mockReset().mockResolvedValue({ total: 0, completed: 0, processing: 0, failed: 0 });
   vi.mocked(getKnowledgeBase).mockReset().mockResolvedValue(knowledgeBase);
   documentListMocks.primary.mockReset().mockResolvedValue({total: ([]).length, page: 1, pageSize: 20,  items: [] });
   vi.mocked(listKnowledgeBases).mockReset().mockResolvedValue({ items: [knowledgeBase] });
@@ -244,9 +243,7 @@ describe('DocumentsPage', () => {
   });
 
   it('queries every processing stage and preserves the aggregate filter in the URL', async () => {
-    documentListMocks.counts.mockImplementation(async (params) => ({
-      items: [], total: params.status === undefined ? 4 : 0,
-    }));
+    documentListMocks.counts.mockResolvedValue({ total: 4, completed: 0, processing: 4, failed: 0 });
     const user = userEvent.setup();
     renderPage();
 
@@ -639,20 +636,19 @@ describe('DocumentsPage', () => {
   });
 
   it('does not let stale count requests overwrite the current search totals', async () => {
-    const stale = deferred<{ items: DocumentItem[]; total: number; page: number; pageSize: number }>();
-    documentListMocks.counts.mockImplementation((params: { q?: string; status?: string }) => {
+    const stale = deferred<DocumentCountsResponse>();
+    documentListMocks.counts.mockImplementation((params: { q?: string }) => {
       if (params.q === '旧筛选') return stale.promise;
       if (params.q === '新筛选') {
-        const total = params.status === 'completed' ? 5 : params.status === 'failed' ? 1 : 8;
-        return Promise.resolve({ items: [], total, page: 1, pageSize: 1 });
+        return Promise.resolve({ total: 8, completed: 5, processing: 2, failed: 1 });
       }
-      return Promise.resolve({ items: [], total: 0, page: 1, pageSize: 1 });
+      return Promise.resolve({ total: 0, completed: 0, processing: 0, failed: 0 });
     });
     renderPage();
     const search = await screen.findByRole('searchbox', { name: '按文件名搜索' });
 
     fireEvent.change(search, { target: { value: '旧筛选' } });
-    await waitFor(() => expect(documentListMocks.counts).toHaveBeenCalledWith(expect.objectContaining({ q: '旧筛选' })));
+    await waitFor(() => expect(documentListMocks.counts).toHaveBeenCalledWith(expect.objectContaining({ q: '旧筛选' }), expect.any(AbortSignal)));
     fireEvent.change(search, { target: { value: '新筛选' } });
 
     const metrics = screen.getByRole('group', { name: '文档处理概况' });
@@ -661,11 +657,27 @@ describe('DocumentsPage', () => {
     expect(metrics).toHaveTextContent('2处理中');
 
     await act(async () => {
-      stale.resolve({ items: [], total: 99, page: 1, pageSize: 1 });
+      stale.resolve({ total: 99, completed: 99, processing: 0, failed: 0 });
       await Promise.resolve();
     });
     expect(metrics).toHaveTextContent('8个文档');
     expect(metrics).not.toHaveTextContent('99个文档');
+  });
+
+  it('loads one aggregate independently of list status and pagination', async () => {
+    documentListMocks.counts.mockResolvedValue({ total: 11, completed: 7, processing: 3, failed: 1 });
+    renderPage('/knowledge-bases/kb1/documents?q=manual&fileType=pdf&status=failed&page=2&pageSize=10');
+    const metrics = await screen.findByRole('group', { name: '文档处理概况' });
+    await waitFor(() => expect(metrics).toHaveTextContent('11个文档'));
+    expect(metrics).toHaveTextContent('3处理中');
+    expect(documentListMocks.primary).toHaveBeenCalledTimes(1);
+    expect(documentListMocks.counts).toHaveBeenCalledTimes(1);
+    expect(documentListMocks.counts).toHaveBeenCalledWith(
+      { q: 'manual', knowledgeBaseId: 'kb1', fileType: 'pdf' }, expect.any(AbortSignal),
+    );
+    fireEvent.click(within(metrics).getByRole('button', { name: /7.*可用于问答/ }));
+    await waitFor(() => expect(documentListMocks.primary).toHaveBeenLastCalledWith('kb1', expect.objectContaining({ status: 'completed', page: 1 })));
+    expect(documentListMocks.counts).toHaveBeenCalledTimes(1);
   });
 
   it('keeps a failed document delete error inside the confirmation dialog', async () => {

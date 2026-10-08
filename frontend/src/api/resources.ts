@@ -28,6 +28,8 @@ import type {
   ChatSessionListResponse,
   DocumentChunkListResponse,
   DocumentChunkListParams,
+  DocumentCountsParams,
+  DocumentCountsResponse,
   DocumentItem,
   DocumentListResponse,
   DocumentPreviewResponse,
@@ -446,6 +448,10 @@ export function listGlobalDocuments(
   signal?: AbortSignal,
 ): Promise<GlobalDocumentListResponse> {
   return apiRequest<GlobalDocumentListResponse>(withQuery('/documents', params), { signal });
+}
+
+export function getDocumentCounts(params: DocumentCountsParams = {}, signal?: AbortSignal): Promise<DocumentCountsResponse> {
+  return apiRequest<DocumentCountsResponse>(withQuery('/documents/counts', params), { signal });
 }
 
 export function getDocument(id: string, signal?: AbortSignal): Promise<DocumentItem> {

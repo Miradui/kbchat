@@ -129,6 +129,15 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 		return err
 	}
 
+	if document.FileType == "pdf" && parsedDocument.PDFTextSummary != nil {
+		summary, err := json.Marshal(parsedDocument.PDFTextSummary)
+		if err != nil {
+			return err
+		}
+		if err := p.documents.SavePDFTextSummary(ctx, document.ID, job.ID, summary); err != nil {
+			return err
+		}
+	}
 	if err := p.documents.UpdateStatus(ctx, document.ID, job.ID, "chunking", chunkingProgress, ""); err != nil {
 		return err
 	}

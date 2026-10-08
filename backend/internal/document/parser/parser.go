@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/ledongthuc/pdf"
@@ -27,8 +28,16 @@ type Parser interface {
 }
 
 type ParsedDocument struct {
-	FileType string
-	Segments []Segment
+	FileType       string
+	Segments       []Segment
+	PDFTextSummary *PDFTextSummary
+}
+
+// PagesWithoutText records an extraction result, not a diagnosis of scanned pages.
+type PDFTextSummary struct {
+	TotalPages       int   `json:"totalPages"`
+	TextPages        int   `json:"textPages"`
+	PagesWithoutText []int `json:"pagesWithoutText"`
 }
 
 type Segment struct {
@@ -70,11 +79,7 @@ func (p *DefaultParser) ParseDocument(path string, fileType string) (ParsedDocum
 			Segments: []Segment{{Content: strings.TrimPrefix(string(content), "\ufeff")}},
 		}, nil
 	case "pdf":
-		segments, err := parsePDFSegments(path)
-		if err != nil {
-			return ParsedDocument{}, err
-		}
-		return ParsedDocument{FileType: fileType, Segments: segments}, nil
+		return parsePDFDocument(path)
 	case "docx":
 		document, err := parseDOCXPath(path)
 		if err != nil {
@@ -114,38 +119,41 @@ func normalizeFileType(fileType string) string {
 	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(fileType)), ".")
 }
 
-func parsePDFSegments(path string) ([]Segment, error) {
+func parsePDFDocument(path string) (ParsedDocument, error) {
 	file, reader, err := pdf.Open(path)
 	if err != nil {
 		// A PDF that will not open is corrupt from the user's point of view even
 		// when the underlying library calls it something else. os.Open failures
 		// reach here too, but a missing local copy is already a storage error by
 		// the time the processor asked for it.
-		return nil, fmt.Errorf("open pdf: %w: %w", ErrCorruptFile, err)
+		return ParsedDocument{}, fmt.Errorf("open pdf: %w: %w", ErrCorruptFile, err)
 	}
 	defer file.Close()
 
-	return collectPDFSegments(reader.NumPage(), func(pageNumber int) (string, error) {
+	return collectPDFDocument(reader.NumPage(), func(pageNumber int) (string, error) {
 		return readPDFPageText(reader.Page(pageNumber))
 	})
 }
 
-func collectPDFSegments(pageCount int, readPage func(pageNumber int) (string, error)) ([]Segment, error) {
+func collectPDFDocument(pageCount int, readPage func(pageNumber int) (string, error)) (ParsedDocument, error) {
 	segments := make([]Segment, 0, pageCount)
+	summary := &PDFTextSummary{TotalPages: pageCount, PagesWithoutText: []int{}}
 	for pageNumber := 1; pageNumber <= pageCount; pageNumber++ {
 		content, err := readPage(pageNumber)
 		if err != nil {
-			return nil, fmt.Errorf("parse pdf page %d: %w: %w", pageNumber, ErrCorruptFile, err)
+			return ParsedDocument{}, fmt.Errorf("parse pdf page %d: %w: %w", pageNumber, ErrCorruptFile, err)
 		}
 		if !utf8.ValidString(content) {
-			return nil, fmt.Errorf("parse pdf page %d: %w", pageNumber, ErrEncodingInvalid)
+			return ParsedDocument{}, fmt.Errorf("parse pdf page %d: %w", pageNumber, ErrEncodingInvalid)
 		}
-		content = strings.TrimSpace(strings.TrimPrefix(content, "\ufeff"))
+		content = strings.TrimFunc(content, func(r rune) bool { return r == '\ufeff' || unicode.IsSpace(r) })
 		if content == "" {
+			summary.PagesWithoutText = append(summary.PagesWithoutText, pageNumber)
 			continue
 		}
 		page := pageNumber
 		segments = append(segments, Segment{Content: content, PageNumber: &page})
 	}
-	return segments, nil
+	summary.TextPages = len(segments)
+	return ParsedDocument{FileType: "pdf", Segments: segments, PDFTextSummary: summary}, nil
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
@@ -109,27 +110,7 @@ func (r *DocumentRepository) createWithJob(ctx context.Context, document *model.
 // spelled out in SQL.
 func (r *DocumentRepository) ListForActor(ctx context.Context, actorID uuid.UUID, memberRoles []string, query GlobalDocumentQuery) ([]GlobalDocumentListItem, int64, error) {
 	page, pageSize := normalizePage(query.Page, query.PageSize)
-	base := r.db.WithContext(ctx).
-		Model(&model.Document{}).
-		Joins("JOIN knowledge_bases ON knowledge_bases.id = documents.knowledge_base_id").
-		Where(reachableKnowledgeBaseCondition(r.db, actorID, memberRoles)).
-		Where("knowledge_bases.deleted_at IS NULL").
-		Where("documents.deleted_at IS NULL")
-	if query.Q != "" {
-		like := "%" + strings.ToLower(query.Q) + "%"
-		base = base.Where("LOWER(documents.filename) LIKE ? OR LOWER(knowledge_bases.name) LIKE ?", like, like)
-	}
-	if query.KnowledgeBaseID != uuid.Nil {
-		base = base.Where("documents.knowledge_base_id = ?", query.KnowledgeBaseID)
-	}
-	if query.Status == "processing" {
-		base = base.Where("documents.status IN ?", []string{"uploaded", "parsing", "chunking", "embedding"})
-	} else if query.Status != "" {
-		base = base.Where("documents.status = ?", query.Status)
-	}
-	if query.FileType != "" {
-		base = base.Where("documents.file_type = ?", query.FileType)
-	}
+	base := r.documentQueryForActor(ctx, actorID, memberRoles, query)
 
 	var total int64
 	if err := base.Count(&total).Error; err != nil {
@@ -175,6 +156,53 @@ type GlobalDocumentQuery struct {
 	Sort            string
 	Page            int
 	PageSize        int
+}
+
+type DocumentCounts struct {
+	Total      int64
+	Completed  int64
+	Processing int64
+	Failed     int64
+}
+
+// CountsForActor reads every status bucket in one statement and snapshot.
+// Status and pagination belong to the list, not to its status-filter controls.
+func (r *DocumentRepository) CountsForActor(ctx context.Context, actorID uuid.UUID, memberRoles []string, query GlobalDocumentQuery) (DocumentCounts, error) {
+	query.Status = ""
+	var counts DocumentCounts
+	err := r.documentQueryForActor(ctx, actorID, memberRoles, query).
+		Select(`COUNT(*) AS total,
+			COUNT(CASE WHEN documents.status = ? THEN 1 END) AS completed,
+			COUNT(CASE WHEN documents.status IN ? THEN 1 END) AS processing,
+			COUNT(CASE WHEN documents.status = ? THEN 1 END) AS failed`,
+			"completed", []string{"uploaded", "parsing", "chunking", "embedding"}, "failed").
+		Scan(&counts).Error
+	return counts, err
+}
+
+func (r *DocumentRepository) documentQueryForActor(ctx context.Context, actorID uuid.UUID, memberRoles []string, query GlobalDocumentQuery) *gorm.DB {
+	base := r.db.WithContext(ctx).
+		Model(&model.Document{}).
+		Joins("JOIN knowledge_bases ON knowledge_bases.id = documents.knowledge_base_id").
+		Where(reachableKnowledgeBaseCondition(r.db, actorID, memberRoles)).
+		Where("knowledge_bases.deleted_at IS NULL").
+		Where("documents.deleted_at IS NULL")
+	if query.Q != "" {
+		like := "%" + strings.ToLower(query.Q) + "%"
+		base = base.Where("LOWER(documents.filename) LIKE ? OR LOWER(knowledge_bases.name) LIKE ?", like, like)
+	}
+	if query.KnowledgeBaseID != uuid.Nil {
+		base = base.Where("documents.knowledge_base_id = ?", query.KnowledgeBaseID)
+	}
+	if query.Status == "processing" {
+		base = base.Where("documents.status IN ?", []string{"uploaded", "parsing", "chunking", "embedding"})
+	} else if query.Status != "" {
+		base = base.Where("documents.status = ?", query.Status)
+	}
+	if query.FileType != "" {
+		base = base.Where("documents.file_type = ?", query.FileType)
+	}
+	return base
 }
 
 func (r *DocumentRepository) FindByIDAndOwner(ctx context.Context, id, ownerID uuid.UUID) (*model.Document, error) {
@@ -323,9 +351,10 @@ func (r *DocumentRepository) QueueReprocess(ctx context.Context, documentID, upd
 
 		now := time.Now()
 		if err := tx.Model(&document).Updates(map[string]any{
-			"status":        "uploaded",
-			"error_message": "",
-			"updated_at":    now,
+			"status":           "uploaded",
+			"error_message":    "",
+			"pdf_text_summary": nil,
+			"updated_at":       now,
 		}).Error; err != nil {
 			return err
 		}
@@ -394,9 +423,10 @@ func (r *DocumentRepository) QueueBatchReprocess(ctx context.Context, documentID
 
 			now := time.Now()
 			if err := tx.Model(&documents[i]).Updates(map[string]any{
-				"status":        "uploaded",
-				"error_message": "",
-				"updated_at":    now,
+				"status":           "uploaded",
+				"error_message":    "",
+				"pdf_text_summary": nil,
+				"updated_at":       now,
 			}).Error; err != nil {
 				return err
 			}
@@ -712,13 +742,11 @@ func (r *DocumentRepository) UpdateStatus(ctx context.Context, documentID, jobID
 		if err := guardRunningDocumentJob(tx, documentID, jobID); err != nil {
 			return err
 		}
-		result := tx.Model(&model.Document{}).
-			Where("id = ?", documentID).
-			Updates(map[string]any{
-				"status":        status,
-				"error_message": errorMessage,
-				"updated_at":    time.Now(),
-			})
+		updates := map[string]any{"status": status, "error_message": errorMessage, "updated_at": time.Now()}
+		if status == "parsing" {
+			updates["pdf_text_summary"] = nil
+		}
+		result := tx.Model(&model.Document{}).Where("id = ?", documentID).Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -738,6 +766,18 @@ func (r *DocumentRepository) UpdateStatus(ctx context.Context, documentID, jobID
 			return ErrDocumentJobCancelled
 		}
 		return nil
+	})
+}
+
+// SavePDFTextSummary preserves successful parsing even if embedding later fails.
+// A cancelled or superseded processing job cannot publish its extraction result.
+func (r *DocumentRepository) SavePDFTextSummary(ctx context.Context, documentID, jobID uuid.UUID, summary []byte) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := guardRunningDocumentJob(tx, documentID, jobID); err != nil {
+			return err
+		}
+		return tx.Model(&model.Document{}).Where("id = ?", documentID).
+			Updates(map[string]any{"pdf_text_summary": datatypes.JSON(summary), "updated_at": time.Now()}).Error
 	})
 }
 

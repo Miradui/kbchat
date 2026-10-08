@@ -632,3 +632,9 @@ go run ./cmd/reembed -only-mismatched=false -batch 100
 在 030 基础上执行 `031_chat_automatic_scope.sql`（入口 `cd backend; go run ./cmd/migrate -migration 031_chat_automatic_scope.sql`），同时发布前后端。迁移可重复执行，现有会话保持 manual，新建无范围会话默认 auto；不重建向量。自动会话必须由支持每轮授权与历史依赖累计的后端处理，不能降级到不识别 scope_mode 的版本。
 
 代码验证使用本地 fixture。用户随后授权更新当前数据库，已于2026-09-29对配置中的 postgres/public 执行029/030/031；所需表、字段、默认值和约束及启动结构检查通过，15个旧会话全部保持manual，业务行数不变。根 `.env` 未修改，本次未重启后端或启动worker；应用需运行对应新版前后端。Rerank 继续受全局开关控制；不要把关闭状态的结果标为已精排。
+
+## PDF 页提取摘要发布（迁移 032）
+
+发布本次后端前执行 `cd backend; go run ./cmd/migrate -migration 032_document_pdf_text_summary.sql`，再发布对应前后端。迁移添加可空的 `documents.pdf_text_summary JSONB`，可重复执行；新后端启动会检查该列存在。文档统计接口无需额外索引或数据回填。
+
+旧文档摘要保持未知，不自动解析或调用模型；后续新上传或用户主动重处理会写入摘要。重处理沿用现有切片/Embedding 流程及成本，本次迁移不会自行排队。2026-10-08 已在隔离 PostgreSQL schema 验证 032、完整新环境迁移和真实文档流程；当前业务 public **尚未执行 032**，不能将测试环境迁移视为业务环境已升级。根 `.env` 和模型配置保持原值，单实例与任务租约暂缓的边界不变。

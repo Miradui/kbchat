@@ -346,6 +346,12 @@ export type DocumentErrorCode =
   | 'cancelled'
   | 'internal';
 
+export type PdfTextSummary = {
+  totalPages: number;
+  textPages: number;
+  pagesWithoutText: number[];
+};
+
 export type DocumentItem = {
   id: string;
   knowledgeBaseId: string;
@@ -379,6 +385,8 @@ export type DocumentItem = {
   retryCount?: number;
   maxRetries?: number;
   nextRetryAt?: string | null;
+  /** Detail response only; absent/null means page extraction has not been recorded. */
+  pdfTextSummary?: PdfTextSummary | null;
   createdAt: string;
   updatedAt?: string;
 };
@@ -463,6 +471,15 @@ export type GlobalDocumentListResponse = {
   total: number;
   page: number;
   pageSize: number;
+};
+
+export type DocumentCountsParams = Pick<GlobalDocumentListParams, 'q' | 'knowledgeBaseId' | 'fileType'>;
+
+export type DocumentCountsResponse = {
+  total: number;
+  completed: number;
+  processing: number;
+  failed: number;
 };
 
 export type SystemCapabilities = {

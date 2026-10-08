@@ -153,6 +153,11 @@ func TestAutomaticChatRechecksNewSourcesBeforeStreaming(t *testing.T) {
 	if _, err := f.kbs.AddMember(ctx, owner.ID, b.ID, dto.KnowledgeBaseMemberRequest{UserID: viewer.ID, Role: "viewer"}); err != nil {
 		t.Fatal(err)
 	}
+	// Automatic sessions choose by creation time, not the fixture's updated time.
+	// Separate the timestamps so equal clock ticks cannot pick a random UUID first.
+	if err := f.db.Model(&a).UpdateColumn("created_at", b.CreatedAt.Add(time.Hour)).Error; err != nil {
+		t.Fatal(err)
+	}
 	res, err := f.chats.CreateSession(ctx, viewer.ID, dto.CreateChatSessionRequest{})
 	if err != nil || res.KnowledgeBaseID != a.ID.String() {
 		t.Fatalf("create: %+v %v", res, err)
