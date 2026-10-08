@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { downloadDocument, getDocument, getDocumentPreview } from '../../api/resources';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
+import type { PdfHighlightTarget } from '../../components/pdf/PdfPreview';
 import type { Citation, DocumentItem, DocumentPreviewResponse } from '../../types/api';
 import { downloadBlob } from '../../utils/download';
 import { ChatSourcePreview } from './ChatSourcePreview';
@@ -11,8 +12,8 @@ import { ChatSourcePreview } from './ChatSourcePreview';
 vi.mock('../../api/resources', () => ({ downloadDocument: vi.fn(), getDocument: vi.fn(), getDocumentPreview: vi.fn() }));
 vi.mock('../../hooks/useMediaQuery', () => ({ useMediaQuery: vi.fn() }));
 vi.mock('../../components/pdf/PdfPreview', () => ({
-  PdfPreview: ({ url, filename, initialPage }: { url: string; filename: string; initialPage?: number | null }) => (
-    <div data-page={initialPage ?? ''} data-testid="pdf-preview" data-url={url} title={`原文：${filename}`} />
+  PdfPreview: ({ url, filename, initialPage, highlight }: { url: string; filename: string; initialPage?: number | null; highlight?: PdfHighlightTarget }) => (
+    <div data-highlight-content={highlight?.content} data-highlight-id={highlight?.id} data-page={initialPage ?? ''} data-testid="pdf-preview" data-url={url} title={`原文：${filename}`} />
   ),
 }));
 vi.mock('../../utils/download', () => ({ downloadBlob: vi.fn() }));
@@ -66,6 +67,8 @@ describe('ChatSourcePreview', () => {
     const pdf = await screen.findByTitle('原文：手册.pdf');
     expect(pdf).toHaveAttribute('data-url', 'blob:source-preview');
     expect(pdf).toHaveAttribute('data-page', '12');
+    expect(pdf).toHaveAttribute('data-highlight-content', citation.content);
+    expect(pdf).toHaveAttribute('data-highlight-id', citation.chunkId);
     expect(getDocumentPreview).toHaveBeenCalledWith('doc1');
     expect(downloadDocument).toHaveBeenCalledWith('doc1');
     expect(screen.getByRole('complementary', { name: '原文预览' })).not.toHaveAttribute('aria-modal');
@@ -83,6 +86,17 @@ describe('ChatSourcePreview', () => {
     view.rerender(<ChatSourcePreview citation={{ ...citation, chunkId: 'chunk2', pageNumber: 4 }} index={2} knowledgeBaseId="kb1" onClose={vi.fn()} />);
     expect(screen.getByTitle('原文：手册.pdf')).toHaveAttribute('data-url', 'blob:source-preview');
     expect(screen.getByTitle('原文：手册.pdf')).toHaveAttribute('data-page', '4');
+    expect(downloadDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it('changes the PDF excerpt on the same page without downloading it again', async () => {
+    const view = render(<ChatSourcePreview citation={citation} index={1} knowledgeBaseId="kb1" onClose={vi.fn()} />);
+    await screen.findByTitle('原文：手册.pdf');
+    view.rerender(<ChatSourcePreview citation={{ ...citation, chunkId: 'chunk2', content: '这一页的第二段引用' }} index={2} knowledgeBaseId="kb1" onClose={vi.fn()} />);
+    const pdf = screen.getByTitle('原文：手册.pdf');
+    expect(pdf).toHaveAttribute('data-page', '12');
+    expect(pdf).toHaveAttribute('data-highlight-content', '这一页的第二段引用');
+    expect(pdf).toHaveAttribute('data-highlight-id', 'chunk2');
     expect(downloadDocument).toHaveBeenCalledTimes(1);
   });
 

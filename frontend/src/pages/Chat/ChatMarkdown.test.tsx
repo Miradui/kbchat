@@ -70,14 +70,68 @@ describe('ChatMarkdown', () => {
 
   it('renders partial Markdown and resolves markers when streaming citations arrive', () => {
     const onSelect = vi.fn();
-    const view = render(<ChatMarkdown content={'依据 [source:1]\n\n```python\nprint("流式")'} streaming onSelect={onSelect} />);
+    const partial = '依据 [source:1]\n\n```python\nprint("流式")';
+    const view = render(<ChatMarkdown content={partial} streaming onSelect={onSelect} />);
     expect(screen.queryByRole('button', { name: /查看来源/ })).not.toBeInTheDocument();
     expect(screen.getByRole('figure', { name: 'python 代码块' })).toHaveTextContent('print("流式")');
     expect(view.container.firstChild).toHaveAttribute('aria-busy', 'true');
 
-    view.rerender(<ChatMarkdown content={'依据 [source:1]\n\n```python\nprint("流式")'} citations={citations} onSelect={onSelect} />);
+    view.rerender(<ChatMarkdown content={partial} citations={citations} streaming onSelect={onSelect} />);
     expect(screen.getByRole('button', { name: '查看来源 1：手册.pdf' })).toBeInTheDocument();
+    expect(view.container.firstChild).toHaveAttribute('aria-busy', 'true');
+
+    const complete = `${partial}\n\`\`\`\n\n**输出结束**`;
+    view.rerender(<ChatMarkdown content={complete} citations={citations} streaming onSelect={onSelect} />);
+    expect(screen.getByText('输出结束').tagName).toBe('STRONG');
+    expect(screen.getByRole('figure', { name: 'python 代码块' })).toHaveTextContent('print("流式")');
+
+    view.rerender(<ChatMarkdown content={complete} citations={citations} onSelect={onSelect} />);
+    expect(screen.getByText('输出结束').tagName).toBe('STRONG');
     expect(view.container.firstChild).not.toHaveAttribute('aria-busy');
+  });
+
+  it('uses current citation labels, focus and selection callbacks when the answer stays the same', async () => {
+    const user = userEvent.setup();
+    const originalSelect = vi.fn();
+    const currentSelect = vi.fn();
+    const content = '主依据 [source:1]，补充依据 [source:2]。';
+    const view = render(<ChatMarkdown content={content} citations={citations} focusedIndex={0} onSelect={originalSelect} />);
+    expect(screen.getByRole('button', { name: '查看来源 1：手册.pdf' })).toHaveAttribute('aria-pressed', 'true');
+    await user.tab();
+    await user.tab();
+    expect(screen.getByRole('button', { name: '查看来源 2：说明.md' })).toHaveFocus();
+
+    const refreshed = citations.map((citation) => ({ ...citation, filename: `新版${citation.filename}`, content: '更新后的来源' }));
+    view.rerender(<ChatMarkdown content={content} citations={refreshed} focusedIndex={1} onSelect={currentSelect} />);
+    expect(screen.queryByRole('button', { name: '查看来源 1：手册.pdf' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看来源 1：新版手册.pdf' })).toHaveAttribute('aria-pressed', 'false');
+    const selected = screen.getByRole('button', { name: '查看来源 2：新版说明.md' });
+    expect(selected).toHaveAttribute('aria-pressed', 'true');
+    expect(selected).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(currentSelect).toHaveBeenCalledWith(1);
+    expect(originalSelect).not.toHaveBeenCalled();
+  });
+
+  it('updates valid markers when citations are removed or selection becomes unavailable', async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    const content = '主依据 [source:1]，补充依据 [source:2]。';
+    const view = render(<ChatMarkdown content={content} citations={citations} onSelect={onSelect} />);
+    expect(screen.getAllByRole('button', { name: /查看来源/ })).toHaveLength(2);
+
+    view.rerender(<ChatMarkdown content={content} citations={citations.slice(0, 1)} onSelect={onSelect} />);
+    expect(screen.getByRole('button', { name: '查看来源 1：手册.pdf' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '查看来源 2：说明.md' })).not.toBeInTheDocument();
+    expect(view.container).toHaveTextContent('补充依据 [source:2]');
+
+    view.rerender(<ChatMarkdown content={content} citations={citations} />);
+    expect(screen.queryByRole('button', { name: /查看来源/ })).not.toBeInTheDocument();
+    expect(view.container).toHaveTextContent(content);
+
+    view.rerender(<ChatMarkdown content={content} citations={citations} onSelect={onSelect} />);
+    await user.click(screen.getByRole('button', { name: '查看来源 2：说明.md' }));
+    expect(onSelect).toHaveBeenCalledWith(1);
   });
 
   it('keeps keyboard focus on the selected citation across a rerender', async () => {

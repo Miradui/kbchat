@@ -140,7 +140,7 @@ export function ChatSourcePreview({ citation, index, knowledgeBaseId, canDownloa
       ) : !canDownload && state?.preview.kind === 'file' ? (
         <p className="ui-muted">可阅读上方引用内容；下载原始文件需要编辑者及以上权限。</p>
       ) : state?.url && state.preview.fileType.toLowerCase() === 'pdf' ? (
-        <RenderBoundary local resetKey={state.url}><PdfPreview url={state.url} filename={state.document.filename} initialPage={pageNumber} /></RenderBoundary>
+        <RenderBoundary local resetKey={state.url}><PdfPreview url={state.url} filename={state.document.filename} initialPage={pageNumber} highlight={{ id: citation.chunkId, content: citation.content }} /></RenderBoundary>
       ) : <p className="chat-preview__error">暂不支持直接预览此格式，可下载原文查看。</p>}
     </div>
   );

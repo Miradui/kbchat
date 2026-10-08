@@ -1,4 +1,4 @@
-import { createContext, useContext } from 'react';
+import { createContext, memo, useContext } from 'react';
 import Markdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Element, ElementContent } from 'hast';
@@ -50,6 +50,18 @@ const components: Components = {
   table: ({ children }) => <div aria-label="回答表格" className="chat-markdown__table" role="region" tabIndex={0}><table>{children}</table></div>,
 };
 
+// Parsing depends on the text and valid source count. Citation controls receive
+// current metadata, focus and handlers through context without reparsing the text.
+const MarkdownContent = memo(function MarkdownContent({ content, citationCount }: { content: string; citationCount: number }) {
+  return (
+    <Markdown
+      components={components}
+      remarkPlugins={[remarkGfm, [remarkCitations, { citationCount }]]}
+      skipHtml
+    >{content}</Markdown>
+  );
+});
+
 export function ChatMarkdown({
   content,
   citations = [],
@@ -60,13 +72,9 @@ export function ChatMarkdown({
   return (
     <div aria-busy={streaming || undefined} className="chat-msg__content chat-markdown">
       <RenderBoundary local resetKey={content}>
-      <CitationContext.Provider value={{ citations, focusedIndex, onSelect }}>
-        <Markdown
-          components={components}
-          remarkPlugins={[remarkGfm, [remarkCitations, { citationCount: onSelect ? citations.length : 0 }]]}
-          skipHtml
-        >{content}</Markdown>
-      </CitationContext.Provider>
+        <CitationContext.Provider value={{ citations, focusedIndex, onSelect }}>
+          <MarkdownContent content={content} citationCount={onSelect ? citations.length : 0} />
+        </CitationContext.Provider>
       </RenderBoundary>
       {streaming && <span aria-hidden="true" className="chat-msg__caret" />}
     </div>
