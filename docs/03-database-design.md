@@ -340,6 +340,8 @@ CREATE TABLE chat_messages (
 
 `client_request_id` 和 `rerank_fallback` 对历史消息及 regenerate 消息保持 nullable。发送消息时，user/assistant 消息对共享同一个 `client_request_id`；assistant 消息保存本次 `rerank_fallback`，以便重复请求重建原响应。
 
+迁移 `033_chat_message_history_index.sql` 为历史游标分页增加 `(session_id, created_at, id)` 复合索引 `idx_chat_messages_session_order`。同时间戳消息以 ID 决定稳定顺序，读取页首向前扩展以保留一轮问题及全部回答版本；不新增列、不改历史消息和模型上下文。API 合同见 [消息读取](04-api-design.md#get-chatsessionsidmessages)。
+
 既有数据库通过 `backend/migrations/014_chat_message_feedback.sql` 增加
 `feedback_rating` 和 `feedback_updated_at`。`feedback_rating` 允许 `NULL`、
 `positive`、`negative`，并由 `chat_messages_feedback_rating_check` 约束；service

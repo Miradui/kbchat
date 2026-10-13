@@ -60,10 +60,10 @@ export function ChatStreamView({
 }) {
   const text = useSyncExternalStore(streamText.subscribe, streamText.getSnapshot);
   useEffect(() => {
-    if (searching || !stickRef.current) return;
+    if (searching || !stickRef.current || (!question && !text && !citations.length)) return;
     const element = scrollRef.current;
     element?.scrollTo({ top: element.scrollHeight, behavior: 'auto' });
-  }, [text, scrollRef, stickRef, searching]);
+  }, [text, question, citations.length, scrollRef, stickRef, searching]);
 
   if (!question && !text && !citations.length) return null;
   return (

@@ -745,8 +745,8 @@ export function unarchiveChatSession(sessionId: string): Promise<ChatSession> {
   });
 }
 
-export function listChatMessages(sessionId: string): Promise<ChatMessageListResponse> {
-  return apiRequest<ChatMessageListResponse>(`/chat/sessions/${sessionId}/messages`);
+export function listChatMessages(sessionId: string, params?: import('../types/api').ChatMessagePageParams, signal?: AbortSignal): Promise<ChatMessageListResponse> {
+  return apiRequest<ChatMessageListResponse>(withQuery(`/chat/sessions/${sessionId}/messages`, params ?? {}), { signal });
 }
 
 export function setChatMessageFeedback(

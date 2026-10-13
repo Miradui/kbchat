@@ -2,6 +2,8 @@
 
 日期：2026-10-08。按用户要求依次推进真实联调、PDF 引用高亮与性能检查；Rerank、模型效果和回答质量调参不在本轮范围。用户确认继续单实例，P14 文档任务租约暂缓。
 
+后续已补齐 [自动跨库真实链路](25-document-integrity-and-performance.md) 和 [模型生成 PDF 引用高亮验收](26-chat-history-and-real-pdf-acceptance.md)；下文保留当时的故障及验证边界。
+
 ## 真实联调
 
 使用当前代码构建的后端、Vite 前端及配置的 PostgreSQL，在独立 `rag_accept_20261008_ui_sequence` schema 执行全部 32 个 SQL 文件。缓存使用进程内 miniredis，文件使用本轮本地临时目录；未把这部分称为真实 Redis 或 MinIO 验收。

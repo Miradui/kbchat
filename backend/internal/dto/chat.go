@@ -251,7 +251,15 @@ type ChatKnowledgeGapListResponse struct {
 }
 
 type ChatMessageListResponse struct {
-	Items []ChatMessageResponse `json:"items"`
+	Items      []ChatMessageResponse `json:"items"`
+	HasMore    bool                  `json:"hasMore,omitempty"`
+	NextCursor string                `json:"nextCursor,omitempty"`
+	Revision   string                `json:"revision,omitempty"`
+}
+
+type ChatMessagePageQuery struct {
+	Limit                   int
+	Before, Since, Revision string
 }
 
 type SendChatMessageResponse struct {

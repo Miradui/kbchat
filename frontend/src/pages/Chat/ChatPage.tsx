@@ -1,5 +1,5 @@
 import { Check, Library, MessageSquareText, PanelLeft, Search, Sparkles } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import {
@@ -62,6 +62,8 @@ export function ChatPage() {
   const sourceTriggerRef = useRef<HTMLElement | null>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const initialScrollRef = useRef<string | undefined>(undefined);
+  const prependAnchorRef = useRef<{ sessionId?: string; id: string; top: number } | null>(null);
   const activeSessionIdRef = useRef(sessionId);
   const feedbackOperationsRef = useRef<Map<string, symbol>>(new Map());
   const skipSessionScopeSyncRef = useRef(false);
@@ -166,7 +168,7 @@ export function ChatPage() {
   const messagesReady = Boolean(sessionId && !thread.loading && !thread.loadError && thread.session?.id === sessionId);
   const messageSearch = useChatMessageSearch({
     sessionId, messages: thread.messages, targetMessageId, onLocate: locateMessage,
-    ready: messagesReady,
+    ready: messagesReady && !thread.loadingHistory && !thread.historyError, complete: !thread.hasOlderMessages,
   });
   const answerVersions = useChatAnswerVersions(thread.messages, sessionId, messageSearch.locatedId);
 
@@ -263,14 +265,29 @@ export function ChatPage() {
     }, { replace: true });
   }, [searchParams, setSearchParams, setDraft]);
 
-  useEffect(() => {
-    if (!stickToBottomRef.current || targetMessageId || messageSearch.open) return;
+  useLayoutEffect(() => { initialScrollRef.current = undefined; prependAnchorRef.current = null; }, [sessionId]);
+  useLayoutEffect(() => {
+    const container = messagesRef.current;
+    if (!container || thread.loading || thread.session?.id !== sessionId) return;
+    const anchor = prependAnchorRef.current;
+    if (anchor) {
+      prependAnchorRef.current = null;
+      const element = document.getElementById(anchor.id);
+      if (anchor.sessionId === sessionId && element && container.contains(element)) {
+        container.scrollTo({ top: container.scrollTop + element.getBoundingClientRect().top - anchor.top, behavior: 'instant' });
+        stickToBottomRef.current = false;
+        return;
+      }
+    }
+    const initial = initialScrollRef.current !== sessionId;
+    if (thread.messages.length > 0) initialScrollRef.current = sessionId;
+    if ((!initial && !stickToBottomRef.current) || targetMessageId || messageSearch.open) return;
     // `auto` while streaming: a smooth scroll per token never settles.
-    messagesRef.current?.scrollTo({
-      top: messagesRef.current.scrollHeight,
-      behavior: thread.sending ? 'auto' : 'smooth',
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior: initial ? 'instant' : thread.sending ? 'auto' : 'smooth',
     });
-  }, [thread.messages, thread.pendingQuestion, thread.sending, targetMessageId, messageSearch.open]);
+  }, [thread.messages, thread.pendingQuestion, thread.sending, thread.loading, thread.session?.id, sessionId, targetMessageId, messageSearch.open]);
 
   const latestAssistantId = useMemo(
     () => [...thread.messages].reverse().find((message) => message.role === 'assistant')?.id ?? null,
@@ -285,6 +302,23 @@ export function ChatPage() {
     || Boolean(thread.stoppedStream?.checking)
     || Boolean(thread.regeneration?.checking);
   const interactionLocked = thread.loading || sessionBusy || threadInteractionPending;
+  const historyLocked = interactionLocked || Boolean(thread.unconfirmedSend) || thread.regeneration?.kind === 'unconfirmed';
+  const { hasOlderMessages, loadingHistory, historyError, loadAllMessages, loadOlderMessages } = thread;
+  const needsCompleteHistory = messageSearch.open || Boolean(targetMessageId && !thread.messages.some((message) => message.id === targetMessageId));
+  useEffect(() => {
+    if (messagesReady && needsCompleteHistory && hasOlderMessages && !loadingHistory && !historyError && !historyLocked) void loadAllMessages();
+  }, [messagesReady, needsCompleteHistory, hasOlderMessages, loadingHistory, historyError, historyLocked, loadAllMessages]);
+  const loadEarlier = useCallback(() => {
+    if (historyLocked) return;
+    void loadOlderMessages(() => {
+      const container = messagesRef.current;
+      if (!container) return;
+      const top = container.getBoundingClientRect().top;
+      const first = Array.from(container.querySelectorAll<HTMLElement>('[id^="chat-message-"]')).find((element) => element.getBoundingClientRect().bottom > top);
+      if (first) prependAnchorRef.current = { sessionId, id: first.id, top: first.getBoundingClientRect().top };
+      stickToBottomRef.current = false;
+    });
+  }, [historyLocked, loadOlderMessages, sessionId]);
   const canSend = (automaticScope ? knowledgeBases.length > 0 : Boolean(activeKnowledgeBase) && activeKnowledgeBaseIds.every((id) => knowledgeBases.some((kb) => kb.id === id)))
     && !archived
     && !thread.loading
@@ -450,9 +484,9 @@ export function ChatPage() {
             {sessionId && <IconButton aria-expanded={messageSearch.open} label="查找会话消息" ref={messageSearch.triggerRef} onClick={messageSearch.openSearch}><Search aria-hidden="true" /></IconButton>}
           </header>
 
-          {messageSearch.open && <ChatMessageSearch {...messageSearch} loading={thread.loading} />}
+          {messageSearch.open && <ChatMessageSearch {...messageSearch} loading={thread.loading || thread.loadingHistory || thread.hasOlderMessages} />}
           {targetMessageId && messagesReady && !messageSearch.open && <div className="chat-find__location">
-            <span>{messageSearch.missingTarget ? '指定消息已不存在或不属于当前会话。' : '已定位到指定消息。'}</span>
+            <span>{needsCompleteHistory && (thread.hasOlderMessages || thread.loadingHistory) ? '正在读取历史以定位消息…' : messageSearch.missingTarget ? '指定消息已不存在或不属于当前会话。' : '已定位到指定消息。'}</span>
             <Button variant="ghost" onClick={() => { setSearchParams((current) => { const next = new URLSearchParams(current); next.delete('messageId'); return next; }, { replace: true }); messageSearch.triggerRef.current?.focus(); }}>取消定位</Button>
           </div>}
 
@@ -473,15 +507,29 @@ export function ChatPage() {
               <Button variant="link" onClick={() => void thread.reload()}>重试</Button>
             </div>
           )}
+          {historyError && <div className="ui-inline-notice" role="status">
+            <span>{historyError}</span>
+            <Button disabled={historyLocked || loadingHistory} variant="link" onClick={() => {
+              if (historyError.includes('会话内容已变化')) void thread.reload();
+              else if (needsCompleteHistory) void loadAllMessages();
+              else loadEarlier();
+            }}>重试加载历史</Button>
+          </div>}
 
           <div
             className="chat-thread"
             onScroll={(event) => {
               const element = event.currentTarget;
               stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 80;
+              if (element.scrollTop < 120 && hasOlderMessages && !loadingHistory && !historyError && !historyLocked && !needsCompleteHistory) loadEarlier();
             }}
             ref={messagesRef}
           >
+            {!thread.loading && hasOlderMessages && <div className="chat-history-load">
+              <Button disabled={historyLocked || loadingHistory} variant="ghost" onClick={loadEarlier}>
+                {loadingHistory ? '正在加载历史消息…' : '加载更早的消息'}
+              </Button>
+            </div>}
             {thread.loading ? (
               <LoadingSkeleton announce columns={1} compact rows={5} />
             ) : thread.messages.length === 0 && !thread.pendingQuestion && !thread.failedSend && !thread.unconfirmedSend && !thread.stoppedStream ? (

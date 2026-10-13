@@ -74,7 +74,7 @@
 | 500 | `CHAT_COMPLETION_FAILED` | 生成回答失败 |
 | 500 | `CHAT_RESULT_UNCONFIRMED` | 回答结果需要重新确认 |
 | 409 | `IDEMPOTENCY_KEY_REUSED` | 同一幂等键已用于不同的聊天内容 |
-| 409 | `CHAT_MESSAGE_CHANGED` | 编辑消息生成期间会话已被其他请求修改，请刷新后重试 |
+| 409 | `CHAT_MESSAGE_CHANGED` | 编辑生成期间会话被修改，或历史分页 revision 已变化 / since 锚点已删除；重新加载会话后重试 |
 | 400 | `EXPORT_TOO_LARGE` | 搜索结果过多，请缩小范围后再导出 |
 
 `RATE_LIMITED` 必须同时设置整数秒 `Retry-After` 响应头，并在 `details.retryAfter` 返回相同值。`RATE_LIMIT_UNAVAILABLE` 只用于 Redis 故障且限流失败策略为 `closed` 的情况，不得设置 `Retry-After`，也不得计入真实限流触发次数。

@@ -480,3 +480,4 @@ a.chat-source__link:hover { color: var(--accent); }
   /* Aligned under the filename rather than the index it does not belong to. */
   .chat-source__page { margin-left: calc(var(--source-index-size) + var(--s-2)); }
 }
+.chat-history-load { display: flex; justify-content: center; padding: 8px 0 16px; }

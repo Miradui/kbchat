@@ -238,6 +238,38 @@ async function submitWithAutomaticChecksPaused() {
 }
 
 describe('ChatPage', () => {
+  it('opens the latest page without a long smooth scroll and loads older messages on demand', async () => {
+    vi.mocked(listChatMessages).mockResolvedValueOnce({ items: [historicalAnswers[1]], hasMore: true, nextCursor: 'older', revision: 'assistant-new' })
+      .mockResolvedValueOnce({ items: [historicalAnswers[0]], nextCursor: 'oldest', revision: 'assistant-new' });
+    renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>, ['/chat/s1']);
+    await screen.findByText('新回答');
+    expect(screen.queryByText('旧回答')).not.toBeInTheDocument();
+    expect(listChatMessages).toHaveBeenCalledWith('s1', { limit: 50 });
+    expect(Element.prototype.scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ behavior: 'instant' }));
+    await userEvent.setup().click(screen.getByRole('button', { name: '加载更早的消息' }));
+    await screen.findByText('旧回答');
+    expect(screen.getByText('新回答')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '加载更早的消息' })).not.toBeInTheDocument();
+  });
+
+  it.each(['search', 'link'] as const)('loads complete history for an older %s target without claiming it is missing', async (mode) => {
+    const complete = deferred<{ items: ChatMessage[] }>();
+    vi.mocked(listChatMessages).mockResolvedValueOnce({ items: [historicalAnswers[1]], hasMore: true, nextCursor: 'older', revision: 'assistant-new' })
+      .mockReturnValueOnce(complete.promise);
+    renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>, [mode === 'link' ? '/chat/s1?messageId=assistant-old' : '/chat/s1']);
+    await screen.findByText('新回答');
+    const user = userEvent.setup();
+    if (mode === 'search') {
+      await user.click(screen.getByRole('button', { name: '查找会话消息' }));
+      await user.type(screen.getByRole('textbox', { name: '查找消息关键词' }), '旧回答');
+    }
+    expect(screen.queryByText('指定消息已不存在或不属于当前会话。')).not.toBeInTheDocument();
+    expect(screen.queryByText('没有匹配消息')).not.toBeInTheDocument();
+    await act(async () => complete.resolve({ items: historicalAnswers }));
+    const located = await screen.findByRole('article', { name: '已定位消息' });
+    expect(located).toHaveAttribute('id', 'chat-message-assistant-old');
+    if (mode === 'search') expect(screen.getByText('1 / 1 条匹配消息')).toBeInTheDocument();
+  });
   it('clears messages, source preview and cached options when a send discovers revoked access', async () => {
     vi.mocked(listChatMessages).mockResolvedValue({ items: historicalAnswers });
     const user = userEvent.setup();
@@ -583,7 +615,7 @@ describe('ChatPage', () => {
     expect(await screen.findByText('指定消息已不存在或不属于当前会话。')).toBeInTheDocument();
     expect(screen.queryByRole('article', { name: '已定位消息' })).not.toBeInTheDocument();
     expect(listChatMessages).toHaveBeenCalledTimes(1);
-    expect(listChatMessages).toHaveBeenCalledWith('s1');
+    expect(listChatMessages).toHaveBeenCalledWith('s1', { limit: 50 });
   });
 
   it('clears conversation search when navigating to another session', async () => {
@@ -2631,6 +2663,7 @@ describe('automatic conversations', () => {
 describe('cross-base conversations', () => {
   it('creates a fixed multi-base scope from the selected cards', async () => {
     const multi = { ...session, knowledgeBaseIds: ['kb1', 'kb2'], knowledgeBases: [{id:'kb1',name:'制度库'},{id:'kb2',name:'产品库'}] };
+    vi.mocked(listChatSessions).mockResolvedValue({ items: [multi], total: 1, page: 1, pageSize: 50 });
     vi.mocked(listKnowledgeBases).mockResolvedValue({items:[knowledgeBase,secondKnowledgeBase]});
     vi.mocked(createChatSession).mockResolvedValue(multi);
     vi.mocked(getChatSession).mockResolvedValue(multi);

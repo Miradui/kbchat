@@ -885,7 +885,12 @@ export type ChatKnowledgeGapListResponse = {
 
 export type ChatMessageListResponse = {
   items: ChatMessage[];
+  hasMore?: boolean;
+  nextCursor?: string;
+  revision?: string;
 };
+
+export type ChatMessagePageParams = { limit: number; before?: string; since?: string; revision?: string };
 
 export type SendChatMessageRequest = {
   content: string;

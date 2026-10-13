@@ -6,10 +6,11 @@ import type { ChatMessage } from '../../types/api';
 
 type Match = { message: ChatMessage; index: number; length: number };
 
-export function useChatMessageSearch({ sessionId, messages, ready, targetMessageId, onLocate }: {
+export function useChatMessageSearch({ sessionId, messages, ready, complete = true, targetMessageId, onLocate }: {
   sessionId?: string;
   messages: ChatMessage[];
   ready: boolean;
+  complete?: boolean;
   targetMessageId: string;
   onLocate: (messageId: string, focus: boolean) => void;
 }) {
@@ -21,7 +22,7 @@ export function useChatMessageSearch({ sessionId, messages, ready, targetMessage
   const lastTarget = useRef('');
   const term = query.trim();
   const matches = useMemo<Match[]>(() => {
-    if (!term || !ready) return [];
+    if (!term || !ready || !complete) return [];
     // Literal, case-insensitive search; punctuation never becomes a regular expression.
     const pattern = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
     return messages.flatMap((message) => {
@@ -29,7 +30,7 @@ export function useChatMessageSearch({ sessionId, messages, ready, targetMessage
       return message.sessionId === sessionId && match
         ? [{ message, index: match.index, length: match[0].length }] : [];
     });
-  }, [messages, ready, sessionId, term]);
+  }, [messages, ready, complete, sessionId, term]);
   const index = Math.max(0, matches.findIndex((match) => match.message.id === selectedId));
   const active = matches[index];
   const activeMessageId = active?.message.id;
@@ -45,11 +46,12 @@ export function useChatMessageSearch({ sessionId, messages, ready, targetMessage
   useEffect(() => {
     if (!targetMessageId) { lastTarget.current = ''; return; }
     if (!ready) return;
+    if (!targetExists && !complete) return;
     const key = `${sessionId}:${targetMessageId}`;
     if (lastTarget.current === key) return;
     lastTarget.current = key;
     if (targetExists) onLocate(targetMessageId, true);
-  }, [onLocate, ready, sessionId, targetExists, targetMessageId]);
+  }, [onLocate, ready, complete, sessionId, targetExists, targetMessageId]);
 
   useEffect(() => {
     if (open && activeMessageId) onLocate(activeMessageId, false);
@@ -93,7 +95,7 @@ export function useChatMessageSearch({ sessionId, messages, ready, targetMessage
     open, openSearch, close, clear, query, inputRef, triggerRef, active, index, matches, move,
     setQuery: (value: string) => { setQuery(value); setSelectedId(null); },
     locatedId: open && term ? active?.message.id : targetExists ? targetMessageId : undefined,
-    missingTarget: Boolean(targetMessageId && ready && !targetExists),
+    missingTarget: Boolean(targetMessageId && ready && complete && !targetExists),
   };
 }
 

@@ -221,7 +221,23 @@ func (h *ChatHandler) ListMessages(c *gin.Context) {
 		return
 	}
 
-	res, err := h.chats.ListMessages(c.Request.Context(), userID, sessionID)
+	var res *dto.ChatMessageListResponse
+	var err error
+	if c.Request.URL.Query().Has("limit") || c.Request.URL.Query().Has("before") || c.Request.URL.Query().Has("since") || c.Request.URL.Query().Has("revision") {
+		limit := 50
+		if c.Request.URL.Query().Has("limit") {
+			limit, err = strconv.Atoi(c.Query("limit"))
+			if err != nil {
+				RespondError(c, apperror.Validation(map[string]any{"limit": "limit must be an integer"}))
+				return
+			}
+		}
+		res, err = h.chats.ListMessagePage(c.Request.Context(), userID, sessionID, dto.ChatMessagePageQuery{
+			Limit: limit, Before: c.Query("before"), Since: c.Query("since"), Revision: c.Query("revision"),
+		})
+	} else {
+		res, err = h.chats.ListMessages(c.Request.Context(), userID, sessionID)
+	}
 	if err != nil {
 		RespondError(c, err)
 		return

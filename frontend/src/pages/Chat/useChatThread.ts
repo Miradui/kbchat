@@ -24,6 +24,7 @@ import type { PendingChatRequest } from './pendingChatRequestStore';
 import { pendingChatEditStore } from './pendingChatEditStore';
 import { pendingRegenerationStore } from './pendingRegenerationStore';
 import { createStreamText } from './streamText';
+import { HISTORY_PAGE_SIZE, useChatHistory } from './useChatHistory';
 
 /** Delays for the automatic reconciliation attempts after an unconfirmed write. */
 const AUTO_CHECK_DELAYS_MS = [2000, 5000];
@@ -173,8 +174,12 @@ export function useChatThread({
     return true;
   }, [clearAutoChecks, setStreamingAnswer]);
 
+  const history = useChatHistory(sessionId, setMessages, handleAccessLost);
+  const { replaceHistory, resetHistory, invalidateHistory, readCurrentHistory, updateHistoryRevision } = history;
+
   const loadThread = useCallback(async (targetSessionId: string) => {
     const request = ++loadRequestRef.current;
+    resetHistory();
     setLoading(true);
     setLoadError('');
     setMessages([]);
@@ -187,12 +192,16 @@ export function useChatThread({
     try {
       const [sessionResponse, messageResponse] = await Promise.all([
         getChatSession(targetSessionId),
-        listChatMessages(targetSessionId),
+        // A persisted unknown write needs complete evidence before it can be
+        // declared absent. Ordinary opens only read the latest history page.
+        pendingChatRequestStore.get(targetSessionId) || pendingChatEditStore.get(targetSessionId) || pendingRegenerationStore.get(targetSessionId)
+          ? listChatMessages(targetSessionId)
+          : listChatMessages(targetSessionId, { limit: HISTORY_PAGE_SIZE }),
       ]);
       if (!current()) return;
 
       setSession(sessionResponse);
-      setMessages(messageResponse.items);
+      replaceHistory(targetSessionId, messageResponse);
 
       const pendingEdit = pendingChatEditStore.get(targetSessionId);
       if (pendingEdit && messageResponse.items.some(
@@ -244,7 +253,7 @@ export function useChatThread({
     } finally {
       if (current()) setLoading(false);
     }
-  }, []);
+  }, [replaceHistory, resetHistory]);
 
   // Switching sessions invalidates every in-flight request and transient state.
   useEffect(() => {
@@ -299,13 +308,13 @@ export function useChatThread({
     if ((activeSessionRef.current ?? '') !== targetSessionId) return 'unknown';
 
     try {
-      const response = await listChatMessages(targetSessionId);
+      const response = await readCurrentHistory(targetSessionId);
       if (
         !mountedRef.current
         || (activeSessionRef.current ?? '') !== targetSessionId
         || reconcileSequenceRef.current !== sequence
       ) return 'unknown';
-      setMessages(response.items);
+      replaceHistory(targetSessionId, response);
       const accepted = response.items.some(
         (message) => message.clientRequestId === pending.clientRequestId,
       );
@@ -319,7 +328,7 @@ export function useChatThread({
     } catch {
       return 'unknown';
     }
-  }, []);
+  }, [readCurrentHistory, replaceHistory]);
 
   const reconcileSend = useCallback(async (
     pending: PendingChatRequest,
@@ -375,6 +384,7 @@ export function useChatThread({
     if (isDraft && draftScopeMode !== 'auto' && !draftKnowledgeBaseId && !draftKnowledgeBaseIds?.length) return;
 
     const token = Symbol('send-message');
+    invalidateHistory();
     sendTokenRef.current = token;
     clearAutoChecks();
     setSending(true);
@@ -536,9 +546,9 @@ export function useChatThread({
 
     const refreshRequest = ++loadRequestRef.current;
     try {
-      const response = await listChatMessages(targetSessionId);
+      const response = await readCurrentHistory(targetSessionId);
       if (mountedRef.current && activeSessionRef.current === targetSessionId && loadRequestRef.current === refreshRequest) {
-        setMessages(response.items);
+        replaceHistory(targetSessionId, response);
         setLoadError('');
         setLoading(false);
       }
@@ -577,6 +587,7 @@ export function useChatThread({
     stoppedStream,
     unconfirmedSend,
     reconcileSendResult,
+    invalidateHistory, readCurrentHistory, replaceHistory,
   ]);
 
   const checkSendNow = useCallback(async () => {
@@ -628,6 +639,7 @@ export function useChatThread({
     }
 
     const token = Symbol('regenerate-message');
+    invalidateHistory();
     regenerateTokenRef.current = token;
     setRegeneratingId(messageId);
     setRegeneration(null);
@@ -648,6 +660,7 @@ export function useChatThread({
           ? current.map((message) => (message.id === response.message.id ? response.message : message))
           : [...current, response.message]
       ));
+      updateHistoryRevision(targetSessionId, response.message.id);
       setLoadError('');
       onSessionsChanged();
     } catch (caught) {
@@ -678,7 +691,7 @@ export function useChatThread({
         if (mountedRef.current) setRegeneratingId(null);
       }
     }
-  }, [handleAccessLost, messages, onSessionsChanged, sessionId]);
+  }, [handleAccessLost, messages, onSessionsChanged, sessionId, invalidateHistory, updateHistoryRevision]);
 
   const checkRegeneration = useCallback(async () => {
     if (
@@ -694,13 +707,13 @@ export function useChatThread({
     regenerationCheckTokenRef.current = token;
     setRegeneration({ ...snapshot, checking: true });
     try {
-      const response = await listChatMessages(sessionId);
+      const response = await readCurrentHistory(sessionId);
       if (
         !mountedRef.current
         || activeSessionRef.current !== sessionId
         || regenerationCheckTokenRef.current !== token
       ) return;
-      setMessages(response.items);
+      replaceHistory(sessionId, response);
       const produced = findNewAssistantMessage(response.items, snapshot.baselineMessageIds);
       if (produced) {
         pendingRegenerationStore.clear(sessionId, snapshot.messageId);
@@ -728,7 +741,7 @@ export function useChatThread({
     } finally {
       if (regenerationCheckTokenRef.current === token) regenerationCheckTokenRef.current = null;
     }
-  }, [onSessionsChanged, regeneration, sessionId]);
+  }, [onSessionsChanged, regeneration, sessionId, readCurrentHistory, replaceHistory]);
 
   const updateMessageFeedback = useCallback((messageId: string, feedback: ChatMessageFeedback) => {
     setMessages((current) => current.map((message) => (
@@ -750,6 +763,7 @@ export function useChatThread({
       });
     }
     const token = Symbol('edit-message');
+    invalidateHistory();
     editTokenRef.current = token;
     setEditingId(messageId);
     const clientRequestId = previousPending?.clientRequestId ?? crypto.randomUUID();
@@ -772,6 +786,7 @@ export function useChatThread({
         if (index < 0) return [response.userMessage, response.assistantMessage];
         return [...current.slice(0, index), response.userMessage, response.assistantMessage];
       });
+      updateHistoryRevision(targetSessionId, response.assistantMessage.id);
       setLoadError('');
       setRerankFallback(response.rerankFallback?.used ? response.rerankFallback : null);
       onSessionsChangedRef.current();
@@ -783,12 +798,12 @@ export function useChatThread({
         throw caught;
       }
       try {
-        const response = await listChatMessages(targetSessionId);
+        const response = await readCurrentHistory(targetSessionId);
         const accepted = response.items.some((message) => message.clientRequestId === clientRequestId);
         if (accepted) {
           pendingChatEditStore.clear(targetSessionId, clientRequestId);
           if (mountedRef.current && activeSessionRef.current === targetSessionId && editTokenRef.current === token) {
-            setMessages(response.items);
+            replaceHistory(targetSessionId, response);
             setLoadError('');
             onSessionsChangedRef.current();
           }
@@ -807,7 +822,7 @@ export function useChatThread({
         if (mountedRef.current) setEditingId(null);
       }
     }
-  }, [handleAccessLost, sessionId]);
+  }, [handleAccessLost, sessionId, invalidateHistory, readCurrentHistory, replaceHistory, updateHistoryRevision]);
 
   const cancelSend = useCallback(() => {
     if (!sendAbortRef.current || !sendTokenRef.current) return;
@@ -830,6 +845,11 @@ export function useChatThread({
     messages,
     loading,
     loadError,
+    hasOlderMessages: history.hasOlderMessages,
+    loadingHistory: history.loadingHistory,
+    historyError: history.historyError,
+    loadOlderMessages: history.loadOlderMessages,
+    loadAllMessages: history.loadAllMessages,
     sending,
     pendingQuestion,
     failedSend,
@@ -864,7 +884,11 @@ export function useChatThread({
 
 function findNewAssistantMessage(messages: ChatMessage[], baselineIds: string[]): ChatMessage | undefined {
   const known = new Set(baselineIds);
-  return [...messages].reverse().find((message) => message.role === 'assistant' && !known.has(message.id));
+  // Loading older pages after a reload must not count old answers outside the
+  // saved page as a successful regeneration. New versions append to the tail.
+  let lastKnown = -1;
+  messages.forEach((message, index) => { if (known.has(message.id)) lastKnown = index; });
+  return lastKnown < 0 ? undefined : messages.slice(lastKnown + 1).reverse().find((message) => message.role === 'assistant');
 }
 
 /**

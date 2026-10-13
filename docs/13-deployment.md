@@ -638,3 +638,9 @@ go run ./cmd/reembed -only-mismatched=false -batch 100
 发布本次后端前执行 `cd backend; go run ./cmd/migrate -migration 032_document_pdf_text_summary.sql`，再发布对应前后端。迁移添加可空的 `documents.pdf_text_summary JSONB`，可重复执行；新后端启动会检查该列存在。文档统计接口无需额外索引或数据回填。
 
 旧文档摘要保持未知，不自动解析或调用模型；后续新上传或用户主动重处理会写入摘要。重处理沿用现有切片/Embedding 流程及成本，本次迁移不会自行排队。2026-10-08 已在隔离 PostgreSQL schema 验证 032、完整新环境迁移和真实文档流程；当前业务 public **尚未执行 032**，不能将测试环境迁移视为业务环境已升级。根 `.env` 和模型配置保持原值，单实例与任务租约暂缓的边界不变。
+
+## 聊天历史分页发布（迁移 033）
+
+先补齐上方 032，再执行 `cd backend; go run ./cmd/migrate -migration 033_chat_message_history_index.sql`，发布对应前后端。033 为 `chat_messages(session_id, created_at, id)` 增加可重复执行的普通复合索引，不修改消息或向量、不调用模型；普通建索引会影响并发写入，大表应安排维护窗口。后端不带分页参数仍兼容旧全量协议，新前端配套使用分页元数据；部署后检查最新页、向上加载、全文查找和导出。
+
+2026-10-08 已在隔离 PostgreSQL schema 验证完整 001–033（含两个 010，共 34 个 SQL 文件）、033 重复执行及真实游标读取。业务 public **尚未执行 032/033**，032 列仍是新版后端启动前提；033 索引不在启动结构必需检查中。详见 [分页与真实 PDF 验收](26-chat-history-and-real-pdf-acceptance.md)。

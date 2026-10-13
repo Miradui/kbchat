@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../api/client';
 import type { ChatMessage, ChatSession, SendChatMessageResponse } from '../../types/api';
 import { pendingChatRequestStore } from './pendingChatRequestStore';
+import { pendingRegenerationStore } from './pendingRegenerationStore';
 import { useChatThread } from './useChatThread';
 
 const resourceMocks = vi.hoisted(() => ({
@@ -122,6 +123,20 @@ describe('useChatThread send reconciliation', () => {
       rerankFallback: null,
     });
     resourceMocks.editChatMessage.mockReset();
+  });
+
+  it('does not mistake older answers outside a paged regeneration baseline for a new version', async () => {
+    const recent = messagesFor('recent');
+    const older = messagesFor('older').map((message) => ({ ...message, id: `older-${message.id}` }));
+    pendingRegenerationStore.set({ sessionId: session.id, messageId: recent[1].id, baselineMessageIds: recent.map((message) => message.id), checked: false, createdAt: new Date().toISOString() });
+    resourceMocks.listChatMessages.mockResolvedValue({ items: [...older, ...recent] });
+    const { result } = renderThread();
+    await settleEffects();
+    expect(resourceMocks.listChatMessages).toHaveBeenLastCalledWith(session.id);
+    expect(result.current.regeneration?.kind).toBe('unconfirmed');
+    expect(pendingRegenerationStore.get(session.id)).not.toBeNull();
+    await act(async () => { await result.current.checkRegeneration(); });
+    expect(result.current.regeneration?.kind).toBe('unconfirmed');
   });
 
   it.each(['send', 'edit', 'regenerate'] as const)('clears an inaccessible thread after %s instead of offering retries', async (operation) => {
