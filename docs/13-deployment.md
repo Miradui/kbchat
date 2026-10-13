@@ -637,10 +637,24 @@ go run ./cmd/reembed -only-mismatched=false -batch 100
 
 发布本次后端前执行 `cd backend; go run ./cmd/migrate -migration 032_document_pdf_text_summary.sql`，再发布对应前后端。迁移添加可空的 `documents.pdf_text_summary JSONB`，可重复执行；新后端启动会检查该列存在。文档统计接口无需额外索引或数据回填。
 
-旧文档摘要保持未知，不自动解析或调用模型；后续新上传或用户主动重处理会写入摘要。重处理沿用现有切片/Embedding 流程及成本，本次迁移不会自行排队。2026-10-08 已在隔离 PostgreSQL schema 验证 032、完整新环境迁移和真实文档流程；当前业务 public **尚未执行 032**，不能将测试环境迁移视为业务环境已升级。根 `.env` 和模型配置保持原值，单实例与任务租约暂缓的边界不变。
+旧文档摘要保持未知，不自动解析或调用模型；后续新上传或用户主动重处理会写入摘要。重处理沿用现有切片/Embedding 流程及成本，本次迁移不会自行排队。2026-10-08 在隔离 PostgreSQL schema 验证 032、完整新环境迁移和真实文档流程；2026-10-13 用户确认发布后，业务 postgres/public 已执行 032，新列为可空 JSONB。根 `.env` 和模型配置保持原值，单实例与任务租约暂缓的边界不变。
 
 ## 聊天历史分页发布（迁移 033）
 
 先补齐上方 032，再执行 `cd backend; go run ./cmd/migrate -migration 033_chat_message_history_index.sql`，发布对应前后端。033 为 `chat_messages(session_id, created_at, id)` 增加可重复执行的普通复合索引，不修改消息或向量、不调用模型；普通建索引会影响并发写入，大表应安排维护窗口。后端不带分页参数仍兼容旧全量协议，新前端配套使用分页元数据；部署后检查最新页、向上加载、全文查找和导出。
 
-2026-10-08 已在隔离 PostgreSQL schema 验证完整 001–033（含两个 010，共 34 个 SQL 文件）、033 重复执行及真实游标读取。业务 public **尚未执行 032/033**，032 列仍是新版后端启动前提；033 索引不在启动结构必需检查中。详见 [分页与真实 PDF 验收](26-chat-history-and-real-pdf-acceptance.md)。
+2026-10-08 已在隔离 PostgreSQL schema 验证完整 001–033（含两个 010，共 34 个 SQL 文件）、033 重复执行及真实游标读取。2026-10-13 业务 postgres/public 已执行 032/033；迁移前后六类业务表行数和内容指纹一致，新索引有效。032 列仍是新版后端启动前提，033 索引不在启动结构必需检查中。详见 [分页与真实 PDF 验收](26-chat-history-and-real-pdf-acceptance.md)。
+
+### 2026-10-13 本地启动记录
+
+代码提交 `2a4adbd`，后端构建到 `backend/bin/rag-server-2a4adbd.exe`；前端重新生产构建并以 Vite preview 监听 `127.0.0.1:5173`，代理到后端 8080。本次为本地运行验证，不代表完成公网容器化生产部署。进程在验收后保持运行，PID 与日志记录在忽略目录 `output/release-20261013/`。
+
+配置中的远端 Redis 首次握手实测约 246ms，超过默认 200ms 总命令预算；本次仅在后端启动环境设置 `REDIS_OPERATION_TIMEOUT=500ms`。doctor 与应用数据库/Redis/存储探测均通过，根 `.env` 不变。手动重启时，在启动后端的 PowerShell 中再次设置该变量：
+
+```powershell
+$env:REDIS_OPERATION_TIMEOUT = '500ms'
+cd backend
+go run ./cmd/server
+```
+
+上述命令需在旧后端已停止后执行，保持单实例。前端可在另一终端从仓库根目录执行 `cd frontend; npm run preview -- --host 127.0.0.1 --port 5173 --strictPort`。此预算调整增加 Redis 故障时单次最多等待到 500ms；默认 5 秒冷却、无自动重试、故障降级语义保持。
