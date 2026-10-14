@@ -339,6 +339,11 @@ export type TextDocumentInput = { title: string; content: string; format: 'md' |
  * can grow server-side before the client knows the new member.
  */
 export type DocumentErrorCode =
+	| 'pdf_limit_exceeded'
+	| 'ocr_unavailable'
+	| 'ocr_timeout'
+	| 'ocr_failed'
+	| 'ocr_limit_exceeded'
   | 'table_limit_exceeded'
   | 'table_import_invalid'
   | 'unsupported_type'
@@ -351,6 +356,12 @@ export type DocumentErrorCode =
   | 'internal';
 
 export type PdfTextSummary = {
+	ocr?: {
+		status: 'disabled' | 'running' | 'completed' | 'unavailable' | 'timeout' | 'failed' | 'limit_exceeded';
+		pages: number[];
+		completedPages: number;
+		totalPages: number;
+	};
   totalPages: number;
   textPages: number;
   pagesWithoutText: number[];
@@ -589,6 +600,7 @@ export type KnowledgeBaseSearchRequest = {
 };
 
 export type KnowledgeBaseSearchResult = {
+	textSource?: 'ocr';
   table?: TableSource;
   knowledgeBaseId?: string;
   knowledgeBaseName?: string;
@@ -705,6 +717,7 @@ export type ChatSessionListResponse = {
 };
 
 export type Citation = {
+	textSource?: 'ocr';
   table?: TableSource;
   knowledgeBaseId?: string;
   knowledgeBaseName?: string;

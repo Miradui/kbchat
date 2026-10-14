@@ -215,3 +215,21 @@ fallback
 ## Embedding 配置变更
 
 `EMBEDDING_DIMENSION` 除校验 Provider 返回值外，还在 server 启动和 doctor 中与数据库向量列声明比较，不一致时拒绝启动。升级先执行迁移 029。仅改 `EMBEDDING_MODEL` 也必须重建历史向量；诊断列出未知来源与不匹配文档数，`go run ./cmd/reembed -dry-run` 可先盘点。完整操作流程见 [部署指南](13-deployment.md#embedding-模型切换与重建)。
+
+## 文档工作流：PDF OCR 配置
+
+OCR 默认关闭。安装 Poppler、Tesseract 5 及所需语言包后设置 `PDF_OCR_ENABLED=true`；识别过程仅调用本机工具，不向外部识别服务发送文档。识别完成的文字仍走原来的切片、Embedding、检索与引用流程。
+
+| 变量 | 默认值 | 约束与含义 |
+| --- | --- | --- |
+| `PDF_OCR_ENABLED` | `false` | 只处理未提取到原生文字的 PDF 页 |
+| `PDF_OCR_PDFTOPPM_PATH` | `pdftoppm` | 可执行文件名称或绝对路径，不是 shell 命令 |
+| `PDF_OCR_TESSERACT_PATH` | `tesseract` | 可执行文件名称或绝对路径 |
+| `PDF_OCR_TESSDATA_DIR` | 空 | 空时使用引擎默认语言目录；便携安装应明确指定 |
+| `PDF_OCR_LANGUAGES` | `chi_sim+eng` | 1–4 个语言名称，用 `+` 连接，必须已安装 |
+| `PDF_OCR_MAX_PAGES` | `40` | 每份文件的待 OCR 页数，范围 1–200，超过则整次失败 |
+| `PDF_OCR_MAX_IMAGE_SIDE` | `3000` | 单页渲染图像长边像素，范围 512–4096 |
+| `PDF_OCR_PAGE_TIMEOUT` | `30s` | 一页的渲染加识别总时限，范围 1s–2m |
+| `PDF_OCR_TIMEOUT` | `5m` | 一份文件的 OCR 总时限，不小于单页时限，最多 20m |
+
+工具不可用在需要 OCR 的任务上返回明确错误，不影响登录或原生文本文档。每页识别输出最多 128 KiB；全部 PDF 最多 500 页、8 MiB 文本，序列化快照最多 16 MiB，图像输出最多 20 MiB、子进程诊断输出最多 16 KiB。取消会终止正在执行的工具，OCR 期间每秒核对任务状态；每个引擎进程限制为一个 OpenMP 线程，文档并发仍由 `WORKER_CONCURRENCY` 决定。

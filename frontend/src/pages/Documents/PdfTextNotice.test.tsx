@@ -4,6 +4,23 @@ import { describe, expect, it } from 'vitest';
 import { PdfTextNotice } from './PdfTextNotice';
 
 describe('PDF text extraction notice', () => {
+  it('shows recognized page ranges and remaining blanks without claiming image highlighting', () => {
+    render(<PdfTextNotice summary={{ totalPages: 4, textPages: 3, pagesWithoutText: [4], ocr: { status: 'completed', totalPages: 3, completedPages: 3, pages: [2, 3] } }} />);
+    const note = screen.getByRole('note');
+    expect(note).toHaveTextContent('OCR 提取文字的页码：2-3');
+    expect(note).toHaveTextContent('未提取页码：4');
+    expect(note).toHaveTextContent('不显示文字高亮');
+  });
+
+  it('reports OCR progress, disabled tools and an unpublished failed attempt', () => {
+    const summary = { totalPages: 2, textPages: 0, pagesWithoutText: [1, 2], ocr: { status: 'running' as const, totalPages: 2, completedPages: 1, pages: [] } };
+    const { rerender } = render(<PdfTextNotice summary={summary} />);
+    expect(screen.getByRole('status')).toHaveTextContent('已识别 1 / 2 页');
+    rerender(<PdfTextNotice summary={{ ...summary, ocr: { ...summary.ocr, status: 'timeout' } }} />);
+    expect(screen.getByRole('note')).toHaveTextContent('识别结果尚未发布');
+    rerender(<PdfTextNotice summary={{ ...summary, ocr: { ...summary.ocr, status: 'disabled' } }} />);
+    expect(screen.getByRole('note')).toHaveTextContent('管理员启用 OCR 后可重新处理');
+  });
   it('does not infer complete extraction from missing historical data', () => {
     const { rerender } = render(<PdfTextNotice />);
     expect(screen.queryByRole('note')).not.toBeInTheDocument();

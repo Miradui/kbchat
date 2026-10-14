@@ -214,6 +214,7 @@ func (s *Service) searchBases(ctx context.Context, ownerID uuid.UUID, kbIDs []uu
 	for _, item := range candidates {
 		start, end := chunkSourceOffsets(item.Metadata)
 		items = append(items, dto.SearchResultResponse{
+			TextSource:        chunkTextSource(item.Metadata),
 			Table:             chunkTableSource(item.Metadata),
 			KnowledgeBaseID:   item.KnowledgeBaseID.String(),
 			KnowledgeBaseName: item.KnowledgeBaseName,
@@ -499,6 +500,17 @@ func chunkTableSource(metadata datatypes.JSON) *dto.TableSource {
 		return nil
 	}
 	return table
+}
+
+func chunkTextSource(metadata datatypes.JSON) string {
+	var source struct {
+		FileType   string `json:"fileType"`
+		TextSource string `json:"textSource"`
+	}
+	if json.Unmarshal(metadata, &source) == nil && source.FileType == "pdf" && source.TextSource == "ocr" {
+		return "ocr"
+	}
+	return ""
 }
 
 // completeVectorRecall reruns the vector stage exhaustively when the

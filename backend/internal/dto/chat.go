@@ -104,6 +104,7 @@ type EditChatMessageRequest struct {
 }
 
 type CitationResponse struct {
+	TextSource        string       `json:"textSource,omitempty"`
 	Table             *TableSource `json:"table,omitempty"`
 	KnowledgeBaseID   string       `json:"knowledgeBaseId,omitempty"`
 	KnowledgeBaseName string       `json:"knowledgeBaseName,omitempty"`

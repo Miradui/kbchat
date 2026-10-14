@@ -8,6 +8,7 @@ import {
   deleteKnowledgeBase,
   deleteDocument,
   getKnowledgeBase,
+	getDocumentUploadResult,
   getWorkspacePreference,
   listDocuments,
   listKnowledgeBaseCategories,
@@ -34,6 +35,7 @@ vi.mock('../../api/resources', () => ({
   deleteKnowledgeBase: vi.fn(),
   deleteDocument: vi.fn(),
   getKnowledgeBase: vi.fn(),
+	getDocumentUploadResult: vi.fn(),
   getSystemCapabilities: vi.fn().mockResolvedValue({
     rerankEnabled: false,
     upload: { maxFileBytes: 50 * 1024 * 1024, allowedExtensions: ['txt', 'md', 'pdf'] },
@@ -139,6 +141,7 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
+	vi.mocked(getDocumentUploadResult).mockReset().mockRejectedValue(new Error('offline'));
   documentListMocks.counts.mockReset().mockResolvedValue({ total: 0, completed: 0, processing: 0, failed: 0 });
   vi.mocked(getKnowledgeBase).mockReset().mockResolvedValue(knowledgeBase);
   documentListMocks.primary.mockReset().mockResolvedValue({total: ([]).length, page: 1, pageSize: 20,  items: [] });
@@ -453,6 +456,7 @@ describe('DocumentsPage', () => {
       expect.any(File),
       expect.any(Function),
       expect.any(AbortSignal),
+      expect.objectContaining({ requestId: expect.any(String) }),
     ));
     act(() => screen.getByText('切换到产品库路由').click());
     expect(await screen.findByRole('heading', { name: '产品库' })).toBeInTheDocument();
@@ -770,7 +774,7 @@ describe('DocumentsPage', () => {
     expect(screen.getByRole('button', { name: '基于此知识库提问' })).toBeInTheDocument();
   });
 
-  it('treats a stopped upload as unknown and refreshes before allowing another upload', async () => {
+  it('retains a stopped upload for explicit recovery and refreshes its document list', async () => {
     let uploadSignal: AbortSignal | undefined;
     vi.mocked(uploadDocument).mockImplementation((
       _knowledgeBaseId,
@@ -794,7 +798,9 @@ describe('DocumentsPage', () => {
     await user.click(within(dialog).getByRole('button', { name: '停止上传' }));
 
     expect(uploadSignal?.aborted).toBe(true);
-    expect(await within(dialog).findByText(/上传结果未知/)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/恢复上传时会先核对已提交的文件/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: '恢复上传' })).toBeInTheDocument();
+    expect(getDocumentUploadResult).not.toHaveBeenCalled();
     expect(within(dialog).queryByRole('button', { name: '重试失败项' })).not.toBeInTheDocument();
     await waitFor(() => expect(listDocuments).toHaveBeenCalledTimes(2));
   });

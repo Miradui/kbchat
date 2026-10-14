@@ -2815,3 +2815,20 @@ OpenAI 兼容接口里没有免费的 ping。为了检查而发一次 completion
 XLSX 使用工作表名和原始行号；CSV 的工作表名为空，行范围是物理文件行（包括引号字段内换行）。表头不会单独成为数据记录。无来源或无效元数据不生成 `table`；行号不由回答模型推断。JSON/SSE、已保存消息及 Markdown 导出均保留来源。
 
 `GET /documents/:id/preview` 对表格返回 `kind=text`、解析文本与 `tableRows`。每项包括上述四个来源字段以及 `[startOffset,endOffset)`，它是响应 `content` 的 UTF-8 字节区间，用于定位完整数据记录。预览输入文件或解析文本大于 1 MiB 时仍报 `FILE_TOO_LARGE_FOR_PREVIEW`；可查看已有引用摘录和来源标签。表格解析失败为 `DOCUMENT_PREVIEW_FAILED`，触及表格解析上限为 `DOCUMENT_TABLE_TOO_LARGE`。XLSX 只读取已保存公式结果；无缓存值为空，前端说明这一限制。
+
+### 扫描 PDF 的页摘要与来源
+
+`pdfTextSummary` 增加可选 `ocr`，旧客户端/旧记录可省略；它描述本次解析结果，不表示片段已发布：
+
+```json
+{
+  "totalPages": 4,
+  "textPages": 3,
+  "pagesWithoutText": [4],
+  "ocr": { "status": "completed", "totalPages": 3, "completedPages": 3, "pages": [2, 3] }
+}
+```
+
+外层 `textPages` 为原生与 OCR 文字页总数；`ocr.totalPages` 为原本无原生文字、需要尝试识别的页数，`completedPages` 包含成功尝试但没有文字的空白页，`pages` 仅包含确实提取出 OCR 文字的物理页。`status` 为 `disabled/running/completed/unavailable/timeout/failed/limit_exceeded`。摘要在识别期间更新，失败时保留诊断，重处理立即清空；片段与文本快照只在完整处理成功时原子替换。任务取消或失败后，最后一次仍为 `running` 的摘要在文档响应中以 `failed` 返回，具体终止原因由 `jobStatus/errorCode` 表示，不能继续当作运行中。
+
+OCR chunk 的 `metadata.textSource`、检索结果和聊天 citation 增加可选 `textSource: "ocr"`，原生文字省略该字段。JSON/SSE、历史和分支保留该字段；权限矩阵保持，OCR 不能授予原文件下载权限。`pageNumber` 仍为原 PDF 物理页码；OCR 偏移只对应识别文本，不对应原图坐标。PDF 来源显示识别摘录并定位到页，不宣称原生文字高亮。版本对比优先读取已发布 PDF 文本快照，不在 HTTP 请求中执行 OCR；旧文档没有快照时沿用原生解析。

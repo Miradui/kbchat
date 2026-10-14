@@ -94,6 +94,19 @@ func (s *DocumentService) comparableText(ctx context.Context, d model.Document) 
 	if d.Status != "completed" {
 		return nil, apperror.New(http.StatusConflict, "DOCUMENT_COMPARE_NOT_READY", "请先完成两个版本的文档处理；失败版本可重新处理后再比较")
 	}
+	if d.FileType == "pdf" {
+		snapshot, err := s.documents.PDFSnapshot(ctx, d.ID)
+		if err != nil {
+			return nil, apperror.Internal(err)
+		}
+		if len(snapshot) > 0 {
+			parsed, err := parser.DecodePDFSnapshot(snapshot)
+			if err != nil {
+				return nil, apperror.New(http.StatusBadRequest, "DOCUMENT_COMPARE_PARSE_FAILED", "已保存的 PDF 文本不可用，请重新处理文档")
+			}
+			return comparableParsedText(parsed)
+		}
+	}
 	info, err := s.storage.Stat(ctx, d.StoragePath)
 	if err != nil {
 		return nil, documentStorageError(err)
@@ -114,6 +127,10 @@ func (s *DocumentService) comparableText(ctx context.Context, d model.Document) 
 	if err != nil {
 		return nil, apperror.New(http.StatusBadRequest, "DOCUMENT_COMPARE_PARSE_FAILED", "无法提取文档文本，请检查文件或重新处理")
 	}
+	return comparableParsedText(parsed)
+}
+
+func comparableParsedText(parsed parser.ParsedDocument) ([]string, error) {
 	var text strings.Builder
 	for _, segment := range parsed.Segments {
 		if text.Len()+len(segment.Content)+1 > maxPreviewTextBytes {

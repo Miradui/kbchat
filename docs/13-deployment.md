@@ -684,3 +684,23 @@ go run ./cmd/migrate -migration 039_table_error_code.sql
 034/036/037 的外键和唯一约束、038 的来源路径约束以及 039 的失败码约束均需通过实际 SQL 迁移建立。启动检查能发现必要字段及 039 约束缺失，不能将启动期 `AutoMigrate` 当作已升级的凭据。新约束为兼容性扩展，但已有 XLSX/CSV 或分支数据后，回退旧程序可能丢失来源展示或无法重新处理新类型；保留迁移，按备份和应用版本协调回退，不删除业务数据。
 
 本轮仅在隔离 schema 验收，已完成回归、实际 PostgreSQL 和 1920×1080 浏览器检查并清理临时环境，详见 [六项扩展验收](29-feature-extension-acceptance.md)。当前 public 仍停在 033，8080/5173 仍运行此前会话搜索版本。不得把隔离验收服务或其固定模型响应当作业务发布。最新验收和发布状态以 `12-handoff.md` 为准。
+
+## 文档工作流发布（迁移 040–043）
+
+上传恢复、表格设置、版本检索策略与扫描 PDF OCR 需要配套新版前后端。已到 039 的数据库在备份并停止旧后端后按顺序执行；仍到 033 的环境先执行上节 034–039：
+
+```powershell
+cd backend
+go run ./cmd/migrate -migration 040_document_upload_receipts.sql
+go run ./cmd/migrate -migration 041_document_table_import.sql
+go run ./cmd/migrate -migration 042_document_version_policy.sql
+go run ./cmd/migrate -migration 043_document_pdf_ocr.sql
+```
+
+040 建立上传提交凭据与删除墓碑，041 保存表格配置，042 默认全部版本，043 保存已发布 PDF 页文本并扩展失败码。迁移不自动重处理、不改已有向量或模型参数。成功入库的 OCR 页可引用并按物理页预览，图像区域不做文字高亮；版本比较复用与片段原子发布的快照。历史 NULL 数据保持未知，按需手动重处理。
+
+OCR 默认为关闭。Linux/Debian 可由部署管理员安装 `poppler-utils tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng`；Windows 使用受信任的 Poppler/Tesseract 5 发行包，并设置可执行文件与 tessdata 的绝对路径。原生工具运行在后端机器，需具备读上传临时副本和创建临时图像的权限。确认 `pdftoppm -v`、`tesseract --version` 和 `tesseract --list-langs` 正常，且包含所配置语言；便携安装为最后一条补充 `--tessdata-dir <语言目录>`。随后启用 `PDF_OCR_ENABLED=true` 并启动单实例新版服务，完整参数见环境配置文档。
+
+OCR 工具不随 Go 可执行文件或当前容器镜像内置；需要在自定义运行镜像中安装上述系统包，或者部署到已安装工具的机器。修改路径或安装依赖不要求修改业务数据；重新处理失败文档即可重试。部署 OCR 语言包与资源预算由管理员控制，上传者不能指定任意命令、路径或额外参数。图片内包含少量可提取文字的混合页不会强制 OCR，不保证复杂版面、手写内容或低清扫描的识别率。
+
+本轮运行验证使用隔离 schema 和临时前端构建，未执行 public 迁移、重启 8080/5173 或改写根 `.env`。最新实际结果和清理状态见 `31-document-workflow-acceptance.md` 与 `12-handoff.md`。

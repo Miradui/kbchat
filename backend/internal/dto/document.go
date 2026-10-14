@@ -51,9 +51,17 @@ type DocumentUploadResult struct {
 }
 
 type PDFTextSummary struct {
-	TotalPages       int   `json:"totalPages"`
-	TextPages        int   `json:"textPages"`
-	PagesWithoutText []int `json:"pagesWithoutText"`
+	OCR              *PDFOCRSummary `json:"ocr,omitempty"`
+	TotalPages       int            `json:"totalPages"`
+	TextPages        int            `json:"textPages"`
+	PagesWithoutText []int          `json:"pagesWithoutText"`
+}
+
+type PDFOCRSummary struct {
+	Status         string `json:"status"`
+	Pages          []int  `json:"pages"`
+	CompletedPages int    `json:"completedPages"`
+	TotalPages     int    `json:"totalPages"`
 }
 
 type GlobalDocumentListQuery struct {

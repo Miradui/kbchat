@@ -126,10 +126,7 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 	if err != nil {
 		return err
 	}
-	parsedDocument, err := parser.ParseWithOptions(ctx, p.parser, localPath, document.FileType, parser.ParseOptions{TableImport: settings})
-	if err != nil {
-		return err
-	}
+	parsedDocument, parseErr := p.parseDocument(ctx, document, job, localPath, settings)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -142,6 +139,9 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 		if err := p.documents.SavePDFTextSummary(ctx, document.ID, job.ID, summary); err != nil {
 			return err
 		}
+	}
+	if parseErr != nil {
+		return parseErr
 	}
 	if err := p.documents.UpdateStatus(ctx, document.ID, job.ID, "chunking", chunkingProgress, ""); err != nil {
 		return err
@@ -227,11 +227,15 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	var identity []repository.EmbeddingIdentity
+	publication := repository.PublicationOptions{}
 	if p.embeddingModel != "" && p.embeddingDimension > 0 {
-		identity = append(identity, repository.EmbeddingIdentity{Model: p.embeddingModel, Dimension: p.embeddingDimension})
+		publication.Embedding = &repository.EmbeddingIdentity{Model: p.embeddingModel, Dimension: p.embeddingDimension}
 	}
-	if err := p.chunks.PublishByDocument(ctx, document.ID, job.ID, rows, identity...); err != nil {
+	publication.PDFTextSnapshot, err = parser.EncodePDFSnapshot(parsedDocument)
+	if err != nil {
+		return err
+	}
+	if err := p.chunks.PublishByDocument(ctx, document.ID, job.ID, rows, publication); err != nil {
 		return err
 	}
 	return nil

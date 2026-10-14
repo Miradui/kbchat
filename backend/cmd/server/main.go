@@ -65,7 +65,7 @@ func main() {
 	documentProcessor := processor.NewWithStorage(
 		documentRepo,
 		chunkRepo,
-		parser.NewDefaultParser(),
+		parser.NewConfiguredParser(cfg),
 		splitter.New(splitter.DefaultChunkSize, splitter.DefaultChunkOverlap),
 		embeddingprovider.NewOpenAICompatibleProvider(cfg),
 		fileStorage,

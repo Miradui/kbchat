@@ -135,6 +135,7 @@ func validateSchema(ctx context.Context, db *gorm.DB) error {
 			{&model.Document{}, "source_path", "038_document_source_path.sql"},
 			{&model.Document{}, "table_import", "041_document_table_import.sql"},
 			{&model.DocumentUploadReceipt{}, "fingerprint", "040_document_upload_receipts.sql"},
+			{&model.DocumentPDFSnapshot{}, "content", "043_document_pdf_ocr.sql"},
 			{&model.ChatSession{}, "scope_mode", "031_chat_automatic_scope.sql"},
 			{&model.ChatSession{}, "branch_from_session_id", "036_chat_branches.sql"},
 			{&model.ChatSession{}, "branch_from_message_id", "036_chat_branches.sql"},
@@ -170,6 +171,11 @@ func validateSchema(ctx context.Context, db *gorm.DB) error {
 		if !strings.Contains(errorConstraint, "'table_import_invalid'") {
 			return fmt.Errorf("database schema incompatible: missing table_import_invalid; apply migration 041_document_table_import.sql")
 		}
+		for _, code := range []string{"pdf_limit_exceeded", "ocr_unavailable", "ocr_timeout", "ocr_failed", "ocr_limit_exceeded"} {
+			if !strings.Contains(errorConstraint, "'"+code+"'") {
+				return fmt.Errorf("database schema incompatible: missing %s; apply migration 043_document_pdf_ocr.sql", code)
+			}
+		}
 	}
 	return validateTimestampSchema(ctx, db)
 }
@@ -184,6 +190,7 @@ func autoMigrateModels() []any {
 		&model.KnowledgeBaseViewEvent{},
 		&model.Document{},
 		&model.DocumentUploadReceipt{},
+		&model.DocumentPDFSnapshot{},
 		&model.DocumentJob{},
 		&model.StorageCleanupJob{},
 		&model.DocumentChunk{},

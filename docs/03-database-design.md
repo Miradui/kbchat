@@ -207,9 +207,9 @@ completed
 failed
 ```
 
-`documents.pdf_text_summary` 由迁移 032 引入，保存 PDF 最近一次成功解析的 `{totalPages, textPages, pagesWithoutText}`；页码为从 1 开始的物理页码，数组升序且不重复。仅空白或 BOM 的页记入未提取文字页，不能据此断言扫描件或损坏。非 PDF、旧文档和未完成解析时为 SQL NULL，表示未知，不表示已完整提取。
+`documents.pdf_text_summary` 由迁移 032 引入，保存 PDF 最近一次提取的 `{totalPages, textPages, pagesWithoutText}`；页码为从 1 开始的物理页码，数组升序且不重复。启用 OCR 后 `textPages` 包含原生与识别文本页，可选 `ocr` 记录识别进度/结果；剩余无文字页不能据此断言损坏。非 PDF、旧文档和未提取时为 SQL NULL，表示未知，不表示已完整提取。结构及 OCR 状态见 API 规范。
 
-重新处理排队及开始解析时清除旧摘要；解析成功后、切片和向量化前写入，因此全空 PDF 的 `empty_content` 或后续 Embedding 失败仍保留本次解析结果。写入复用当前运行任务守卫，取消或失效任务不能覆盖结果。迁移不回填、不重建向量；详情响应返回摘要，列表不携带页码数组。
+重新处理排队及开始解析时清除旧摘要；原生解析后、OCR 识别期间及结束时在切片和向量化前写入，因此全空 PDF 的 `empty_content`、OCR 失败或后续 Embedding 失败仍保留本次已知页信息。写入复用当前运行任务守卫，取消或失效任务不能覆盖结果。迁移不回填、不重建向量；详情响应返回摘要，列表不携带页码数组。
 
 ## document_chunks
 
@@ -546,3 +546,9 @@ CREATE INDEX idx_model_usage_user_created ON model_usage_records (user_id, creat
 创建分支通过 GORM 事务锁定来源会话，复制到指定回答为止的消息、引用和完整依赖集合。副本使用新消息 ID 和严格递增的时间，来源链接、依赖和副本原子提交；不复制收藏、评价、请求编号或模型用量。来源软删/永久删不删除独立分支，分支仍按自己的完整依赖鉴权。
 
 表格不新增表或向量列。`document_chunks.metadata.table` 保存 `{sheetName,rowStart,rowEnd,headerRow}`，CSV 工作表名为空，XLSX 行起止相同。对应 `structureType=table_row`；无通用文本偏移和物理页码。该来源随实际检索片段保存到 `chat_messages.citations`，历史 JSON 缺少 `table` 时兼容原有格式。
+
+## 已发布 PDF 文本快照（043）
+
+`document_pdf_snapshots` 使用 `document_id UUID PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE` 和 `content JSONB NOT NULL`。内容为 `{version:1,totalPages,pages:[{pageNumber,content,textSource?}]}`，最多 500 个物理页，空白页省略；OCR 页标记 `textSource: "ocr"`。快照与替换后的全部 chunks、Embedding 来源和成功任务状态在同一事务内提交。重新处理失败或取消保留旧快照；软删除随原文隐藏，永久删除级联清除。
+
+该表按文档单独读取，避免列表、状态轮询及知识库查询载入大段 OCR 文本；访问前仍需校验文档所属知识库的能力。043 可重复执行，不为旧记录生成快照，并补齐 `pdf_limit_exceeded/ocr_unavailable/ocr_timeout/ocr_failed/ocr_limit_exceeded` 错误码约束。

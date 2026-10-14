@@ -1,14 +1,17 @@
 package parser
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/ledongthuc/pdf"
+	"kbchat/backend/internal/document/ocr"
 )
 
 // Sentinel causes, wrapped into the returned errors so a caller can tell why a
@@ -35,18 +38,24 @@ type ParsedDocument struct {
 
 // PagesWithoutText records an extraction result, not a diagnosis of scanned pages.
 type PDFTextSummary struct {
-	TotalPages       int   `json:"totalPages"`
-	TextPages        int   `json:"textPages"`
-	PagesWithoutText []int `json:"pagesWithoutText"`
+	OCR              *PDFOCRSummary `json:"ocr,omitempty"`
+	TotalPages       int            `json:"totalPages"`
+	TextPages        int            `json:"textPages"`
+	PagesWithoutText []int          `json:"pagesWithoutText"`
 }
 
 type Segment struct {
+	TextSource string
 	Content    string
 	PageNumber *int
 	Table      *TableRow
 }
 
-type DefaultParser struct{}
+type DefaultParser struct {
+	ocr         ocr.PageRecognizer
+	ocrMaxPages int
+	ocrTimeout  time.Duration
+}
 
 func NewDefaultParser() *DefaultParser {
 	return &DefaultParser{}
@@ -93,7 +102,7 @@ func (p *DefaultParser) ParseDocument(path string, fileType string) (ParsedDocum
 			Segments: []Segment{{Content: strings.TrimPrefix(string(content), "\ufeff")}},
 		}, nil
 	case "pdf":
-		return parsePDFDocument(path)
+		return p.parsePDF(context.Background(), path, nil)
 	case "docx":
 		document, err := parseDOCXPath(path)
 		if err != nil {
@@ -136,7 +145,12 @@ func normalizeFileType(fileType string) string {
 	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(fileType)), ".")
 }
 
-func parsePDFDocument(path string) (ParsedDocument, error) {
+func readPDFDocument(ctx context.Context, path string) (document ParsedDocument, parseErr error) {
+	defer func() {
+		if recover() != nil {
+			document, parseErr = ParsedDocument{}, ErrCorruptFile
+		}
+	}()
 	file, reader, err := pdf.Open(path)
 	if err != nil {
 		// A PDF that will not open is corrupt from the user's point of view even
@@ -148,11 +162,18 @@ func parsePDFDocument(path string) (ParsedDocument, error) {
 	defer file.Close()
 
 	return collectPDFDocument(reader.NumPage(), func(pageNumber int) (string, error) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		return readPDFPageText(reader.Page(pageNumber))
 	})
 }
 
 func collectPDFDocument(pageCount int, readPage func(pageNumber int) (string, error)) (ParsedDocument, error) {
+	if pageCount < 1 || pageCount > MaxPDFPages {
+		return ParsedDocument{}, ErrPDFLimit
+	}
+	textBytes := 0
 	segments := make([]Segment, 0, pageCount)
 	summary := &PDFTextSummary{TotalPages: pageCount, PagesWithoutText: []int{}}
 	for pageNumber := 1; pageNumber <= pageCount; pageNumber++ {
@@ -164,6 +185,10 @@ func collectPDFDocument(pageCount int, readPage func(pageNumber int) (string, er
 			return ParsedDocument{}, fmt.Errorf("parse pdf page %d: %w", pageNumber, ErrEncodingInvalid)
 		}
 		content = strings.TrimFunc(content, func(r rune) bool { return r == '\ufeff' || unicode.IsSpace(r) })
+		textBytes += len(content)
+		if textBytes > MaxPDFTextBytes {
+			return ParsedDocument{}, ErrPDFLimit
+		}
 		if content == "" {
 			summary.PagesWithoutText = append(summary.PagesWithoutText, pageNumber)
 			continue

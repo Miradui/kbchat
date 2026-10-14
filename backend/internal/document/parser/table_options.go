@@ -10,7 +10,8 @@ import (
 )
 
 type ParseOptions struct {
-	TableImport *tableconfig.Options
+	TableImport   *tableconfig.Options
+	OnPDFProgress func(*PDFTextSummary) error
 }
 
 // Optional extension keeps simple parser fixtures compatible while refusing to
@@ -35,6 +36,9 @@ func (p *DefaultParser) ParseDocumentWithOptions(ctx context.Context, path, file
 	if fileType != "xlsx" && fileType != "csv" {
 		if options.TableImport != nil {
 			return ParsedDocument{}, tableconfig.ErrInvalid
+		}
+		if fileType == "pdf" {
+			return p.parsePDF(ctx, path, options.OnPDFProgress)
 		}
 		return p.ParseDocument(path, fileType)
 	}

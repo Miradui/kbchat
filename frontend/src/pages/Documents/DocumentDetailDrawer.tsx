@@ -557,6 +557,7 @@ export function DocumentDetailDrawer({
                               <header>
                                 <strong>#{chunk.chunkIndex}</strong>
                                 {isSource && <Badge tone="accent">引用来源</Badge>}
+                                {chunk.metadata?.textSource === 'ocr' && <Badge tone="neutral">OCR 识别文本</Badge>}
                                 <span className="ui-muted">
                                   {chunk.tokenCount} 词元{chunk.pageNumber ? ` · p.${chunk.pageNumber}` : ''}
                                   {chunk.metadata?.table ? ` · ${tableSourceLabel(chunk.metadata.table as import('../../types/api').TableSource)}` : ''}

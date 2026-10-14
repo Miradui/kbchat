@@ -117,6 +117,21 @@ describe('PdfPreview citation highlights', () => {
     expect(scrollTo).toHaveBeenLastCalledWith({ top: 410, left: 0, behavior: 'auto' });
   });
 
+  it('locates an OCR citation page without inventing a native text highlight', async () => {
+    const fixture = pdfFixture();
+    vi.mocked(loadPdfJs).mockResolvedValue(fixture.library);
+    const user = userEvent.setup();
+    render(<PdfPreview filename="scan.pdf" highlight={{ ...target, textSource: 'ocr' }} initialPage={2} url="blob:authorized" />);
+    expect(markedText(await pageText())).toBe('');
+    expect(screen.getByText(/此引用来自 OCR 识别文本/)).toBeInTheDocument();
+    expect(screen.queryByText('已高亮引用内容。')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'PDF 下一页' }));
+    await pageText(3);
+    await user.click(screen.getByRole('button', { name: '定位到引用' }));
+    expect(markedText(await pageText())).toBe('');
+    expect(fixture.getPage).toHaveBeenLastCalledWith(2);
+  });
+
   it('changes highlights on the same page without reloading or rendering the PDF again', async () => {
     const fixture = pdfFixture();
     vi.mocked(loadPdfJs).mockResolvedValue(fixture.library);

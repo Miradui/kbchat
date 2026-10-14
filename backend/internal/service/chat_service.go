@@ -1978,6 +1978,7 @@ func citationsFromSearch(items []dto.SearchResultResponse) []dto.CitationRespons
 	citations := make([]dto.CitationResponse, 0, len(items))
 	for _, item := range items {
 		citations = append(citations, dto.CitationResponse{
+			TextSource:        item.TextSource,
 			Table:             item.Table,
 			KnowledgeBaseID:   item.KnowledgeBaseID,
 			KnowledgeBaseName: item.KnowledgeBaseName,

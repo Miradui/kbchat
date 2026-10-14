@@ -774,10 +774,16 @@ func (r *DocumentRepository) UpdateStatus(ctx context.Context, documentID, jobID
 
 // SavePDFTextSummary preserves successful parsing even if embedding later fails.
 // A cancelled or superseded processing job cannot publish its extraction result.
-func (r *DocumentRepository) SavePDFTextSummary(ctx context.Context, documentID, jobID uuid.UUID, summary []byte) error {
+func (r *DocumentRepository) SavePDFTextSummary(ctx context.Context, documentID, jobID uuid.UUID, summary []byte, progress ...int) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := guardRunningDocumentJob(tx, documentID, jobID); err != nil {
 			return err
+		}
+		if len(progress) > 0 {
+			if err := tx.Model(&model.DocumentJob{}).Where("id = ?", jobID).
+				Updates(map[string]any{"progress": max(10, min(progress[0], 29)), "updated_at": time.Now()}).Error; err != nil {
+				return err
+			}
 		}
 		return tx.Model(&model.Document{}).Where("id = ?", documentID).
 			Updates(map[string]any{"pdf_text_summary": datatypes.JSON(summary), "updated_at": time.Now()}).Error

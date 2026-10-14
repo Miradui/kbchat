@@ -743,6 +743,7 @@ func newProcessorTestFixture(t *testing.T, fileType string) processorTestFixture
 		&model.Document{},
 		&model.DocumentJob{},
 		&model.DocumentChunk{},
+		&model.DocumentPDFSnapshot{},
 	); err != nil {
 		t.Fatalf("auto migrate processor fixture: %v", err)
 	}

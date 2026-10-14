@@ -97,6 +97,9 @@ func (s *Splitter) SplitDocument(document parser.ParsedDocument) []Chunk {
 		}
 		blocks := parseBlocks(text, structuredMarkdown(fileType), fileType, segment.PageNumber)
 		for _, chunk := range s.splitBlocks(blocks) {
+			if segment.TextSource == "ocr" {
+				chunk.Metadata["textSource"] = "ocr"
+			}
 			chunk.Index = len(chunks)
 			chunks = append(chunks, chunk)
 		}

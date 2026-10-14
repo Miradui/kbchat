@@ -17,6 +17,11 @@ export type DocumentFailureCopy = {
 };
 
 const FAILURES: Record<DocumentErrorCode, DocumentFailureCopy> = {
+  pdf_limit_exceeded: { reason: 'PDF 超出解析限制。', advice: '请拆分为最多 500 页、8 MiB 解析文本的文件后重新上传。', retryable: false },
+  ocr_unavailable: { reason: '扫描 PDF 识别工具或语言包不可用。', advice: '请联系管理员检查 OCR 工具和语言包，配置完成后重新处理。', retryable: true },
+  ocr_timeout: { reason: '扫描 PDF 识别超时。', advice: '请拆分文件或联系管理员调整识别时限后重新处理。', retryable: true },
+  ocr_failed: { reason: '扫描 PDF 的页面识别失败。', advice: '请检查原文件能否正常打开，并联系管理员检查识别工具后重新处理。', retryable: true },
+  ocr_limit_exceeded: { reason: '扫描 PDF 超出识别资源限制。', advice: '请拆分文件后重新上传；默认每份最多识别 40 页，管理员可调整至最多 200 页。', retryable: false },
   table_limit_exceeded: { reason: '表格超出解析限制。', advice: '请拆分至最多 32 个工作表、合计 10000 条数据行、256 列和 8 MiB 解析文本；单元格最多 32767 字，CSV 物理行数或工作表行号最多 100000。', retryable: false },
   table_import_invalid: { reason: '表格导入设置与文件不匹配。', advice: '请重新导入并检查所选工作表、表头行和列是否存在。', retryable: false },
   unsupported_type: {
@@ -38,7 +43,7 @@ const FAILURES: Record<DocumentErrorCode, DocumentFailureCopy> = {
     // The most common real cause is a scanned PDF, and saying so saves the user
     // from re-uploading the same image-only file and getting the same result.
     reason: '文件里没有可提取的文字，扫描件或纯图片 PDF 通常是这种情况。',
-    advice: '先做 OCR 转成文字版，或改上传文字版本。',
+    advice: '请核对原文件是否为空白；扫描件可由管理员启用 OCR 后重新处理，或改上传文字版本。',
     retryable: false,
   },
   embedding_failed: {

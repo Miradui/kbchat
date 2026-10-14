@@ -61,6 +61,7 @@ const (
 )
 
 type Config struct {
+	PDFOCR                  PDFOCRConfig
 	AppEnv                  string
 	ServerPort              string
 	CORSAllowedOrigins      []string
@@ -128,6 +129,7 @@ func Load() Config {
 	loadDotEnv()
 
 	return Config{
+		PDFOCR:                  loadPDFOCR(),
 		AppEnv:                  getEnv("APP_ENV", defaultAppEnv),
 		ServerPort:              getEnv("SERVER_PORT", defaultServerPort),
 		CORSAllowedOrigins:      splitCommaSeparated(getEnv("CORS_ALLOWED_ORIGINS", defaultCORSAllowedOrigins)),
@@ -186,6 +188,9 @@ func Load() Config {
 }
 
 func (c Config) Validate() error {
+	if err := c.PDFOCR.Validate(); err != nil {
+		return err
+	}
 	if err := ValidateJWTSecret(c.JWTSecret); err != nil {
 		return err
 	}

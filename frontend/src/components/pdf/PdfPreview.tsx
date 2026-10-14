@@ -7,7 +7,7 @@ import { IconButton } from '../ui/IconButton';
 import { matchPdfCitation } from './pdfCitation';
 import { loadPdfJs, type PdfLibrary } from './pdfjs';
 
-export type PdfHighlightTarget = { id: string; content: string };
+export type PdfHighlightTarget = { id: string; content: string; textSource?: 'ocr' };
 
 type PdfPreviewProps = {
   url: string;
@@ -137,11 +137,12 @@ export function PdfPreview({ url, filename, initialPage, highlight }: PdfPreview
       {highlight && citationPage === null && (
         <p className="pdf-preview__notice">引用未提供有效页码，可对照上方摘录阅读 PDF。</p>
       )}
+      {highlight?.textSource === 'ocr' && <p className="pdf-preview__notice">此引用来自 OCR 识别文本，可定位到扫描页并对照上方摘录阅读；扫描图像暂不支持文字高亮。</p>}
       <div aria-label="PDF 页面" className="pdf-preview__viewport" ref={viewportRef} tabIndex={0}>
         {error ? <PdfError message={error} onRetry={retry} /> : current && width > 0 ? (
           <PdfPage
             key={`${url}:${attempt}:${page}:${width}:${zoom}`}
-            highlight={validCitationPage && page === citationPage ? highlight : undefined}
+            highlight={validCitationPage && page === citationPage && highlight?.textSource !== 'ocr' ? highlight : undefined}
             library={current.library}
             locateRequest={locateRequest}
             onRetry={retry}

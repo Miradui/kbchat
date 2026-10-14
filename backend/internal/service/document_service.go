@@ -899,6 +899,38 @@ func documentPDFTextSummary(document *model.Document) *dto.PDFTextSummary {
 	if summary.PagesWithoutText == nil {
 		summary.PagesWithoutText = []int{}
 	}
+	if value := summary.OCR; value != nil {
+		valid := value.TotalPages >= 1 && value.TotalPages <= summary.TotalPages && value.CompletedPages >= 0 && value.CompletedPages <= value.TotalPages && len(value.Pages) <= value.CompletedPages
+		switch value.Status {
+		case "disabled", "running", "completed", "unavailable", "timeout", "failed", "limit_exceeded":
+		default:
+			valid = false
+		}
+		previous := 0
+		for _, page := range value.Pages {
+			if page <= previous || page > summary.TotalPages {
+				valid = false
+			}
+			for _, empty := range summary.PagesWithoutText {
+				if page == empty {
+					valid = false
+				}
+			}
+			previous = page
+		}
+		if !valid {
+			summary.OCR = nil
+		} else {
+			if value.Pages == nil {
+				value.Pages = []int{}
+			}
+			// Cancellation prevents any late worker write, including a final
+			// summary. Do not expose its last progress snapshot as still running.
+			if document.Status == "failed" && value.Status == "running" {
+				value.Status = "failed"
+			}
+		}
+	}
 	return &summary
 }
 

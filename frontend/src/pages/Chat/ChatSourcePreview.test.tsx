@@ -13,7 +13,7 @@ vi.mock('../../api/resources', () => ({ downloadDocument: vi.fn(), getDocument: 
 vi.mock('../../hooks/useMediaQuery', () => ({ useMediaQuery: vi.fn() }));
 vi.mock('../../components/pdf/PdfPreview', () => ({
   PdfPreview: ({ url, filename, initialPage, highlight }: { url: string; filename: string; initialPage?: number | null; highlight?: PdfHighlightTarget }) => (
-    <div data-highlight-content={highlight?.content} data-highlight-id={highlight?.id} data-page={initialPage ?? ''} data-testid="pdf-preview" data-url={url} title={`原文：${filename}`} />
+    <div data-text-source={highlight?.textSource} data-highlight-content={highlight?.content} data-highlight-id={highlight?.id} data-page={initialPage ?? ''} data-testid="pdf-preview" data-url={url} title={`原文：${filename}`} />
   ),
 }));
 vi.mock('../../utils/download', () => ({ downloadBlob: vi.fn() }));
@@ -41,6 +41,11 @@ beforeEach(() => {
 });
 
 describe('ChatSourcePreview', () => {
+  it('uses the saved citation OCR source even if document processing state has changed', async () => {
+    render(<ChatSourcePreview citation={{ ...citation, textSource: 'ocr' }} index={1} knowledgeBaseId="kb1" onClose={vi.fn()} />);
+    expect(await screen.findByTestId('pdf-preview')).toHaveAttribute('data-text-source', 'ocr');
+    expect(screen.getByText(/第 12 页 · OCR 识别文本/)).toBeInTheDocument();
+  });
   it('uses sheet and physical row metadata to highlight a whole row and never guesses another row', async () => {
     const a = '工作表「销售」 · 第 5 行（表头第 2 行）\n名称：甲😀\n说明：相同内容';
     const b = '工作表「库存」 · 第 5 行（表头第 1 行）\n名称：乙\n说明：相同内容';

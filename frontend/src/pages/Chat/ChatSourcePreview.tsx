@@ -116,14 +116,14 @@ export function ChatSourcePreview({ citation, index, knowledgeBaseId, canDownloa
         {citation.filename.toLowerCase().endsWith('.docx') ? <FileType aria-hidden="true" /> : <FileText aria-hidden="true" />}
         <div>
           <h3>{state?.document.filename ?? citation.filename}</h3>
-          <p>{citation.knowledgeBaseName && `${citation.knowledgeBaseName} · `}来源 {index} · {tableSourceLabel(citation.table) || (pageNumber ? `第 ${pageNumber} 页` : '未提供页码')}</p>
+          <p>{citation.knowledgeBaseName && `${citation.knowledgeBaseName} · `}来源 {index} · {tableSourceLabel(citation.table) || (pageNumber ? `第 ${pageNumber} 页` : '未提供页码')}{citation.textSource === 'ocr' ? ' · OCR 识别文本' : ''}</p>
         </div>
       </div>
       <details className="chat-preview__excerpt" open>
         <summary>本次回答引用的内容</summary>
         <blockquote>{citation.content}</blockquote>
       </details>
-      {state?.document.fileType === 'xlsx' && <p className="ui-muted">工作表按首个非空行识别表头。公式仅显示文件已保存的结果，缺少缓存值的单元格为空；不会重新计算。</p>}
+      {state?.document.fileType === 'xlsx' && <p className="ui-muted">工作表、表头和列以该文档保存的导入设置为准。公式仅显示文件已保存的结果，缺少缓存值的单元格为空；不会重新计算。</p>}
       {downloadError && <p className="ui-inline-error" role="alert">{downloadError}</p>}
       {loading ? <LoadingSkeleton rows={5} /> : error ? (
         <div className="chat-preview__error">
@@ -144,7 +144,7 @@ export function ChatSourcePreview({ citation, index, knowledgeBaseId, canDownloa
       ) : !canDownload && state?.preview.kind === 'file' ? (
         <p className="ui-muted">可阅读上方引用内容；下载原始文件需要编辑者及以上权限。</p>
       ) : state?.url && state.preview.fileType.toLowerCase() === 'pdf' ? (
-        <RenderBoundary local resetKey={state.url}><PdfPreview url={state.url} filename={state.document.filename} initialPage={pageNumber} highlight={{ id: citation.chunkId, content: citation.content }} /></RenderBoundary>
+        <RenderBoundary local resetKey={state.url}><PdfPreview url={state.url} filename={state.document.filename} initialPage={pageNumber} highlight={{ id: citation.chunkId, content: citation.content, textSource: citation.textSource }} /></RenderBoundary>
       ) : <p className="chat-preview__error">暂不支持直接预览此格式，可下载原文查看。</p>}
     </div>
   );

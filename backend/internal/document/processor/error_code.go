@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"kbchat/backend/internal/document/ocr"
 	"kbchat/backend/internal/document/parser"
 	"kbchat/backend/internal/document/tableconfig"
 	"kbchat/backend/internal/repository"
@@ -11,7 +12,7 @@ import (
 )
 
 // The closed set written to documents.error_code. Kept in sync with the CHECK
-// constraint in migrations/041_document_table_import.sql -- adding a
+// constraint in migrations/043_document_pdf_ocr.sql -- adding a
 // value here without the migration makes every write of it fail.
 const (
 	// ErrorCodeUnsupportedType is part of the closed set but ClassifyError never
@@ -28,6 +29,11 @@ const (
 	ErrorCodeInternal        = "internal"
 	ErrorCodeTableLimit      = "table_limit_exceeded"
 	ErrorCodeTableImport     = "table_import_invalid"
+	ErrorCodePDFLimit        = "pdf_limit_exceeded"
+	ErrorCodeOCRUnavailable  = "ocr_unavailable"
+	ErrorCodeOCRTimeout      = "ocr_timeout"
+	ErrorCodeOCRFailed       = "ocr_failed"
+	ErrorCodeOCRLimit        = "ocr_limit_exceeded"
 )
 
 // ClassifyError maps a processing failure to the closed set above.
@@ -53,6 +59,16 @@ func ClassifyError(err error) string {
 		errors.Is(err, context.DeadlineExceeded),
 		errors.Is(err, repository.ErrDocumentJobCancelled):
 		return ErrorCodeCancelled
+	case errors.Is(err, ocr.ErrUnavailable):
+		return ErrorCodeOCRUnavailable
+	case errors.Is(err, ocr.ErrTimeout):
+		return ErrorCodeOCRTimeout
+	case errors.Is(err, ocr.ErrFailed):
+		return ErrorCodeOCRFailed
+	case errors.Is(err, ocr.ErrLimit):
+		return ErrorCodeOCRLimit
+	case errors.Is(err, parser.ErrPDFLimit):
+		return ErrorCodePDFLimit
 	case errors.Is(err, parser.ErrEncodingInvalid):
 		return ErrorCodeEncodingInvalid
 	case errors.Is(err, parser.ErrTableLimit):
@@ -79,7 +95,7 @@ func ClassifyError(err error) string {
 // Provider, storage-read and unrecognised failures stay retryable.
 func IsPermanent(err error) bool {
 	switch ClassifyError(err) {
-	case ErrorCodeEncodingInvalid, ErrorCodeCorruptFile, ErrorCodeEmptyContent, ErrorCodeTableLimit, ErrorCodeTableImport:
+	case ErrorCodeEncodingInvalid, ErrorCodeCorruptFile, ErrorCodeEmptyContent, ErrorCodeTableLimit, ErrorCodeTableImport, ErrorCodePDFLimit, ErrorCodeOCRUnavailable, ErrorCodeOCRTimeout, ErrorCodeOCRFailed, ErrorCodeOCRLimit:
 		return true
 	case ErrorCodeStorageFailed:
 		return errors.Is(err, storage.ErrNotFound)

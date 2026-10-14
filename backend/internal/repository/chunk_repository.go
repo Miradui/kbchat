@@ -97,12 +97,17 @@ type EmbeddingIdentity struct {
 	Dimension int
 }
 
+type PublicationOptions struct {
+	Embedding       *EmbeddingIdentity
+	PDFTextSnapshot []byte
+}
+
 func (r *ChunkRepository) PublishByDocument(
 	ctx context.Context,
 	documentID uuid.UUID,
 	jobID uuid.UUID,
 	chunks []model.DocumentChunk,
-	identity ...EmbeddingIdentity,
+	options ...PublicationOptions,
 ) error {
 	if err := validateReplacementChunks(documentID, chunks); err != nil {
 		return err
@@ -120,9 +125,17 @@ func (r *ChunkRepository) PublishByDocument(
 
 		now := time.Now()
 		values := map[string]any{"status": "completed", "error_message": "", "updated_at": now}
-		if len(identity) > 0 {
-			values["embedding_model"] = identity[0].Model
-			values["embedding_dimension"] = identity[0].Dimension
+		if len(options) > 0 {
+			if identity := options[0].Embedding; identity != nil {
+				values["embedding_model"] = identity.Model
+				values["embedding_dimension"] = identity.Dimension
+			}
+			if snapshot := options[0].PDFTextSnapshot; snapshot != nil {
+				row := model.DocumentPDFSnapshot{DocumentID: documentID, Content: datatypes.JSON(snapshot)}
+				if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "document_id"}}, DoUpdates: clause.AssignmentColumns([]string{"content"})}).Create(&row).Error; err != nil {
+					return err
+				}
+			}
 		}
 		documentResult := tx.Model(&model.Document{}).
 			Where("id = ?", documentID).
