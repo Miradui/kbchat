@@ -1115,6 +1115,14 @@ field: file
 
 ### POST /knowledge-bases/:kbId/documents
 
+XLSX/CSV 可额外提交 `tableImport` JSON 表单字段，例如 `{"sheets":[{"name":"销售","headerRow":3,"columns":[1,4]}]}`。只导入列出的工作表；CSV 使用空名称 `""` 且只能有一项。`headerRow=0` 表示首个非空记录，正数为物理行号，不能指向空行或多行 CSV 记录的中间；省略 `columns` 表示全部列，显式数组必须非空、无重复，列号为原文件 1–256。最多 32 张表，工作表不得重复。服务端验证实际工作表/表头/列存在，规范化顺序后持久化并纳入请求指纹；不配置保持既有默认。替换接口使用相同选项，返回文档详情中的 `tableImport`。非法设置返回 `400 DOCUMENT_TABLE_IMPORT_INVALID`。
+
+### POST /knowledge-bases/:kbId/document-import-preview
+
+需 `content.write`，multipart `file` 只接受 XLSX/UTF-8 CSV。只读检查文件，不保存对象、文档、任务或调用模型。返回 `sheets[]`：`name`、`suggestedHeaderRow`、`columnCount`、`lastRow`、`rows[{rowStart,rowEnd,values}]`、`truncated`。每表最多 20 个非空记录、每格最多 80 字、每表约 64 KiB 预览文本；原始物理行号保留。预览截断不影响实际导入，实际导入仍完整校验所选内容和解析上限。
+
+### 文件上传请求与响应
+
 请求：
 
 ```text

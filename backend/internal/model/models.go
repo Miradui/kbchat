@@ -140,7 +140,8 @@ type KnowledgeBaseWorkspacePreference struct {
 }
 
 type Document struct {
-	SourcePath string `gorm:"not null;default:''" json:"sourcePath"`
+	TableImport datatypes.JSON `gorm:"type:jsonb;default:null" json:"-"`
+	SourcePath  string         `gorm:"not null;default:''" json:"sourcePath"`
 	// NULL means no page extraction record, including documents parsed before migration 032.
 	PDFTextSummary     datatypes.JSON `gorm:"type:jsonb;default:null" json:"-"`
 	EmbeddingModel     *string        `gorm:"size:128" json:"-"`

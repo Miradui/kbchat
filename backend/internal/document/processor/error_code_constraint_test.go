@@ -29,6 +29,7 @@ func TestErrorCodeSetMatchesTheMigrationCheckConstraint(t *testing.T) {
 		ErrorCodeCancelled,
 		ErrorCodeInternal,
 		ErrorCodeTableLimit,
+		ErrorCodeTableImport,
 	}
 
 	sqlCodes := checkConstraintValues(t, "documents_error_code_check")
@@ -36,12 +37,12 @@ func TestErrorCodeSetMatchesTheMigrationCheckConstraint(t *testing.T) {
 }
 
 // checkConstraintValues pulls the quoted values out of one named CHECK constraint in
-// migration 039. Parsed rather than hard-coded: a copy of the list here would drift
+// migration 041. Parsed rather than hard-coded: a copy of the list here would drift
 // from the migration in exactly the way this test exists to catch.
 func checkConstraintValues(t *testing.T, constraintName string) []string {
 	t.Helper()
 
-	path := filepath.Join("..", "..", "..", "migrations", "039_table_error_code.sql")
+	path := filepath.Join("..", "..", "..", "migrations", "041_document_table_import.sql")
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read migration: %v", err)

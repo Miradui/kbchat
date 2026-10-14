@@ -11,8 +11,8 @@ export function DocumentReadingPreview({ content, fileType }: { content: string;
 
   return (
     <div className="doc-reading">
-      {fileType === 'xlsx' && <p className="ui-muted">按工作表和来源行阅读；首个非空行为表头。公式仅显示已保存的结果，缺少缓存值的单元格为空，不重新计算。</p>}
-      {fileType === 'csv' && <p className="ui-muted">首个非空记录为表头；行号对应 CSV 原文件的物理行，多行字段显示行范围。</p>}
+      {fileType === 'xlsx' && <p className="ui-muted">按导入时的工作表、表头和列设置阅读。公式仅显示已保存的结果，缺少缓存值的单元格为空，不重新计算。</p>}
+      {fileType === 'csv' && <p className="ui-muted">按导入时的表头和列设置阅读；行号对应 CSV 原文件的物理行，多行字段显示行范围。</p>}
       {markdown && (
         <div className="doc-reading__toolbar">
           <SegmentedControl

@@ -11,6 +11,7 @@ import (
 	"kbchat/backend/internal/document/lexer"
 	"kbchat/backend/internal/document/parser"
 	"kbchat/backend/internal/document/splitter"
+	"kbchat/backend/internal/document/tableconfig"
 	"kbchat/backend/internal/embedding"
 	"kbchat/backend/internal/model"
 	"kbchat/backend/internal/repository"
@@ -121,7 +122,11 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 		}
 	}
 	defer cleanup()
-	parsedDocument, err := p.parser.ParseDocument(localPath, document.FileType)
+	settings, err := tableconfig.Decode(document.TableImport)
+	if err != nil {
+		return err
+	}
+	parsedDocument, err := parser.ParseWithOptions(ctx, p.parser, localPath, document.FileType, parser.ParseOptions{TableImport: settings})
 	if err != nil {
 		return err
 	}

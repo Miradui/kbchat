@@ -18,6 +18,7 @@ export type DocumentFailureCopy = {
 
 const FAILURES: Record<DocumentErrorCode, DocumentFailureCopy> = {
   table_limit_exceeded: { reason: '表格超出解析限制。', advice: '请拆分至最多 32 个工作表、合计 10000 条数据行、256 列和 8 MiB 解析文本；单元格最多 32767 字，CSV 物理行数或工作表行号最多 100000。', retryable: false },
+  table_import_invalid: { reason: '表格导入设置与文件不匹配。', advice: '请重新导入并检查所选工作表、表头行和列是否存在。', retryable: false },
   unsupported_type: {
     reason: '文件格式不受支持。',
     advice: '转换成 TXT、Markdown、PDF、DOCX、XLSX 或 UTF-8 CSV 后重新上传。',

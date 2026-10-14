@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -47,7 +50,12 @@ func (h *DocumentHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	res, err := h.documents.UploadWithOptions(c.Request.Context(), userID, kbID, file, uploadOptions(c))
+	options, err := uploadOptions(c)
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	res, err := h.documents.UploadWithOptions(c.Request.Context(), userID, kbID, file, options)
 	if err != nil {
 		RespondError(c, err)
 		return
@@ -93,7 +101,12 @@ func (h *DocumentHandler) UploadGlobal(c *gin.Context) {
 		RespondError(c, apperror.Validation(map[string]any{"knowledgeBaseId": "知识库 ID 不合法"}))
 		return
 	}
-	res, err := h.documents.UploadWithOptions(c.Request.Context(), userID, kbID, file, uploadOptions(c))
+	options, err := uploadOptions(c)
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	res, err := h.documents.UploadWithOptions(c.Request.Context(), userID, kbID, file, options)
 	if err != nil {
 		RespondError(c, err)
 		return
@@ -116,7 +129,12 @@ func (h *DocumentHandler) Replace(c *gin.Context) {
 		RespondError(c, uploadFileError(err))
 		return
 	}
-	res, err := h.documents.Replace(c.Request.Context(), userID, documentID, file, uploadOptions(c))
+	options, err := uploadOptions(c)
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	res, err := h.documents.Replace(c.Request.Context(), userID, documentID, file, options)
 	if err != nil {
 		RespondError(c, err)
 		return
@@ -133,12 +151,39 @@ func (h *DocumentHandler) limitUploadBody(c *gin.Context) {
 // uploadOptions reads the duplicate override from the multipart form, because the
 // file and the decision arrive in the same request -- a query parameter would let
 // the two disagree. Anything other than "true" means the default: reject.
-func uploadOptions(c *gin.Context) service.DocumentUploadOptions {
-	return service.DocumentUploadOptions{
+func uploadOptions(c *gin.Context) (service.DocumentUploadOptions, error) {
+	options := service.DocumentUploadOptions{
 		RequestID:      c.PostForm("requestId"),
 		SourcePath:     c.PostForm("sourcePath"),
 		AllowDuplicate: c.PostForm("allowDuplicate") == "true",
 	}
+	if raw, present := c.GetPostForm("tableImport"); present {
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		if len(raw) > 64*1024 || decoder.Decode(&options.TableImport) != nil || options.TableImport == nil || decoder.Decode(new(any)) != io.EOF {
+			return options, apperror.Validation(map[string]any{"tableImport": "表格设置必须是有效的 JSON 对象"})
+		}
+	}
+	return options, nil
+}
+
+func (h *DocumentHandler) InspectTable(c *gin.Context) {
+	h.limitUploadBody(c)
+	actor, kbID, ok := userAndKnowledgeBaseID(c)
+	if !ok {
+		return
+	}
+	file, err := c.FormFile("file")
+	if err != nil {
+		RespondError(c, uploadFileError(err))
+		return
+	}
+	result, err := h.documents.InspectTable(c.Request.Context(), actor, kbID, file)
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 func (h *DocumentHandler) UploadResult(c *gin.Context) {

@@ -276,6 +276,7 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	protected.POST("/knowledge-bases/:id/documents", documentHandler.Upload)
 	protected.POST("/knowledge-bases/:id/documents/text", documentHandler.CreateText)
 	protected.GET("/knowledge-bases/:id/document-uploads/:requestId", documentHandler.UploadResult)
+	protected.POST("/knowledge-bases/:id/document-import-preview", documentHandler.InspectTable)
 	protected.GET("/knowledge-bases/:id/documents", documentHandler.List)
 	protected.GET("/documents", documentHandler.ListGlobal)
 	protected.GET("/documents/counts", documentHandler.CountsGlobal)

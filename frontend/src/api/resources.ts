@@ -486,6 +486,7 @@ export function listDocumentChunks(
  * 409 so the user can choose.
  */
 export type UploadDocumentOptions = {
+	tableImport?: import('../types/api').TableImportOptions;
 	requestId?: string;
   allowDuplicate?: boolean;
   sourcePath?: string;
@@ -529,11 +530,17 @@ export function uploadGlobalDocument(
  * it keeps a normal upload's body identical to what it was before this existed.
  */
 function appendUploadOptions(body: FormData, options: UploadDocumentOptions): void {
+	if (options.tableImport) body.append('tableImport', JSON.stringify(options.tableImport));
 	if (options.requestId) body.append('requestId', options.requestId);
   if (options.sourcePath) body.append('sourcePath', options.sourcePath);
   if (options.allowDuplicate) {
     body.append('allowDuplicate', 'true');
   }
+}
+
+export function inspectTableImport(knowledgeBaseId: string, file: File, signal?: AbortSignal): Promise<import('../types/api').TableImportPreview> {
+  const body = new FormData(); body.append('file', file);
+  return apiUploadRequest(`/knowledge-bases/${knowledgeBaseId}/document-import-preview`, body, { signal });
 }
 
 export type DocumentUploadResult = { status: 'committed'; document: DocumentItem } | { status: 'notFound' | 'unavailable'; document?: never };

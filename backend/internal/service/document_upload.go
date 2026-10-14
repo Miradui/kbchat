@@ -11,6 +11,7 @@ import (
 
 	"kbchat/backend/internal/access"
 	"kbchat/backend/internal/apperror"
+	"kbchat/backend/internal/document/tableconfig"
 	"kbchat/backend/internal/dto"
 	"kbchat/backend/internal/model"
 )
@@ -30,7 +31,8 @@ func uploadReceipt(actorID, kbID uuid.UUID, file documentSource, hash, sourcePat
 		Size                              int64
 		AllowDuplicate                    bool
 		Replaces                          *uuid.UUID
-	}{file.Filename, hash, sourcePath, file.Size, options.AllowDuplicate, options.replaces})
+		TableImport                       *tableconfig.Options `json:",omitempty"`
+	}{file.Filename, hash, sourcePath, file.Size, options.AllowDuplicate, options.replaces, options.TableImport})
 	digest := sha256.Sum256(payload)
 	return &model.DocumentUploadReceipt{UserID: actorID, KnowledgeBaseID: kbID, RequestID: id, Fingerprint: hex.EncodeToString(digest[:])}, nil
 }

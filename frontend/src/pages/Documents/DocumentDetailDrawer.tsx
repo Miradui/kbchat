@@ -428,6 +428,7 @@ export function DocumentDetailDrawer({
                 <dl className="doc-meta-grid">
                   <div><dt>类型</dt><dd>{document.fileType || '—'}</dd></div>
                   {document.sourcePath && <div><dt>来源路径</dt><dd className="doc-import__path">{document.sourcePath}</dd></div>}
+                  {document.tableImport && <div><dt>表格导入设置</dt><dd>{document.tableImport.sheets.map((sheet) => `${sheet.name || 'CSV'}：${sheet.headerRow ? `表头第 ${sheet.headerRow} 行` : '自动表头'}，${sheet.columns ? `第 ${sheet.columns.join('、')} 列` : '全部列'}`).join('；')}</dd></div>}
                   <div><dt>大小</dt><dd>{formatBytes(document.fileSize)}</dd></div>
                   <div><dt>创建</dt><dd>{formatDateTime(document.createdAt)}</dd></div>
                   <div><dt>更新</dt><dd>{formatDateTime(document.updatedAt || document.createdAt)}</dd></div>

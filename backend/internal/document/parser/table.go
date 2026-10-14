@@ -3,6 +3,7 @@ package parser
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/csv"
 	"encoding/xml"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/xuri/excelize/v2"
+	"kbchat/backend/internal/document/tableconfig"
 )
 
 const (
@@ -56,17 +58,33 @@ func (r *TableRow) Text() string {
 }
 
 type tableCollector struct {
-	document ParsedDocument
-	bytes    int
-	rows     int
+	ctx        context.Context
+	options    *tableconfig.Options
+	inspection *TableInspection
+	document   ParsedDocument
+	bytes      int
+	rows       int
 }
 
 func (c *tableCollector) add(sheet string, start, end, headerRow int, headers, values []string) error {
 	if len(values) > MaxTableColumns || len(headers) > MaxTableColumns {
 		return ErrTableLimit
 	}
+	indices := make([]int, max(len(headers), len(values)))
+	for i := range indices {
+		indices[i] = i + 1
+	}
+	if selection, _ := c.selection(sheet); selection != nil && selection.Columns != nil {
+		indices = selection.Columns
+	}
+	selected := make([]string, len(indices))
+	for i, column := range indices {
+		if column <= len(values) {
+			selected[i] = values[column-1]
+		}
+	}
 	nonempty := false
-	for _, value := range values {
+	for _, value := range selected {
 		if strings.TrimSpace(value) != "" {
 			nonempty = true
 		}
@@ -80,28 +98,28 @@ func (c *tableCollector) add(sheet string, start, end, headerRow int, headers, v
 	if c.rows++; c.rows > MaxTableRows {
 		return ErrTableLimit
 	}
-	labels := make([]string, len(values))
+	labels := make([]string, len(indices))
 	counts := map[string]int{}
 	for _, header := range headers {
 		counts[normalizeCell(header)]++
 	}
-	for i := range values {
+	for i, column := range indices {
 		label := ""
-		if i < len(headers) {
-			label = normalizeCell(headers[i])
+		if column <= len(headers) {
+			label = normalizeCell(headers[column-1])
 		}
 		if utf8.RuneCountInString(label) > 200 {
 			return ErrTableLimit
 		}
 		if label == "" {
-			label = fmt.Sprintf("列 %d", i+1)
+			label = fmt.Sprintf("列 %d", column)
 		} else if counts[label] > 1 {
-			label += fmt.Sprintf(" [列 %d]", i+1)
+			label += fmt.Sprintf(" [列 %d]", column)
 		}
 		labels[i] = strings.ReplaceAll(label, "\n", " ")
-		values[i] = normalizeCell(values[i])
+		selected[i] = normalizeCell(selected[i])
 	}
-	row := &TableRow{SheetName: sheet, RowStart: start, RowEnd: end, HeaderRow: headerRow, Headers: labels, Values: append([]string(nil), values...)}
+	row := &TableRow{SheetName: sheet, RowStart: start, RowEnd: end, HeaderRow: headerRow, Headers: labels, Values: selected}
 	content := row.Text()
 	c.bytes += len(content)
 	if c.bytes > MaxTableTextBytes {
@@ -123,20 +141,22 @@ func hasTableValues(values []string) bool {
 }
 
 func parseTableBytes(content []byte, fileType string) (ParsedDocument, error) {
+	return NewDefaultParser().ParseBytesWithOptions(context.Background(), content, fileType, ParseOptions{})
+}
+
+func (c *tableCollector) read(content []byte, fileType string) error {
+	if c.ctx != nil {
+		if err := c.ctx.Err(); err != nil {
+			return err
+		}
+	}
 	if len(content) > MaxTableInputBytes {
-		return ParsedDocument{}, ErrTableLimit
+		return ErrTableLimit
 	}
-	collector := &tableCollector{document: ParsedDocument{FileType: fileType, Segments: []Segment{}}}
-	var err error
 	if fileType == "csv" {
-		err = collector.csv(content)
-	} else {
-		err = collector.xlsx(content)
+		return c.csv(content)
 	}
-	if err != nil {
-		return ParsedDocument{}, err
-	}
-	return collector.document, nil
+	return c.xlsx(content)
 }
 func (c *tableCollector) csv(content []byte) error {
 	if !utf8.Valid(content) {
@@ -153,31 +173,19 @@ func (c *tableCollector) csv(content []byte) error {
 	}
 	reader := csv.NewReader(strings.NewReader(strings.TrimPrefix(string(content), "\ufeff")))
 	reader.FieldsPerRecord = -1
-	var headers []string
-	headerRow := 0
+	sheet := c.startSheet("")
 	for {
 		values, err := reader.Read()
 		if err == io.EOF {
-			return nil
+			return sheet.finish()
 		}
 		if err != nil {
 			return fmt.Errorf("csv record: %w: %v", ErrCorruptFile, err)
 		}
-		if len(values) > MaxTableColumns {
-			return ErrTableLimit
-		}
-		if !hasTableValues(values) {
-			continue
-		}
 		start, _ := reader.FieldPos(0)
 		last, _ := reader.FieldPos(len(values) - 1)
 		end := last + strings.Count(values[len(values)-1], "\n")
-		if headerRow == 0 {
-			headers = values
-			headerRow = start
-			continue
-		}
-		if err = c.add("", start, end, headerRow, headers, values); err != nil {
+		if err = sheet.consume(start, end, values); err != nil {
 			return err
 		}
 	}
@@ -223,9 +231,23 @@ func (c *tableCollector) xlsx(content []byte) error {
 	if len(sheets) > MaxTableSheets {
 		return ErrTableLimit
 	}
+	if c.options != nil {
+		for _, selected := range c.options.Sheets {
+			found := false
+			for _, name := range sheets {
+				found = found || selected.Name == name
+			}
+			if !found {
+				return fmt.Errorf("所选工作表不存在: %w", tableconfig.ErrInvalid)
+			}
+		}
+	}
 	for _, sheet := range sheets {
 		if utf8.RuneCountInString(sheet) > 100 {
 			return ErrTableLimit
+		}
+		if _, included := c.selection(sheet); !included {
+			continue
 		}
 		if err = c.sheet(book, sheet); err != nil {
 			return err
@@ -273,8 +295,7 @@ func (c *tableCollector) sheet(book *excelize.File, sheet string) error {
 		return fmt.Errorf("xlsx sheet: %w: %v", ErrCorruptFile, err)
 	}
 	defer rows.Close()
-	var headers []string
-	headerRow := 0
+	reader := c.startSheet(sheet)
 	rowNumber := 0
 	for rows.Next() {
 		rowNumber++
@@ -286,23 +307,12 @@ func (c *tableCollector) sheet(book *excelize.File, sheet string) error {
 		if err != nil {
 			return fmt.Errorf("xlsx row: %w: %v", ErrCorruptFile, err)
 		}
-		if len(values) > MaxTableColumns {
-			return ErrTableLimit
-		}
-		if !hasTableValues(values) {
-			continue
-		}
-		if headerRow == 0 {
-			headers = values
-			headerRow = rowNumber
-			continue
-		}
-		if err = c.add(sheet, rowNumber, rowNumber, headerRow, headers, values); err != nil {
+		if err = reader.consume(rowNumber, rowNumber, values); err != nil {
 			return err
 		}
 	}
 	if err = rows.Error(); err != nil {
 		return fmt.Errorf("xlsx rows: %w: %v", ErrCorruptFile, err)
 	}
-	return nil
+	return reader.finish()
 }

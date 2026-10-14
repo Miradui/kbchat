@@ -130,6 +130,21 @@
 
 /* ---------------- Import dialog ---------------- */
 .doc-import { display: grid; gap: var(--s-4); }
+.table-import-settings { width: min(960px, calc(100vw - 32px)); max-width: 960px; }
+.table-import { display: grid; gap: var(--s-3); min-width: 0; }
+.table-import__sheets, .table-import__columns { border: 1px solid var(--line); border-radius: var(--r-sm); display: flex; flex-wrap: wrap; gap: var(--s-3); padding: var(--s-3); }
+.table-import__sheets label, .table-import__columns label { align-items: center; display: flex; gap: var(--s-2); }
+.table-import__columns { max-height: 150px; overflow: auto; }
+.table-import__columns label { max-width: 260px; }
+.table-import__columns span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.table-import__header { align-items: center; display: flex; gap: var(--s-3); }
+.table-import__header input { width: 110px; }
+.table-import__preview { max-height: 280px; overflow: auto; border: 1px solid var(--line); border-radius: var(--r-sm); }
+.table-import__preview table { border-collapse: collapse; font-size: var(--t-small); min-width: 100%; }
+.table-import__preview th, .table-import__preview td { border: 1px solid var(--line); padding: var(--s-2); min-width: 90px; max-width: 260px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.table-import__preview thead { position: sticky; top: 0; background: var(--surface); }
+.table-import__preview .is-header { background: var(--accent-wash); }
+.table-import__preview .is-excluded { color: var(--text-faint); background: var(--surface-sunken); }
 .doc-import__target { display: grid; gap: var(--s-2); }
 .doc-import__target > span { color: var(--text-secondary); font-size: var(--t-small); font-weight: 550; }
 .doc-import__target > strong { color: var(--text); font-weight: 550; }

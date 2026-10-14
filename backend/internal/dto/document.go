@@ -5,26 +5,28 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"kbchat/backend/internal/document/tableconfig"
 )
 
 type DocumentResponse struct {
-	SourcePath      string          `json:"sourcePath,omitempty"`
-	PDFTextSummary  *PDFTextSummary `json:"pdfTextSummary"`
-	ID              string          `json:"id"`
-	KnowledgeBaseID string          `json:"knowledgeBaseId"`
-	Filename        string          `json:"filename"`
-	FileType        string          `json:"fileType"`
-	FileSize        int64           `json:"fileSize"`
-	Status          string          `json:"status"`
-	ErrorMessage    *string         `json:"errorMessage"`
-	JobStatus       string          `json:"jobStatus"`
-	Progress        int             `json:"progress"`
-	Stage           string          `json:"stage"`
-	RetryCount      int             `json:"retryCount"`
-	MaxRetries      int             `json:"maxRetries"`
-	NextRetryAt     *time.Time      `json:"nextRetryAt"`
-	CreatedAt       time.Time       `json:"createdAt"`
-	UpdatedAt       time.Time       `json:"updatedAt"`
+	TableImport     *tableconfig.Options `json:"tableImport,omitempty"`
+	SourcePath      string               `json:"sourcePath,omitempty"`
+	PDFTextSummary  *PDFTextSummary      `json:"pdfTextSummary"`
+	ID              string               `json:"id"`
+	KnowledgeBaseID string               `json:"knowledgeBaseId"`
+	Filename        string               `json:"filename"`
+	FileType        string               `json:"fileType"`
+	FileSize        int64                `json:"fileSize"`
+	Status          string               `json:"status"`
+	ErrorMessage    *string              `json:"errorMessage"`
+	JobStatus       string               `json:"jobStatus"`
+	Progress        int                  `json:"progress"`
+	Stage           string               `json:"stage"`
+	RetryCount      int                  `json:"retryCount"`
+	MaxRetries      int                  `json:"maxRetries"`
+	NextRetryAt     *time.Time           `json:"nextRetryAt"`
+	CreatedAt       time.Time            `json:"createdAt"`
+	UpdatedAt       time.Time            `json:"updatedAt"`
 
 	// ErrorCode is a closed set (see model.DocumentErrorCode*) so the client can
 	// give specific advice per failure. ErrorMessage stays the human sentence; the

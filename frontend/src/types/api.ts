@@ -338,6 +338,7 @@ export type TextDocumentInput = { title: string; content: string; format: 'md' |
  */
 export type DocumentErrorCode =
   | 'table_limit_exceeded'
+  | 'table_import_invalid'
   | 'unsupported_type'
   | 'corrupt_file'
   | 'encoding_invalid'
@@ -354,6 +355,7 @@ export type PdfTextSummary = {
 };
 
 export type DocumentItem = {
+	tableImport?: TableImportOptions;
   sourcePath?: string;
   id: string;
   knowledgeBaseId: string;
@@ -392,6 +394,9 @@ export type DocumentItem = {
   createdAt: string;
   updatedAt?: string;
 };
+
+export type TableImportOptions = { sheets: Array<{ name: string; headerRow: number; columns?: number[] }> };
+export type TableImportPreview = { sheets: Array<{ name: string; suggestedHeaderRow: number; columnCount: number; lastRow: number; rows: Array<{ rowStart: number; rowEnd: number; values: string[] }>; truncated: boolean }> };
 
 /** Details on a 409 DOCUMENT_DUPLICATE_CONTENT, enough to describe the conflict. */
 export type DocumentDuplicateDetails = {

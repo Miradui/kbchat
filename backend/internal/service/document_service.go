@@ -20,6 +20,7 @@ import (
 	"kbchat/backend/internal/apperror"
 	"kbchat/backend/internal/config"
 	"kbchat/backend/internal/document/parser"
+	"kbchat/backend/internal/document/tableconfig"
 	"kbchat/backend/internal/dto"
 	"kbchat/backend/internal/model"
 	"kbchat/backend/internal/repository"
@@ -70,9 +71,10 @@ func NewDocumentService(
 // DocumentUploadOptions carries the caller's decision about an already-known
 // file. It is a struct so a later option does not change every call site.
 type DocumentUploadOptions struct {
-	RequestID  string
-	replaces   *uuid.UUID
-	SourcePath string
+	TableImport *tableconfig.Options
+	RequestID   string
+	replaces    *uuid.UUID
+	SourcePath  string
 	// AllowDuplicate records that the user saw the conflict and chose to keep
 	// both copies. Without it a matching content hash is rejected.
 	AllowDuplicate bool
@@ -98,6 +100,11 @@ func (s *DocumentService) UploadWithOptions(
 }
 
 func (s *DocumentService) uploadSource(ctx context.Context, ownerID, kbID uuid.UUID, file documentSource, options DocumentUploadOptions) (*dto.DocumentResponse, error) {
+	settings, err := tableconfig.Normalize(fileTypeOf(file.Filename), options.TableImport)
+	if err != nil {
+		return nil, tableImportError(err)
+	}
+	options.TableImport = settings
 	sourcePath, err := normalizeDocumentSourcePath(options.SourcePath, file.Filename)
 	if err != nil {
 		return nil, err
@@ -115,6 +122,15 @@ func (s *DocumentService) uploadSource(ctx context.Context, ownerID, kbID uuid.U
 	}
 	if replay, err := s.replayUpload(ctx, receipt); err != nil || replay != nil {
 		return replay, err
+	}
+	if settings != nil {
+		content, err := readTableSource(file)
+		if err != nil {
+			return nil, tableImportError(err)
+		}
+		if _, err := parser.NewDefaultParser().ParseBytesWithOptions(ctx, content, fileTypeOf(file.Filename), parser.ParseOptions{TableImport: settings}); err != nil {
+			return nil, tableImportError(err)
+		}
 	}
 	if options.replaces != nil {
 		old, err := s.authorizeDocument(ctx, ownerID, *options.replaces, access.CapContentWrite)
@@ -163,6 +179,9 @@ func (s *DocumentService) uploadSource(ctx context.Context, ownerID, kbID uuid.U
 		StoragePath:     storagePath,
 		Status:          "uploaded",
 		ContentHash:     &contentHash,
+	}
+	if settings != nil {
+		document.TableImport, _ = json.Marshal(settings)
 	}
 	job := &model.DocumentJob{
 		JobType: "process_document",
@@ -469,7 +488,11 @@ func (s *DocumentService) Preview(ctx context.Context, ownerID, documentID uuid.
 		return nil, documentStorageError(err)
 	}
 	if document.FileType == "docx" || document.FileType == "csv" || document.FileType == "xlsx" {
-		parsed, parseErr := parser.NewDefaultParser().ParseBytes(content, document.FileType)
+		settings, parseErr := tableconfig.Decode(document.TableImport)
+		if parseErr != nil {
+			return nil, tableImportError(parseErr)
+		}
+		parsed, parseErr := parser.NewDefaultParser().ParseBytesWithOptions(ctx, content, document.FileType, parser.ParseOptions{TableImport: settings})
 		if parseErr != nil {
 			if errors.Is(parseErr, parser.ErrTableLimit) {
 				return nil, apperror.New(http.StatusBadRequest, "DOCUMENT_TABLE_TOO_LARGE", "表格超出解析限制，请拆分后重新上传")
@@ -828,8 +851,10 @@ func toDocumentResponse(document *model.Document, job *model.DocumentJob, maxRet
 		errorMessage = &message
 	}
 	progress := documentProgress(document.Status, job, maxRetries)
+	settings, _ := tableconfig.Decode(document.TableImport)
 
 	return dto.DocumentResponse{
+		TableImport:     settings,
 		SourcePath:      document.SourcePath,
 		PDFTextSummary:  documentPDFTextSummary(document),
 		ID:              document.ID.String(),

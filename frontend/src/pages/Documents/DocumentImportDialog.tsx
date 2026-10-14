@@ -17,6 +17,7 @@ import { formatDocumentBytes } from './documentDisplay';
 import type { ImportSnapshot, ImportStatus } from './DocumentImportContext';
 import { MAX_IMPORT_BYTES, MAX_IMPORT_FILES, prepareImportFiles, preparePlainImportFiles, type PreparedImportFile } from './importFiles';
 import { isUnconfirmedUpload, recoverUpload } from './recoverUpload';
+import { TableImportSettingsDialog } from './TableImportSettingsDialog';
 
 /**
  * The accept attribute is a file-picker hint only; validateDocumentFile enforces
@@ -50,6 +51,7 @@ function extensionSummary(extensions: string[]): string {
  * misdescribe what happened.
  */
 type ImportItem = {
+	tableImport?: UploadDocumentOptions['tableImport'];
 	requestId: string;
 	allowDuplicate?: boolean;
 	replaceId?: string;
@@ -135,6 +137,8 @@ export function DocumentImportDialog({
   const uploadAbortRef = useRef<AbortController | null>(null);
   const wasOpenRef = useRef(false);
   const [items, setItems] = useState<ImportItem[]>([]);
+  const [tableSettingsKey, setTableSettingsKey] = useState<string | null>(null);
+  const tableSettingsItem = items.find((item) => item.key === tableSettingsKey);
   const [knowledgeBaseId, setKnowledgeBaseId] = useState('');
   const [validationError, setValidationError] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -164,6 +168,7 @@ export function DocumentImportDialog({
 
     operationRef.current = null;
     setItems([]);
+    setTableSettingsKey(null);
     setValidationError('');
     setUploading(false);
     setConfirmDiscard(false);
@@ -533,7 +538,7 @@ export function DocumentImportDialog({
   }
 
   function uploadItem(item: ImportItem, onProgress: (progress: number) => void, signal: AbortSignal) {
-    const options: UploadDocumentOptions = { requestId: item.requestId, ...(item.allowDuplicate ? { allowDuplicate: true } : {}), ...(item.sourcePath ? { sourcePath: item.sourcePath } : {}) };
+    const options: UploadDocumentOptions = { requestId: item.requestId, ...(item.tableImport ? { tableImport: item.tableImport } : {}), ...(item.allowDuplicate ? { allowDuplicate: true } : {}), ...(item.sourcePath ? { sourcePath: item.sourcePath } : {}) };
     return recoverUpload({
       signal, reconcileFirst: item.status === 'unconfirmed',
       onReconciling: () => setItems((current) => updateImportItem(current, item.key, { error: '正在核对服务器上传结果…' })),
@@ -638,7 +643,7 @@ export function DocumentImportDialog({
           <input ref={archiveRef} className="sr-only" type="file" accept=".zip,application/zip" aria-label="选择 ZIP 压缩包" disabled={uploading || preparing} onChange={handleFileInput} />
         </div>
         <p className="ui-muted">文件夹与 ZIP 会先展开为清单，保留来源路径。单批最多 200 个文件／200 MiB，不展开嵌套 ZIP。</p>
-        <p className="ui-muted">Excel 支持 .xlsx，CSV 请使用 UTF-8。每张表的首个非空行为表头；公式只读取已保存的结果，不重新计算。</p>
+        <p className="ui-muted">Excel 支持 .xlsx，CSV 请使用 UTF-8。可逐文件设置工作表、表头行和导入列；默认使用全部工作表及首个非空记录作为表头。</p>
         {preparing && <p role="status">正在展开文件… <Button variant="link" onClick={() => { prepareRef.current?.abort(); prepareRef.current = null; setPreparing(false); }}>取消展开</Button></p>}
         </>}
 
@@ -652,6 +657,10 @@ export function DocumentImportDialog({
                   <strong>{item.file.name}</strong>
                   {item.sourcePath && <small className="doc-import__path">{item.sourcePath}</small>}
                   <small>{formatDocumentBytes(item.file.size)}{item.error ? ` · ${item.error}` : ''}</small>
+                  {/\.(xlsx|csv)$/i.test(item.file.name) && <div>
+                    <Button variant="link" disabled={uploading || !knowledgeBaseId || !['pending', 'failed'].includes(item.status)} onClick={() => setTableSettingsKey(item.key)}>表格导入设置</Button>
+                    <small>{item.tableImport ? `已选择 ${item.tableImport.sheets.length} 张表，按设置导入` : '自动识别表头，导入全部列'}</small>
+                  </div>}
                   {item.status === 'duplicate' && item.duplicate && (
                     <DuplicateChoice
                       busy={uploading}
@@ -719,6 +728,17 @@ export function DocumentImportDialog({
         </div>
       </div>
       </Dialog>
+      {tableSettingsItem && !minimized && <TableImportSettingsDialog
+        key={tableSettingsItem.key}
+        file={tableSettingsItem.file}
+        knowledgeBaseId={knowledgeBaseId}
+        initial={tableSettingsItem.tableImport}
+        onClose={() => setTableSettingsKey(null)}
+        onApply={(tableImport) => {
+          setItems((current) => updateImportItem(current, tableSettingsItem.key, { tableImport, requestId: crypto.randomUUID(), status: 'pending', error: '', duplicate: undefined, allowDuplicate: undefined, replaceId: undefined }));
+          setTableSettingsKey(null);
+        }}
+      />}
       {confirmDiscard && (
         <ConfirmDialog
           cancelLabel="继续编辑"

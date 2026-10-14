@@ -14,6 +14,7 @@ const CODES: DocumentErrorCode[] = [
   'cancelled',
   'internal',
   'table_limit_exceeded',
+  'table_import_invalid',
 ];
 
 describe('documentFailureCopy', () => {

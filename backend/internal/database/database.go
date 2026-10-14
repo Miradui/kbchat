@@ -132,6 +132,7 @@ func validateSchema(ctx context.Context, db *gorm.DB) error {
 			{&model.Document{}, "embedding_dimension", "029_document_embedding_identity.sql"},
 			{&model.Document{}, "pdf_text_summary", "032_document_pdf_text_summary.sql"},
 			{&model.Document{}, "source_path", "038_document_source_path.sql"},
+			{&model.Document{}, "table_import", "041_document_table_import.sql"},
 			{&model.DocumentUploadReceipt{}, "fingerprint", "040_document_upload_receipts.sql"},
 			{&model.ChatSession{}, "scope_mode", "031_chat_automatic_scope.sql"},
 			{&model.ChatSession{}, "branch_from_session_id", "036_chat_branches.sql"},
@@ -164,6 +165,9 @@ func validateSchema(ctx context.Context, db *gorm.DB) error {
 		}
 		if !strings.Contains(errorConstraint, "'table_limit_exceeded'") {
 			return fmt.Errorf("database schema incompatible: documents_error_code_check missing table_limit_exceeded; apply migration 039_table_error_code.sql")
+		}
+		if !strings.Contains(errorConstraint, "'table_import_invalid'") {
+			return fmt.Errorf("database schema incompatible: missing table_import_invalid; apply migration 041_document_table_import.sql")
 		}
 	}
 	return validateTimestampSchema(ctx, db)

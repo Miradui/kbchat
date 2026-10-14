@@ -6,6 +6,7 @@ import (
 	"kbchat/backend/internal/access"
 	"kbchat/backend/internal/apperror"
 	"kbchat/backend/internal/document/parser"
+	"kbchat/backend/internal/document/tableconfig"
 	"kbchat/backend/internal/dto"
 	"kbchat/backend/internal/model"
 	"net/http"
@@ -105,7 +106,11 @@ func (s *DocumentService) comparableText(ctx context.Context, d model.Document) 
 		return nil, documentStorageError(err)
 	}
 	defer cleanup()
-	parsed, err := parser.NewDefaultParser().ParseDocument(path, d.FileType)
+	settings, err := tableconfig.Decode(d.TableImport)
+	if err != nil {
+		return nil, tableImportError(err)
+	}
+	parsed, err := parser.ParseWithOptions(ctx, parser.NewDefaultParser(), path, d.FileType, parser.ParseOptions{TableImport: settings})
 	if err != nil {
 		return nil, apperror.New(http.StatusBadRequest, "DOCUMENT_COMPARE_PARSE_FAILED", "无法提取文档文本，请检查文件或重新处理")
 	}

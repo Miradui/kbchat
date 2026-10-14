@@ -47,3 +47,26 @@ func TestProcessCSVPublishesRowsWithSourceMetadata(t *testing.T) {
 		t.Fatalf("publication not complete: %#v %v", stored, err)
 	}
 }
+
+func TestProcessUsesPersistedTableSettings(t *testing.T) {
+	f := newProcessorTestFixture(t, "csv")
+	path := filepath.Join(t.TempDir(), "selected.csv")
+	if err := os.WriteFile(path, []byte("说明\n名称,备注,价格\n甲,不要向量化,8\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.Model(&model.Document{}).Where("id = ?", f.document.ID).Updates(map[string]any{"storage_path": path, "table_import": `{"sheets":[{"name":"","headerRow":2,"columns":[1,3]}]}`}).Error; err != nil {
+		t.Fatal(err)
+	}
+	p := New(f.documents, f.chunks, parser.NewDefaultParser(), splitter.New(100, 10), cardinalityEmbedder{})
+	if err := p.Process(context.Background(), &f.job); err != nil {
+		t.Fatal(err)
+	}
+	chunks, err := f.chunks.ListByDocument(context.Background(), f.document.ID)
+	if err != nil || len(chunks) != 1 || strings.Contains(chunks[0].Content, "不要向量化") || !strings.Contains(chunks[0].Content, "价格：8") {
+		t.Fatalf("settings not applied: %+v %v", chunks, err)
+	}
+	metadata := decodeChunkMetadata(t, chunks[0].Metadata)
+	if metadata["table"].(map[string]any)["headerRow"] != float64(2) {
+		t.Fatalf("wrong header: %+v", metadata)
+	}
+}
