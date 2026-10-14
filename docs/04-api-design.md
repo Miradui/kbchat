@@ -1107,6 +1107,12 @@ field: file
 
 支持 `allowDuplicate` 表单字段，语义与 `POST /knowledge-bases/:kbId/documents` 一致。
 
+文件上传、全局上传、文本创建与版本替换均支持可选 `requestId`（非零 UUID；multipart 字段，文本创建使用 JSON 字段）。迁移 040 以 `(userId, knowledgeBaseId, requestId)` 唯一记录已提交结果；文件字节哈希、名称、大小、来源路径、重复选择与替换目标共同构成请求指纹。同一请求重放返回同一文档及当前处理状态（201），不重复创建文件或任务；同一 ID 改变内容/选项返回 `409 DOCUMENT_UPLOAD_REQUEST_CONFLICT`。先前文档已删除、移动或不可访问时返回 `409 DOCUMENT_UPLOAD_RESULT_UNAVAILABLE`，凭据保留，禁止复活文件。未传 ID 的旧客户端保持原接口兼容，但无法按请求核对。
+
+### GET /knowledge-bases/:kbId/document-uploads/:requestId
+
+需当前 `content.write`，只查询调用者自己的凭据。返回 `{ "status": "committed", "document": DocumentResponse }`、`{ "status": "notFound" }` 或 `{ "status": "unavailable" }`。`notFound` 仅说明此刻无已提交凭据，原请求可能仍在处理；客户端必须复用同一 ID 重试，服务端唯一键和事务负责消除并发重复。`unavailable` 表示曾提交但结果现不可访问，不允许把它当作未上传。核对是只读操作，任务和文档不会因此改变。
+
 ### POST /knowledge-bases/:kbId/documents
 
 请求：
@@ -1323,8 +1329,8 @@ field: file
 大小按新文件计算。
 
 替换是"新建一份 + 归档旧的"，不是原地覆盖。原地覆盖会让一次失败的重新解析毁掉本来可用的
-文档：旧 chunk 已删、新 chunk 没建出来，知识库直接少一块内容。新文档走完整处理流程，成功
-建出来之后才把旧文档标记为被取代（`supersededById` / `supersededAt`）。旧文档保留，可追溯，
+文档：旧 chunk 已删、新 chunk 没建出来，知识库直接少一块内容。新文档走完整处理流程。
+创建文档、处理任务、标记旧版（`supersededById` / `supersededAt`）和上传凭据在同一事务完成。并发替换只允许一个成功，失败者不留下额外新版。旧文档保留，可追溯，
 它的 chunk 也不会被这个接口删除。
 
 版本链只有一层活动版本：已经被替换过的文档再次替换返回 409 `DOCUMENT_ALREADY_SUPERSEDED`，

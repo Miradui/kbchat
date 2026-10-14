@@ -50,6 +50,8 @@
 | 400 | `FILE_TOO_LARGE_FOR_PREVIEW` | 文档过大，无法在线预览 |
 | 409 | `DOCUMENT_DUPLICATE_CONTENT` | 知识库中已存在内容相同的文档 |
 | 409 | `DOCUMENT_ALREADY_SUPERSEDED` | 该文档已被替换，请替换最新版本 |
+| 409 | `DOCUMENT_UPLOAD_REQUEST_CONFLICT` | 同一上传请求 ID 被用于不同文件或导入选项 |
+| 409 | `DOCUMENT_UPLOAD_RESULT_UNAVAILABLE` | 请求曾成功提交，但文档已删除、移动或不可访问 |
 | 500 | `DOCUMENT_UPLOAD_FAILED` | 文档上传失败 |
 | 500 | `DOCUMENT_PROCESS_FAILED` | 文档处理失败 |
 | 404 | `CATEGORY_NOT_FOUND` | 分类不存在 |

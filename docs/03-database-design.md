@@ -1,5 +1,7 @@
 # 数据库设计
 
+迁移 040 新增 `document_upload_receipts`：`user_id`、`knowledge_base_id`、`request_id` 联合主键，`fingerprint varchar(64)`、可空 `document_id`、`created_at timestamptz`。凭据与文档/任务/版本链接一起提交，只记录成功请求；文档永久删除将 `document_id` 置空以保留幂等墓碑，用户或知识库永久删除级联清除。按 `document_id` 建索引。未传请求 ID 的旧客户端不创建凭据。
+
 数据库使用 PostgreSQL，向量能力使用 pgvector。
 
 ## 时间约定

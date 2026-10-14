@@ -326,7 +326,7 @@ export type DocumentStatus =
   | 'failed';
 
 export type DocumentJobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
-export type TextDocumentInput = { title: string; content: string; format: 'md' | 'txt'; allowDuplicate?: boolean };
+export type TextDocumentInput = { title: string; content: string; format: 'md' | 'txt'; allowDuplicate?: boolean; requestId?: string };
 
 /**
  * The closed set written to `documents.error_code`. `unsupported_type` never

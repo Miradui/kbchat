@@ -64,6 +64,7 @@ func newWorkspaceTestServices(t *testing.T) workspaceTestServices {
 		&model.KnowledgeBaseFavorite{},
 		&model.KnowledgeBaseViewEvent{},
 		&model.Document{},
+		&model.DocumentUploadReceipt{},
 		&model.DocumentJob{},
 		&model.StorageCleanupJob{},
 		&model.ChatSession{}, &model.ChatSessionKnowledgeBase{},

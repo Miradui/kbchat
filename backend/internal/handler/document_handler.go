@@ -135,9 +135,27 @@ func (h *DocumentHandler) limitUploadBody(c *gin.Context) {
 // the two disagree. Anything other than "true" means the default: reject.
 func uploadOptions(c *gin.Context) service.DocumentUploadOptions {
 	return service.DocumentUploadOptions{
+		RequestID:      c.PostForm("requestId"),
 		SourcePath:     c.PostForm("sourcePath"),
 		AllowDuplicate: c.PostForm("allowDuplicate") == "true",
 	}
+}
+
+func (h *DocumentHandler) UploadResult(c *gin.Context) {
+	actor, kbID, ok := userAndKnowledgeBaseID(c)
+	if !ok {
+		return
+	}
+	requestID, ok := parseUUIDParam(c, "requestId", "上传请求 ID 不合法")
+	if !ok {
+		return
+	}
+	result, err := h.documents.UploadResult(c.Request.Context(), actor, kbID, requestID)
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 func uploadFileError(err error) error {

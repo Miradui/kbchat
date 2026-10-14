@@ -129,7 +129,7 @@ function DocumentImportSession({ children }: { children: ReactNode }) {
 
   const localItems = snapshot?.items.filter((item) => item.status !== 'succeeded') ?? [];
   const busyCount = localItems.filter((item) => item.status === 'pending' || item.status === 'uploading').length + tasks.filter((task) => isProcessing(task.document) && !task.paused).length;
-  const attentionCount = localItems.filter((item) => ['failed', 'unconfirmed', 'duplicate'].includes(item.status)).length + tasks.filter((task) => task.error || (task.document.status === 'failed' && task.document.jobStatus !== 'cancelled')).length;
+  const attentionCount = localItems.filter((item) => ['failed', 'unconfirmed', 'duplicate', 'unavailable'].includes(item.status)).length + tasks.filter((task) => task.error || (task.document.status === 'failed' && task.document.jobStatus !== 'cancelled')).length;
   const taskCount = localItems.length + tasks.length;
   const hasTasks = Boolean(options) || tasks.length > 0;
   const openTasks = useCallback(() => { setVisible(false); setTasksOpen(true); }, []);
@@ -200,4 +200,4 @@ function DocumentImportSession({ children }: { children: ReactNode }) {
   );
 }
 
-const transferLabels: Record<ImportStatus, string> = { pending: '待上传', uploading: '上传中', succeeded: '已上传', failed: '上传失败', unconfirmed: '结果待确认', duplicate: '内容重复' };
+const transferLabels: Record<ImportStatus, string> = { pending: '待上传', uploading: '上传中', succeeded: '已上传', failed: '上传失败', unconfirmed: '结果待确认', duplicate: '内容重复', unavailable: '文档已不可用' };

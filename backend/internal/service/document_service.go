@@ -70,6 +70,8 @@ func NewDocumentService(
 // DocumentUploadOptions carries the caller's decision about an already-known
 // file. It is a struct so a later option does not change every call site.
 type DocumentUploadOptions struct {
+	RequestID  string
+	replaces   *uuid.UUID
 	SourcePath string
 	// AllowDuplicate records that the user saw the conflict and chose to keep
 	// both copies. Without it a matching content hash is rejected.
@@ -107,12 +109,33 @@ func (s *DocumentService) uploadSource(ctx context.Context, ownerID, kbID uuid.U
 	if err != nil {
 		return nil, apperror.Wrap(http.StatusInternalServerError, "DOCUMENT_UPLOAD_FAILED", "document upload failed", err)
 	}
-	if !options.AllowDuplicate {
+	receipt, err := uploadReceipt(ownerID, kbID, file, contentHash, sourcePath, options)
+	if err != nil {
+		return nil, err
+	}
+	if replay, err := s.replayUpload(ctx, receipt); err != nil || replay != nil {
+		return replay, err
+	}
+	if options.replaces != nil {
+		old, err := s.authorizeDocument(ctx, ownerID, *options.replaces, access.CapContentWrite)
+		if err != nil {
+			return nil, err
+		}
+		if old.KnowledgeBaseID != kbID || old.SupersededByID != nil {
+			return nil, apperror.New(http.StatusConflict, "DOCUMENT_ALREADY_SUPERSEDED", "该文档已被替换或移动，请刷新后替换最新版本")
+		}
+	}
+	if !options.AllowDuplicate && options.replaces == nil {
 		existing, err := s.documents.FindByContentHash(ctx, kbID, contentHash)
 		if err != nil {
 			return nil, apperror.Internal(err)
 		}
 		if existing != nil {
+			// The first request may have committed between our receipt lookup and
+			// duplicate query. A replay must not become a new duplicate decision.
+			if replay, err := s.replayUpload(ctx, receipt); err != nil || replay != nil {
+				return replay, err
+			}
 			return nil, newDuplicateDocumentError(existing)
 		}
 	}
@@ -145,11 +168,32 @@ func (s *DocumentService) uploadSource(ctx context.Context, ownerID, kbID uuid.U
 		JobType: "process_document",
 		Status:  "pending",
 	}
-	if err := s.documents.CreateWithJobAndReleaseStorageReservation(ctx, document, job, ownerID); err != nil {
+	if err := s.documents.CommitUpload(ctx, document, job, ownerID, receipt, options.replaces); err != nil {
+		if receipt != nil {
+			// A lost COMMIT response is not proof of rollback. Keep the reservation
+			// to clean up later unless replay proves which object was committed.
+			checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
+			replay, replayErr := s.replayUpload(checkCtx, receipt)
+			if replay != nil || errors.Is(err, repository.ErrDocumentUploadReplayed) {
+				if replay == nil || replay.ID != document.ID.String() {
+					s.discardUpload(ctx, storagePath)
+				}
+				if replay != nil || replayErr != nil {
+					return replay, replayErr
+				}
+			}
+			if !errors.Is(err, repository.ErrDocumentAlreadySuperseded) {
+				return nil, apperror.Internal(err)
+			}
+		}
 		if cleanupErr := s.cleanupUploadedFile(ctx, storagePath); cleanupErr != nil {
 			err = errors.Join(err, fmt.Errorf("delete uploaded file: %w", cleanupErr))
 		} else {
 			s.cancelStorageReservation(ctx, storagePath)
+		}
+		if errors.Is(err, repository.ErrDocumentAlreadySuperseded) {
+			return nil, apperror.New(http.StatusConflict, "DOCUMENT_ALREADY_SUPERSEDED", "该文档已被替换，请替换最新版本")
 		}
 		return nil, apperror.Internal(err)
 	}

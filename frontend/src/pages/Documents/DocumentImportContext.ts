@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react';
 import type { DocumentItem } from '../../types/api';
 
-export type ImportStatus = 'pending' | 'uploading' | 'succeeded' | 'failed' | 'unconfirmed' | 'duplicate';
+export type ImportStatus = 'pending' | 'uploading' | 'succeeded' | 'failed' | 'unconfirmed' | 'duplicate' | 'unavailable';
 export type ImportSnapshot = {
   knowledgeBaseId: string;
   knowledgeBaseName: string;

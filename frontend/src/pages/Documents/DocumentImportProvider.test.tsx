@@ -5,7 +5,7 @@ import { Link, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '../../api/client';
-import { getDocument, replaceDocument, uploadDocument, uploadGlobalDocument } from '../../api/resources';
+import { getDocument, getDocumentUploadResult, replaceDocument, uploadDocument, uploadGlobalDocument } from '../../api/resources';
 import { tokenStore } from '../../store/tokenStore';
 import { renderWithRouter } from '../../test/render';
 import type { DocumentItem } from '../../types/api';
@@ -13,7 +13,7 @@ import { useDocumentImports } from './DocumentImportContext';
 import { DocumentImportProvider } from './DocumentImportProvider';
 import { UploadTasksButton } from './UploadTasksButton';
 
-vi.mock('../../api/resources', () => ({ getDocument: vi.fn(), replaceDocument: vi.fn(), uploadDocument: vi.fn(), uploadGlobalDocument: vi.fn() }));
+vi.mock('../../api/resources', () => ({ getDocument: vi.fn(), getDocumentUploadResult: vi.fn(), replaceDocument: vi.fn(), uploadDocument: vi.fn(), uploadGlobalDocument: vi.fn() }));
 vi.mock('../../hooks/useSystemCapabilities', () => ({ useSystemCapabilities: () => ({ upload: { allowedExtensions: ['txt', 'md', 'pdf'], maxFileBytes: 50 * 1024 * 1024 } }) }));
 
 const file = new File(['正文'], 'policy.md', { type: 'text/markdown' });
@@ -47,6 +47,7 @@ function renderApp() {
 beforeEach(() => {
   tokenStore.setToken('test-account-a');
   vi.mocked(getDocument).mockReset().mockResolvedValue(documentItem);
+  vi.mocked(getDocumentUploadResult).mockReset().mockRejectedValue(new Error('offline'));
   vi.mocked(uploadGlobalDocument).mockReset().mockResolvedValue(documentItem);
   vi.mocked(uploadDocument).mockReset().mockResolvedValue(documentItem);
   vi.mocked(replaceDocument).mockReset().mockResolvedValue(documentItem);
@@ -108,8 +109,8 @@ describe('DocumentImportProvider', () => {
     expect(screen.getByRole('combobox', { name: '目标知识库' })).toBeDisabled();
     await user.click(screen.getByRole('button', { name: choice === 'keep' ? '保留两份' : '替换原文档' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    if (choice === 'keep') expect(uploadGlobalDocument).toHaveBeenLastCalledWith('kb1', file, expect.any(Function), expect.any(AbortSignal), { allowDuplicate: true });
-    else expect(replaceDocument).toHaveBeenCalledWith('existing1', file, expect.any(Function), expect.any(AbortSignal));
+    if (choice === 'keep') expect(uploadGlobalDocument).toHaveBeenLastCalledWith('kb1', file, expect.any(Function), expect.any(AbortSignal), { allowDuplicate: true, requestId: expect.any(String) });
+    else expect(replaceDocument).toHaveBeenCalledWith('existing1', file, expect.any(Function), expect.any(AbortSignal), { requestId: expect.any(String) });
   });
 
   it('allows an explicit failed upload to be retried after navigating away', async () => {
@@ -144,11 +145,11 @@ describe('DocumentImportProvider', () => {
     await user.click(screen.getByRole('button', { name: '上传任务' }));
     expect(screen.getByRole('article', { name: file.name })).toHaveTextContent('结果待确认');
     await user.click(screen.getByRole('button', { name: '继续导入' }));
-    await user.click(screen.getByRole('button', { name: '开始导入' }));
+    vi.mocked(getDocumentUploadResult).mockResolvedValue({ status: 'committed', document: documentItem });
+    await user.click(screen.getByRole('button', { name: '恢复上传' }));
     expect(uploadGlobalDocument).toHaveBeenCalledTimes(2);
     expect(vi.mocked(uploadGlobalDocument).mock.calls[1][1]).toBe(other);
-    expect(screen.getByText('结果待确认')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '开始导入' })).toBeDisabled();
+    expect(screen.queryByText('结果待确认')).not.toBeInTheDocument();
   });
 
   it('stops the current transfer without sending the next file', async () => {

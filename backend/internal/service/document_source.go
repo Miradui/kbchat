@@ -71,5 +71,5 @@ func (s *DocumentService) CreateText(ctx context.Context, actorID, kbID uuid.UUI
 		return r
 	}, title)
 	source := documentSource{Filename: title + "." + format, Size: int64(len(req.Content)), Open: func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(req.Content)), nil }}
-	return s.uploadSource(ctx, actorID, kbID, source, DocumentUploadOptions{AllowDuplicate: req.AllowDuplicate})
+	return s.uploadSource(ctx, actorID, kbID, source, DocumentUploadOptions{AllowDuplicate: req.AllowDuplicate, RequestID: req.RequestID})
 }

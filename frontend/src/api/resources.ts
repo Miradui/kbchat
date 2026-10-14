@@ -486,6 +486,7 @@ export function listDocumentChunks(
  * 409 so the user can choose.
  */
 export type UploadDocumentOptions = {
+	requestId?: string;
   allowDuplicate?: boolean;
   sourcePath?: string;
 };
@@ -528,10 +529,17 @@ export function uploadGlobalDocument(
  * it keeps a normal upload's body identical to what it was before this existed.
  */
 function appendUploadOptions(body: FormData, options: UploadDocumentOptions): void {
+	if (options.requestId) body.append('requestId', options.requestId);
   if (options.sourcePath) body.append('sourcePath', options.sourcePath);
   if (options.allowDuplicate) {
     body.append('allowDuplicate', 'true');
   }
+}
+
+export type DocumentUploadResult = { status: 'committed'; document: DocumentItem } | { status: 'notFound' | 'unavailable'; document?: never };
+
+export function getDocumentUploadResult(knowledgeBaseId: string, requestId: string, signal?: AbortSignal): Promise<DocumentUploadResult> {
+  return apiRequest(`/knowledge-bases/${knowledgeBaseId}/document-uploads/${requestId}`, { signal });
 }
 
 /**

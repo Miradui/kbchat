@@ -50,6 +50,7 @@ function renderDialog(props: Partial<React.ComponentProps<typeof DocumentImportD
     fixedKnowledgeBaseName: '制度库',
     knowledgeBases: [{ id: 'kb1', name: '制度库' }],
     onClose: vi.fn(),
+    onCheckUpload: vi.fn().mockRejectedValue(new Error('offline')),
     onUpload: vi.fn(async (_knowledgeBaseId, file) => documentFor(file)),
   };
 
@@ -61,6 +62,37 @@ function renderDialog(props: Partial<React.ComponentProps<typeof DocumentImportD
 }
 
 describe('DocumentImportDialog', () => {
+  it('recovers a lost upload response and automatically continues the remaining queue', async () => {
+    const user = userEvent.setup();
+    const first = new File(['one'], 'first.md'); const second = new File(['two'], 'second.md');
+    const onUpload = vi.fn().mockRejectedValueOnce(new Error('response lost')).mockResolvedValueOnce(documentFor(second));
+    const onCheckUpload = vi.fn().mockResolvedValue({ status: 'committed', document: documentFor(first) });
+    const onUploaded = vi.fn(); const onClose = vi.fn();
+    renderDialog({ onUpload, onCheckUpload, onUploaded, onClose });
+    await user.upload(screen.getByLabelText('选择文档文件'), [first, second]);
+    await user.click(screen.getByRole('button', { name: '开始导入' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(onUpload.mock.calls.map((call) => call[1])).toEqual([first, second]);
+    expect(onCheckUpload).toHaveBeenCalledWith('kb1', onUpload.mock.calls[0][4].requestId, expect.any(AbortSignal));
+    expect(onUploaded).toHaveBeenCalledTimes(2);
+  });
+
+  it('resumes an uncertain replacement with its original request ID and target', async () => {
+    const user = userEvent.setup(); const file = new File(['new'], 'spec.md');
+    const onReplace = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(documentFor(file));
+    const onCheckUpload = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ status: 'notFound' });
+    const onClose = vi.fn();
+    renderDialog({ onUpload: vi.fn().mockRejectedValue(duplicateError()), onReplace, onCheckUpload, onClose });
+    await user.upload(screen.getByLabelText('选择文档文件'), file);
+    await user.click(screen.getByRole('button', { name: '开始导入' }));
+    await user.click(await screen.findByRole('button', { name: '替换原文档' }));
+    await user.click(await screen.findByRole('button', { name: '恢复上传' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(onReplace).toHaveBeenCalledTimes(2);
+    expect(onReplace.mock.calls[1][0]).toBe('doc-existing');
+    expect(onReplace.mock.calls[1][4]).toEqual(onReplace.mock.calls[0][4]);
+  });
+
   it('keeps equal filenames from different folders and passes each relative path to upload', async () => {
     const user = userEvent.setup();
     const onUpload = vi.fn(async (_kb: string, file: File) => documentFor(file));
@@ -76,7 +108,7 @@ describe('DocumentImportDialog', () => {
     await user.click(screen.getByRole('button', { name: '开始导入' }));
     await waitFor(() => expect(onUpload).toHaveBeenCalledTimes(2));
     for (const path of ['资料/甲/说明.md', '资料/乙/说明.md']) {
-      expect(onUpload).toHaveBeenCalledWith('kb1', expect.any(File), expect.any(Function), expect.any(AbortSignal), { sourcePath: path });
+      expect(onUpload).toHaveBeenCalledWith('kb1', expect.any(File), expect.any(Function), expect.any(AbortSignal), { sourcePath: path, requestId: expect.any(String) });
     }
   });
 
@@ -96,7 +128,7 @@ describe('DocumentImportDialog', () => {
     await user.click(screen.getByRole('button', { name: '加入导入清单' }));
     await user.click(screen.getByRole('button', { name: '开始导入' }));
     await screen.findByRole('button', { name: '保留两份' });
-    expect(onCreateText).toHaveBeenCalledWith('kb1', { title: '笔记', content: '# 说明\n正文', format: 'md' }, expect.any(AbortSignal));
+    expect(onCreateText).toHaveBeenCalledWith('kb1', { title: '笔记', content: '# 说明\n正文', format: 'md', requestId: expect.any(String) }, expect.any(AbortSignal));
     await user.click(screen.getByRole('button', { name: '保留两份' }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(onCreateText).toHaveBeenLastCalledWith('kb1', expect.objectContaining({ allowDuplicate: true }), expect.any(AbortSignal));
@@ -194,6 +226,7 @@ describe('DocumentImportDialog', () => {
       expect.objectContaining({ name: 'notes.txt' }),
       expect.any(Function),
       expect.any(AbortSignal),
+      { requestId: expect.any(String) },
     ));
   });
 
@@ -414,7 +447,7 @@ describe('DocumentImportDialog', () => {
       expect.objectContaining({ name: 'policy.md' }),
       expect.any(Function),
       expect.any(AbortSignal),
-      { allowDuplicate: true },
+      { allowDuplicate: true, requestId: expect.any(String) },
     ]);
     expect(onReplace).not.toHaveBeenCalled();
     expect(onBatchComplete).toHaveBeenCalledWith([expect.objectContaining({ filename: 'policy.md' })]);
@@ -439,6 +472,7 @@ describe('DocumentImportDialog', () => {
       expect.objectContaining({ name: 'policy.md' }),
       expect.any(Function),
       expect.any(AbortSignal),
+      { requestId: expect.any(String) },
     );
     // Replacement must not also create a second copy.
     expect(onUpload).toHaveBeenCalledTimes(1);
@@ -540,7 +574,7 @@ describe('DocumentImportDialog', () => {
     expect(await screen.findByText('结果待确认')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '替换原文档' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '保留两份' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '开始导入' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '恢复上传' })).toBeEnabled();
     expect(onReplace).toHaveBeenCalledTimes(1);
   });
 

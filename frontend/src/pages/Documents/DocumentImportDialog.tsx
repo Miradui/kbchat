@@ -2,7 +2,7 @@ import { Minimize2, Square, Upload, X } from 'lucide-react';
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiError } from '../../api/client';
-import { createTextDocument } from '../../api/resources';
+import { createTextDocument, getDocumentUploadResult, type UploadDocumentOptions } from '../../api/resources';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { useToast } from '../../components/feedback/ToastProvider';
 import { useUnsavedChangesWarning } from '../../components/feedback/useUnsavedChangesWarning';
@@ -16,6 +16,7 @@ import { formatRelativeTime } from '../../utils/format';
 import { formatDocumentBytes } from './documentDisplay';
 import type { ImportSnapshot, ImportStatus } from './DocumentImportContext';
 import { MAX_IMPORT_BYTES, MAX_IMPORT_FILES, prepareImportFiles, preparePlainImportFiles, type PreparedImportFile } from './importFiles';
+import { isUnconfirmedUpload, recoverUpload } from './recoverUpload';
 
 /**
  * The accept attribute is a file-picker hint only; validateDocumentFile enforces
@@ -49,6 +50,9 @@ function extensionSummary(extensions: string[]): string {
  * misdescribe what happened.
  */
 type ImportItem = {
+	requestId: string;
+	allowDuplicate?: boolean;
+	replaceId?: string;
   sourcePath?: string;
   text?: TextDocumentInput;
   error: string;
@@ -66,6 +70,7 @@ type KnowledgeBaseOption = {
 };
 
 type DocumentImportDialogProps = {
+	onCheckUpload?: typeof getDocumentUploadResult;
   onCreateText?: (knowledgeBaseId: string, input: TextDocumentInput, signal?: AbortSignal) => Promise<DocumentItem>;
   fixedKnowledgeBaseId?: string;
   fixedKnowledgeBaseName?: string;
@@ -79,7 +84,7 @@ type DocumentImportDialogProps = {
     file: File,
     onProgress?: (progress: number) => void,
     signal?: AbortSignal,
-    options?: { allowDuplicate?: boolean; sourcePath?: string },
+    options?: UploadDocumentOptions,
   ) => Promise<DocumentItem>;
   /**
    * Replace the colliding document instead of adding a second copy. Injected so the
@@ -90,7 +95,7 @@ type DocumentImportDialogProps = {
     file: File,
     onProgress?: (progress: number) => void,
     signal?: AbortSignal,
-    options?: { sourcePath?: string },
+    options?: UploadDocumentOptions,
   ) => Promise<DocumentItem>;
   onUploaded?: (document: DocumentItem) => void;
   open: boolean;
@@ -110,6 +115,7 @@ export function DocumentImportDialog({
   onKnowledgeBaseChange,
   onUpload,
   onCreateText,
+  onCheckUpload = (...args) => getDocumentUploadResult(...args),
   onReplace,
   onUploaded,
   open,
@@ -125,6 +131,7 @@ export function DocumentImportDialog({
   const prepareRef = useRef<AbortController | null>(null);
   const [preparing, setPreparing] = useState(false);
   const operationRef = useRef<symbol | null>(null);
+  const autoResumeRef = useRef(false);
   const uploadAbortRef = useRef<AbortController | null>(null);
   const wasOpenRef = useRef(false);
   const [items, setItems] = useState<ImportItem[]>([]);
@@ -179,10 +186,19 @@ export function DocumentImportDialog({
 
   const failedCount = items.filter((item) => item.status === 'failed').length;
   const pendingCount = items.filter((item) => item.status === 'pending').length;
+  const unconfirmedCount = items.filter((item) => item.status === 'unconfirmed').length;
   const uploadCandidates = useMemo(
-    () => items.filter((item) => item.status === 'pending' || item.status === 'failed'),
+    () => items.filter((item) => item.status === 'pending' || item.status === 'failed' || item.status === 'unconfirmed'),
     [items],
   );
+
+  useEffect(() => {
+    const resume = () => { if (autoResumeRef.current && !operationRef.current) void handleSubmit(); };
+    window.addEventListener('online', resume);
+    return () => window.removeEventListener('online', resume);
+    // The event uses the latest queue and target after an interrupted transfer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, knowledgeBaseId]);
 
   useUnsavedChangesWarning(open && (preparing || hasTextDraft || items.some((item) => item.status !== 'succeeded')));
 
@@ -251,7 +267,7 @@ export function DocumentImportDialog({
     for (const { file, sourcePath } of validFiles) {
       const key = `${sourcePath ?? ''}:${fileKey(file)}`;
       if (existingKeys.has(key)) { errors.push('已忽略重复选择的文件。'); continue; }
-      existingKeys.add(key); additions.push({ file, sourcePath, key, error: '', progress: 0, status: 'pending' });
+      existingKeys.add(key); additions.push({ file, sourcePath, key, requestId: crypto.randomUUID(), error: '', progress: 0, status: 'pending' });
     }
     if (items.length + additions.length > MAX_IMPORT_FILES || [...items, ...additions].reduce((sum, item) => sum + item.file.size, 0) > MAX_IMPORT_BYTES) {
       setValidationError('导入清单最多 200 个文件，总大小不超过 200 MiB。请分批导入。'); return;
@@ -291,7 +307,8 @@ export function DocumentImportDialog({
     let hasFailure = false;
     let hasDuplicate = items.some((item) => item.status === 'duplicate');
     let cancelled = false;
-    let hasUnconfirmed = items.some((item) => item.status === 'unconfirmed');
+    let hasUnconfirmed = false;
+    autoResumeRef.current = false;
 
     for (const item of uploadCandidates) {
       if (operationRef.current !== operation) {
@@ -332,7 +349,7 @@ export function DocumentImportDialog({
           hasFailure = true;
           cancelled = true;
           setItems((current) => updateImportItem(current, item.key, {
-            error: '上传结果未知，请先在文档列表确认。',
+            error: '上传已停止，可恢复时核对结果并继续。',
             status: 'unconfirmed',
           }));
           break;
@@ -352,8 +369,9 @@ export function DocumentImportDialog({
         }
         if (isUnconfirmedUpload(error)) {
           hasUnconfirmed = true;
+          autoResumeRef.current = true;
           setItems((current) => updateImportItem(current, item.key, {
-            error: '上传结果未知，请先在文档列表确认。',
+            error: '暂时无法核对上传结果，联网后可恢复上传。',
             status: 'unconfirmed',
           }));
           // Stop this batch on connection uncertainty; do not pile up ambiguous writes.
@@ -362,7 +380,7 @@ export function DocumentImportDialog({
         hasFailure = true;
         setItems((current) => updateImportItem(current, item.key, {
           error: documentUploadErrorMessage(error),
-          status: 'failed',
+          status: error instanceof ApiError && error.code === 'DOCUMENT_UPLOAD_RESULT_UNAVAILABLE' ? 'unavailable' : 'failed',
         }));
       }
     }
@@ -386,12 +404,12 @@ export function DocumentImportDialog({
     setUploading(false);
     if (cancelled) {
       setValidationError(batchCompleteError
-        ? '上传已停止，但文档列表刷新失败。请手动刷新并确认文件是否已创建。'
-        : '上传已停止，结果可能已提交。请先查看文档列表，确认未创建后再重新选择该文件。');
+        ? '上传已停止，列表刷新失败。恢复上传时会先核对服务器结果。'
+        : '上传已停止。恢复上传时会先核对已提交的文件，再继续剩余清单。');
       return;
     }
     if (hasUnconfirmed) {
-      setValidationError('上传结果待确认。请先查看文档列表，确认未创建后再重新选择该文件；其他待上传文件可以继续导入。');
+      setValidationError('暂时无法连接服务器。恢复上传会先核对结果，已成功的文件不会重复创建；网络恢复时会自动继续。');
       return;
     }
     if (hasFailure) {
@@ -431,6 +449,7 @@ export function DocumentImportDialog({
   async function resolveDuplicate(item: ImportItem, choice: 'keep' | 'replace') {
     if (uploading || operationRef.current || !item.duplicate) return;
     const existingId = item.duplicate.existingDocumentId;
+    const resolvedItem: ImportItem = { ...item, requestId: crypto.randomUUID(), allowDuplicate: choice === 'keep', replaceId: choice === 'replace' ? existingId : undefined };
 
     const operation = Symbol('duplicate-resolution');
     const controller = new AbortController();
@@ -439,6 +458,7 @@ export function DocumentImportDialog({
     setUploading(true);
     setValidationError('');
     setItems((current) => updateImportItem(current, item.key, {
+      requestId: resolvedItem.requestId, allowDuplicate: resolvedItem.allowDuplicate, replaceId: resolvedItem.replaceId,
       error: '',
       progress: 0,
       status: 'uploading',
@@ -453,9 +473,7 @@ export function DocumentImportDialog({
     };
 
     try {
-      const document = choice === 'replace' && onReplace
-        ? await (item.sourcePath ? onReplace(existingId, item.file, onProgress, controller.signal, { sourcePath: item.sourcePath }) : onReplace(existingId, item.file, onProgress, controller.signal))
-        : await uploadItem(item, onProgress, controller.signal, { allowDuplicate: true });
+      const document = await uploadItem(resolvedItem, onProgress, controller.signal);
       if (operationRef.current !== operation) return;
       setItems((current) => updateImportItem(current, item.key, {
         duplicate: undefined,
@@ -491,10 +509,11 @@ export function DocumentImportDialog({
       if (controller.signal.aborted || isUnconfirmedUpload(error)) {
         setItems((current) => updateImportItem(current, item.key, {
           duplicate: undefined,
-          error: '上传结果未知，请先在文档列表确认。',
+          error: '暂时无法核对上传结果，恢复时会继续本次选择。',
           status: 'unconfirmed',
         }));
-        setValidationError('上传结果待确认，请先查看文档列表，确认未创建后再重新选择该文件。');
+        autoResumeRef.current = !controller.signal.aborted;
+        setValidationError('上传结果待确认。恢复上传会先核对结果，再继续本次替换或保留两份的操作。');
         try { await onBatchComplete?.([]); } catch { /* The result stays unknown even when the list cannot refresh. */ }
         return;
       }
@@ -502,7 +521,7 @@ export function DocumentImportDialog({
         // The conflict details are kept so the row can offer the choice again
         // rather than dropping the user back to a bare failure.
         error: documentUploadErrorMessage(error),
-        status: 'duplicate',
+        status: error instanceof ApiError && error.code === 'DOCUMENT_UPLOAD_RESULT_UNAVAILABLE' ? 'unavailable' : 'duplicate',
       }));
     } finally {
       if (operationRef.current === operation) {
@@ -513,10 +532,19 @@ export function DocumentImportDialog({
     }
   }
 
-  function uploadItem(item: ImportItem, onProgress: (progress: number) => void, signal?: AbortSignal, options?: { allowDuplicate?: boolean }) {
-    if (item.text) return (onCreateText ?? createTextDocument)(knowledgeBaseId, { ...item.text, ...options }, signal);
-    if (item.sourcePath) return onUpload(knowledgeBaseId, item.file, onProgress, signal, { ...options, sourcePath: item.sourcePath });
-    return options ? onUpload(knowledgeBaseId, item.file, onProgress, signal, options) : onUpload(knowledgeBaseId, item.file, onProgress, signal);
+  function uploadItem(item: ImportItem, onProgress: (progress: number) => void, signal: AbortSignal) {
+    const options: UploadDocumentOptions = { requestId: item.requestId, ...(item.allowDuplicate ? { allowDuplicate: true } : {}), ...(item.sourcePath ? { sourcePath: item.sourcePath } : {}) };
+    return recoverUpload({
+      signal, reconcileFirst: item.status === 'unconfirmed',
+      onReconciling: () => setItems((current) => updateImportItem(current, item.key, { error: '正在核对服务器上传结果…' })),
+      check: () => onCheckUpload(knowledgeBaseId, item.requestId, signal),
+      send: () => {
+        signal.throwIfAborted();
+        if (item.replaceId && onReplace) return onReplace(item.replaceId, item.file, onProgress, signal, options);
+        if (item.text) return (onCreateText ?? createTextDocument)(knowledgeBaseId, { ...item.text, requestId: item.requestId, ...(item.allowDuplicate ? { allowDuplicate: true } : {}) }, signal);
+        return onUpload(knowledgeBaseId, item.file, onProgress, signal, options);
+      },
+    });
   }
 
   function addText() {
@@ -526,7 +554,7 @@ export function DocumentImportDialog({
     if (textBytes > upload.maxFileBytes) { setValidationError('正文大小超过上传限制。'); return; }
     const file = new File([textContent], `${title}.${textFormat}`, { type: MIME_BY_EXTENSION[textFormat] });
     if (items.length >= MAX_IMPORT_FILES || items.reduce((sum, item) => sum + item.file.size, 0) + file.size > MAX_IMPORT_BYTES) { setValidationError('导入清单最多 200 个文件，总大小不超过 200 MiB。'); return; }
-    setItems((current) => [...current, { file, text: { title, content: textContent, format: textFormat }, key: `text-${crypto.randomUUID()}`, error: '', progress: 0, status: 'pending' }]);
+    setItems((current) => [...current, { file, text: { title, content: textContent, format: textFormat }, key: `text-${crypto.randomUUID()}`, requestId: crypto.randomUUID(), error: '', progress: 0, status: 'pending' }]);
     setTextTitle(''); setTextContent(''); setValidationError('');
   }
 
@@ -681,10 +709,10 @@ export function DocumentImportDialog({
             <>
               <Button onClick={closeSafely} variant="secondary">取消</Button>
               <Button
-                disabled={preparing || !knowledgeBaseId || hasTextDraft || (pendingCount === 0 && failedCount === 0)}
+                disabled={preparing || !knowledgeBaseId || hasTextDraft || (pendingCount === 0 && failedCount === 0 && unconfirmedCount === 0)}
                 onClick={() => void handleSubmit()}
               >
-                {failedCount > 0 && pendingCount === 0 ? '重试失败项' : '开始导入'}
+                {unconfirmedCount > 0 ? '恢复上传' : failedCount > 0 && pendingCount === 0 ? '重试失败项' : '开始导入'}
               </Button>
             </>
           )}
@@ -729,7 +757,7 @@ function fileKey(file: File): string {
 function updateImportItem(
   items: ImportItem[],
   key: string,
-  update: Partial<Pick<ImportItem, 'error' | 'progress' | 'status' | 'duplicate'>>,
+  update: Partial<ImportItem>,
 ): ImportItem[] {
   return items.map((item) => item.key === key ? { ...item, ...update } : item);
 }
@@ -744,6 +772,7 @@ function importStatusLabel(status: ImportStatus): string {
     case 'succeeded': return '已上传';
     case 'failed': return '上传失败';
     case 'unconfirmed': return '结果待确认';
+    case 'unavailable': return '文档已不可用';
     case 'duplicate': return '内容重复';
     default: return '待上传';
   }
@@ -842,9 +871,4 @@ function documentUploadErrorMessage(error: unknown): string {
     }
   }
   return getErrorMessage(error, '上传失败');
-}
-
-/** Only an explicit client/business rejection proves a non-idempotent upload failed. */
-function isUnconfirmedUpload(error: unknown): boolean {
-  return !(error instanceof ApiError) || error.status === 0 || error.status >= 500;
 }

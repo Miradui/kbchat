@@ -43,6 +43,11 @@ type DocumentResponse struct {
 	StaleAfterDays int `json:"staleAfterDays"`
 }
 
+type DocumentUploadResult struct {
+	Status   string            `json:"status"`
+	Document *DocumentResponse `json:"document,omitempty"`
+}
+
 type PDFTextSummary struct {
 	TotalPages       int   `json:"totalPages"`
 	TextPages        int   `json:"textPages"`
