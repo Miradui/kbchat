@@ -118,3 +118,40 @@ func TestChatHistoryEmptyAndLegacyOrphanAnswers(t *testing.T) {
 		t.Fatalf("orphan group: %+v %v", page, err)
 	}
 }
+
+func TestChatHistoryAroundAndForwardPagesPreserveVersionsWithoutReadingTheTail(t *testing.T) {
+	db := newChatRepositoryTestDB(t)
+	sid, items := historyFixture(t, db, 1000)
+	r := NewChatRepository(db)
+	ctx := context.Background()
+	page, err := r.ListMessagePage(ctx, sid, ChatHistoryQuery{Limit: 5, Around: &items[401].ID})
+	if err != nil || len(page.Items) != 8 || page.Items[0].ID != items[396].ID || page.Items[7].ID != items[403].ID || !page.HasMore || !page.HasNewer {
+		t.Fatalf("bounded context: %+v %v", page, err)
+	}
+	forward, err := r.ListMessagePage(ctx, sid, ChatHistoryQuery{Limit: 5, After: page.NewerCursor, Revision: page.Revision})
+	if err != nil || len(forward.Items) != 8 || forward.Items[0].ID != items[404].ID || forward.Items[7].ID != items[411].ID || !forward.HasNewer {
+		t.Fatalf("next context: %+v %v", forward, err)
+	}
+	backward, err := r.ListMessagePage(ctx, sid, ChatHistoryQuery{Limit: 5, Before: page.NextCursor, Revision: page.Revision})
+	if err != nil || len(backward.Items) != 8 || backward.Items[7].ID != items[395].ID {
+		t.Fatalf("previous context: %+v %v", backward, err)
+	}
+	for _, target := range []int{0, 1, 500, 997, 999} {
+		window, err := r.ListMessagePage(ctx, sid, ChatHistoryQuery{Limit: 1, Around: &items[target].ID})
+		if err != nil || len(window.Items) != 4 || window.Items[0].ID != items[target/4*4].ID || window.HasNewer != (target < 996) || window.HasMore != (target >= 4) {
+			t.Fatalf("complete turn around %d: %+v %v", target, window, err)
+		}
+	}
+	missing := uuid.New()
+	_, err = r.ListMessagePage(ctx, sid, ChatHistoryQuery{Limit: 5, Around: &missing})
+	if !errors.Is(err, ErrChatMessageNotFound) {
+		t.Fatalf("missing target: %v", err)
+	}
+	if err := db.Create(&model.ChatMessage{SessionID: sid, Role: "assistant", Content: "new version", CreatedAt: time.Now().Add(time.Hour)}).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, err = r.ListMessagePage(ctx, sid, ChatHistoryQuery{Limit: 5, After: page.NewerCursor, Revision: page.Revision})
+	if !errors.Is(err, ErrChatMessageChanged) {
+		t.Fatalf("stale forward page: %v", err)
+	}
+}

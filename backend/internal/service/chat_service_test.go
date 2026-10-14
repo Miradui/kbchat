@@ -626,6 +626,7 @@ func newChatServiceTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("open sqlite db: %v", err)
 	}
 	if err := db.AutoMigrate(
+		&model.ChatBookmark{},
 		&model.User{},
 		&model.KnowledgeBase{},
 		&model.ChatSession{}, &model.ChatSessionKnowledgeBase{},

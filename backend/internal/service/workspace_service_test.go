@@ -51,6 +51,8 @@ func newWorkspaceTestServices(t *testing.T) workspaceTestServices {
 		t.Fatalf("open sqlite db: %v", err)
 	}
 	if err := db.AutoMigrate(
+		&model.ChatBookmark{},
+		&model.QuestionTemplate{},
 		&model.User{},
 		&model.UserAvatar{},
 		&model.KnowledgeBase{},

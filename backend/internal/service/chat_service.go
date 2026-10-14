@@ -396,6 +396,9 @@ func (s *ChatService) ListMessages(ctx context.Context, userID, sessionID uuid.U
 	}
 
 	res := dto.ChatMessageListResponse{Items: make([]dto.ChatMessageResponse, 0, len(messages))}
+	if err := s.chats.LoadBookmarks(ctx, userID, messages); err != nil {
+		return nil, apperror.Internal(err)
+	}
 	for i := range messages {
 		res.Items = append(res.Items, toChatMessageResponse(&messages[i]))
 	}
@@ -989,6 +992,17 @@ func writeExportCitations(builder *strings.Builder, raw datatypes.JSON) {
 		}
 		if citations[i].PageNumber != nil {
 			builder.WriteString(fmt.Sprintf("（第 %d 页）", *citations[i].PageNumber))
+		}
+		if table := citations[i].Table; table != nil {
+			name := table.SheetName
+			if name == "" {
+				name = "CSV"
+			}
+			rows := fmt.Sprint(table.RowStart)
+			if table.RowEnd > table.RowStart {
+				rows += fmt.Sprintf("–%d", table.RowEnd)
+			}
+			builder.WriteString(fmt.Sprintf("（%s，第 %s 行）", name, rows))
 		}
 		builder.WriteString("\n")
 		if strings.TrimSpace(citations[i].Content) != "" {
@@ -1897,6 +1911,15 @@ func cleanSessionTitle(raw string) string {
 }
 
 func toChatSessionResponse(session *model.ChatSession) dto.ChatSessionResponse {
+	var sourceSession, sourceMessage *string
+	if session.BranchFromSessionID != nil {
+		value := session.BranchFromSessionID.String()
+		sourceSession = &value
+	}
+	if session.BranchFromMessageID != nil {
+		value := session.BranchFromMessageID.String()
+		sourceMessage = &value
+	}
 	ids := make([]string, 0, 1+len(session.KnowledgeBaseLinks))
 	for _, id := range session.KnowledgeBaseIDs() {
 		ids = append(ids, id.String())
@@ -1906,6 +1929,7 @@ func toChatSessionResponse(session *model.ChatSession) dto.ChatSessionResponse {
 		bases = append(bases, dto.ChatKnowledgeBaseResponse{ID: link.KnowledgeBaseID.String(), Name: link.KnowledgeBase.Name})
 	}
 	return dto.ChatSessionResponse{
+		BranchFromSessionID: sourceSession, BranchFromMessageID: sourceMessage,
 		ScopeMode:        chatScopeMode(session),
 		KnowledgeBaseIDs: ids, KnowledgeBases: bases,
 		ID:              session.ID.String(),
@@ -1944,6 +1968,7 @@ func toChatMessageResponse(message *model.ChatMessage) dto.ChatMessageResponse {
 		Content:         message.Content,
 		Citations:       citations,
 		Feedback:        feedback,
+		Bookmark:        bookmarkResponse(message.Bookmark),
 		CreatedAt:       message.CreatedAt,
 		AnswerStatus:    message.AnswerStatus,
 	}
@@ -1953,6 +1978,7 @@ func citationsFromSearch(items []dto.SearchResultResponse) []dto.CitationRespons
 	citations := make([]dto.CitationResponse, 0, len(items))
 	for _, item := range items {
 		citations = append(citations, dto.CitationResponse{
+			Table:             item.Table,
 			KnowledgeBaseID:   item.KnowledgeBaseID,
 			KnowledgeBaseName: item.KnowledgeBaseName,
 			DocumentID:        item.DocumentID,
@@ -2322,6 +2348,9 @@ func buildRAGPrompt(question string, items []dto.SearchResultResponse) string {
 		builder.WriteString("filename: " + item.Filename + "\n")
 		if item.PageNumber != nil {
 			builder.WriteString(fmt.Sprintf("pageNumber: %d\n", *item.PageNumber))
+		}
+		if table := item.Table; table != nil {
+			builder.WriteString(fmt.Sprintf("sheetName: %s\nrowStart: %d\nrowEnd: %d\n", table.SheetName, table.RowStart, table.RowEnd))
 		}
 		builder.WriteString("content: " + item.Content + "\n\n")
 	}

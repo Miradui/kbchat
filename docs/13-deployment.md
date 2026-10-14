@@ -647,7 +647,7 @@ go run ./cmd/reembed -only-mismatched=false -batch 100
 
 ### 2026-10-13 本地启动记录
 
-代码提交 `2a4adbd`，后端构建到 `backend/bin/rag-server-2a4adbd.exe`；前端重新生产构建并以 Vite preview 监听 `127.0.0.1:5173`，代理到后端 8080。本次为本地运行验证，不代表完成公网容器化生产部署。进程在验收后保持运行，PID 与日志记录在忽略目录 `output/release-20261013/`。
+此前发布基于提交 `2a4adbd`，后端构建到 `backend/bin/rag-server-2a4adbd.exe`；前端重新生产构建并以 Vite preview 监听 `127.0.0.1:5173`，代理到后端 8080。本次为本地运行验证，不代表完成公网容器化生产部署。当时的 PID 与日志记录在忽略目录 `output/release-20261013/`；同日搜索功能更新后的当前运行版本见下文。
 
 配置中的远端 Redis 首次握手实测约 246ms，超过默认 200ms 总命令预算；本次仅在后端启动环境设置 `REDIS_OPERATION_TIMEOUT=500ms`。doctor 与应用数据库/Redis/存储探测均通过，根 `.env` 不变。手动重启时，在启动后端的 PowerShell 中再次设置该变量：
 
@@ -658,3 +658,29 @@ go run ./cmd/server
 ```
 
 上述命令需在旧后端已停止后执行，保持单实例。前端可在另一终端从仓库根目录执行 `cd frontend; npm run preview -- --host 127.0.0.1 --port 5173 --strictPort`。此预算调整增加 Redis 故障时单次最多等待到 500ms；默认 5 秒冷却、无自动重试、故障降级语义保持。
+
+### 同日会话内容搜索更新
+
+搜索接口及 `around/after` 历史读取需要配套新版前后端，不增加迁移或配置。2026-10-13 已完成隔离 PostgreSQL 和浏览器验收，随后停止上述旧后端，启动当前工作区构建 `backend/bin/rag-server-chat-search-20261013.exe`；前端 5173 生产预览读取新构建。后端保留进程级 500ms Redis 预算，根 `.env` 未变，业务 public 不重复迁移。
+
+当前本地后端 PID 28716、前端 PID 23488，8080 健康检查及 5173 页面/搜索资源正常，新搜索路由未登录返回 401；始终保持单实例。进程会随重启变化，后续操作先核实端口和可执行文件。当前搜索改动尚未提交 Git，运行记录在忽略目录 `output/chat-search-20261013/local-runtime*.json`。详见 [会话搜索验收](27-chat-search-acceptance.md)。
+
+## 六项功能扩展发布（迁移 034–039）
+
+回答收藏、文档版本对比、对话分支、提问模板、文件夹 / ZIP 与表格资料需要配套前后端及新迁移。全新数据库执行全部迁移；已经执行到 033 的数据库，备份后先停止旧后端，再按顺序执行：
+
+```powershell
+cd backend
+go run ./cmd/migrate -migration 034_chat_bookmarks.sql
+go run ./cmd/migrate -migration 035_document_version_index.sql
+go run ./cmd/migrate -migration 036_chat_branches.sql
+go run ./cmd/migrate -migration 037_question_templates.sql
+go run ./cmd/migrate -migration 038_document_source_path.sql
+go run ./cmd/migrate -migration 039_table_error_code.sql
+```
+
+随后发布新版后端和前端，核对启动结构检查、登录、已有会话读取及新功能。部署仍只运行一个业务后端，文档任务租约继续暂缓。迁移不会重建向量、回填表格、修改模型/检索默认或根 `.env`；旧文档的来源路径为空。新增表格解析依赖随 Go 构建，ZIP 依赖随前端构建，无需额外 Python/Excel 服务。
+
+034/036/037 的外键和唯一约束、038 的来源路径约束以及 039 的失败码约束均需通过实际 SQL 迁移建立。启动检查能发现必要字段及 039 约束缺失，不能将启动期 `AutoMigrate` 当作已升级的凭据。新约束为兼容性扩展，但已有 XLSX/CSV 或分支数据后，回退旧程序可能丢失来源展示或无法重新处理新类型；保留迁移，按备份和应用版本协调回退，不删除业务数据。
+
+本轮仅在隔离 schema 验收，已完成回归、实际 PostgreSQL 和 1920×1080 浏览器检查并清理临时环境，详见 [六项扩展验收](29-feature-extension-acceptance.md)。当前 public 仍停在 033，8080/5173 仍运行此前会话搜索版本。不得把隔离验收服务或其固定模型响应当作业务发布。最新验收和发布状态以 `12-handoff.md` 为准。

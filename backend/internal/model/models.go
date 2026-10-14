@@ -140,6 +140,7 @@ type KnowledgeBaseWorkspacePreference struct {
 }
 
 type Document struct {
+	SourcePath string `gorm:"not null;default:''" json:"sourcePath"`
 	// NULL means no page extraction record, including documents parsed before migration 032.
 	PDFTextSummary     datatypes.JSON `gorm:"type:jsonb;default:null" json:"-"`
 	EmbeddingModel     *string        `gorm:"size:128" json:"-"`
@@ -228,18 +229,21 @@ type DocumentChunk struct {
 }
 
 type ChatSession struct {
-	ScopeMode          string                     `gorm:"size:16;not null;default:manual" json:"scopeMode"`
-	KnowledgeBaseLinks []ChatSessionKnowledgeBase `gorm:"foreignKey:SessionID;constraint:OnDelete:CASCADE" json:"-"`
-	ID                 uuid.UUID                  `gorm:"type:uuid;primaryKey" json:"id"`
-	UserID             uuid.UUID                  `gorm:"type:uuid;not null;index" json:"userId"`
-	User               User                       `gorm:"foreignKey:UserID" json:"-"`
-	KnowledgeBaseID    uuid.UUID                  `gorm:"type:uuid;not null;index" json:"knowledgeBaseId"`
-	KnowledgeBase      KnowledgeBase              `gorm:"foreignKey:KnowledgeBaseID" json:"-"`
-	Title              string                     `gorm:"size:255" json:"title"`
-	CreatedAt          time.Time                  `json:"createdAt"`
-	UpdatedAt          time.Time                  `json:"updatedAt"`
-	ArchivedAt         *time.Time                 `gorm:"index" json:"archivedAt"`
-	DeletedAt          gorm.DeletedAt             `gorm:"index" json:"-"`
+	BranchFromSessionID *uuid.UUID                 `gorm:"type:uuid;index" json:"-"`
+	BranchFromMessageID *uuid.UUID                 `gorm:"type:uuid" json:"-"`
+	BranchRequestID     *uuid.UUID                 `gorm:"type:uuid;uniqueIndex:idx_chat_branch_request,where:branch_request_id IS NOT NULL" json:"-"`
+	ScopeMode           string                     `gorm:"size:16;not null;default:manual" json:"scopeMode"`
+	KnowledgeBaseLinks  []ChatSessionKnowledgeBase `gorm:"foreignKey:SessionID;constraint:OnDelete:CASCADE" json:"-"`
+	ID                  uuid.UUID                  `gorm:"type:uuid;primaryKey" json:"id"`
+	UserID              uuid.UUID                  `gorm:"type:uuid;not null;index" json:"userId"`
+	User                User                       `gorm:"foreignKey:UserID" json:"-"`
+	KnowledgeBaseID     uuid.UUID                  `gorm:"type:uuid;not null;index" json:"knowledgeBaseId"`
+	KnowledgeBase       KnowledgeBase              `gorm:"foreignKey:KnowledgeBaseID" json:"-"`
+	Title               string                     `gorm:"size:255" json:"title"`
+	CreatedAt           time.Time                  `json:"createdAt"`
+	UpdatedAt           time.Time                  `json:"updatedAt"`
+	ArchivedAt          *time.Time                 `gorm:"index" json:"archivedAt"`
+	DeletedAt           gorm.DeletedAt             `gorm:"index" json:"-"`
 }
 
 func (s *ChatSession) BeforeCreate(_ *gorm.DB) error {
@@ -250,6 +254,7 @@ func (s *ChatSession) BeforeCreate(_ *gorm.DB) error {
 }
 
 type ChatMessage struct {
+	Bookmark          *ChatBookmark  `gorm:"foreignKey:MessageID;constraint:OnDelete:CASCADE" json:"-"`
 	ID                uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
 	SessionID         uuid.UUID      `gorm:"type:uuid;not null;index;uniqueIndex:idx_chat_messages_session_client_role,where:client_request_id IS NOT NULL AND (role = 'user' OR role = 'assistant')" json:"sessionId"`
 	Session           ChatSession    `gorm:"foreignKey:SessionID" json:"-"`

@@ -61,6 +61,7 @@ type RateLimitNotice = RetryNotice & {
 
 type UseChatThreadOptions = {
   sessionId?: string;
+  initialMessageId?: string;
   draftKnowledgeBaseId?: string;
   draftKnowledgeBaseIds?: string[];
   draftScopeMode?: 'auto' | 'manual';
@@ -80,6 +81,7 @@ type UseChatThreadOptions = {
  */
 export function useChatThread({
   sessionId,
+  initialMessageId,
   draftKnowledgeBaseId,
   draftKnowledgeBaseIds,
   draftScopeMode = 'manual',
@@ -108,6 +110,8 @@ export function useChatThread({
   const [rateLimitNotice, setRateLimitNotice] = useState<RateLimitNotice | null>(null);
 
   const activeSessionRef = useRef<string | undefined>(sessionId);
+  const initialMessageRef = useRef(initialMessageId);
+  initialMessageRef.current = initialMessageId;
   const mountedRef = useRef(true);
   const loadRequestRef = useRef(0);
   const sendTokenRef = useRef<symbol | null>(null);
@@ -175,7 +179,7 @@ export function useChatThread({
   }, [clearAutoChecks, setStreamingAnswer]);
 
   const history = useChatHistory(sessionId, setMessages, handleAccessLost);
-  const { replaceHistory, resetHistory, invalidateHistory, readCurrentHistory, updateHistoryRevision } = history;
+  const { replaceHistory, resetHistory, invalidateHistory, readCurrentHistory, updateHistoryRevision, markMissingMessage } = history;
 
   const loadThread = useCallback(async (targetSessionId: string) => {
     const request = ++loadRequestRef.current;
@@ -190,18 +194,32 @@ export function useChatThread({
       && loadRequestRef.current === request;
 
     try {
+      const initialTarget = initialMessageRef.current;
+      let missingTarget = '';
+      const readInitialMessages = async () => {
+        // Unknown writes require complete evidence before being declared absent.
+        if (pendingChatRequestStore.get(targetSessionId) || pendingChatEditStore.get(targetSessionId) || pendingRegenerationStore.get(targetSessionId)) {
+          return listChatMessages(targetSessionId);
+        }
+        try {
+          return await listChatMessages(targetSessionId, { limit: HISTORY_PAGE_SIZE, ...(initialTarget ? { around: initialTarget } : {}) });
+        } catch (error) {
+          if (initialTarget && error instanceof ApiError && (error.code === 'CHAT_MESSAGE_NOT_FOUND' || error.code === 'VALIDATION_ERROR')) {
+            missingTarget = initialTarget;
+            return listChatMessages(targetSessionId, { limit: HISTORY_PAGE_SIZE });
+          }
+          throw error;
+        }
+      };
       const [sessionResponse, messageResponse] = await Promise.all([
         getChatSession(targetSessionId),
-        // A persisted unknown write needs complete evidence before it can be
-        // declared absent. Ordinary opens only read the latest history page.
-        pendingChatRequestStore.get(targetSessionId) || pendingChatEditStore.get(targetSessionId) || pendingRegenerationStore.get(targetSessionId)
-          ? listChatMessages(targetSessionId)
-          : listChatMessages(targetSessionId, { limit: HISTORY_PAGE_SIZE }),
+        readInitialMessages(),
       ]);
       if (!current()) return;
 
       setSession(sessionResponse);
       replaceHistory(targetSessionId, messageResponse);
+      if (missingTarget) markMissingMessage(missingTarget);
 
       const pendingEdit = pendingChatEditStore.get(targetSessionId);
       if (pendingEdit && messageResponse.items.some(
@@ -246,6 +264,7 @@ export function useChatThread({
       }
     } catch (caught) {
       if (current()) {
+        if (handleAccessLost(caught, targetSessionId)) { resetHistory(); return; }
         setLoadError(getErrorMessage(caught, '消息加载失败'));
         setMessages([]);
         setSession(null);
@@ -253,7 +272,7 @@ export function useChatThread({
     } finally {
       if (current()) setLoading(false);
     }
-  }, [replaceHistory, resetHistory]);
+  }, [replaceHistory, resetHistory, markMissingMessage, handleAccessLost]);
 
   // Switching sessions invalidates every in-flight request and transient state.
   useEffect(() => {
@@ -749,6 +768,10 @@ export function useChatThread({
     )));
   }, []);
 
+  const updateMessageBookmark = useCallback((messageId: string, bookmark: import('../../types/api').ChatBookmark | null) => {
+    setMessages((current) => current.map((message) => message.id === messageId ? { ...message, bookmark } : message));
+  }, []);
+
   const editMessage = useCallback(async (messageId: string, content: string) => {
     if (!sessionId || !content.trim() || sendTokenRef.current || regenerateTokenRef.current || editTokenRef.current) return;
     const targetSessionId = sessionId;
@@ -846,10 +869,19 @@ export function useChatThread({
     loading,
     loadError,
     hasOlderMessages: history.hasOlderMessages,
+    hasNewerMessages: history.hasNewerMessages,
     loadingHistory: history.loadingHistory,
     historyError: history.historyError,
+    missingMessageId: history.missingMessageId,
     loadOlderMessages: history.loadOlderMessages,
     loadAllMessages: history.loadAllMessages,
+    loadNewerMessages: history.loadNewerMessages,
+    loadMessageContext: history.loadMessageContext,
+    cancelMessageContext: history.cancelMessageContext,
+    retryHistory: history.retryHistory,
+    loadLatestMessages: history.loadLatestMessages,
+    invalidateHistory: history.invalidateHistory,
+    handleAccessLost,
     sending,
     pendingQuestion,
     failedSend,
@@ -877,6 +909,7 @@ export function useChatThread({
     checkRegeneration,
     hasPendingWrite,
     updateMessageFeedback,
+    updateMessageBookmark,
     dismissFailedSend: () => setFailedSend(null),
     dismissRateLimitError: () => setRateLimitNotice(null),
   };

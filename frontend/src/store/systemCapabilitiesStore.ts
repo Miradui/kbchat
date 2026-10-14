@@ -15,7 +15,7 @@ export const defaultSystemCapabilities: SystemCapabilities = {
   chatModels: [],
   upload: {
     maxFileBytes: 50 * 1024 * 1024,
-    allowedExtensions: ['txt', 'md', 'pdf', 'docx'],
+    allowedExtensions: ['txt', 'md', 'pdf', 'docx', 'xlsx', 'csv'],
   },
   retrieval: {
     maxVectorTopN: 100,

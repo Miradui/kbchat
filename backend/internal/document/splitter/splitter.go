@@ -84,6 +84,13 @@ func (s *Splitter) SplitDocument(document parser.ParsedDocument) []Chunk {
 	fileType := normalizeFileType(document.FileType)
 	chunks := make([]Chunk, 0, len(document.Segments))
 	for _, segment := range document.Segments {
+		if segment.Table != nil {
+			for _, chunk := range s.splitTableRow(fileType, segment.Table) {
+				chunk.Index = len(chunks)
+				chunks = append(chunks, chunk)
+			}
+			continue
+		}
 		text := normalize(segment.Content)
 		if text == "" {
 			continue

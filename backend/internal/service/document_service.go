@@ -70,6 +70,7 @@ func NewDocumentService(
 // DocumentUploadOptions carries the caller's decision about an already-known
 // file. It is a struct so a later option does not change every call site.
 type DocumentUploadOptions struct {
+	SourcePath string
 	// AllowDuplicate records that the user saw the conflict and chose to keep
 	// both copies. Without it a matching content hash is rejected.
 	AllowDuplicate bool
@@ -95,6 +96,10 @@ func (s *DocumentService) UploadWithOptions(
 }
 
 func (s *DocumentService) uploadSource(ctx context.Context, ownerID, kbID uuid.UUID, file documentSource, options DocumentUploadOptions) (*dto.DocumentResponse, error) {
+	sourcePath, err := normalizeDocumentSourcePath(options.SourcePath, file.Filename)
+	if err != nil {
+		return nil, err
+	}
 
 	// Hashed and checked before anything is written: a duplicate is then rejected
 	// without an object to clean up, and without a storage reservation to cancel.
@@ -126,6 +131,7 @@ func (s *DocumentService) uploadSource(ctx context.Context, ownerID, kbID uuid.U
 	}
 
 	document := &model.Document{
+		SourcePath:      sourcePath,
 		KnowledgeBaseID: kbID,
 		UploaderID:      ownerID,
 		Filename:        file.Filename,
@@ -418,16 +424,29 @@ func (s *DocumentService) Preview(ctx context.Context, ownerID, documentID uuid.
 	if err != nil {
 		return nil, documentStorageError(err)
 	}
-	if strings.EqualFold(document.FileType, "docx") {
-		parsed, parseErr := parser.NewDefaultParser().ParseBytes(content, "docx")
+	if document.FileType == "docx" || document.FileType == "csv" || document.FileType == "xlsx" {
+		parsed, parseErr := parser.NewDefaultParser().ParseBytes(content, document.FileType)
 		if parseErr != nil {
+			if errors.Is(parseErr, parser.ErrTableLimit) {
+				return nil, apperror.New(http.StatusBadRequest, "DOCUMENT_TABLE_TOO_LARGE", "表格超出解析限制，请拆分后重新上传")
+			}
 			return nil, apperror.New(http.StatusBadRequest, "DOCUMENT_PREVIEW_FAILED", "文档无法解析")
 		}
-		parts := make([]string, 0, len(parsed.Segments))
+		var joined strings.Builder
 		for _, segment := range parsed.Segments {
-			parts = append(parts, segment.Content)
+			if joined.Len() > 0 {
+				joined.WriteByte('\n')
+			}
+			start := joined.Len()
+			joined.WriteString(segment.Content)
+			if joined.Len() > maxPreviewTextBytes {
+				return nil, apperror.New(http.StatusBadRequest, "FILE_TOO_LARGE_FOR_PREVIEW", "解析文本超过预览限制，可在下方查看片段")
+			}
+			if row := segment.Table; row != nil {
+				res.TableRows = append(res.TableRows, dto.TablePreviewRow{TableSource: dto.TableSource{SheetName: row.SheetName, RowStart: row.RowStart, RowEnd: row.RowEnd, HeaderRow: row.HeaderRow}, StartOffset: start, EndOffset: joined.Len()})
+			}
 		}
-		res.Content = strings.Join(parts, "\n")
+		res.Content = joined.String()
 	} else {
 		res.Content = string(content)
 	}
@@ -620,7 +639,7 @@ func (s *DocumentService) recordDocumentActivity(ctx context.Context, userID uui
 // AllowedDocumentExtensions is the upload allow list enforced by validateFile.
 // GET /api/v1/system/capabilities publishes it so the import dialog offers the
 // same set instead of a frontend copy.
-var AllowedDocumentExtensions = []string{"txt", "md", "pdf", "docx"}
+var AllowedDocumentExtensions = []string{"txt", "md", "pdf", "docx", "xlsx", "csv"}
 
 func (s *DocumentService) validateFile(file *multipart.FileHeader) error {
 	if file == nil {
@@ -646,6 +665,17 @@ func (s *DocumentService) validateFile(file *multipart.FileHeader) error {
 				return validatePDFSignature(file)
 			case "docx":
 				return validateDOCXSignature(file)
+			case "xlsx":
+				opened, err := file.Open()
+				if err != nil {
+					return apperror.New(http.StatusBadRequest, "DOCUMENT_TYPE_UNSUPPORTED", "无法读取 XLSX 文件")
+				}
+				defer opened.Close()
+				header := make([]byte, 8)
+				n, _ := io.ReadFull(opened, header)
+				if !isZIPMagic(header[:n]) {
+					return apperror.New(http.StatusBadRequest, "DOCUMENT_TYPE_UNSUPPORTED", "请使用未加密的 .xlsx 文件，不支持旧 .xls")
+				}
 			}
 			return nil
 		}
@@ -756,6 +786,7 @@ func toDocumentResponse(document *model.Document, job *model.DocumentJob, maxRet
 	progress := documentProgress(document.Status, job, maxRetries)
 
 	return dto.DocumentResponse{
+		SourcePath:      document.SourcePath,
 		PDFTextSummary:  documentPDFTextSummary(document),
 		ID:              document.ID.String(),
 		KnowledgeBaseID: document.KnowledgeBaseID.String(),
@@ -850,6 +881,7 @@ func toGlobalDocumentResponse(
 	}
 	progress := documentProgress(document.Status, job, maxRetries)
 	return dto.GlobalDocumentResponse{
+		SourcePath:        document.SourcePath,
 		ID:                document.ID.String(),
 		KnowledgeBaseID:   document.KnowledgeBaseID.String(),
 		KnowledgeBaseName: document.KnowledgeBaseName,
@@ -979,6 +1011,10 @@ func contentTypeForFile(filename string) string {
 		return "application/pdf"
 	case ".docx":
 		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case ".xlsx":
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	case ".csv":
+		return "text/csv; charset=utf-8"
 	default:
 		return "application/octet-stream"
 	}
@@ -986,7 +1022,7 @@ func contentTypeForFile(filename string) string {
 
 func previewKind(filename string) string {
 	switch strings.ToLower(filepath.Ext(filename)) {
-	case ".txt", ".md", ".docx":
+	case ".txt", ".md", ".docx", ".xlsx", ".csv":
 		return "text"
 	default:
 		return "file"

@@ -537,7 +537,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
                 : <Link className="ui-button ui-button--primary" to="/knowledge-bases?intent=create"><span>先新建知识库</span></Link>}
             description={activeFilterCount > 0
               ? '调整筛选条件后再试。'
-              : '导入 txt、md、pdf 或 docx，处理完成后即可用于问答。'}
+              : '导入 TXT、Markdown、PDF、DOCX、XLSX 或 CSV，处理完成后即可用于问答。'}
             title={activeFilterCount > 0 ? '没有匹配的文档' : '还没有文档'}
           />
         ) : (

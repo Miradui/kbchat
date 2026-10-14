@@ -26,9 +26,11 @@ import type { DocumentChunk, DocumentItem, DocumentPreviewResponse, KnowledgeBas
 import { hasCapability } from '../../utils/access';
 import { formatBytes, formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
+import { tableSourceLabel } from '../../utils/tableSource';
 import { DocumentProgress } from './DocumentProgress';
 import { DocumentReadingPreview } from './DocumentReadingPreview';
 import { PdfTextNotice } from './PdfTextNotice';
+import { DocumentVersionDialog } from './DocumentVersionDialog';
 import { documentDisplayStatusLabel, documentDisplayStatusTone, isTerminalDocumentStatus } from './documentDisplay';
 import { documentFailureCopy, documentStalenessHint } from './documentFailure';
 
@@ -75,6 +77,7 @@ export function DocumentDetailDrawer({
   const [chunksLoading, setChunksLoading] = useState(true);
   const [operation, setOperation] = useState<DocumentOperation>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [comparing, setComparing] = useState(false);
   const [deleteError, setDeleteError] = useState('');
   const [error, setError] = useState('');
   const [previewError, setPreviewError] = useState('');
@@ -100,6 +103,7 @@ export function DocumentDetailDrawer({
     mutationRef.current = null;
     setOperation(null);
     setConfirmDelete(false);
+    setComparing(false);
     setDeleteError('');
     setLoading(true);
     setError('');
@@ -423,12 +427,14 @@ export function DocumentDetailDrawer({
 
                 <dl className="doc-meta-grid">
                   <div><dt>类型</dt><dd>{document.fileType || '—'}</dd></div>
+                  {document.sourcePath && <div><dt>来源路径</dt><dd className="doc-import__path">{document.sourcePath}</dd></div>}
                   <div><dt>大小</dt><dd>{formatBytes(document.fileSize)}</dd></div>
                   <div><dt>创建</dt><dd>{formatDateTime(document.createdAt)}</dd></div>
                   <div><dt>更新</dt><dd>{formatDateTime(document.updatedAt || document.createdAt)}</dd></div>
                 </dl>
 
                 <div className="doc-detail__actions">
+                  <Button disabled={submitting} variant="secondary" onClick={() => setComparing(true)}>版本对比</Button>
                   {canDownload && <Button
                     disabled={submitting}
                     leadingIcon={<Download aria-hidden="true" />}
@@ -552,6 +558,7 @@ export function DocumentDetailDrawer({
                                 {isSource && <Badge tone="accent">引用来源</Badge>}
                                 <span className="ui-muted">
                                   {chunk.tokenCount} 词元{chunk.pageNumber ? ` · p.${chunk.pageNumber}` : ''}
+                                  {chunk.metadata?.table ? ` · ${tableSourceLabel(chunk.metadata.table as import('../../types/api').TableSource)}` : ''}
                                 </span>
                               </header>
                               <p>{chunk.content}</p>
@@ -576,6 +583,8 @@ export function DocumentDetailDrawer({
           </>
         )}
       </Drawer>
+
+      {comparing && <DocumentVersionDialog documentId={documentId} key={documentId} onClose={() => setComparing(false)} />}
 
       {confirmDelete && document && (
         <ConfirmDialog

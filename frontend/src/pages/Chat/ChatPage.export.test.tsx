@@ -28,7 +28,9 @@ vi.mock('../../layouts/AppShell', () => ({
     <><div>{topbarActions}</div>{children}</>
   ),
 }));
-vi.mock('../../hooks/useMediaQuery', () => ({ useMediaQuery: () => false }));
+vi.mock('../../hooks/useMediaQuery', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../hooks/useMediaQuery')>(), useMediaQuery: () => false,
+}));
 vi.mock('./ChatSessionRail', () => ({ ChatSessionRail: () => null }));
 vi.mock('./ChatComposer', () => ({ ChatComposer: () => null }));
 vi.mock('./useChatSessions', () => ({

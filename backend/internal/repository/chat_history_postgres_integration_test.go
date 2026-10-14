@@ -50,4 +50,12 @@ func TestPostgresChatHistoryKeysetAndIndexMigration(t *testing.T) {
 		}
 		query.Before, query.Revision = page.NextCursor, page.Revision
 	}
+	window, err := r.ListMessagePage(context.Background(), sid, ChatHistoryQuery{Limit: 1, Around: &items[9].ID})
+	if err != nil || len(window.Items) != 4 || window.Items[0].ID != items[8].ID || !window.HasMore || !window.HasNewer {
+		t.Fatalf("around: %+v %v", window, err)
+	}
+	next, err := r.ListMessagePage(context.Background(), sid, ChatHistoryQuery{Limit: 5, After: window.NewerCursor, Revision: window.Revision})
+	if err != nil || len(next.Items) != 8 || next.Items[0].ID != items[12].ID || !next.HasNewer {
+		t.Fatalf("after: %+v %v", next, err)
+	}
 }

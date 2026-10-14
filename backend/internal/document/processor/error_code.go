@@ -10,7 +10,7 @@ import (
 )
 
 // The closed set written to documents.error_code. Kept in sync with the CHECK
-// constraint in migrations/019_document_versions_and_answer_status.sql -- adding a
+// constraint in migrations/039_table_error_code.sql -- adding a
 // value here without the migration makes every write of it fail.
 const (
 	// ErrorCodeUnsupportedType is part of the closed set but ClassifyError never
@@ -25,6 +25,7 @@ const (
 	ErrorCodeStorageFailed   = "storage_failed"
 	ErrorCodeCancelled       = "cancelled"
 	ErrorCodeInternal        = "internal"
+	ErrorCodeTableLimit      = "table_limit_exceeded"
 )
 
 // ClassifyError maps a processing failure to the closed set above.
@@ -52,6 +53,8 @@ func ClassifyError(err error) string {
 		return ErrorCodeCancelled
 	case errors.Is(err, parser.ErrEncodingInvalid):
 		return ErrorCodeEncodingInvalid
+	case errors.Is(err, parser.ErrTableLimit):
+		return ErrorCodeTableLimit
 	case errors.Is(err, parser.ErrCorruptFile):
 		return ErrorCodeCorruptFile
 	case errors.Is(err, ErrEmptyContent):
@@ -72,7 +75,7 @@ func ClassifyError(err error) string {
 // Provider, storage-read and unrecognised failures stay retryable.
 func IsPermanent(err error) bool {
 	switch ClassifyError(err) {
-	case ErrorCodeEncodingInvalid, ErrorCodeCorruptFile, ErrorCodeEmptyContent:
+	case ErrorCodeEncodingInvalid, ErrorCodeCorruptFile, ErrorCodeEmptyContent, ErrorCodeTableLimit:
 		return true
 	case ErrorCodeStorageFailed:
 		return errors.Is(err, storage.ErrNotFound)

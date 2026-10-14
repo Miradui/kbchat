@@ -18,6 +18,7 @@ import (
 	"kbchat/backend/internal/authz"
 	"kbchat/backend/internal/cache"
 	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/document/parser"
 	"kbchat/backend/internal/dto"
 	"kbchat/backend/internal/embedding"
 	"kbchat/backend/internal/model"
@@ -213,6 +214,7 @@ func (s *Service) searchBases(ctx context.Context, ownerID uuid.UUID, kbIDs []uu
 	for _, item := range candidates {
 		start, end := chunkSourceOffsets(item.Metadata)
 		items = append(items, dto.SearchResultResponse{
+			Table:             chunkTableSource(item.Metadata),
 			KnowledgeBaseID:   item.KnowledgeBaseID.String(),
 			KnowledgeBaseName: item.KnowledgeBaseName,
 			ChunkID:           item.ChunkID.String(),
@@ -479,6 +481,24 @@ func chunkSourceOffsets(metadata datatypes.JSON) (*int, *int) {
 		return nil, nil
 	}
 	return offsets.StartOffset, offsets.EndOffset
+}
+
+func chunkTableSource(metadata datatypes.JSON) *dto.TableSource {
+	var source struct {
+		FileType string           `json:"fileType"`
+		Table    *dto.TableSource `json:"table"`
+	}
+	if json.Unmarshal(metadata, &source) != nil || source.Table == nil || (source.FileType != "csv" && source.FileType != "xlsx") {
+		return nil
+	}
+	table := source.Table
+	if table.HeaderRow < 1 || table.RowStart <= table.HeaderRow || table.RowEnd < table.RowStart || table.RowEnd > parser.MaxTableSourceRow {
+		return nil
+	}
+	if (source.FileType == "csv" && table.SheetName != "") || (source.FileType == "xlsx" && (table.SheetName == "" || table.RowStart != table.RowEnd)) {
+		return nil
+	}
+	return table
 }
 
 // completeVectorRecall reruns the vector stage exhaustively when the

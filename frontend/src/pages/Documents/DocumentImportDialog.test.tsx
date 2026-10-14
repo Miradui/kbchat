@@ -61,6 +61,25 @@ function renderDialog(props: Partial<React.ComponentProps<typeof DocumentImportD
 }
 
 describe('DocumentImportDialog', () => {
+  it('keeps equal filenames from different folders and passes each relative path to upload', async () => {
+    const user = userEvent.setup();
+    const onUpload = vi.fn(async (_kb: string, file: File) => documentFor(file));
+    renderDialog({ onUpload });
+    const files = ['资料/甲/说明.md', '资料/乙/说明.md'].map((path) => {
+      const file = new File(['same'], '说明.md', { type: 'text/markdown', lastModified: 100 });
+      Object.defineProperty(file, 'webkitRelativePath', { value: path });
+      return file;
+    });
+    await user.upload(screen.getByLabelText('选择文档文件夹'), files);
+    expect(screen.getByText('资料/甲/说明.md')).toBeInTheDocument();
+    expect(screen.getByText('资料/乙/说明.md')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '开始导入' }));
+    await waitFor(() => expect(onUpload).toHaveBeenCalledTimes(2));
+    for (const path of ['资料/甲/说明.md', '资料/乙/说明.md']) {
+      expect(onUpload).toHaveBeenCalledWith('kb1', expect.any(File), expect.any(Function), expect.any(AbortSignal), { sourcePath: path });
+    }
+  });
+
   it('validates a text draft, queues it and uses the text API with duplicate confirmation', async () => {
     const user = userEvent.setup();
     const onUpload = vi.fn();
@@ -158,14 +177,14 @@ describe('DocumentImportDialog', () => {
       dataTransfer: {
         files: [
           new File(['ok'], 'notes.txt', { type: 'text/plain' }),
-          new File(['bad'], 'archive.zip', { type: 'application/zip' }),
+          new File(['bad'], 'archive.xls', { type: 'application/vnd.ms-excel' }),
           new File([], 'empty.md', { type: 'text/markdown' }),
         ],
       },
     });
 
     expect(screen.getByText('notes.txt')).toBeInTheDocument();
-    expect(screen.queryByText('archive.zip')).not.toBeInTheDocument();
+    expect(screen.queryByText('archive.xls')).not.toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('仅支持 TXT、MD、PDF');
     expect(screen.getByRole('alert')).toHaveTextContent('不能为空');
 

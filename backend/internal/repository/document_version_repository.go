@@ -13,6 +13,20 @@ import (
 
 var ErrDocumentAlreadySuperseded = errors.New("document is already superseded")
 
+// A deleted or cross-library link stops the chain. UNION also terminates a
+// malformed cycle without exposing documents outside this authorized library.
+func (r *DocumentRepository) VersionChain(ctx context.Context, kbID, documentID uuid.UUID) ([]model.Document, error) {
+	items := []model.Document{}
+	err := r.db.WithContext(ctx).Raw(`WITH RECURSIVE versions AS (
+ SELECT id, superseded_by_id FROM documents WHERE id = ? AND knowledge_base_id = ? AND deleted_at IS NULL
+ UNION
+ SELECT d.id, d.superseded_by_id FROM documents d JOIN versions v
+ ON d.id = v.superseded_by_id OR d.superseded_by_id = v.id
+ WHERE d.knowledge_base_id = ? AND d.deleted_at IS NULL
+ ) SELECT d.* FROM documents d JOIN versions v ON d.id = v.id ORDER BY d.created_at ASC, d.id ASC LIMIT 101`, documentID, kbID, kbID).Scan(&items).Error
+	return items, err
+}
+
 // FindByContentHash returns the oldest live document in a knowledge base whose
 // content hash matches.
 //

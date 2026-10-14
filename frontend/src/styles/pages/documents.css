@@ -233,3 +233,15 @@
 .doc-detail__pdf-text p + p, .doc-detail__pdf-text details + p { margin-top: 6px; }
 .doc-detail__pdf-text summary { cursor: pointer; margin-top: 6px; }
 .doc-detail__pdf-pages { overflow-wrap: anywhere; max-height: 12rem; overflow-y: auto; }
+.document-version-dialog { width: min(1000px, calc(100vw - 48px)); max-width: 1000px; }
+.document-version-selectors { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.document-version-selectors > * { min-width: 0; }
+.document-diff { max-height: 52dvh; overflow: auto; border: 1px solid var(--line); border-radius: var(--r-sm); }
+.document-diff__line { display: grid; grid-template-columns: 76px 16px minmax(0, 1fr); gap: 8px; padding: 4px 10px; font-size: 13px; }
+.document-diff__numbers { opacity: .7; font-variant-numeric: tabular-nums; text-align: right; }
+.document-diff__text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.document-diff__line.is-add { background: var(--ok-wash); }
+.document-diff__line.is-remove { background: var(--danger-wash); }
+@media (max-width: 700px) { .document-version-selectors { grid-template-columns: 1fr; } }
+.doc-import__batch-actions { display: flex; gap: 12px; }
+.doc-import__path { overflow-wrap: anywhere; white-space: normal; }

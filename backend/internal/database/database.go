@@ -131,7 +131,17 @@ func validateSchema(ctx context.Context, db *gorm.DB) error {
 			{&model.Document{}, "embedding_model", "029_document_embedding_identity.sql"},
 			{&model.Document{}, "embedding_dimension", "029_document_embedding_identity.sql"},
 			{&model.Document{}, "pdf_text_summary", "032_document_pdf_text_summary.sql"},
+			{&model.Document{}, "source_path", "038_document_source_path.sql"},
 			{&model.ChatSession{}, "scope_mode", "031_chat_automatic_scope.sql"},
+			{&model.ChatSession{}, "branch_from_session_id", "036_chat_branches.sql"},
+			{&model.ChatSession{}, "branch_from_message_id", "036_chat_branches.sql"},
+			{&model.ChatSession{}, "branch_request_id", "036_chat_branches.sql"},
+			{&model.ChatBookmark{}, "message_id", "034_chat_bookmarks.sql"},
+			{&model.ChatBookmark{}, "user_id", "034_chat_bookmarks.sql"},
+			{&model.ChatBookmark{}, "note", "034_chat_bookmarks.sql"},
+			{&model.QuestionTemplate{}, "title", "037_question_templates.sql"},
+			{&model.QuestionTemplate{}, "body", "037_question_templates.sql"},
+			{&model.QuestionTemplate{}, "user_id", "037_question_templates.sql"},
 		} {
 			if !migrator.HasColumn(required.model, required.column) {
 				return fmt.Errorf("database schema incompatible: missing %s; apply migration %s", required.column, required.migration)
@@ -142,6 +152,17 @@ func validateSchema(ctx context.Context, db *gorm.DB) error {
 		}
 		if !migrator.HasTable(&model.ModelUsageRecord{}) {
 			return fmt.Errorf("database schema incompatible: missing model_usage_records; apply migration 026_model_usage_records.sql")
+		}
+		if !migrator.HasTable(&model.ChatBookmark{}) {
+			return fmt.Errorf("database schema incompatible: missing chat_bookmarks; apply migration 034_chat_bookmarks.sql")
+		}
+		var errorConstraint string
+		if err := db.WithContext(ctx).Raw(`SELECT pg_get_constraintdef(oid) FROM pg_constraint
+			WHERE conrelid = 'documents'::regclass AND conname = 'documents_error_code_check' AND contype = 'c'`).Scan(&errorConstraint).Error; err != nil {
+			return fmt.Errorf("check document error constraint: %w", err)
+		}
+		if !strings.Contains(errorConstraint, "'table_limit_exceeded'") {
+			return fmt.Errorf("database schema incompatible: documents_error_code_check missing table_limit_exceeded; apply migration 039_table_error_code.sql")
 		}
 	}
 	return validateTimestampSchema(ctx, db)
@@ -162,6 +183,8 @@ func autoMigrateModels() []any {
 		&model.ChatSession{},
 		&model.ChatSessionKnowledgeBase{},
 		&model.ChatMessage{},
+		&model.ChatBookmark{},
+		&model.QuestionTemplate{},
 		&model.EvaluationCase{},
 		&model.EvaluationRun{},
 		&model.Activity{},

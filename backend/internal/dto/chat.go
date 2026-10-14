@@ -65,15 +65,17 @@ type ChatSessionListQuery struct {
 }
 
 type ChatSessionResponse struct {
-	ScopeMode        string                      `json:"scopeMode"`
-	KnowledgeBaseIDs []string                    `json:"knowledgeBaseIds"`
-	KnowledgeBases   []ChatKnowledgeBaseResponse `json:"knowledgeBases"`
-	ID               string                      `json:"id"`
-	KnowledgeBaseID  string                      `json:"knowledgeBaseId"`
-	Title            string                      `json:"title"`
-	CreatedAt        time.Time                   `json:"createdAt"`
-	UpdatedAt        time.Time                   `json:"updatedAt"`
-	ArchivedAt       *time.Time                  `json:"archivedAt"`
+	BranchFromSessionID *string                     `json:"branchFromSessionId,omitempty"`
+	BranchFromMessageID *string                     `json:"branchFromMessageId,omitempty"`
+	ScopeMode           string                      `json:"scopeMode"`
+	KnowledgeBaseIDs    []string                    `json:"knowledgeBaseIds"`
+	KnowledgeBases      []ChatKnowledgeBaseResponse `json:"knowledgeBases"`
+	ID                  string                      `json:"id"`
+	KnowledgeBaseID     string                      `json:"knowledgeBaseId"`
+	Title               string                      `json:"title"`
+	CreatedAt           time.Time                   `json:"createdAt"`
+	UpdatedAt           time.Time                   `json:"updatedAt"`
+	ArchivedAt          *time.Time                  `json:"archivedAt"`
 	// The three fields below are only populated by the session list endpoint.
 	// Single-session responses (create/get/update/archive/unarchive) omit them
 	// because they do not join the knowledge base or aggregate messages.
@@ -102,15 +104,16 @@ type EditChatMessageRequest struct {
 }
 
 type CitationResponse struct {
-	KnowledgeBaseID   string   `json:"knowledgeBaseId,omitempty"`
-	KnowledgeBaseName string   `json:"knowledgeBaseName,omitempty"`
-	DocumentID        string   `json:"documentId"`
-	ChunkID           string   `json:"chunkId"`
-	Filename          string   `json:"filename"`
-	PageNumber        *int     `json:"pageNumber"`
-	Content           string   `json:"content"`
-	VectorScore       float64  `json:"vectorScore"`
-	RerankScore       *float64 `json:"rerankScore"`
+	Table             *TableSource `json:"table,omitempty"`
+	KnowledgeBaseID   string       `json:"knowledgeBaseId,omitempty"`
+	KnowledgeBaseName string       `json:"knowledgeBaseName,omitempty"`
+	DocumentID        string       `json:"documentId"`
+	ChunkID           string       `json:"chunkId"`
+	Filename          string       `json:"filename"`
+	PageNumber        *int         `json:"pageNumber"`
+	Content           string       `json:"content"`
+	VectorScore       float64      `json:"vectorScore"`
+	RerankScore       *float64     `json:"rerankScore"`
 	// StartOffset and EndOffset carry the retrieval offsets (see
 	// SearchResultResponse). Citations stored before they existed have neither.
 	StartOffset *int `json:"startOffset,omitempty"`
@@ -118,6 +121,7 @@ type CitationResponse struct {
 }
 
 type ChatMessageResponse struct {
+	Bookmark        *ChatBookmarkResponse        `json:"bookmark,omitempty"`
 	ID              string                       `json:"id"`
 	SessionID       string                       `json:"sessionId"`
 	ClientRequestID *string                      `json:"clientRequestId"`
@@ -251,15 +255,17 @@ type ChatKnowledgeGapListResponse struct {
 }
 
 type ChatMessageListResponse struct {
-	Items      []ChatMessageResponse `json:"items"`
-	HasMore    bool                  `json:"hasMore,omitempty"`
-	NextCursor string                `json:"nextCursor,omitempty"`
-	Revision   string                `json:"revision,omitempty"`
+	Items       []ChatMessageResponse `json:"items"`
+	HasMore     bool                  `json:"hasMore,omitempty"`
+	NextCursor  string                `json:"nextCursor,omitempty"`
+	HasNewer    bool                  `json:"hasNewer,omitempty"`
+	NewerCursor string                `json:"newerCursor,omitempty"`
+	Revision    string                `json:"revision,omitempty"`
 }
 
 type ChatMessagePageQuery struct {
-	Limit                   int
-	Before, Since, Revision string
+	Limit                                  int
+	Before, After, Around, Since, Revision string
 }
 
 type SendChatMessageResponse struct {

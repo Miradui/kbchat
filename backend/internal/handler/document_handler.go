@@ -116,7 +116,7 @@ func (h *DocumentHandler) Replace(c *gin.Context) {
 		RespondError(c, uploadFileError(err))
 		return
 	}
-	res, err := h.documents.Replace(c.Request.Context(), userID, documentID, file)
+	res, err := h.documents.Replace(c.Request.Context(), userID, documentID, file, uploadOptions(c))
 	if err != nil {
 		RespondError(c, err)
 		return
@@ -135,6 +135,7 @@ func (h *DocumentHandler) limitUploadBody(c *gin.Context) {
 // the two disagree. Anything other than "true" means the default: reject.
 func uploadOptions(c *gin.Context) service.DocumentUploadOptions {
 	return service.DocumentUploadOptions{
+		SourcePath:     c.PostForm("sourcePath"),
 		AllowDuplicate: c.PostForm("allowDuplicate") == "true",
 	}
 }

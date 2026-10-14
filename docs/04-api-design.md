@@ -318,7 +318,7 @@ pageSize=20         最大 100
   "keywordSearchEnabled": true,
   "upload": {
     "maxFileBytes": 52428800,
-    "allowedExtensions": ["txt", "md", "pdf", "docx"]
+    "allowedExtensions": ["txt", "md", "pdf", "docx", "xlsx", "csv"]
   },
   "retrieval": {
     "maxVectorTopN": 100,
@@ -1018,7 +1018,7 @@ pageSize
 }
 ```
 
-`errorCode` 是封闭集合，与 `backend/migrations/019_document_versions_and_answer_status.sql`
+`errorCode` 是封闭集合，与 `backend/migrations/039_table_error_code.sql`
 的 CHECK 约束一一对应：
 
 | 值 | 含义 |
@@ -1026,7 +1026,8 @@ pageSize
 | `unsupported_type` | 格式不受支持。集合内保留但处理阶段不会产生：上传校验先返回 400 |
 | `corrupt_file` | 容器本身无法解析（截断的 PDF 等） |
 | `encoding_invalid` | 文本编码不是合法 UTF-8 |
-| `empty_content` | 解析成功但没有可提取文字（扫描件、纯图片 PDF） |
+| `empty_content` | 解析成功但没有可提取文字或数据行（如纯图片 PDF、空表或仅含表头） |
+| `table_limit_exceeded` | 表格数据、行列数或 XLSX 展开内容超出解析限制 |
 | `embedding_failed` | 向量化调用失败，文件本身无问题 |
 | `storage_failed` | 读取对象存储失败 |
 | `cancelled` | 任务被取消 |
@@ -1035,7 +1036,7 @@ pageSize
 未失败的文档不返回 `errorCode`（`omitempty`）；019 之前记录的失败也没有该字段，客户端必须
 能回落到中性文案。
 
-`corrupt_file`、`encoding_invalid`、`empty_content` 以及对象已不存在的 `storage_failed` 是确定性失败，后台任务首次失败即终止，不消耗重试次数；其余失败按 worker 的重试次数与间隔重试，只在最终失败时写入 `errorCode`。
+`corrupt_file`、`encoding_invalid`、`empty_content`、`table_limit_exceeded` 以及对象已不存在的 `storage_failed` 是确定性失败，后台任务首次失败即终止，不消耗重试次数；其余失败按 worker 的重试次数与间隔重试，只在最终失败时写入 `errorCode`。
 
 `isStale` 只是展示提示，不是判断：文档超过 `staleAfterDays` 没有更新即为 true。它**不影响
 检索**，过期文档照常被检索和引用。`staleAfterDays` 回显服务端阈值（`STALE_DOCUMENT_AFTER_DAYS`，
@@ -1237,7 +1238,7 @@ Content-Disposition: attachment
 
 预览原始上传文件。需要所属知识库的 `document.read`。
 
-`txt` / `md` / `docx` 返回文本内容；`pdf` 和其他文件返回文件预览元信息，前端可使用 `downloadUrl` 打开浏览器/PDF 预览。DOCX 内容是解析后的 Markdown 形态纯文本，不还原版式；文本预览当前限制为 1MB，超出返回 `FILE_TOO_LARGE_FOR_PREVIEW`。
+`txt` / `md` / `docx` / `xlsx` / `csv` 返回文本内容；`pdf` 返回文件预览元信息，前端可使用 `downloadUrl` 打开浏览器/PDF 预览。DOCX 内容是解析后的 Markdown 形态纯文本，不还原版式；文本预览的输入文件及解析文本各限制为 1 MiB，超出返回 `FILE_TOO_LARGE_FOR_PREVIEW`。表格额外返回 `tableRows`，见下文「表格来源与相对路径」。
 DOCX 包损坏或加密导致解析失败时返回 `DOCUMENT_PREVIEW_FAILED`；上传处理任务则记录 `corrupt_file` 错误码。
 
 ```json
@@ -1683,7 +1684,7 @@ GET /chat/sessions?knowledgeBaseId=&archived=false&q=&page=1&pageSize=20
 
 - `knowledgeBaseId`：筛选范围包含该库的会话（含作为附加库的跨库会话），缺省返回全部
 - `archived`：`false`（默认）只返回未归档会话，`true` 只返回已归档会话；不支持一次返回两者
-- `q`：按会话标题模糊匹配，不检索消息内容（消息内容检索走 `GET /search`）
+- `q`：按会话标题模糊匹配，不检索消息内容（消息内容检索走 `GET /chat/messages/search`）
 - `page` / `pageSize`：默认 `1` / `20`，`pageSize` 上限 100
 
 响应按 `updatedAt` 倒序：
@@ -1837,24 +1838,43 @@ Markdown 按消息创建时间升序包含会话标题、`知识库：<名称>`�
 
 必须校验 session 属于当前用户，且对每个关联知识库均具有 `chat.use`。
 
-不带分页参数时兼容返回完整历史 `{items}`。携带下表任一参数时启用游标分页，消息按 `(createdAt, id)` 升序返回；首次读取最新一页，再向前加载。
+不带分页参数时兼容返回完整历史 `{items}`。携带下表任一参数时启用游标分页，消息按 `(createdAt, id)` 升序返回；默认读取最新一页，也可直接读取指定消息附近的窗口。
 
 | 参数 | 约定 |
 | --- | --- |
 | `limit` | 1–100 的整数，分页时默认 50；显式空值、非整数和越界值返回 400 `VALIDATION_ERROR`。这是消息数软上限，页首会向前扩展到所属 user 问题，保留该轮全部回答版本；旧数据开头的孤立 assistant 组也保持完整。 |
 | `before` | 上一页的 `nextCursor`，读取游标之前的消息，不包含游标消息。 |
+| `after` | 上一页的 `newerCursor`，向后读取，不包含游标消息；页尾扩展到该轮全部回答版本。 |
+| `around` | 当前会话内目标消息 UUID，读取目标前后合计约 `limit` 条，再把窗口两端扩展到完整问题/回答版本组。目标不存在或属于其他会话时返回 404 `CHAT_MESSAGE_NOT_FOUND`；会话本身无权访问时仍返回 `RESOURCE_NOT_FOUND`。 |
 | `since` | 从已加载最早消息的游标开始刷新到当前末尾，包含游标消息，不截断到 `limit`；与 `before` 互斥。用于发送、编辑等操作后的已加载范围刷新。 |
-| `revision` | 最新消息 ID，加载更早历史时应回传上一响应的值。若会话末尾已变化，返回 409 `CHAT_MESSAGE_CHANGED`，客户端重新加载会话。 |
+| `revision` | 最新消息 ID，向前或向后续页时应回传上一响应的值。若会话末尾已变化，返回 409 `CHAT_MESSAGE_CHANGED`，客户端重新加载会话。 |
 
-分页响应为 `{items, hasMore?, nextCursor?, revision?}`：`hasMore` 缺省等同 `false`；非空页始终返回 `nextCursor`，即使已经没有更早消息，仍可供 `since` 刷新；空历史省略游标和 revision。游标是不透明的 Base64URL 值，绑定会话，客户端应原样回传；格式不合法或属于其他会话返回 400。`since` 对应的消息已被编辑删除时返回 409；读取期间检测到末尾变化也返回 409。
+`before`、`after`、`around`、`since` 互斥。向前、向后续页均应回传 `revision`；`around` 是重新定位，可省略 revision 读取当前版本。
 
-每次分页、范围刷新和全量读取均重新执行相同权限检查；知识库成员身份不能赋予读取其他用户会话的权限。分页只限制历史展示读取，不改变模型上下文预算、发送幂等规则或全量 Markdown 导出。前端全文查找、未加载消息深链接和刷新后的未知写操作对账按需使用全量读取。
+分页响应为 `{items, hasMore?, nextCursor?, hasNewer?, newerCursor?, revision?}`：`hasMore` / `hasNewer` 分别表示窗口前/后仍有消息，缺省等同 `false`。非空页始终返回窗口首尾游标 `nextCursor` / `newerCursor`，首游标也供 `since` 刷新；空历史省略游标和 revision。游标是不透明的 Base64URL 值，绑定会话，客户端应原样回传；格式不合法或属于其他会话返回 400。`since` / `after` 对应的消息已被编辑删除时返回 409；读取期间检测到末尾变化也返回 409。
+
+每次分页、范围刷新和全量读取均重新执行相同权限检查；知识库成员身份不能赋予读取其他用户会话的权限。分页只限制历史展示读取，不改变模型上下文预算、发送幂等规则或全量 Markdown 导出。前端搜索和深链接使用局部窗口；跨刷新未知写操作对账仍按需全量读取。
 
 消息项包含 `clientRequestId`；历史消息或 regenerate 产生的 assistant 消息可为 `null`。客户端用该字段确定性核对发送结果，不得按消息数量或文本相等推测。
 
 每条消息都固定返回 `feedback`。未评价消息和 user 消息为 `null`；已评价的
 assistant 消息为 `{ "messageId", "rating", "reason", "comment", "updatedAt" }`。消息列表、阻塞发送、
 流式 `done` 和 regenerate 返回的消息均使用同一结构。
+
+### GET /chat/messages/search
+
+关键词搜索当前用户全部可访问的提问与回答，包括已归档会话和历史回答版本，每条消息只返回一个命中。已软删除会话、已删除/撤权的任一依赖知识库，以及其他用户的会话均不可见；计数和结果使用同一权限条件，系统管理员也不能读取他人的消息。
+
+| 参数 | 说明 |
+| --- | --- |
+| `q` | 必填，去掉首尾空白后 1–200 字符。正文子串匹配，不区分大小写，`%`、`_`、`!` 等按字面处理，不是正则或语义检索。 |
+| `sessionId` | 可选 UUID，仅搜索该会话；逐库检查 `chat.use` 及 `user_id`，不可访问返回 404 `RESOURCE_NOT_FOUND`。 |
+| `page` | 默认 1，整数范围 1–1000000。 |
+| `pageSize` | 默认 20，整数范围 1–100。 |
+
+返回 `{items, total, page, pageSize}`。每项包含 `messageId`、`sessionId`、`sessionTitle`、`archivedAt`（未归档为 null）、`role`、`createdAt` 和 `excerpt: {before, match, after}`。摘录只围绕正文首次命中，保留原大小写，前后最多 40/80 字符，截断处加省略号；三个字段均为纯文本，客户端不得作为 HTML 注入。数据库语言排序规则与应用 Unicode 转换存在差异时可返回无高亮的短摘录。不会返回整条长正文或引用元数据。
+
+跨会话按消息 `(createdAt, messageId)` 倒序；指定会话时按相同键升序，供上一条/下一条查找使用。越界页保留总数并返回空数组。结果不是持久快照；点击命中后通过该会话 `messages?around=<messageId>&limit=50` 重新读取上下文与权限，已删除的消息局部提示，不把它误当作整段会话撤权。
 
 ### POST /chat/messages/:messageId/feedback
 
@@ -2679,7 +2699,7 @@ OpenAI 兼容接口里没有免费的 ping。为了检查而发一次 completion
 - 替换已被替换过的文档返回 409 `DOCUMENT_ALREADY_SUPERSEDED`
 - 文档响应新增 `errorCode`、`supersededById`、`supersededAt`、`isStale`、`staleAfterDays`
 - 会话消息新增 `answerStatus`，`GET /chat/knowledge-gaps` 的 `category` 扩展到四类
-- `errorCode` 与 `answerStatus` 都是封闭集合，值域由 migration 019 的 CHECK 约束固定
+- `errorCode` 与 `answerStatus` 都是封闭集合；`errorCode` 的 CHECK 已由迁移 039 扩充，`answerStatus` 保持迁移 019 的约束
 
 ## P2 权限与协作
 
@@ -2721,3 +2741,61 @@ OpenAI 兼容接口里没有免费的 ping。为了检查而发一次 completion
 ## Embedding 诊断
 
 `GET /system/diagnostics` 新增 `embedding`：`status`、`model`、`configuredDimension`、`columnDimension`、`totalDocuments`、`unknownDocuments`、`mismatchedDocuments`、`groups`。每个 group 为 `{model,dimension,count}`；未知值为 null。只统计知识库和文档均未删除、状态 completed 的文档，包含仍可检索的历史版本。未知与不匹配分别计数；有任一异常时为 degraded，查询失败为 down，不能把失败解释为零文档。原有管理员权限保持。
+
+## 回答收藏与个人备注
+
+| 方法 / 路径 | 请求与响应 |
+| --- | --- |
+| `GET /chat/bookmarks` | `q` 可选、最多 200 字；`page` 默认 1、范围 1–1000000，`pageSize` 默认 20、范围 1–100。返回 `{items,total,page,pageSize}`。 |
+| `PUT /chat/messages/:messageId/bookmark` | `{note}`，trim 后最多 4000 字，允许空备注；请求体最多 100 KiB。幂等创建/更新，200 返回 `{messageId,note,createdAt,updatedAt}`。 |
+| `DELETE /chat/messages/:messageId/bookmark` | 204；在回答仍可访问的前提下重复删除成功。 |
+
+仅收藏本人可访问会话中的 assistant 回答，精确绑定回答版本；提问返回 400 `VALIDATION_ERROR`。没有访问立场、会话已删除或任一依赖撤权返回 404 `RESOURCE_NOT_FOUND`。归档会话包括在结果中；计数与条目共用全部依赖权限条件。`q` 对回答、备注和会话标题做字面关键词搜索，不把 `%/_` 当通配符。
+
+列表条目包含消息搜索字段 `{messageId,sessionId,sessionTitle,archivedAt,role,createdAt,excerpt}` 和 `bookmark`；摘录沿用会话搜索的纯文本及高亮区间格式。消息历史 DTO 额外带可选 `bookmark`，由批量查询加载；无收藏时省略。普通消息查询、个人模板及收藏不跨账号缓存。
+
+## 文档版本文本对比
+
+- `GET /documents/:id/versions` 返回 `{items:[{id,filename,status,createdAt,supersededById}]}`，按时间/ID 升序。仅包含该文档双向替换链中同库、未删除的文档，删除或跨库链接停止遍历；最多 100 个版本。
+- `GET /documents/:id/compare?baseId=UUID` 将路径版本作为新版本、`baseId` 作为旧版本。两端均需 `document.read`，且必须来自同一替换链；非法链为 400 `VALIDATION_ERROR`。两个相同 ID 可比较，结果无增删。
+- 响应为 `{base,head,addedLines,removedLines,lines}`；每行 `{kind,content,baseLine,headLine}`，`kind=equal|add|remove`，行号从 1 开始，不存在的一侧为 null。文本按字面返回，不包含渲染 HTML。
+- 两端必须 completed；原文件各最多 50 MiB、解析文本各最多 1 MiB / 2000 行。比较解析文本，不比较 PDF/DOCX 版式或调用模型概括差异；对象读取后重新验证两端权限。错误列表见 `09-error-codes.md`。
+
+## 对话分支
+
+`POST /chat/sessions/:id/branches`，请求体最多 16 KiB：
+
+```json
+{"messageId":"assistant-message-uuid","clientRequestId":"new-request-uuid","title":"可选标题"}
+```
+
+201 返回新会话详情，含可选 `branchFromSessionId` / `branchFromMessageId`。标题 trim 后最多 100 字；不填则由来源标题附加“ · 分支”。来源须属于调用者且全部依赖可访问，允许从归档会话创建。只接受 assistant 消息，复制按时间/ID 排序的历史前缀，恰好结束于选中的回答版本；最多 10000 条消息 / 16 MiB 正文、引用和回退元数据。
+
+复制保留内容、引用、意图、检索式和回答状态，继承自动/手动模式及完整依赖；副本使用新 ID，不复制收藏、评价、未确认写入、请求编号或模型用量。来源会话不变。创建、依赖和消息复制在同一事务中，来源行锁使相同请求并发重试返回同一个分支；已存在请求编号用于不同目标或已软删除分支时报 409 `CHAT_BRANCH_REQUEST_CONFLICT`。来源永久删除后分支保留，链接置空；分支始终独立检查自己的知识库依赖。
+
+## 个人提问模板
+
+| 方法 / 路径 | 请求与响应 |
+| --- | --- |
+| `GET /chat/templates` | 与收藏相同的 `q/page/pageSize`，搜索标题和正文；返回 `{items,total,page,pageSize}`。 |
+| `POST /chat/templates` | `{title,body}`，201 返回模板。 |
+| `PUT /chat/templates/:templateId` | `{title,body}`，200 返回更新模板。 |
+| `DELETE /chat/templates/:templateId` | 204；不存在或非本人模板返回 404。 |
+
+模板响应 `{id,title,body,variables,createdAt,updatedAt}`。标题 trim 后 1–100 字，正文 1–12000 字，请求体最多 100 KiB。变量语法为 `{{变量名}}`，变量名最多 40 个 Unicode 字符，只含字母、数字、下划线或连字符；最多 20 个不同变量，按第一次出现排序，重复变量只列一次，畸形括号返回 400 `VALIDATION_ERROR`。权限仅个人归属，不依附特定知识库；不调用模型或自动发送聊天。前端填值和插入草稿，不新增服务端模板执行接口。
+
+## 表格来源与相对路径
+
+上传能力增加 `.xlsx` 和 `.csv`；`.xls` 不支持。解析与压缩包上限见 [RAG 规范](05-rag-pipeline.md#xlsx--csv-资料解析)。表格向量及引用继续使用现有 pipeline，无统计/公式执行接口。
+
+文档上传、全局上传及替换 multipart 请求可带 `sourcePath`。它只作来源展示，统一 `/` 分隔，最后一段必须等于上传文件名；最多 1024 UTF-8 字节、每段最多 255 字，拒绝绝对路径、冒号、控制字符、空段、`.` 和 `..`。非法值为 400 `VALIDATION_ERROR`。文档详情、列表、回收站、上传和替换响应带可选 `sourcePath`，空值省略；替换只保存本次上传提供的路径。ZIP 不作为后端文档格式上传，由浏览器展开后调用原有逐文件 API，全部文件仍逐项鉴权、查重与排队。
+
+检索条目与引用新增可选 `table`：
+
+```json
+{"table":{"sheetName":"库存","rowStart":5,"rowEnd":5,"headerRow":2}}
+```
+
+XLSX 使用工作表名和原始行号；CSV 的工作表名为空，行范围是物理文件行（包括引号字段内换行）。表头不会单独成为数据记录。无来源或无效元数据不生成 `table`；行号不由回答模型推断。JSON/SSE、已保存消息及 Markdown 导出均保留来源。
+
+`GET /documents/:id/preview` 对表格返回 `kind=text`、解析文本与 `tableRows`。每项包括上述四个来源字段以及 `[startOffset,endOffset)`，它是响应 `content` 的 UTF-8 字节区间，用于定位完整数据记录。预览输入文件或解析文本大于 1 MiB 时仍报 `FILE_TOO_LARGE_FOR_PREVIEW`；可查看已有引用摘录和来源标签。表格解析失败为 `DOCUMENT_PREVIEW_FAILED`，触及表格解析上限为 `DOCUMENT_TABLE_TOO_LARGE`。XLSX 只读取已保存公式结果；无缓存值为空，前端说明这一限制。

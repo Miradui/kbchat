@@ -21,6 +21,7 @@ type ChatComposerProps = {
   onChange: (value: string) => void;
   onSubmit: () => void;
   onCancel: () => void;
+  onTemplates?: () => void;
 };
 
 /**
@@ -38,6 +39,7 @@ export function ChatComposer({
   onChange,
   onSubmit,
   onCancel,
+  onTemplates,
 }: ChatComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const hintId = useId();
@@ -85,6 +87,7 @@ export function ChatComposer({
           value={value}
         />
         <div className="chat-composer__actions">
+          {onTemplates && <Button variant="ghost" disabled={disabled || sending} onClick={onTemplates}>提问模板</Button>}
           <span className="chat-composer__hint">
             <kbd className="ui-kbd">Enter</kbd> 发送 · <kbd className="ui-kbd">Shift + Enter</kbd> 换行
           </span>

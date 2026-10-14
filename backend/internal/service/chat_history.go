@@ -20,8 +20,14 @@ func (s *ChatService) ListMessagePage(ctx context.Context, userID, sessionID uui
 	if err != nil {
 		return nil, err
 	}
-	if query.Limit < 1 || query.Limit > 100 || (query.Before != "" && query.Since != "") {
-		return nil, apperror.Validation(map[string]any{"pagination": "limit must be 1-100; before and since are mutually exclusive"})
+	directions := 0
+	for _, value := range []string{query.Before, query.After, query.Around, query.Since} {
+		if value != "" {
+			directions++
+		}
+	}
+	if query.Limit < 1 || query.Limit > 100 || directions > 1 {
+		return nil, apperror.Validation(map[string]any{"pagination": "limit must be 1-100; before, after, around and since are mutually exclusive"})
 	}
 	decode := func(value string) (*repository.ChatHistoryCursor, error) {
 		if value == "" {
@@ -49,22 +55,44 @@ func (s *ChatService) ListMessagePage(ctx context.Context, userID, sessionID uui
 	if err != nil {
 		return nil, err
 	}
+	after, err := decode(query.After)
+	if err != nil {
+		return nil, err
+	}
+	var around *uuid.UUID
+	if query.Around != "" {
+		id, err := uuid.Parse(query.Around)
+		if err != nil || id == uuid.Nil {
+			return nil, apperror.Validation(map[string]any{"around": "message id is invalid"})
+		}
+		around = &id
+	}
 	if query.Revision != "" {
 		if _, err := uuid.Parse(query.Revision); err != nil {
 			return nil, apperror.Validation(map[string]any{"revision": "revision is invalid"})
 		}
 	}
-	page, err := s.chats.ListMessagePage(ctx, session.ID, repository.ChatHistoryQuery{Limit: query.Limit, Before: before, Since: since, Revision: query.Revision})
+	page, err := s.chats.ListMessagePage(ctx, session.ID, repository.ChatHistoryQuery{Limit: query.Limit, Before: before, After: after, Around: around, Since: since, Revision: query.Revision})
+	if errors.Is(err, repository.ErrChatMessageNotFound) {
+		return nil, apperror.NotFound("CHAT_MESSAGE_NOT_FOUND", "message no longer exists in this conversation")
+	}
 	if errors.Is(err, repository.ErrChatMessageChanged) {
 		return nil, apperror.New(http.StatusConflict, "CHAT_MESSAGE_CHANGED", "conversation history changed; reload the latest page")
 	}
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
-	res := &dto.ChatMessageListResponse{Items: make([]dto.ChatMessageResponse, 0, len(page.Items)), HasMore: page.HasMore, Revision: page.Revision}
+	res := &dto.ChatMessageListResponse{Items: make([]dto.ChatMessageResponse, 0, len(page.Items)), HasMore: page.HasMore, HasNewer: page.HasNewer, Revision: page.Revision}
 	if page.NextCursor != nil {
 		data, _ := json.Marshal(page.NextCursor)
 		res.NextCursor = base64.RawURLEncoding.EncodeToString(data)
+	}
+	if page.NewerCursor != nil {
+		data, _ := json.Marshal(page.NewerCursor)
+		res.NewerCursor = base64.RawURLEncoding.EncodeToString(data)
+	}
+	if err := s.chats.LoadBookmarks(ctx, userID, page.Items); err != nil {
+		return nil, apperror.Internal(err)
 	}
 	for i := range page.Items {
 		res.Items = append(res.Items, toChatMessageResponse(&page.Items[i]))

@@ -1,0 +1,22 @@
+import { screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { expect, it, vi } from 'vitest';
+import { createChatBranch } from '../../api/resources';
+import { renderWithRouter } from '../../test/render';
+import type { ChatMessage, ChatSession } from '../../types/api';
+import { ChatBranchDialog } from './ChatBranchDialog';
+vi.mock('../../api/resources', () => ({ createChatBranch: vi.fn() }));
+it('retries with the same idempotency key and leaves navigation to the user after creating the exact version', async () => {
+  const message: ChatMessage = { id: 'old-answer', sessionId: 'source', role: 'assistant', content: '早期方案', citations: [], createdAt: '' };
+  const branch = { id: 'branch', title: '方案分支' } as ChatSession;
+  vi.mocked(createChatBranch).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(branch);
+  const created = vi.fn();
+  renderWithRouter(<ChatBranchDialog message={message} onClose={vi.fn()} onCreated={created} onInaccessible={() => false} />);
+  await userEvent.setup().click(screen.getByRole('button', { name: '创建分支' })); await screen.findByRole('alert');
+  const key = vi.mocked(createChatBranch).mock.calls[0][1].clientRequestId;
+  await userEvent.setup().click(screen.getByRole('button', { name: '创建分支' }));
+  await waitFor(() => expect(created).toHaveBeenCalledWith(branch));
+  expect(createChatBranch).toHaveBeenLastCalledWith('source', { messageId: 'old-answer', clientRequestId: key, title: '' });
+  expect(screen.getByRole('link', { name: '打开新分支' })).toHaveAttribute('href', '/chat/branch');
+  expect(screen.getByRole('button', { name: '留在当前会话' })).toBeInTheDocument();
+});

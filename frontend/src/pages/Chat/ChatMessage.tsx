@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Copy, FileText, FileType, Pencil, RotateCw, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react';
+import { Bookmark, Check, ChevronDown, Copy, FileText, FileType, GitBranch, Pencil, RotateCw, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 import { memo, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
@@ -12,6 +12,7 @@ import type {
 } from '../../types/api';
 import { formatNullableScore, formatScore } from '../../utils/format';
 import { copyText } from '../../utils/clipboard';
+import { tableSourceLabel } from '../../utils/tableSource';
 import { answerStatusNotice } from './answerStatus';
 import { ChatMarkdown } from './ChatMarkdown';
 import { ChatAnswerVersionNavigation } from './ChatAnswerVersionNavigation';
@@ -32,6 +33,9 @@ type MessageBubbleProps = {
   onRegenerate: (messageId: string) => void;
   feedbackSaving: boolean;
   onFeedback: (messageId: string, rating: ChatFeedbackRating) => void;
+  onBookmark?: (message: ChatMessageType) => void;
+  onBranch?: (message: ChatMessageType) => void;
+  branchingDisabled?: boolean;
   versionNavigation?: ReactNode;
   versionIndex?: number;
   versionCount?: number;
@@ -66,6 +70,8 @@ export const MessageBubble = memo(function MessageBubble({
   onRegenerate,
   feedbackSaving,
   onFeedback,
+  onBookmark,
+  onBranch, branchingDisabled = false,
   versionNavigation,
   versionIndex = 0, versionCount = 1, versionGroupId = '', versionsDisabled = false, onVersionChange,
   recovery,
@@ -220,6 +226,11 @@ export const MessageBubble = memo(function MessageBubble({
               {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
             </IconButton>
 
+            {onBookmark && <IconButton label={message.bookmark ? '编辑收藏备注' : '收藏回答'} aria-pressed={Boolean(message.bookmark)} onClick={() => onBookmark(message)}>
+              <Bookmark aria-hidden="true" fill={message.bookmark ? 'currentColor' : 'none'} />
+            </IconButton>}
+            {onBranch && <IconButton label="从此回答创建分支" disabled={branchingDisabled} onClick={() => onBranch(message)}><GitBranch aria-hidden="true" /></IconButton>}
+
             {versionNavigation ?? (versionCount > 1 && onVersionChange ? <ChatAnswerVersionNavigation
               index={versionIndex} count={versionCount} disabled={versionsDisabled}
               onChange={(index) => onVersionChange(versionGroupId, index)} /> : null)}
@@ -294,7 +305,7 @@ export function CitationCard({ citation, focused, index, knowledgeBaseId, onOpen
   const ref = useRef<HTMLElement | null>(null);
   const long = citation.content.length > PREVIEW_LENGTH;
   const preview = long ? `${citation.content.slice(0, PREVIEW_LENGTH).trimEnd()}…` : citation.content;
-  const pageLabel = citation.pageNumber ? `p.${citation.pageNumber}` : '无页码';
+  const pageLabel = tableSourceLabel(citation.table) || (citation.pageNumber ? `p.${citation.pageNumber}` : '无页码');
   const sourceKnowledgeBaseId = citation.knowledgeBaseId ?? knowledgeBaseId;
   const href = sourceKnowledgeBaseId
     ? `/knowledge-bases/${encodeURIComponent(sourceKnowledgeBaseId)}/documents?documentId=${encodeURIComponent(citation.documentId)}&chunkId=${encodeURIComponent(citation.chunkId)}`

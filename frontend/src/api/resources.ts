@@ -487,6 +487,7 @@ export function listDocumentChunks(
  */
 export type UploadDocumentOptions = {
   allowDuplicate?: boolean;
+  sourcePath?: string;
 };
 
 export function uploadDocument(
@@ -527,6 +528,7 @@ export function uploadGlobalDocument(
  * it keeps a normal upload's body identical to what it was before this existed.
  */
 function appendUploadOptions(body: FormData, options: UploadDocumentOptions): void {
+  if (options.sourcePath) body.append('sourcePath', options.sourcePath);
   if (options.allowDuplicate) {
     body.append('allowDuplicate', 'true');
   }
@@ -546,9 +548,12 @@ export function replaceDocument(
   file: File,
   onProgress?: (progress: number) => void,
   signal?: AbortSignal,
+  options: UploadDocumentOptions = {},
 ): Promise<DocumentItem> {
   const body = new FormData();
   body.append('file', file);
+
+  appendUploadOptions(body, options);
 
   return apiUploadRequest<DocumentItem>(`/documents/${id}/replace`, body, {
     onProgress,
@@ -747,6 +752,43 @@ export function unarchiveChatSession(sessionId: string): Promise<ChatSession> {
 
 export function listChatMessages(sessionId: string, params?: import('../types/api').ChatMessagePageParams, signal?: AbortSignal): Promise<ChatMessageListResponse> {
   return apiRequest<ChatMessageListResponse>(withQuery(`/chat/sessions/${sessionId}/messages`, params ?? {}), { signal });
+}
+
+export function searchChatMessages(params: import('../types/api').ChatMessageSearchParams, signal?: AbortSignal): Promise<import('../types/api').ChatMessageSearchResponse> {
+  return apiRequest<import('../types/api').ChatMessageSearchResponse>(withQuery('/chat/messages/search', params), { signal });
+}
+
+export function listChatBookmarks(params: import('../types/api').PersonalListParams, signal?: AbortSignal) {
+  return apiRequest<import('../types/api').ChatBookmarkListResponse>(withQuery('/chat/bookmarks', params), { signal });
+}
+
+export function createChatBranch(sessionId: string, input: { messageId: string; clientRequestId: string; title?: string }) {
+  return apiRequest<import('../types/api').ChatSession>(`/chat/sessions/${sessionId}/branches`, { method: 'POST', body: input });
+}
+
+export function listQuestionTemplates(params: import('../types/api').PersonalListParams, signal?: AbortSignal) {
+  return apiRequest<import('../types/api').QuestionTemplateListResponse>(withQuery('/chat/templates', params), { signal });
+}
+export function saveQuestionTemplate(id: string | null, input: { title: string; body: string }) {
+  return apiRequest<import('../types/api').QuestionTemplate>(id ? `/chat/templates/${id}` : '/chat/templates', { method: id ? 'PUT' : 'POST', body: input });
+}
+export function deleteQuestionTemplate(id: string) {
+  return apiRequest<void>(`/chat/templates/${id}`, { method: 'DELETE' });
+}
+
+export function listDocumentVersions(id: string, signal?: AbortSignal) {
+  return apiRequest<{ items: import('../types/api').DocumentVersion[] }>(`/documents/${id}/versions`, { signal });
+}
+export function compareDocumentVersions(headId: string, baseId: string, signal?: AbortSignal) {
+  return apiRequest<import('../types/api').DocumentCompareResponse>(withQuery(`/documents/${headId}/compare`, { baseId }), { signal });
+}
+
+export function saveChatBookmark(messageId: string, note: string) {
+  return apiRequest<import('../types/api').ChatBookmark>(`/chat/messages/${messageId}/bookmark`, { method: 'PUT', body: { note } });
+}
+
+export function deleteChatBookmark(messageId: string) {
+  return apiRequest<void>(`/chat/messages/${messageId}/bookmark`, { method: 'DELETE' });
 }
 
 export function setChatMessageFeedback(

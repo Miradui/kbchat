@@ -77,3 +77,55 @@ it('forwards revoked access and invalidates pagination', async () => {
   expect(denied).toHaveBeenCalledWith(error, 's1');
   expect(result.current.hasOlderMessages).toBe(false);
 });
+
+it('replaces a distant window, appends and prepends context without losing either cursor', async () => {
+  const { result } = setup();
+  vi.mocked(listChatMessages).mockResolvedValueOnce({ items: [message('m10'), message('m11')], hasMore: true, hasNewer: true, nextCursor: 'c10', newerCursor: 'c11', revision: 'last' });
+  await act(async () => { await result.current.loadMessageContext('m10'); });
+  expect(result.current.messages.map((item) => item.id)).toEqual(['m10', 'm11']);
+  expect(result.current.hasNewerMessages).toBe(true);
+  expect(listChatMessages).toHaveBeenLastCalledWith('s1', { limit: 50, around: 'm10' }, expect.any(AbortSignal));
+  vi.mocked(listChatMessages).mockResolvedValueOnce({ items: [message('m12')], hasMore: true, hasNewer: true, nextCursor: 'c12', newerCursor: 'c12', revision: 'last' });
+  await act(async () => { await result.current.loadNewerMessages(); });
+  expect(listChatMessages).toHaveBeenLastCalledWith('s1', { limit: 50, after: 'c11', revision: 'last' }, expect.any(AbortSignal));
+  vi.mocked(listChatMessages).mockResolvedValueOnce({ items: [message('m9')], hasNewer: true, nextCursor: 'c9', newerCursor: 'c9', revision: 'last' });
+  await act(async () => { await result.current.loadOlderMessages(); });
+  expect(listChatMessages).toHaveBeenLastCalledWith('s1', { limit: 50, before: 'c10', revision: 'last' }, expect.any(AbortSignal));
+  expect(result.current.messages.map((item) => item.id)).toEqual(['m9', 'm10', 'm11', 'm12']);
+  expect(result.current.hasOlderMessages).toBe(false);
+  expect(result.current.hasNewerMessages).toBe(true);
+  vi.mocked(listChatMessages).mockRejectedValueOnce(new Error('offline'));
+  await act(async () => { await result.current.loadNewerMessages(); });
+  vi.mocked(listChatMessages).mockResolvedValueOnce({ items: [message('m13')], newerCursor: 'c13', revision: 'last' });
+  await act(async () => { await result.current.retryHistory(); });
+  expect(listChatMessages).toHaveBeenLastCalledWith('s1', { limit: 50, after: 'c12', revision: 'last' }, expect.any(AbortSignal));
+  expect(result.current.hasNewerMessages).toBe(false);
+});
+
+it('distinguishes a deleted search hit from revoked session access and lets the user return to latest', async () => {
+  const { result, denied } = setup();
+  vi.mocked(listChatMessages).mockRejectedValueOnce(new ApiError(404, { code: 'CHAT_MESSAGE_NOT_FOUND', message: 'gone' }));
+  await act(async () => { await result.current.loadMessageContext('deleted'); });
+  expect(result.current.missingMessageId).toBe('deleted');
+  expect(result.current.messages).toEqual(latest.items);
+  expect(denied).not.toHaveBeenCalled();
+  let resolve!: (value: ChatMessageListResponse) => void;
+  vi.mocked(listChatMessages).mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+  let pending!: Promise<void>;
+  act(() => { pending = result.current.loadLatestMessages(); result.current.cancelMessageContext(); });
+  expect(vi.mocked(listChatMessages).mock.calls.at(-1)?.[2]?.aborted).toBe(false);
+  await act(async () => { resolve(latest); await pending; });
+  expect(result.current.missingMessageId).toBe('');
+});
+
+it('discards a slower context request after a different hit is selected', async () => {
+  const { result } = setup();
+  let resolve!: (value: ChatMessageListResponse) => void;
+  vi.mocked(listChatMessages).mockReturnValueOnce(new Promise((done) => { resolve = done; }))
+    .mockResolvedValueOnce({ items: [message('new-target')], hasNewer: true, newerCursor: 'new' });
+  let pending!: Promise<void>;
+  act(() => { pending = result.current.loadMessageContext('old-target'); });
+  await act(async () => { await result.current.loadMessageContext('new-target'); });
+  await act(async () => { resolve({ items: [message('stale')] }); await pending; });
+  expect(result.current.messages.map((item) => item.id)).toEqual(['new-target']);
+});

@@ -15,6 +15,7 @@ import { getErrorMessage } from '../../utils/errors';
 import { formatRelativeTime } from '../../utils/format';
 import { formatDocumentBytes } from './documentDisplay';
 import type { ImportSnapshot, ImportStatus } from './DocumentImportContext';
+import { MAX_IMPORT_BYTES, MAX_IMPORT_FILES, prepareImportFiles, preparePlainImportFiles, type PreparedImportFile } from './importFiles';
 
 /**
  * The accept attribute is a file-picker hint only; validateDocumentFile enforces
@@ -25,6 +26,8 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   md: 'text/markdown',
   pdf: 'application/pdf',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  csv: 'text/csv',
 };
 
 function acceptAttribute(extensions: string[]): string {
@@ -46,6 +49,7 @@ function extensionSummary(extensions: string[]): string {
  * misdescribe what happened.
  */
 type ImportItem = {
+  sourcePath?: string;
   text?: TextDocumentInput;
   error: string;
   file: File;
@@ -75,7 +79,7 @@ type DocumentImportDialogProps = {
     file: File,
     onProgress?: (progress: number) => void,
     signal?: AbortSignal,
-    options?: { allowDuplicate?: boolean },
+    options?: { allowDuplicate?: boolean; sourcePath?: string },
   ) => Promise<DocumentItem>;
   /**
    * Replace the colliding document instead of adding a second copy. Injected so the
@@ -86,6 +90,7 @@ type DocumentImportDialogProps = {
     file: File,
     onProgress?: (progress: number) => void,
     signal?: AbortSignal,
+    options?: { sourcePath?: string },
   ) => Promise<DocumentItem>;
   onUploaded?: (document: DocumentItem) => void;
   open: boolean;
@@ -115,6 +120,10 @@ export function DocumentImportDialog({
   const toast = useToast();
   const { upload } = useSystemCapabilities();
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const folderRef = useRef<HTMLInputElement | null>(null);
+  const archiveRef = useRef<HTMLInputElement | null>(null);
+  const prepareRef = useRef<AbortController | null>(null);
+  const [preparing, setPreparing] = useState(false);
   const operationRef = useRef<symbol | null>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
   const wasOpenRef = useRef(false);
@@ -135,6 +144,7 @@ export function DocumentImportDialog({
     const opening = open && !wasOpenRef.current;
     wasOpenRef.current = open;
     if (!open) {
+      prepareRef.current?.abort(); prepareRef.current = null; setPreparing(false);
       uploadAbortRef.current?.abort();
       uploadAbortRef.current = null;
       operationRef.current = null;
@@ -161,6 +171,7 @@ export function DocumentImportDialog({
   }, [fixedKnowledgeBaseId, initialKnowledgeBaseId, knowledgeBases, open]);
 
   useEffect(() => () => {
+    prepareRef.current?.abort(); prepareRef.current = null;
     uploadAbortRef.current?.abort();
     uploadAbortRef.current = null;
     operationRef.current = null;
@@ -173,7 +184,7 @@ export function DocumentImportDialog({
     [items],
   );
 
-  useUnsavedChangesWarning(open && (hasTextDraft || items.some((item) => item.status !== 'succeeded')));
+  useUnsavedChangesWarning(open && (preparing || hasTextDraft || items.some((item) => item.status !== 'succeeded')));
 
   const knowledgeBaseName = (fixedKnowledgeBaseId ? fixedKnowledgeBaseName : undefined) || knowledgeBases.find((item) => item.id === knowledgeBaseId)?.name || '目标知识库';
   useEffect(() => {
@@ -186,6 +197,7 @@ export function DocumentImportDialog({
   }, [items, knowledgeBaseId, knowledgeBaseName, uploading, onStateChange]);
 
   function closeSafely() {
+    prepareRef.current?.abort(); prepareRef.current = null; setPreparing(false);
     if (uploading) {
       onMinimize?.();
       return;
@@ -198,43 +210,53 @@ export function DocumentImportDialog({
   }
 
   function handleFileInput(event: ChangeEvent<HTMLInputElement>) {
-    addFiles(Array.from(event.target.files ?? []));
+    void addFiles(Array.from(event.target.files ?? []));
     event.target.value = '';
   }
 
   function handleDrop(event: DragEvent<HTMLButtonElement>) {
     event.preventDefault();
     if (!uploading) {
-      addFiles(Array.from(event.dataTransfer.files));
+      void addFiles(Array.from(event.dataTransfer.files));
     }
   }
 
-  function addFiles(files: File[]) {
-    if (uploading || files.length === 0) {
+  async function addFiles(files: File[]) {
+    if (uploading || preparing || prepareRef.current || files.length === 0) {
       return;
     }
-
-    const errors: string[] = [];
-    const validFiles = files.filter((file) => {
+    const controller = new AbortController(); prepareRef.current = controller; setPreparing(true); setValidationError('');
+    let expanded: { files: PreparedImportFile[]; warnings: string[] };
+    try {
+      expanded = files.some((file) => file.name.toLowerCase().endsWith('.zip'))
+        ? await prepareImportFiles(files, upload.maxFileBytes, upload.allowedExtensions, controller.signal)
+        : preparePlainImportFiles(files);
+      if (controller.signal.aborted) return;
+    } catch (caught) {
+      if (!controller.signal.aborted) setValidationError(`文件展开失败：${getErrorMessage(caught, 'ZIP 可能损坏、不完整或包含不支持的结构。')}`);
+      return;
+    } finally { if (prepareRef.current === controller) { prepareRef.current = null; setPreparing(false); } }
+    const errors: string[] = [...expanded.warnings];
+    const validFiles = expanded.files.filter(({ file, sourcePath }) => {
       const error = validateDocumentFile(file, upload);
       if (error) {
-        errors.push(`${file.name}：${error}`);
+        errors.push(`${sourcePath || file.name}：${error}`);
         return false;
       }
       return true;
     });
 
-    setItems((current) => {
-      const existingKeys = new Set(current.map((item) => item.key));
-      const additions = validFiles
-        .map((file) => ({ file, key: fileKey(file) }))
-        .filter(({ key }) => !existingKeys.has(key))
-        .map(({ file, key }): ImportItem => ({ error: '', file, key, progress: 0, status: 'pending' }));
-      if (additions.length < validFiles.length) {
-        errors.push('已忽略重复选择的文件。');
-      }
-      return [...current, ...additions];
-    });
+    const existingKeys = new Set(items.map((item) => item.key));
+    const additions: ImportItem[] = [];
+    for (const { file, sourcePath } of validFiles) {
+      const key = `${sourcePath ?? ''}:${fileKey(file)}`;
+      if (existingKeys.has(key)) { errors.push('已忽略重复选择的文件。'); continue; }
+      existingKeys.add(key); additions.push({ file, sourcePath, key, error: '', progress: 0, status: 'pending' });
+    }
+    if (items.length + additions.length > MAX_IMPORT_FILES || [...items, ...additions].reduce((sum, item) => sum + item.file.size, 0) > MAX_IMPORT_BYTES) {
+      setValidationError('导入清单最多 200 个文件，总大小不超过 200 MiB。请分批导入。'); return;
+    }
+    setItems((current) => [...current, ...additions]);
     setValidationError(errors.join(' '));
   }
 
@@ -245,7 +267,7 @@ export function DocumentImportDialog({
   }
 
   async function handleSubmit() {
-    if (uploading || operationRef.current) {
+    if (uploading || preparing || prepareRef.current || operationRef.current) {
       return;
     }
     if (!knowledgeBaseId) {
@@ -432,7 +454,7 @@ export function DocumentImportDialog({
 
     try {
       const document = choice === 'replace' && onReplace
-        ? await onReplace(existingId, item.file, onProgress, controller.signal)
+        ? await (item.sourcePath ? onReplace(existingId, item.file, onProgress, controller.signal, { sourcePath: item.sourcePath }) : onReplace(existingId, item.file, onProgress, controller.signal))
         : await uploadItem(item, onProgress, controller.signal, { allowDuplicate: true });
       if (operationRef.current !== operation) return;
       setItems((current) => updateImportItem(current, item.key, {
@@ -493,6 +515,7 @@ export function DocumentImportDialog({
 
   function uploadItem(item: ImportItem, onProgress: (progress: number) => void, signal?: AbortSignal, options?: { allowDuplicate?: boolean }) {
     if (item.text) return (onCreateText ?? createTextDocument)(knowledgeBaseId, { ...item.text, ...options }, signal);
+    if (item.sourcePath) return onUpload(knowledgeBaseId, item.file, onProgress, signal, { ...options, sourcePath: item.sourcePath });
     return options ? onUpload(knowledgeBaseId, item.file, onProgress, signal, options) : onUpload(knowledgeBaseId, item.file, onProgress, signal);
   }
 
@@ -502,6 +525,7 @@ export function DocumentImportDialog({
     if (!textContent.trim()) { setValidationError('正文不能为空。'); return; }
     if (textBytes > upload.maxFileBytes) { setValidationError('正文大小超过上传限制。'); return; }
     const file = new File([textContent], `${title}.${textFormat}`, { type: MIME_BY_EXTENSION[textFormat] });
+    if (items.length >= MAX_IMPORT_FILES || items.reduce((sum, item) => sum + item.file.size, 0) + file.size > MAX_IMPORT_BYTES) { setValidationError('导入清单最多 200 个文件，总大小不超过 200 MiB。'); return; }
     setItems((current) => [...current, { file, text: { title, content: textContent, format: textFormat }, key: `text-${crypto.randomUUID()}`, error: '', progress: 0, status: 'pending' }]);
     setTextTitle(''); setTextContent(''); setValidationError('');
   }
@@ -543,8 +567,8 @@ export function DocumentImportDialog({
         )}
 
         <div role="group" aria-label="导入方式">
-          <Button aria-pressed={mode === 'file'} disabled={uploading} onClick={() => setMode('file')} variant="secondary">上传文件</Button>
-          <Button aria-pressed={mode === 'text'} disabled={uploading} onClick={() => setMode('text')} variant="secondary">粘贴文本</Button>
+          <Button aria-pressed={mode === 'file'} disabled={uploading || preparing} onClick={() => setMode('file')} variant="secondary">上传文件</Button>
+          <Button aria-pressed={mode === 'text'} disabled={uploading || preparing} onClick={() => setMode('text')} variant="secondary">粘贴文本</Button>
         </div>
         {mode === 'text' && <div style={{ display: 'grid', gap: 'var(--s-3)' }}>
           <label>文档标题<input className="ui-input" aria-label="文档标题" value={textTitle} disabled={uploading} onChange={(event) => setTextTitle(event.target.value)} /></label>
@@ -557,7 +581,7 @@ export function DocumentImportDialog({
           aria-label="拖放或选择文档"
           className="doc-import__dropzone"
           data-autofocus={fixedKnowledgeBaseId ? '' : undefined}
-          disabled={uploading}
+          disabled={uploading || preparing}
           onClick={() => inputRef.current?.click()}
           onDragOver={(event) => event.preventDefault()}
           onDrop={handleDrop}
@@ -571,7 +595,7 @@ export function DocumentImportDialog({
         </button>
         <input
           ref={inputRef}
-          accept={acceptAttribute(upload.allowedExtensions)}
+          accept={`${acceptAttribute(upload.allowedExtensions)},.zip,application/zip`}
           aria-label="选择文档文件"
           className="sr-only"
           disabled={uploading}
@@ -579,6 +603,15 @@ export function DocumentImportDialog({
           onChange={handleFileInput}
           type="file"
         />
+        <div className="doc-import__batch-actions">
+          <Button variant="secondary" disabled={uploading || preparing} onClick={() => folderRef.current?.click()}>选择文件夹</Button>
+          <Button variant="secondary" disabled={uploading || preparing} onClick={() => archiveRef.current?.click()}>选择 ZIP</Button>
+          <input ref={folderRef} {...{ webkitdirectory: '', directory: '' }} className="sr-only" type="file" multiple aria-label="选择文档文件夹" disabled={uploading || preparing} onChange={handleFileInput} />
+          <input ref={archiveRef} className="sr-only" type="file" accept=".zip,application/zip" aria-label="选择 ZIP 压缩包" disabled={uploading || preparing} onChange={handleFileInput} />
+        </div>
+        <p className="ui-muted">文件夹与 ZIP 会先展开为清单，保留来源路径。单批最多 200 个文件／200 MiB，不展开嵌套 ZIP。</p>
+        <p className="ui-muted">Excel 支持 .xlsx，CSV 请使用 UTF-8。每张表的首个非空行为表头；公式只读取已保存的结果，不重新计算。</p>
+        {preparing && <p role="status">正在展开文件… <Button variant="link" onClick={() => { prepareRef.current?.abort(); prepareRef.current = null; setPreparing(false); }}>取消展开</Button></p>}
         </>}
 
         {validationError && <p className="ui-inline-error" role="alert">{validationError}</p>}
@@ -589,6 +622,7 @@ export function DocumentImportDialog({
               <article className="doc-import__item" key={item.key} role="listitem">
                 <div className="ui-cell-stack">
                   <strong>{item.file.name}</strong>
+                  {item.sourcePath && <small className="doc-import__path">{item.sourcePath}</small>}
                   <small>{formatDocumentBytes(item.file.size)}{item.error ? ` · ${item.error}` : ''}</small>
                   {item.status === 'duplicate' && item.duplicate && (
                     <DuplicateChoice
@@ -647,7 +681,7 @@ export function DocumentImportDialog({
             <>
               <Button onClick={closeSafely} variant="secondary">取消</Button>
               <Button
-                disabled={!knowledgeBaseId || hasTextDraft || (pendingCount === 0 && failedCount === 0)}
+                disabled={preparing || !knowledgeBaseId || hasTextDraft || (pendingCount === 0 && failedCount === 0)}
                 onClick={() => void handleSubmit()}
               >
                 {failedCount > 0 && pendingCount === 0 ? '重试失败项' : '开始导入'}

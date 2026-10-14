@@ -12,7 +12,8 @@ import { useMediaQuery } from '../../hooks/useMediaQuery';
 import type { Citation, DocumentItem, DocumentPreviewResponse } from '../../types/api';
 import { downloadBlob } from '../../utils/download';
 import { getErrorMessage } from '../../utils/errors';
-import { locateCitation, normalizeSourceText } from './citationLocation';
+import { locateCitation, normalizeSourceText, rangeFromByteOffsets } from './citationLocation';
+import { tableSourceLabel } from '../../utils/tableSource';
 
 type PreviewState = {
   document: DocumentItem;
@@ -85,7 +86,9 @@ export function ChatSourcePreview({ citation, index, knowledgeBaseId, canDownloa
   }, [citation.documentId, citation.chunkId, overlay]);
 
   const content = normalizeSourceText(state?.preview.content ?? '');
-  const match = state?.preview.kind === 'text' ? locateCitation(content, citation) : null;
+  const sourceRow = citation.table ? state?.preview.tableRows?.find((row) => row.sheetName === citation.table?.sheetName && row.rowStart === citation.table.rowStart && row.rowEnd === citation.table.rowEnd && row.headerRow === citation.table.headerRow) : undefined;
+  const tableMatch = sourceRow ? rangeFromByteOffsets(content, sourceRow.startOffset, sourceRow.endOffset) : null;
+  const match = state?.preview.kind === 'text' ? citation.table ? tableMatch : locateCitation(content, citation) : null;
   const matchStart = match?.start ?? -1;
   useEffect(() => {
     if (!loading) matchRef.current?.scrollIntoView?.({ block: 'center', behavior: 'auto' });
@@ -113,13 +116,14 @@ export function ChatSourcePreview({ citation, index, knowledgeBaseId, canDownloa
         {citation.filename.toLowerCase().endsWith('.docx') ? <FileType aria-hidden="true" /> : <FileText aria-hidden="true" />}
         <div>
           <h3>{state?.document.filename ?? citation.filename}</h3>
-          <p>{citation.knowledgeBaseName && `${citation.knowledgeBaseName} · `}来源 {index} · {pageNumber ? `第 ${pageNumber} 页` : '未提供页码'}</p>
+          <p>{citation.knowledgeBaseName && `${citation.knowledgeBaseName} · `}来源 {index} · {tableSourceLabel(citation.table) || (pageNumber ? `第 ${pageNumber} 页` : '未提供页码')}</p>
         </div>
       </div>
       <details className="chat-preview__excerpt" open>
         <summary>本次回答引用的内容</summary>
         <blockquote>{citation.content}</blockquote>
       </details>
+      {state?.document.fileType === 'xlsx' && <p className="ui-muted">工作表按首个非空行识别表头。公式仅显示文件已保存的结果，缺少缓存值的单元格为空；不会重新计算。</p>}
       {downloadError && <p className="ui-inline-error" role="alert">{downloadError}</p>}
       {loading ? <LoadingSkeleton rows={5} /> : error ? (
         <div className="chat-preview__error">

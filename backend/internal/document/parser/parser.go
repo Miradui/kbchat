@@ -43,6 +43,7 @@ type PDFTextSummary struct {
 type Segment struct {
 	Content    string
 	PageNumber *int
+	Table      *TableRow
 }
 
 type DefaultParser struct{}
@@ -66,6 +67,19 @@ func (p *DefaultParser) Parse(path string, fileType string) (string, error) {
 func (p *DefaultParser) ParseDocument(path string, fileType string) (ParsedDocument, error) {
 	fileType = normalizeFileType(fileType)
 	switch fileType {
+	case "csv", "xlsx":
+		info, err := os.Stat(path)
+		if err != nil {
+			return ParsedDocument{}, err
+		}
+		if info.Size() > MaxTableInputBytes {
+			return ParsedDocument{}, ErrTableLimit
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return ParsedDocument{}, err
+		}
+		return parseTableBytes(content, fileType)
 	case "txt", "md":
 		content, err := os.ReadFile(path)
 		if err != nil {
@@ -106,6 +120,9 @@ func (p *DefaultParser) ParseDocument(path string, fileType string) (ParsedDocum
 // avoids writing a second, subtly different parser just for previews.
 func (p *DefaultParser) ParseBytes(content []byte, fileType string) (ParsedDocument, error) {
 	fileType = normalizeFileType(fileType)
+	if fileType == "csv" || fileType == "xlsx" {
+		return parseTableBytes(content, fileType)
+	}
 	if fileType == "docx" {
 		return ParseDOCXBytes(content)
 	}

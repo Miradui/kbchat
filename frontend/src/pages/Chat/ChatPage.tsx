@@ -25,6 +25,10 @@ import { ChatComposer } from './ChatComposer';
 import { useEventCallback } from '../../hooks/useEventCallback';
 import { ChatFeedbackDialog } from './ChatFeedbackDialog';
 import { ChatMessageSearch, useChatMessageSearch } from './ChatMessageSearch';
+import { ChatSearchDialog } from './ChatSearchDialog';
+import { ChatBookmarkDialog, ChatBookmarksDialog } from './ChatBookmarks';
+import { ChatBranchDialog } from './ChatBranchDialog';
+import { QuestionTemplatesDialog } from './QuestionTemplatesDialog';
 import { ChatMarkdown } from './ChatMarkdown';
 import { ChatAssistantLabel, CitationCard, MessageBubble } from './ChatMessage';
 import { ChatSessionRail } from './ChatSessionRail';
@@ -53,6 +57,14 @@ export function ChatPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const isNarrow = useMediaQuery('(max-width: 1080px)');
   const [railOpen, setRailOpen] = useState(false);
+  const [searchDialogOpen, setSearchDialogOpen] = useState(false);
+  const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  const [bookmarkTarget, setBookmarkTarget] = useState<ChatMessage | null>(null);
+  const [branchTarget, setBranchTarget] = useState<ChatMessage | null>(null);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  useEffect(() => { setTemplatesOpen(false); }, [sessionId]);
+  useEffect(() => { setBranchTarget(null); }, [sessionId]);
+  useEffect(() => { setBookmarkTarget(null); }, [sessionId]);
   const railBackdropRef = useRef<HTMLButtonElement>(null);
   const {
     draft, setDraft, focusedCitation, setFocusedCitation, sourcePreview, setSourcePreview,
@@ -94,6 +106,7 @@ export function ChatPage() {
 
   const thread = useChatThread({
     sessionId,
+    initialMessageId: targetMessageId,
     draftKnowledgeBaseId: urlKnowledgeBaseId || undefined,
     draftScopeMode: draftKnowledgeBaseIds.length ? 'manual' : 'auto',
     draftKnowledgeBaseIds: draftKnowledgeBaseIds.length > 1 ? draftKnowledgeBaseIds : undefined,
@@ -103,6 +116,9 @@ export function ChatPage() {
     },
     onSessionsChanged: () => void reloadSessions(),
     onAccessLost: (targetSessionId) => {
+      setBookmarkTarget(null);
+      setBranchTarget(null);
+      setBookmarksOpen(false);
       setSourcePreview(null);
       setFocusedCitation(null);
       setDraft('');
@@ -166,9 +182,14 @@ export function ChatPage() {
     if (focus) element.focus({ preventScroll: true });
   }, []);
   const messagesReady = Boolean(sessionId && !thread.loading && !thread.loadError && thread.session?.id === sessionId);
+  const threadInteractionPending = thread.sending || Boolean(thread.regeneratingId) || Boolean(thread.editingId)
+    || Boolean(thread.unconfirmedSend?.checking) || Boolean(thread.stoppedStream?.checking) || Boolean(thread.regeneration?.checking);
+  const interactionLocked = thread.loading || sessionBusy || threadInteractionPending;
+  const historyLocked = interactionLocked || Boolean(thread.unconfirmedSend) || thread.regeneration?.kind === 'unconfirmed';
   const messageSearch = useChatMessageSearch({
     sessionId, messages: thread.messages, targetMessageId, onLocate: locateMessage,
-    ready: messagesReady && !thread.loadingHistory && !thread.historyError, complete: !thread.hasOlderMessages,
+    ready: messagesReady, complete: !thread.hasOlderMessages && !thread.hasNewerMessages,
+    blocked: historyLocked, missingMessageId: thread.missingMessageId,
   });
   const answerVersions = useChatAnswerVersions(thread.messages, sessionId, messageSearch.locatedId);
 
@@ -268,7 +289,7 @@ export function ChatPage() {
   useLayoutEffect(() => { initialScrollRef.current = undefined; prependAnchorRef.current = null; }, [sessionId]);
   useLayoutEffect(() => {
     const container = messagesRef.current;
-    if (!container || thread.loading || thread.session?.id !== sessionId) return;
+    if (!container || thread.loading || thread.loadingHistory || thread.session?.id !== sessionId) return;
     const anchor = prependAnchorRef.current;
     if (anchor) {
       prependAnchorRef.current = null;
@@ -287,27 +308,37 @@ export function ChatPage() {
       top: container.scrollHeight,
       behavior: initial ? 'instant' : thread.sending ? 'auto' : 'smooth',
     });
-  }, [thread.messages, thread.pendingQuestion, thread.sending, thread.loading, thread.session?.id, sessionId, targetMessageId, messageSearch.open]);
+  }, [thread.messages, thread.pendingQuestion, thread.sending, thread.loading, thread.loadingHistory, thread.session?.id, sessionId, targetMessageId, messageSearch.open]);
 
   const latestAssistantId = useMemo(
-    () => [...thread.messages].reverse().find((message) => message.role === 'assistant')?.id ?? null,
-    [thread.messages],
+    () => thread.hasNewerMessages ? null : [...thread.messages].reverse().find((message) => message.role === 'assistant')?.id ?? null,
+    [thread.messages, thread.hasNewerMessages],
   );
 
   const archived = Boolean(currentSession?.archivedAt);
-  const threadInteractionPending = thread.sending
-    || Boolean(thread.regeneratingId)
-    || Boolean(thread.editingId)
-    || Boolean(thread.unconfirmedSend?.checking)
-    || Boolean(thread.stoppedStream?.checking)
-    || Boolean(thread.regeneration?.checking);
-  const interactionLocked = thread.loading || sessionBusy || threadInteractionPending;
-  const historyLocked = interactionLocked || Boolean(thread.unconfirmedSend) || thread.regeneration?.kind === 'unconfirmed';
-  const { hasOlderMessages, loadingHistory, historyError, loadAllMessages, loadOlderMessages } = thread;
-  const needsCompleteHistory = messageSearch.open || Boolean(targetMessageId && !thread.messages.some((message) => message.id === targetMessageId));
+  const { hasOlderMessages, hasNewerMessages, loadingHistory, historyError, loadOlderMessages, loadNewerMessages,
+    loadMessageContext, cancelMessageContext, loadLatestMessages, handleAccessLost } = thread;
+  const locationTarget = messageSearch.requestedId;
+  const locationLoaded = thread.messages.some((message) => message.id === locationTarget);
+  const historyOutsideWindow = hasOlderMessages || hasNewerMessages;
+  const searchingHistory = messageSearch.open || Boolean(targetMessageId);
+  const locationMissing = messageSearch.missingTarget;
   useEffect(() => {
-    if (messagesReady && needsCompleteHistory && hasOlderMessages && !loadingHistory && !historyError && !historyLocked) void loadAllMessages();
-  }, [messagesReady, needsCompleteHistory, hasOlderMessages, loadingHistory, historyError, historyLocked, loadAllMessages]);
+    if (!messagesReady || historyLocked || !locationTarget || locationLoaded || locationMissing || !historyOutsideWindow) return;
+    void loadMessageContext(locationTarget);
+    return cancelMessageContext;
+  }, [messagesReady, historyLocked, locationTarget, locationLoaded, locationMissing, historyOutsideWindow, loadMessageContext, cancelMessageContext]);
+  useEffect(() => {
+    if (messageSearch.cause && sessionId) handleAccessLost(messageSearch.cause, sessionId);
+  }, [messageSearch.cause, sessionId, handleAccessLost]);
+  const returnToLatest = useEventCallback(() => {
+    if (historyLocked) return;
+    leaveMessageLocation();
+    initialScrollRef.current = undefined;
+    prependAnchorRef.current = null;
+    stickToBottomRef.current = true;
+    void loadLatestMessages();
+  });
   const loadEarlier = useCallback(() => {
     if (historyLocked) return;
     void loadOlderMessages(() => {
@@ -322,6 +353,8 @@ export function ChatPage() {
   const canSend = (automaticScope ? knowledgeBases.length > 0 : Boolean(activeKnowledgeBase) && activeKnowledgeBaseIds.every((id) => knowledgeBases.some((kb) => kb.id === id)))
     && !archived
     && !thread.loading
+    && !hasNewerMessages
+    && !loadingHistory
     && !sessionBusy
     && !thread.editingId
     && !thread.unconfirmedSend
@@ -433,6 +466,8 @@ export function ChatPage() {
             }
           }}
           onNavigate={() => setRailOpen(false)}
+          onSearch={() => { if (!sessionBusyRef.current && !thread.hasPendingWrite()) setSearchDialogOpen(true); }}
+          onBookmarks={() => { if (!sessionBusyRef.current && !thread.hasPendingWrite()) setBookmarksOpen(true); }}
           onNewChat={() => {
             if (sessionBusyRef.current || thread.hasPendingWrite()) return;
             setRailOpen(false);
@@ -481,12 +516,13 @@ export function ChatPage() {
                 <span className="ui-truncate">手动 · {activeKnowledgeBase.name}</span>
               </Link>
             )}
-            {sessionId && <IconButton aria-expanded={messageSearch.open} label="查找会话消息" ref={messageSearch.triggerRef} onClick={messageSearch.openSearch}><Search aria-hidden="true" /></IconButton>}
+            {sessionId && <IconButton disabled={historyLocked} aria-expanded={messageSearch.open} label="查找会话消息" ref={messageSearch.triggerRef} onClick={messageSearch.openSearch}><Search aria-hidden="true" /></IconButton>}
+            {loadedSession?.branchFromSessionId && <Link className="ui-button ui-button--ghost" to={`/chat/${loadedSession.branchFromSessionId}${loadedSession.branchFromMessageId ? `?messageId=${encodeURIComponent(loadedSession.branchFromMessageId)}` : ''}`}>查看来源会话</Link>}
           </header>
 
-          {messageSearch.open && <ChatMessageSearch {...messageSearch} loading={thread.loading || thread.loadingHistory || thread.hasOlderMessages} />}
+          {messageSearch.open && <ChatMessageSearch {...messageSearch} loading={messageSearch.loading || loadingHistory} missingTarget={!loadingHistory && messageSearch.missingTarget} />}
           {targetMessageId && messagesReady && !messageSearch.open && <div className="chat-find__location">
-            <span>{needsCompleteHistory && (thread.hasOlderMessages || thread.loadingHistory) ? '正在读取历史以定位消息…' : messageSearch.missingTarget ? '指定消息已不存在或不属于当前会话。' : '已定位到指定消息。'}</span>
+            <span>{loadingHistory ? '正在读取目标附近的消息…' : messageSearch.missingTarget ? '指定消息已不存在或不属于当前会话。' : !locationLoaded ? '正在读取目标附近的消息…' : '已定位到指定消息。'}</span>
             <Button variant="ghost" onClick={() => { setSearchParams((current) => { const next = new URLSearchParams(current); next.delete('messageId'); return next; }, { replace: true }); messageSearch.triggerRef.current?.focus(); }}>取消定位</Button>
           </div>}
 
@@ -510,9 +546,9 @@ export function ChatPage() {
           {historyError && <div className="ui-inline-notice" role="status">
             <span>{historyError}</span>
             <Button disabled={historyLocked || loadingHistory} variant="link" onClick={() => {
-              if (historyError.includes('会话内容已变化')) void thread.reload();
-              else if (needsCompleteHistory) void loadAllMessages();
-              else loadEarlier();
+              if (locationTarget && !locationLoaded && !locationMissing) void loadMessageContext(locationTarget);
+              else if (historyError.includes('会话内容已变化')) void thread.reload();
+              else void thread.retryHistory();
             }}>重试加载历史</Button>
           </div>}
 
@@ -521,7 +557,7 @@ export function ChatPage() {
             onScroll={(event) => {
               const element = event.currentTarget;
               stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 80;
-              if (element.scrollTop < 120 && hasOlderMessages && !loadingHistory && !historyError && !historyLocked && !needsCompleteHistory) loadEarlier();
+              if (element.scrollTop < 120 && hasOlderMessages && !loadingHistory && !historyError && !historyLocked && !searchingHistory) loadEarlier();
             }}
             ref={messagesRef}
           >
@@ -558,7 +594,7 @@ export function ChatPage() {
                       && !archived
                       && !interactionLocked
                     }
-                    canEdit={!archived && !interactionLocked}
+                    canEdit={!archived && !interactionLocked && !loadingHistory}
                     focusedCitationIndex={
                       focusedCitation?.messageId === message.id ? focusedCitation.index : null
                     }
@@ -573,6 +609,9 @@ export function ChatPage() {
                     feedbackSaving={feedbackSavingIds.has(message.id)}
                     versionIndex={index} versionCount={versions.length} versionGroupId={id} versionsDisabled={interactionLocked} onVersionChange={selectAnswerVersion}
                     onFeedback={onMessageFeedback}
+                    onBookmark={setBookmarkTarget}
+                    onBranch={setBranchTarget}
+                    branchingDisabled={historyLocked}
                     onEditDraftChange={setEditingDraft}
                     onStartEdit={startEditing}
                     onCancelEdit={cancelEditing}
@@ -707,9 +746,20 @@ export function ChatPage() {
                 )}
               </>
             )}
+            {!thread.loading && hasNewerMessages && <div className="chat-history-load">
+              <Button disabled={historyLocked || loadingHistory} variant="ghost" onClick={() => {
+                stickToBottomRef.current = false;
+                void loadNewerMessages();
+              }}>加载后续消息</Button>
+            </div>}
           </div>
+          {hasNewerMessages && <div className="chat-find__location">
+            <span>正在查看历史片段，回到最新消息后可继续提问。</span>
+            <Button disabled={historyLocked || loadingHistory} variant="ghost" onClick={returnToLatest}>回到最新消息</Button>
+          </div>}
 
           <ChatComposer
+            onTemplates={() => setTemplatesOpen(true)}
             disabled={!canSend || thread.sending || sessionBusy}
             error={thread.rateLimitError}
             retryNotice={thread.rateLimitNotice}
@@ -747,6 +797,27 @@ export function ChatPage() {
           />
         )}
       </div>
+
+      {templatesOpen && <QuestionTemplatesDialog draft={draft} onClose={() => setTemplatesOpen(false)} onInsert={(text) => setDraft((current) => current ? `${current}\n\n${text}` : text)} />}
+      {branchTarget && <ChatBranchDialog key={branchTarget.id} message={branchTarget} onClose={() => setBranchTarget(null)} onCreated={mergeSession} onInaccessible={thread.handleAccessLost} />}
+      {bookmarkTarget && <ChatBookmarkDialog key={bookmarkTarget.id} target={{ messageId: bookmarkTarget.id, sessionId: bookmarkTarget.sessionId, bookmark: bookmarkTarget.bookmark }}
+        onClose={() => setBookmarkTarget(null)} onUpdated={thread.updateMessageBookmark} onInaccessible={thread.handleAccessLost} />}
+      {bookmarksOpen && <ChatBookmarksDialog onClose={() => setBookmarksOpen(false)} onUpdated={thread.updateMessageBookmark} onInaccessible={thread.handleAccessLost} onSelect={(item) => {
+        if (sessionBusyRef.current || thread.hasPendingWrite()) return;
+        messageSearch.clear(); setBookmarksOpen(false); setRailOpen(false);
+        if (item.sessionId === sessionId && thread.messages.some((message) => message.id === item.messageId)) void loadMessageContext(item.messageId);
+        navigate(`/chat/${item.sessionId}?messageId=${encodeURIComponent(item.messageId)}`);
+      }} />}
+      {searchDialogOpen && <ChatSearchDialog onClose={() => setSearchDialogOpen(false)} onSelect={(item) => {
+        if (sessionBusyRef.current || thread.hasPendingWrite()) return;
+        messageSearch.clear();
+        setSearchDialogOpen(false);
+        setRailOpen(false);
+        if (item.sessionId === sessionId && thread.messages.some((message) => message.id === item.messageId)) {
+          void loadMessageContext(item.messageId);
+        }
+        navigate(`/chat/${item.sessionId}?messageId=${encodeURIComponent(item.messageId)}`);
+      }} />}
 
       {renameTarget && <ChatSessionRenameDialog key={renameTarget.id} title={renameTarget.title || ''}
         busy={sessionBusy} error={sessionActionError}

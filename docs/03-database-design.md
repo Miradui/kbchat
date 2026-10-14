@@ -180,6 +180,7 @@ CREATE TABLE documents (
     file_type VARCHAR(32),
     file_size BIGINT,
     storage_path TEXT NOT NULL,
+    source_path TEXT NOT NULL DEFAULT '' CHECK (octet_length(source_path) <= 1024),
     status VARCHAR(32) DEFAULT 'uploaded',
     error_message TEXT,
     pdf_text_summary JSONB,
@@ -294,6 +295,9 @@ CREATE TABLE chat_sessions (
     knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
     scope_mode VARCHAR(16) NOT NULL DEFAULT 'manual' CHECK (scope_mode IN ('auto', 'manual')),
     title VARCHAR(255),
+    branch_from_session_id UUID REFERENCES chat_sessions(id) ON DELETE SET NULL,
+    branch_from_message_id UUID REFERENCES chat_messages(id) ON DELETE SET NULL,
+    branch_request_id UUID,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now(),
     archived_at TIMESTAMPTZ NULL,
@@ -519,3 +523,20 @@ CREATE INDEX idx_model_usage_user_created ON model_usage_records (user_id, creat
 `029_document_embedding_identity.sql` 给 `documents` 增加可空的 `embedding_model VARCHAR(128)`、`embedding_dimension INTEGER`。存量记录保持 NULL，表示来源未知；禁止用当前配置回填旧向量的来源。processor 发布新 chunks 时在同一个事务里写入实际配置的模型和校验过的维度，失败不会把未发布的来源标成有效。诊断按模型和维度统计有效文档。
 
 启动和 doctor 查询 `pg_attribute.atttypmod`，按当前 search_path 解析 `document_chunks.embedding`；必须与 `EMBEDDING_DIMENSION` 一致，否则拒绝启动。模型切换与重建步骤见 [部署指南](13-deployment.md#embedding-模型切换与重建)。
+
+## 六项功能扩展（迁移 034–039）
+
+| 迁移 | 数据与约束 |
+| --- | --- |
+| 034 | `chat_bookmarks`：`message_id` 为主键并引用 `chat_messages`，`user_id` 引用 `users`，两者均 ON DELETE CASCADE；`note TEXT NOT NULL DEFAULT ''` 最多 4000 字；`created_at/updated_at` 为 TIMESTAMPTZ。索引 `(user_id, created_at DESC, message_id DESC)` 支持个人分页。 |
+| 035 | `documents.superseded_by_id` 的非空部分索引，供替换链的反向查找。版本读取仅遍历同一个未删除知识库中的未删除文档。 |
+| 036 | `chat_sessions.branch_from_session_id` / `branch_from_message_id` 为可空外键，来源永久删除时 SET NULL；`branch_request_id` 为可空 UUID，全局非空唯一索引用于幂等。来源会话字段另有索引。旧会话三字段为空。 |
+| 037 | `question_templates`：UUID 主键，`user_id` 引用 `users` ON DELETE CASCADE，`title VARCHAR(100)` 1–100 字，`body TEXT` 1–12000 字，TIMESTAMPTZ 创建/更新时间；索引 `(user_id, updated_at DESC, id DESC)`。变量从正文验证并提取，不单独保存 JSON 副本。 |
+| 038 | `documents.source_path TEXT NOT NULL DEFAULT ''`，数据库限制 UTF-8 字节数不超过 1024；应用进一步校验相对路径。原数据为空，不据此推断本地文件系统位置或改变对象存储 key。 |
+| 039 | 扩充 `documents_error_code_check` 允许 `table_limit_exceeded`；其余 019 错误码保持。启动额外检查约束定义，缺少 039 时阻止运行。 |
+
+收藏绑定确切回答 ID，重生成不转移到新版本。归档保持可读，软删会话或任一知识库依赖撤权后隐藏，恢复可见；永久删消息/会话级联清除收藏。所有读取仍要求会话归属和全部依赖知识库权限。
+
+创建分支通过 GORM 事务锁定来源会话，复制到指定回答为止的消息、引用和完整依赖集合。副本使用新消息 ID 和严格递增的时间，来源链接、依赖和副本原子提交；不复制收藏、评价、请求编号或模型用量。来源软删/永久删不删除独立分支，分支仍按自己的完整依赖鉴权。
+
+表格不新增表或向量列。`document_chunks.metadata.table` 保存 `{sheetName,rowStart,rowEnd,headerRow}`，CSV 工作表名为空，XLSX 行起止相同。对应 `structureType=table_row`；无通用文本偏移和物理页码。该来源随实际检索片段保存到 `chat_messages.citations`，历史 JSON 缺少 `table` 时兼容原有格式。

@@ -8,6 +8,7 @@ import (
 )
 
 type DocumentResponse struct {
+	SourcePath      string          `json:"sourcePath,omitempty"`
 	PDFTextSummary  *PDFTextSummary `json:"pdfTextSummary"`
 	ID              string          `json:"id"`
 	KnowledgeBaseID string          `json:"knowledgeBaseId"`
@@ -72,6 +73,7 @@ type DocumentCountsResponse struct {
 }
 
 type GlobalDocumentResponse struct {
+	SourcePath        string     `json:"sourcePath,omitempty"`
 	ID                string     `json:"id"`
 	KnowledgeBaseID   string     `json:"knowledgeBaseId"`
 	KnowledgeBaseName string     `json:"knowledgeBaseName"`
@@ -135,13 +137,14 @@ type DocumentDownloadResponse struct {
 }
 
 type DocumentPreviewResponse struct {
-	ID          string `json:"id"`
-	Filename    string `json:"filename"`
-	FileType    string `json:"fileType"`
-	ContentType string `json:"contentType"`
-	Kind        string `json:"kind"`
-	Content     string `json:"content,omitempty"`
-	DownloadURL string `json:"downloadUrl"`
+	TableRows   []TablePreviewRow `json:"tableRows,omitempty"`
+	ID          string            `json:"id"`
+	Filename    string            `json:"filename"`
+	FileType    string            `json:"fileType"`
+	ContentType string            `json:"contentType"`
+	Kind        string            `json:"kind"`
+	Content     string            `json:"content,omitempty"`
+	DownloadURL string            `json:"downloadUrl"`
 }
 
 type DocumentBatchRequest struct {

@@ -17,9 +17,10 @@ export type DocumentFailureCopy = {
 };
 
 const FAILURES: Record<DocumentErrorCode, DocumentFailureCopy> = {
+  table_limit_exceeded: { reason: '表格超出解析限制。', advice: '请拆分至最多 32 个工作表、合计 10000 条数据行、256 列和 8 MiB 解析文本；单元格最多 32767 字，CSV 物理行数或工作表行号最多 100000。', retryable: false },
   unsupported_type: {
     reason: '文件格式不受支持。',
-    advice: '转换成 TXT、Markdown、PDF 或 DOCX 后重新上传。',
+    advice: '转换成 TXT、Markdown、PDF、DOCX、XLSX 或 UTF-8 CSV 后重新上传。',
     retryable: false,
   },
   corrupt_file: {
@@ -70,9 +71,18 @@ const FAILURES: Record<DocumentErrorCode, DocumentFailureCopy> = {
  * server's own sentence when there is one.
  */
 export function documentFailureCopy(
-  document: Pick<DocumentItem, 'errorCode' | 'errorMessage'>,
+  document: Pick<DocumentItem, 'errorCode' | 'errorMessage'> & Partial<Pick<DocumentItem, 'fileType'>>,
 ): DocumentFailureCopy {
   const code = document.errorCode;
+  if (code === 'empty_content' && (document.fileType === 'xlsx' || document.fileType === 'csv')) {
+    return {
+      reason: '表格中没有可入库的数据行。',
+      advice: document.fileType === 'xlsx'
+        ? '首个非空行为表头，请在其后补充数据；公式需要先在表格软件中计算并保存结果，再重新上传。'
+        : '首个非空记录为表头，请在其后补充数据后重新上传。',
+      retryable: false,
+    };
+  }
   if (code && code in FAILURES) {
     return FAILURES[code as DocumentErrorCode];
   }

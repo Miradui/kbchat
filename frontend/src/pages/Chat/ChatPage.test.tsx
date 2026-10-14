@@ -15,6 +15,7 @@ import {
   getDocumentPreview,
   getWorkspacePreference,
   listChatMessages,
+  searchChatMessages,
   listChatSessions,
   listKnowledgeBaseCategories,
   listKnowledgeBases,
@@ -42,6 +43,7 @@ vi.mock('../../api/resources', () => ({
   downloadDocument: vi.fn(),
   getWorkspacePreference: vi.fn(),
   listChatMessages: vi.fn(),
+  searchChatMessages: vi.fn(),
   listChatSessions: vi.fn(),
   listKnowledgeBaseCategories: vi.fn(),
   listKnowledgeBases: vi.fn(),
@@ -165,6 +167,7 @@ beforeEach(() => {
   vi.mocked(getDocument).mockReset().mockImplementation(async (id) => ({ id, knowledgeBaseId: 'kb1', filename: '新制度.pdf', fileType: 'pdf', fileSize: 1024, status: 'completed', errorMessage: null, createdAt: '', updatedAt: '' }));
   vi.mocked(getDocumentPreview).mockReset().mockResolvedValue({ id: 'doc-new', filename: '新制度.pdf', kind: 'text', fileType: 'pdf', contentType: 'text/plain', content: '新制度依据的完整原文', downloadUrl: '' });
   vi.mocked(listChatMessages).mockReset().mockResolvedValue({ items: [] });
+  vi.mocked(searchChatMessages).mockReset().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
   vi.mocked(sendChatMessage).mockReset();
   vi.mocked(archiveChatSession).mockReset();
   vi.mocked(createChatSession).mockReset();
@@ -252,23 +255,29 @@ describe('ChatPage', () => {
     expect(screen.queryByRole('button', { name: '加载更早的消息' })).not.toBeInTheDocument();
   });
 
-  it.each(['search', 'link'] as const)('loads complete history for an older %s target without claiming it is missing', async (mode) => {
-    const complete = deferred<{ items: ChatMessage[] }>();
-    vi.mocked(listChatMessages).mockResolvedValueOnce({ items: [historicalAnswers[1]], hasMore: true, nextCursor: 'older', revision: 'assistant-new' })
-      .mockReturnValueOnce(complete.promise);
+  it.each(['search', 'link'] as const)('loads only the context for an older %s target without claiming it is missing', async (mode) => {
+    const complete = deferred<{ items: ChatMessage[]; hasNewer: boolean; newerCursor: string }>();
+    vi.mocked(listChatMessages).mockImplementation((_id, params) => params?.around ? complete.promise
+      : Promise.resolve({ items: [historicalAnswers[1]], hasMore: true, nextCursor: 'older', revision: 'assistant-new' }));
+    vi.mocked(searchChatMessages).mockResolvedValue({ items: [{ messageId: 'assistant-old', sessionId: 's1', sessionTitle: '制度问答', archivedAt: null,
+      role: 'assistant', createdAt: '', excerpt: { before: '', match: '旧回答', after: '' } }], total: 1, page: 1, pageSize: 20 });
     renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>, [mode === 'link' ? '/chat/s1?messageId=assistant-old' : '/chat/s1']);
-    await screen.findByText('新回答');
+    if (mode === 'search') await screen.findByText('新回答');
     const user = userEvent.setup();
     if (mode === 'search') {
       await user.click(screen.getByRole('button', { name: '查找会话消息' }));
       await user.type(screen.getByRole('textbox', { name: '查找消息关键词' }), '旧回答');
+      await waitFor(() => expect(listChatMessages).toHaveBeenCalledWith('s1', { limit: 50, around: 'assistant-old' }, expect.any(AbortSignal)));
     }
     expect(screen.queryByText('指定消息已不存在或不属于当前会话。')).not.toBeInTheDocument();
     expect(screen.queryByText('没有匹配消息')).not.toBeInTheDocument();
-    await act(async () => complete.resolve({ items: historicalAnswers }));
+    await act(async () => complete.resolve({ items: [historicalAnswers[0]], hasNewer: true, newerCursor: 'context-end' }));
     const located = await screen.findByRole('article', { name: '已定位消息' });
     expect(located).toHaveAttribute('id', 'chat-message-assistant-old');
     if (mode === 'search') expect(screen.getByText('1 / 1 条匹配消息')).toBeInTheDocument();
+    expect(screen.queryByText('新回答')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '回到最新消息' })).toBeInTheDocument();
+    expect(listChatMessages).not.toHaveBeenCalledWith('s1');
   });
   it('clears messages, source preview and cached options when a send discovers revoked access', async () => {
     vi.mocked(listChatMessages).mockResolvedValue({ items: historicalAnswers });
@@ -290,6 +299,43 @@ describe('ChatPage', () => {
     expect(screen.queryByRole('option', { name: '制度库' })).not.toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: '输入问题' })).toBeDisabled();
     expect(screen.getByText('会话已不可访问，可能已删除或访问权限发生变化。')).toBeInTheDocument();
+  });
+
+  it('opens an archived cross-session search hit directly around its message', async () => {
+    const archived = { ...secondSession, archivedAt: '2026-10-13T00:00:00Z' };
+    vi.mocked(getChatSession).mockImplementation(async (id) => id === 's1' ? session : archived);
+    vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
+    vi.mocked(listChatMessages).mockImplementation(async (id) => ({ items: id === 's1' ? historicalAnswers : [secondSessionMessage] }));
+    vi.mocked(searchChatMessages).mockResolvedValue({ items: [{ messageId: 'm2', sessionId: 's2', sessionTitle: '归档采购问答', archivedAt: archived.archivedAt,
+      role: 'assistant', createdAt: '', excerpt: { before: '', match: '产品会话回答', after: '' } }], total: 1, page: 1, pageSize: 20 });
+    const user = userEvent.setup();
+    renderWithRouter(<><Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes><LocationProbe /></>, ['/chat/s1']);
+    await user.click(await screen.findByRole('button', { name: '搜索会话内容' }));
+    await user.type(screen.getByRole('searchbox', { name: '搜索所有会话的关键词' }), '产品');
+    await user.click(await screen.findByRole('button', { name: /归档采购问答/ }));
+    const target = await screen.findByRole('article', { name: '已定位消息' });
+    expect(target).toHaveAttribute('id', 'chat-message-m2');
+    expect(listChatMessages).toHaveBeenCalledWith('s2', { limit: 50, around: 'm2' });
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/chat/s2?messageId=m2');
+    expect(screen.getByRole('button', { name: '已归档' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('dialog', { name: '搜索会话内容' })).not.toBeInTheDocument();
+  });
+
+  it('returns from a search window to the latest messages and enables the composer', async () => {
+    vi.mocked(listChatMessages).mockImplementation(async (_id, params) => params?.around
+      ? { items: [historicalAnswers[0]], hasMore: true, hasNewer: true, nextCursor: 'old', newerCursor: 'context', revision: 'tail' }
+      : { items: [historicalAnswers[1]], hasMore: true, nextCursor: 'tail', revision: 'tail' });
+    const user = userEvent.setup();
+    renderWithRouter(<><Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes><LocationProbe /></>, ['/chat/s1?messageId=assistant-old']);
+    await screen.findByRole('article', { name: '已定位消息' });
+    expect(screen.queryByRole('button', { name: '重新生成' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '回到最新消息' }));
+    await screen.findByText('新回答');
+    expect(screen.queryByText('旧回答')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '回到最新消息' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('当前位置')).not.toHaveTextContent('messageId=');
+    expect(screen.getByRole('textbox', { name: '输入问题' })).toBeEnabled();
+    expect(listChatMessages).toHaveBeenLastCalledWith('s1', { limit: 50 }, expect.any(AbortSignal));
   });
 
   it('updates both the rail and header from the first question without reloading the page', async () => {
@@ -615,7 +661,32 @@ describe('ChatPage', () => {
     expect(await screen.findByText('指定消息已不存在或不属于当前会话。')).toBeInTheDocument();
     expect(screen.queryByRole('article', { name: '已定位消息' })).not.toBeInTheDocument();
     expect(listChatMessages).toHaveBeenCalledTimes(1);
-    expect(listChatMessages).toHaveBeenCalledWith('s1', { limit: 50 });
+    expect(listChatMessages).toHaveBeenCalledWith('s1', { limit: 50, around: 'other-session-message' });
+  });
+
+  it('keeps paging and retrying after a missing deep link without requesting the missing target again', async () => {
+    let olderAttempts = 0;
+    const olderMessage: ChatMessage = { ...firstSessionLateMessage, id: 'older-question', role: 'user', content: '更早的分页问题' };
+    vi.mocked(listChatMessages).mockImplementation(async (_id, params) => {
+      if (params?.around) throw new ApiError(404, { code: 'CHAT_MESSAGE_NOT_FOUND', message: 'gone' });
+      if (params?.before) {
+        olderAttempts += 1;
+        if (olderAttempts === 1) throw new Error('offline');
+        return { items: [olderMessage], hasMore: true, nextCursor: 'older', revision: 'assistant-new' };
+      }
+      return { items: [historicalAnswers[1]], hasMore: true, nextCursor: 'newer', revision: 'assistant-new' };
+    });
+    const user = userEvent.setup();
+    renderWithRouter(<Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>, ['/chat/s1?messageId=gone']);
+    await screen.findByText('指定消息已不存在或不属于当前会话。');
+    await user.click(screen.getByRole('button', { name: '加载更早的消息' }));
+    await user.click(await screen.findByRole('button', { name: '重试加载历史' }));
+    expect(await screen.findByText('更早的分页问题')).toBeInTheDocument();
+    expect(screen.getByText('新回答')).toBeInTheDocument();
+    expect(screen.getByText('指定消息已不存在或不属于当前会话。')).toBeInTheDocument();
+    expect(olderAttempts).toBe(2);
+    expect(vi.mocked(listChatMessages).mock.calls.filter(([, params]) => params?.around)).toHaveLength(1);
+    expect(listChatMessages).toHaveBeenCalledTimes(4);
   });
 
   it('clears conversation search when navigating to another session', async () => {

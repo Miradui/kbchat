@@ -337,6 +337,7 @@ export type TextDocumentInput = { title: string; content: string; format: 'md' |
  * can grow server-side before the client knows the new member.
  */
 export type DocumentErrorCode =
+  | 'table_limit_exceeded'
   | 'unsupported_type'
   | 'corrupt_file'
   | 'encoding_invalid'
@@ -353,6 +354,7 @@ export type PdfTextSummary = {
 };
 
 export type DocumentItem = {
+  sourcePath?: string;
   id: string;
   knowledgeBaseId: string;
   filename: string;
@@ -442,6 +444,7 @@ export type DocumentChunkListParams = {
 };
 
 export type DocumentPreviewResponse = {
+  tableRows?: Array<TableSource & { startOffset: number; endOffset: number }>;
   id: string;
   filename: string;
   fileType: string;
@@ -579,6 +582,7 @@ export type KnowledgeBaseSearchRequest = {
 };
 
 export type KnowledgeBaseSearchResult = {
+  table?: TableSource;
   knowledgeBaseId?: string;
   knowledgeBaseName?: string;
   chunkId: string;
@@ -658,6 +662,8 @@ export type KnowledgeBaseSearchDebug = {
 };
 
 export type ChatSession = {
+  branchFromSessionId?: string;
+  branchFromMessageId?: string;
   scopeMode?: 'auto' | 'manual';
   knowledgeBaseIds?: string[];
   knowledgeBases?: Array<{ id: string; name: string }>;
@@ -692,6 +698,7 @@ export type ChatSessionListResponse = {
 };
 
 export type Citation = {
+  table?: TableSource;
   knowledgeBaseId?: string;
   knowledgeBaseName?: string;
   documentId: string;
@@ -717,6 +724,7 @@ export type Citation = {
 export type ChatAnswerStatus = 'answered' | 'no_basis' | 'retrieval_failed' | 'model_refused';
 
 export type ChatMessage = {
+  bookmark?: ChatBookmark | null;
   id: string;
   sessionId: string;
   clientRequestId?: string | null;
@@ -887,10 +895,36 @@ export type ChatMessageListResponse = {
   items: ChatMessage[];
   hasMore?: boolean;
   nextCursor?: string;
+  hasNewer?: boolean;
+  newerCursor?: string;
   revision?: string;
 };
 
-export type ChatMessagePageParams = { limit: number; before?: string; since?: string; revision?: string };
+export type ChatMessagePageParams = { limit: number; before?: string; after?: string; around?: string; since?: string; revision?: string };
+
+export type ChatSearchExcerpt = { before: string; match: string; after: string };
+export type ChatMessageSearchItem = {
+  messageId: string;
+  sessionId: string;
+  sessionTitle: string;
+  archivedAt: string | null;
+  role: 'user' | 'assistant';
+  createdAt: string;
+  excerpt: ChatSearchExcerpt;
+};
+export type ChatMessageSearchParams = { q: string; sessionId?: string; page?: number; pageSize?: number };
+export type ChatMessageSearchResponse = { items: ChatMessageSearchItem[]; total: number; page: number; pageSize: number };
+
+export type PersonalListParams = { q?: string; page?: number; pageSize?: number };
+export type QuestionTemplate = { id: string; title: string; body: string; variables: string[]; createdAt: string; updatedAt: string };
+export type QuestionTemplateListResponse = { items: QuestionTemplate[]; total: number; page: number; pageSize: number };
+export type DocumentVersion = { id: string; filename: string; status: string; createdAt: string; supersededById: string | null };
+export type DocumentDiffLine = { kind: 'equal' | 'add' | 'remove'; content: string; baseLine: number | null; headLine: number | null };
+export type DocumentCompareResponse = { base: DocumentVersion; head: DocumentVersion; addedLines: number; removedLines: number; lines: DocumentDiffLine[] };
+export type TableSource = { sheetName: string; rowStart: number; rowEnd: number; headerRow: number };
+export type ChatBookmark = { messageId: string; note: string; createdAt: string; updatedAt: string };
+export type ChatBookmarkItem = ChatMessageSearchItem & { bookmark: ChatBookmark };
+export type ChatBookmarkListResponse = { items: ChatBookmarkItem[]; total: number; page: number; pageSize: number };
 
 export type SendChatMessageRequest = {
   content: string;

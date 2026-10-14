@@ -36,6 +36,38 @@ const completedResponse: SendChatMessageResponse = {
   rerankFallback: null,
 };
 
+describe('useChatThread search links', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    resourceMocks.getChatSession.mockReset().mockResolvedValue(session);
+    resourceMocks.listChatMessages.mockReset().mockResolvedValue({ items: [] });
+  });
+
+  it('loads a deep link directly and handles a missing message without losing session access', async () => {
+    const onAccessLost = vi.fn();
+    resourceMocks.listChatMessages.mockRejectedValueOnce(new ApiError(404, { code: 'CHAT_MESSAGE_NOT_FOUND', message: 'gone' }))
+      .mockResolvedValue({ items: messagesFor('existing'), hasMore: true, nextCursor: 'start' });
+    const { result } = renderHook(() => useChatThread({ sessionId: session.id, initialMessageId: 'removed-message',
+      onSessionCreated: vi.fn(), onSessionsChanged: vi.fn(), onAccessLost }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(resourceMocks.listChatMessages).toHaveBeenNthCalledWith(1, session.id, { limit: 50, around: 'removed-message' });
+    expect(resourceMocks.listChatMessages).toHaveBeenNthCalledWith(2, session.id, { limit: 50 });
+    expect(result.current.session?.id).toBe(session.id);
+    expect(result.current.missingMessageId).toBe('removed-message');
+    expect(onAccessLost).not.toHaveBeenCalled();
+  });
+
+  it('clears a revoked session when opening a search result', async () => {
+    const onAccessLost = vi.fn();
+    resourceMocks.getChatSession.mockRejectedValue(new ApiError(404, { code: 'RESOURCE_NOT_FOUND', message: 'revoked' }));
+    const { result } = renderHook(() => useChatThread({ sessionId: session.id, initialMessageId: 'old-message',
+      onSessionCreated: vi.fn(), onSessionsChanged: vi.fn(), onAccessLost }));
+    await waitFor(() => expect(onAccessLost).toHaveBeenCalledWith(session.id));
+    expect(result.current.messages).toEqual([]);
+    expect(result.current.session).toBeNull();
+  });
+});
+
 function messagesForResponse(clientRequestId: string): [ChatMessage, ChatMessage] {
   return [
     {

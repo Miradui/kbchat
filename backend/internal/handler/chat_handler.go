@@ -223,7 +223,7 @@ func (h *ChatHandler) ListMessages(c *gin.Context) {
 
 	var res *dto.ChatMessageListResponse
 	var err error
-	if c.Request.URL.Query().Has("limit") || c.Request.URL.Query().Has("before") || c.Request.URL.Query().Has("since") || c.Request.URL.Query().Has("revision") {
+	if c.Request.URL.Query().Has("limit") || c.Request.URL.Query().Has("before") || c.Request.URL.Query().Has("after") || c.Request.URL.Query().Has("around") || c.Request.URL.Query().Has("since") || c.Request.URL.Query().Has("revision") {
 		limit := 50
 		if c.Request.URL.Query().Has("limit") {
 			limit, err = strconv.Atoi(c.Query("limit"))
@@ -233,7 +233,7 @@ func (h *ChatHandler) ListMessages(c *gin.Context) {
 			}
 		}
 		res, err = h.chats.ListMessagePage(c.Request.Context(), userID, sessionID, dto.ChatMessagePageQuery{
-			Limit: limit, Before: c.Query("before"), Since: c.Query("since"), Revision: c.Query("revision"),
+			Limit: limit, Before: c.Query("before"), After: c.Query("after"), Around: c.Query("around"), Since: c.Query("since"), Revision: c.Query("revision"),
 		})
 	} else {
 		res, err = h.chats.ListMessages(c.Request.Context(), userID, sessionID)

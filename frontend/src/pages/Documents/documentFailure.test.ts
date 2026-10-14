@@ -13,9 +13,18 @@ const CODES: DocumentErrorCode[] = [
   'storage_failed',
   'cancelled',
   'internal',
+  'table_limit_exceeded',
 ];
 
 describe('documentFailureCopy', () => {
+  it.each(['xlsx', 'csv'])('explains missing table data instead of OCR for %s', (fileType) => {
+    const copy = documentFailureCopy({ errorCode: 'empty_content', errorMessage: null, fileType });
+    expect(copy.reason).toContain('数据行');
+    expect(copy.advice).toContain('表头');
+    expect(copy.advice).not.toContain('OCR');
+    expect(copy.retryable).toBe(false);
+  });
+
   it.each(CODES)('has distinct advice for %s', (code) => {
     const copy = documentFailureCopy({ errorCode: code, errorMessage: null });
     expect(copy.reason).not.toBe('');

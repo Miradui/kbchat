@@ -186,7 +186,7 @@ function KnowledgeBaseOverview() {
             ) : documents.length === 0 ? (
               <EmptyState
                 action={<Link className="ui-button ui-button--primary" to={`${documentsHref}?intent=upload`}><span>导入文档</span></Link>}
-                description="导入 txt、md、pdf 或 docx 后即可开始问答。"
+                description="导入文档或 XLSX／CSV 表格后即可开始问答。"
                 title="还没有文档"
               />
             ) : (

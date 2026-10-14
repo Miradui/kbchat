@@ -74,7 +74,8 @@
 | 500 | `CHAT_COMPLETION_FAILED` | 生成回答失败 |
 | 500 | `CHAT_RESULT_UNCONFIRMED` | 回答结果需要重新确认 |
 | 409 | `IDEMPOTENCY_KEY_REUSED` | 同一幂等键已用于不同的聊天内容 |
-| 409 | `CHAT_MESSAGE_CHANGED` | 编辑生成期间会话被修改，或历史分页 revision 已变化 / since 锚点已删除；重新加载会话后重试 |
+| 409 | `CHAT_MESSAGE_CHANGED` | 编辑生成期间会话被修改，或历史分页 revision 已变化 / since、after 锚点已删除；重新加载会话后重试 |
+| 404 | `CHAT_MESSAGE_NOT_FOUND` | 定位目标已不存在或不属于当前会话；会话仍可访问时局部提示 |
 | 400 | `EXPORT_TOO_LARGE` | 搜索结果过多，请缩小范围后再导出 |
 
 `RATE_LIMITED` 必须同时设置整数秒 `Retry-After` 响应头，并在 `details.retryAfter` 返回相同值。`RATE_LIMIT_UNAVAILABLE` 只用于 Redis 故障且限流失败策略为 `closed` 的情况，不得设置 `Retry-After`，也不得计入真实限流触发次数。
@@ -230,3 +231,21 @@
 | 409 | `OWNERSHIP_CHANGED` | 加锁复查时单库所有权或状态已变化，应刷新后重试 |
 
 管理员入口的原用户不存在使用 `USER_NOT_FOUND`；权限仍使用现有 401 / 403 / 404 合同。
+
+## 收藏、分支、版本与表格扩展
+
+| HTTP | 错误码 | 含义 |
+| --- | --- | --- |
+| 400 | `DOCUMENT_VERSION_LIMIT` | 同链在线可选版本超过 100 个 |
+| 409 | `DOCUMENT_COMPARE_NOT_READY` | 至少一个版本尚未完成处理 |
+| 400 | `DOCUMENT_COMPARE_EMPTY` | 未提取到可比较文本 |
+| 400 | `DOCUMENT_COMPARE_PARSE_FAILED` | 原文件无法重新解析 |
+| 400 | `DOCUMENT_COMPARE_TOO_LARGE` | 超出每版 50 MiB 原文件、1 MiB 文本或 2000 行限制 |
+| 409 | `CHAT_BRANCH_REQUEST_CONFLICT` | 分支请求编号已用于不同目标或已软删除分支 |
+| 400 | `CHAT_BRANCH_TOO_LARGE` | 历史前缀超过 10000 条消息或 16 MiB |
+| 400 | `DOCUMENT_TABLE_TOO_LARGE` | 预览表格触及解析上限 |
+| 400 | `DOCUMENT_PREVIEW_FAILED` | 预览无法解析文档 |
+
+收藏、模板、来源路径、非同链对比、无效分支目标等输入问题沿用 `VALIDATION_ERROR`；不存在、非本人或依赖不可访问的会话/消息/模板沿用 404 `RESOURCE_NOT_FOUND`。知识库角色不足仍沿用能力矩阵的 403。
+
+异步文档错误集合由迁移 039 新增 `table_limit_exceeded`。它是确定性失败，必须拆分/修复文件，不自动重试；不是 HTTP 错误码。空表、仅表头或没有缓存结果的公式数据可能得到 `empty_content`，前端按表格类型解释，避免把修复建议误写为 OCR。表格预览仍受 `FILE_TOO_LARGE_FOR_PREVIEW` 输入/输出上限约束。

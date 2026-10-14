@@ -35,6 +35,7 @@ func (s *DocumentService) Replace(
 	ctx context.Context,
 	ownerID, documentID uuid.UUID,
 	file *multipart.FileHeader,
+	options ...DocumentUploadOptions,
 ) (*dto.DocumentResponse, error) {
 	old, err := s.authorizeDocument(ctx, ownerID, documentID, access.CapContentWrite)
 	if err != nil {
@@ -49,6 +50,13 @@ func (s *DocumentService) Replace(
 	}
 	if err := s.validateFile(file); err != nil {
 		return nil, err
+	}
+	sourcePath := ""
+	if len(options) > 0 {
+		sourcePath, err = normalizeDocumentSourcePath(options[0].SourcePath, file.Filename)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	contentHash, err := hashUploadedFile(file)
@@ -66,6 +74,7 @@ func (s *DocumentService) Replace(
 	}
 
 	document := &model.Document{
+		SourcePath:      sourcePath,
 		KnowledgeBaseID: old.KnowledgeBaseID,
 		UploaderID:      ownerID,
 		Filename:        file.Filename,

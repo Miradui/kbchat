@@ -41,6 +41,29 @@ beforeEach(() => {
 });
 
 describe('ChatSourcePreview', () => {
+  it('uses sheet and physical row metadata to highlight a whole row and never guesses another row', async () => {
+    const a = '工作表「销售」 · 第 5 行（表头第 2 行）\n名称：甲😀\n说明：相同内容';
+    const b = '工作表「库存」 · 第 5 行（表头第 1 行）\n名称：乙\n说明：相同内容';
+    const source = `${a}\n${b}`;
+    const bytes = (text: string) => new TextEncoder().encode(text).length;
+    const table = { sheetName: '库存', rowStart: 5, rowEnd: 5, headerRow: 1 };
+    vi.mocked(getDocument).mockResolvedValue({ ...documentItem, filename: '资料.xlsx', fileType: 'xlsx' });
+    vi.mocked(getDocumentPreview).mockResolvedValue({ ...preview, filename: '资料.xlsx', fileType: 'xlsx', kind: 'text', content: source, tableRows: [
+      { sheetName: '销售', rowStart: 5, rowEnd: 5, headerRow: 2, startOffset: 0, endOffset: bytes(a) },
+      { ...table, startOffset: bytes(`${a}\n`), endOffset: bytes(source) },
+    ] });
+    const props = { citation: { ...citation, filename: '资料.xlsx', pageNumber: null, content: '相同内容', table }, index: 1, knowledgeBaseId: 'kb1', onClose: vi.fn() };
+    const view = render(<ChatSourcePreview {...props} />);
+    const text = await screen.findByLabelText('文档原文');
+    expect(text.querySelector('mark')?.textContent).toBe(b);
+    expect(screen.getByText('来源 1 · 库存 · 第 5 行')).toBeInTheDocument();
+    expect(screen.getByText(/公式仅显示文件已保存的结果/)).toBeInTheDocument();
+    view.rerender(<ChatSourcePreview {...props} citation={{ ...props.citation, chunkId: 'missing-row', table: { ...table, rowStart: 9, rowEnd: 9 } }} />);
+    expect(text.querySelector('mark')).toBeNull();
+    expect(getDocumentPreview).toHaveBeenCalledTimes(1);
+    expect(downloadDocument).not.toHaveBeenCalled();
+  });
+
   it('lets viewers read a PDF citation without attempting a forbidden file download', async () => {
     render(<ChatSourcePreview canDownload={false} citation={citation} index={1} knowledgeBaseId="kb1" onClose={vi.fn()} />);
     expect(await screen.findByText('可阅读上方引用内容；下载原始文件需要编辑者及以上权限。')).toBeInTheDocument();

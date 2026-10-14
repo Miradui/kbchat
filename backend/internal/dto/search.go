@@ -22,14 +22,15 @@ type RerankFallbackResponse struct {
 }
 
 type SearchResultResponse struct {
-	KnowledgeBaseID   string  `json:"knowledgeBaseId"`
-	KnowledgeBaseName string  `json:"knowledgeBaseName"`
-	ChunkID           string  `json:"chunkId"`
-	DocumentID        string  `json:"documentId"`
-	Filename          string  `json:"filename"`
-	Content           string  `json:"content"`
-	PageNumber        *int    `json:"pageNumber"`
-	VectorScore       float64 `json:"vectorScore"`
+	Table             *TableSource `json:"table,omitempty"`
+	KnowledgeBaseID   string       `json:"knowledgeBaseId"`
+	KnowledgeBaseName string       `json:"knowledgeBaseName"`
+	ChunkID           string       `json:"chunkId"`
+	DocumentID        string       `json:"documentId"`
+	Filename          string       `json:"filename"`
+	Content           string       `json:"content"`
+	PageNumber        *int         `json:"pageNumber"`
+	VectorScore       float64      `json:"vectorScore"`
 	// KeywordScore is null when the keyword stage did not return the chunk
 	// (or was disabled); VectorScore is 0 for a chunk only the keyword stage found.
 	KeywordScore *float64 `json:"keywordScore"`

@@ -17,6 +17,7 @@ import (
 )
 
 type GlobalDocumentListItem struct {
+	SourcePath        string
 	ID                uuid.UUID
 	KnowledgeBaseID   uuid.UUID
 	KnowledgeBaseName string
@@ -131,6 +132,7 @@ func (r *DocumentRepository) ListForActor(ctx context.Context, actorID uuid.UUID
 			documents.knowledge_base_id AS knowledge_base_id,
 			knowledge_bases.name AS knowledge_base_name,
 			documents.filename AS filename,
+			documents.source_path AS source_path,
 			documents.file_type AS file_type,
 			documents.file_size AS file_size,
 			documents.status AS status,
@@ -720,6 +722,7 @@ func (r *DocumentRepository) ListDeletedForActor(ctx context.Context, actorID uu
 			documents.knowledge_base_id AS knowledge_base_id,
 			knowledge_bases.name AS knowledge_base_name,
 			documents.filename AS filename,
+			documents.source_path AS source_path,
 			documents.deleted_at AS deleted_at
 		`).
 		Order("documents.deleted_at desc").
