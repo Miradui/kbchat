@@ -23,6 +23,8 @@ func TestPostgresSearchByKeywordRanksExactCodesAndScopesToKnowledgeBase(t *testi
 	defer cancel()
 
 	for _, statement := range []string{
+		`ALTER TABLE knowledge_bases ADD COLUMN document_version_policy VARCHAR(16) NOT NULL DEFAULT 'all'`,
+		`ALTER TABLE documents ADD COLUMN superseded_by_id UUID`,
 		`DROP TABLE document_chunks`,
 		`CREATE TABLE document_chunks (
 			id UUID PRIMARY KEY,
@@ -42,6 +44,11 @@ func TestPostgresSearchByKeywordRanksExactCodesAndScopesToKnowledgeBase(t *testi
 	}
 
 	kbA, kbB := uuid.New(), uuid.New()
+	for _, id := range []uuid.UUID{kbA, kbB} {
+		if err := db.Exec("INSERT INTO knowledge_bases (id, name) VALUES (?, 'keyword')", id).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 	docA, docB, docDeleted := uuid.New(), uuid.New(), uuid.New()
 	now := time.Now()
 	for _, document := range []struct {

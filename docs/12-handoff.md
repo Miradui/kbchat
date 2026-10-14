@@ -1,6 +1,6 @@
 # 当前交接
 
-当前任务（2026-10-15）：用户选择 **1、2、4、6**，按顺序实施上传中断恢复、表格导入设置、版本检索控制与扫描 PDF OCR，并按功能点提交 Git。计划及验收标准见 [文档工作流扩展计划](30-document-workflow-plan.md)。上传恢复已提交 `39abe31`，表格导入设置的实现与相关回归通过，下一项为版本检索控制；进度见 [验收记录](31-document-workflow-acceptance.md)。本轮尚未修改业务部署或 public schema。
+当前任务（2026-10-15）：用户选择 **1、2、4、6**，按顺序实施上传中断恢复、表格导入设置、版本检索控制与扫描 PDF OCR，并按功能点提交 Git。计划及验收标准见 [文档工作流扩展计划](30-document-workflow-plan.md)。上传恢复已提交 `39abe31`、表格导入设置已提交 `da18751`，版本检索控制的实现及相关/真实 PostgreSQL 回归通过，下一项为扫描 PDF OCR；进度见 [验收记录](31-document-workflow-acceptance.md)。本轮尚未修改业务部署或 public schema。
 
 更新日期：2026-10-14。用户选择的 **1、3、4、8、9、10** 已按顺序完成：回答收藏/备注、文档版本文本对比、对话分支、个人提问模板、文件夹/ZIP 导入、XLSX/CSV 入库及工作表/行号引用。前后端回归、独立 PostgreSQL 和 1920×1080 浏览器验收通过；隔离 schema、临时进程和浏览器已清理，根 `.env` 与 public 六类业务表行数未变。范围见 [六项扩展计划](28-feature-extension-plan.md)，结果和边界见 [六项扩展验收](29-feature-extension-acceptance.md)。
 

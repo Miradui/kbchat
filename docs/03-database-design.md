@@ -6,6 +6,8 @@
 
 数据库使用 PostgreSQL，向量能力使用 pgvector。
 
+迁移 042 新增 `knowledge_bases.document_version_policy VARCHAR(16) NOT NULL DEFAULT 'all'`，约束为 `all/current`，旧库和新库默认均保持全部版本。当前有效版本根据既有 `superseded_by_id` 链及已发布 `document_chunks` 动态选择，不改写历史切片，也不依据处理中会变化的 `documents.status` 判断快照是否可用。
+
 ## 时间约定
 
 - 所有业务时间字段使用 `TIMESTAMPTZ` 表示绝对时刻，包括创建、更新、软删除、任务锁定和调度时间。PostgreSQL 保存时刻，不保留输入时区名称。

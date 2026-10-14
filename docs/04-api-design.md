@@ -610,6 +610,8 @@ map 生成，改代码不改表就会与实现不一致；`internal/access/capab
 
 ### POST /knowledge-bases
 
+知识库创建/更新请求支持可选顶层 `documentVersionPolicy: "all" | "current"`，详情与列表均返回该字段；默认 `all`，更新时省略则保留原值，非法值返回 `VALIDATION_ERROR`。修改仍需 `kb.write`（manager/owner）。`current` 在本库参与的单库、多库、自动问答、检索调试和评测中，仅召回同库替换链内最新有已发布片段的可用版本。新版未发布、首次处理失败或取消时使用旧快照；再次处理失败不撤销已有快照。变更不重建向量，不修改历史会话、引用、文档或版本对比权限。
+
 请求：
 
 ```json

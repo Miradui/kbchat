@@ -41,6 +41,7 @@ func (r *KnowledgeBaseRepository) ListByOwner(ctx context.Context, ownerID uuid.
 }
 
 type KnowledgeBaseListItem struct {
+	DocumentVersionPolicy   string
 	ID                      uuid.UUID
 	Name                    string
 	Description             string
@@ -98,6 +99,7 @@ func (r *KnowledgeBaseRepository) ListWorkspace(ctx context.Context, ownerID uui
 			knowledge_bases.category_id AS category_id,
 			knowledge_bases.visibility AS visibility,
 			knowledge_bases.retrieval_config AS retrieval_config,
+			knowledge_bases.document_version_policy AS document_version_policy,
 			knowledge_bases.answer_config AS answer_config,
 			knowledge_bases.created_at AS created_at,
 			knowledge_bases.updated_at AS updated_at,

@@ -372,9 +372,12 @@ const exactVectorSearchSQL = `WITH candidates AS MATERIALIZED (
 		document_chunks.embedding
 	FROM document_chunks
 	JOIN documents ON documents.id = document_chunks.document_id
+	JOIN knowledge_bases ON knowledge_bases.id = documents.knowledge_base_id
 	WHERE document_chunks.knowledge_base_id = ?
 		AND documents.knowledge_base_id = ?
 		AND documents.deleted_at IS NULL
+		AND knowledge_bases.deleted_at IS NULL
+		AND ` + documentVersionSearchCondition + `
 		AND document_chunks.embedding IS NOT NULL
 )
 SELECT id AS chunk_id, document_id, filename, content, page_number, metadata,
@@ -509,7 +512,10 @@ func publishedChunks(db *gorm.DB, kbID uuid.UUID) *gorm.DB {
 	return db.
 		Table("document_chunks").
 		Joins("JOIN documents ON documents.id = document_chunks.document_id").
+		Joins("JOIN knowledge_bases ON knowledge_bases.id = documents.knowledge_base_id").
 		Where("document_chunks.knowledge_base_id = ?", kbID).
 		Where("documents.knowledge_base_id = ?", kbID).
-		Where("documents.deleted_at IS NULL")
+		Where("documents.deleted_at IS NULL").
+		Where("knowledge_bases.deleted_at IS NULL").
+		Where(documentVersionSearchCondition)
 }

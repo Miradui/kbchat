@@ -28,7 +28,8 @@ func TestPostgresVectorSearchSurvivesFilteredHNSWShortfall(t *testing.T) {
 	defer cancel()
 
 	for _, statement := range []string{
-		`CREATE TABLE documents (id UUID PRIMARY KEY, knowledge_base_id UUID NOT NULL, filename TEXT NOT NULL, deleted_at TIMESTAMPTZ)`,
+		`CREATE TABLE knowledge_bases (id UUID PRIMARY KEY, document_version_policy VARCHAR(16) NOT NULL DEFAULT 'all', deleted_at TIMESTAMPTZ)`,
+		`CREATE TABLE documents (id UUID PRIMARY KEY, knowledge_base_id UUID NOT NULL, filename TEXT NOT NULL, superseded_by_id UUID, deleted_at TIMESTAMPTZ)`,
 		`CREATE TABLE document_chunks (
 			id UUID PRIMARY KEY,
 			document_id UUID NOT NULL,
@@ -46,6 +47,11 @@ func TestPostgresVectorSearchSurvivesFilteredHNSWShortfall(t *testing.T) {
 	}
 
 	kbA, kbB := uuid.New(), uuid.New()
+	for _, id := range []uuid.UUID{kbA, kbB} {
+		if err := db.Exec("INSERT INTO knowledge_bases (id) VALUES (?)", id).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 	liveA, deletedA, docB := uuid.New(), uuid.New(), uuid.New()
 	now := time.Now()
 	for _, document := range []struct {

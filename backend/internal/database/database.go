@@ -127,6 +127,7 @@ func validateSchema(ctx context.Context, db *gorm.DB) error {
 			{&model.User{}, "status", "025_user_status_and_admin.sql"},
 			{&model.User{}, "created_by", "025_user_status_and_admin.sql"},
 			{&model.KnowledgeBase{}, "answer_config", "027_kb_answer_config.sql"},
+			{&model.KnowledgeBase{}, "document_version_policy", "042_document_version_policy.sql"},
 			{&model.EvaluationRun{}, "answer_config", "028_evaluation_answer_config.sql"},
 			{&model.Document{}, "embedding_model", "029_document_embedding_identity.sql"},
 			{&model.Document{}, "embedding_dimension", "029_document_embedding_identity.sql"},

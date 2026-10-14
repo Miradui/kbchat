@@ -11,6 +11,7 @@ import { KnowledgeBaseLayout, KnowledgeBaseLoadFailure } from './KnowledgeBaseLa
 import { MembersPanel } from './MembersPanel';
 import { RetrievalConfigForm } from './RetrievalConfigForm';
 import { AnswerConfigForm } from './AnswerConfigForm';
+import { DocumentVersionPolicyForm } from './DocumentVersionPolicyForm';
 import { RetrievalTestPanel } from './RetrievalTestPanel';
 import { useKnowledgeBase } from './useKnowledgeBase';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
@@ -55,6 +56,7 @@ function KnowledgeBaseSettings() {
   return (
     <KnowledgeBaseLayout active="settings" knowledgeBase={knowledgeBase} onUpdated={setKnowledgeBase}>
       <div className="kb-settings">
+        <DocumentVersionPolicyForm knowledgeBase={knowledgeBase} onUpdated={setKnowledgeBase} />
         <div className="kb-settings__grid">
           <RetrievalConfigForm knowledgeBase={knowledgeBase} onUpdated={setKnowledgeBase} />
           <AnswerConfigForm knowledgeBase={knowledgeBase} onUpdated={setKnowledgeBase} />

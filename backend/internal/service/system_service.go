@@ -26,7 +26,7 @@ func (s *SystemService) Capabilities() *dto.SystemCapabilitiesResponse {
 	return &dto.SystemCapabilitiesResponse{
 		RerankEnabled:        s.cfg.RerankEnabled,
 		KeywordSearchEnabled: s.cfg.KeywordSearchEnabled,
-		ChatModels:           append([]string(nil), s.cfg.ChatAllowedModels...),
+		ChatModels:           append([]string{}, s.cfg.ChatAllowedModels...),
 		Upload: dto.SystemUploadCapabilities{
 			MaxFileBytes:      int64(s.cfg.MaxUploadSizeMB) * 1024 * 1024,
 			AllowedExtensions: extensions,

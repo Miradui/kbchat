@@ -54,21 +54,22 @@ func (u *User) BeforeCreate(_ *gorm.DB) error {
 }
 
 type KnowledgeBase struct {
-	ID              uuid.UUID              `gorm:"type:uuid;primaryKey" json:"id"`
-	Name            string                 `gorm:"size:128;not null" json:"name"`
-	Description     string                 `json:"description"`
-	OwnerID         uuid.UUID              `gorm:"type:uuid;not null;index" json:"ownerId"`
-	Owner           User                   `gorm:"foreignKey:OwnerID" json:"-"`
-	UpdatedByID     *uuid.UUID             `gorm:"type:uuid;index" json:"updatedById"`
-	UpdatedBy       *User                  `gorm:"foreignKey:UpdatedByID" json:"-"`
-	CategoryID      *uuid.UUID             `gorm:"type:uuid;index" json:"categoryId"`
-	Category        *KnowledgeBaseCategory `gorm:"foreignKey:CategoryID" json:"-"`
-	Visibility      string                 `gorm:"size:32;default:private;not null" json:"visibility"`
-	RetrievalConfig datatypes.JSON         `gorm:"type:jsonb;default:'{\"vectorTopN\":30,\"rerankTopK\":5,\"scoreThreshold\":0.3,\"enableRerank\":true}'" json:"retrievalConfig"`
-	AnswerConfig    datatypes.JSON         `gorm:"type:jsonb;default:'{\"answerLanguage\":\"auto\",\"allowGeneralKnowledge\":false,\"model\":\"\"}'" json:"answerConfig"`
-	CreatedAt       time.Time              `json:"createdAt"`
-	UpdatedAt       time.Time              `json:"updatedAt"`
-	DeletedAt       gorm.DeletedAt         `gorm:"index" json:"-"`
+	DocumentVersionPolicy string                 `gorm:"size:16;not null;default:all" json:"documentVersionPolicy"`
+	ID                    uuid.UUID              `gorm:"type:uuid;primaryKey" json:"id"`
+	Name                  string                 `gorm:"size:128;not null" json:"name"`
+	Description           string                 `json:"description"`
+	OwnerID               uuid.UUID              `gorm:"type:uuid;not null;index" json:"ownerId"`
+	Owner                 User                   `gorm:"foreignKey:OwnerID" json:"-"`
+	UpdatedByID           *uuid.UUID             `gorm:"type:uuid;index" json:"updatedById"`
+	UpdatedBy             *User                  `gorm:"foreignKey:UpdatedByID" json:"-"`
+	CategoryID            *uuid.UUID             `gorm:"type:uuid;index" json:"categoryId"`
+	Category              *KnowledgeBaseCategory `gorm:"foreignKey:CategoryID" json:"-"`
+	Visibility            string                 `gorm:"size:32;default:private;not null" json:"visibility"`
+	RetrievalConfig       datatypes.JSON         `gorm:"type:jsonb;default:'{\"vectorTopN\":30,\"rerankTopK\":5,\"scoreThreshold\":0.3,\"enableRerank\":true}'" json:"retrievalConfig"`
+	AnswerConfig          datatypes.JSON         `gorm:"type:jsonb;default:'{\"answerLanguage\":\"auto\",\"allowGeneralKnowledge\":false,\"model\":\"\"}'" json:"answerConfig"`
+	CreatedAt             time.Time              `json:"createdAt"`
+	UpdatedAt             time.Time              `json:"updatedAt"`
+	DeletedAt             gorm.DeletedAt         `gorm:"index" json:"-"`
 }
 
 type KnowledgeBaseCategory struct {

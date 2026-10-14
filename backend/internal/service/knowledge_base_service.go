@@ -79,6 +79,10 @@ func NewKnowledgeBaseService(
 }
 
 func (s *KnowledgeBaseService) Create(ctx context.Context, ownerID uuid.UUID, req dto.KnowledgeBaseRequest) (*dto.KnowledgeBaseResponse, error) {
+	versionPolicy, err := normalizeDocumentVersionPolicy(req.DocumentVersionPolicy, "all")
+	if err != nil {
+		return nil, err
+	}
 	config := defaultConfig(req.RetrievalConfig)
 	configJSON, err := json.Marshal(config)
 	if err != nil {
@@ -94,14 +98,15 @@ func (s *KnowledgeBaseService) Create(ctx context.Context, ownerID uuid.UUID, re
 	}
 
 	kb := &model.KnowledgeBase{
-		Name:            req.Name,
-		Description:     req.Description,
-		OwnerID:         ownerID,
-		UpdatedByID:     &ownerID,
-		CategoryID:      req.CategoryID,
-		Visibility:      normalizedVisibility(req.Visibility),
-		RetrievalConfig: datatypes.JSON(configJSON),
-		AnswerConfig:    datatypes.JSON(answerJSON),
+		DocumentVersionPolicy: versionPolicy,
+		Name:                  req.Name,
+		Description:           req.Description,
+		OwnerID:               ownerID,
+		UpdatedByID:           &ownerID,
+		CategoryID:            req.CategoryID,
+		Visibility:            normalizedVisibility(req.Visibility),
+		RetrievalConfig:       datatypes.JSON(configJSON),
+		AnswerConfig:          datatypes.JSON(answerJSON),
 	}
 	if err := s.ensureCategoryOwner(ctx, ownerID, kb.CategoryID); err != nil {
 		return nil, err
@@ -264,6 +269,10 @@ func (s *KnowledgeBaseService) Update(ctx context.Context, ownerID, id uuid.UUID
 		return nil, err
 	}
 	kb := granted.knowledgeBase
+	versionPolicy, err := normalizeDocumentVersionPolicy(req.DocumentVersionPolicy, kb.DocumentVersionPolicy)
+	if err != nil {
+		return nil, err
+	}
 
 	// A request that omits a config block keeps what is stored. The settings
 	// page saves retrieval and answer configuration from separate forms, and
@@ -311,6 +320,7 @@ func (s *KnowledgeBaseService) Update(ctx context.Context, ownerID, id uuid.UUID
 	kb.Visibility = visibility
 	kb.RetrievalConfig = datatypes.JSON(configJSON)
 	kb.AnswerConfig = datatypes.JSON(answerJSON)
+	kb.DocumentVersionPolicy = versionPolicy
 	if err := s.repo.Update(ctx, kb); err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -984,19 +994,20 @@ func toKnowledgeBaseResponse(kb *model.KnowledgeBase, tags []model.KnowledgeBase
 	}
 
 	return dto.KnowledgeBaseResponse{
-		ID:              kb.ID.String(),
-		Name:            kb.Name,
-		Description:     kb.Description,
-		CategoryID:      categoryID,
-		Visibility:      visibility,
-		RetrievalConfig: config,
-		AnswerConfig:    answerConfig,
-		CreatedAt:       kb.CreatedAt,
-		UpdatedAt:       kb.UpdatedAt,
-		UpdatedBy:       toKnowledgeBaseUserSummary(kb.UpdatedBy, &kb.Owner),
-		Tags:            toTagResponses(tags),
-		EffectiveRole:   string(role),
-		Capabilities:    capabilityStrings(role),
+		DocumentVersionPolicy: storedDocumentVersionPolicy(kb.DocumentVersionPolicy),
+		ID:                    kb.ID.String(),
+		Name:                  kb.Name,
+		Description:           kb.Description,
+		CategoryID:            categoryID,
+		Visibility:            visibility,
+		RetrievalConfig:       config,
+		AnswerConfig:          answerConfig,
+		CreatedAt:             kb.CreatedAt,
+		UpdatedAt:             kb.UpdatedAt,
+		UpdatedBy:             toKnowledgeBaseUserSummary(kb.UpdatedBy, &kb.Owner),
+		Tags:                  toTagResponses(tags),
+		EffectiveRole:         string(role),
+		Capabilities:          capabilityStrings(role),
 	}
 }
 
@@ -1024,6 +1035,7 @@ func toWorkspaceKnowledgeBaseResponse(item *repository.KnowledgeBaseListItem, ta
 	// endpoint.
 	role := access.Resolve(item.OwnerID, actorID, access.Role(item.MemberRole))
 	return dto.KnowledgeBaseResponse{
+		DocumentVersionPolicy:   storedDocumentVersionPolicy(item.DocumentVersionPolicy),
 		ID:                      item.ID.String(),
 		Name:                    item.Name,
 		Description:             item.Description,

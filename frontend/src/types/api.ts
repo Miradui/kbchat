@@ -45,6 +45,7 @@ export type AnswerConfig = {
 };
 
 export type KnowledgeBase = {
+	documentVersionPolicy?: 'all' | 'current';
   id: string;
   name: string;
   description: string;
@@ -86,6 +87,7 @@ export type KnowledgeBaseListResponse = {
 };
 
 export type KnowledgeBaseInput = {
+	documentVersionPolicy?: 'all' | 'current';
   name: string;
   description: string;
   categoryId?: string | null;

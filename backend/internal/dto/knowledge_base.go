@@ -26,16 +26,18 @@ type AnswerConfig struct {
 }
 
 type KnowledgeBaseRequest struct {
-	Name            string           `json:"name" binding:"required"`
-	Description     string           `json:"description"`
-	CategoryID      *uuid.UUID       `json:"categoryId"`
-	Visibility      string           `json:"visibility"`
-	RetrievalConfig *RetrievalConfig `json:"retrievalConfig"`
-	AnswerConfig    *AnswerConfig    `json:"answerConfig"`
-	TagIDs          *[]uuid.UUID     `json:"tagIds,omitempty"`
+	DocumentVersionPolicy *string          `json:"documentVersionPolicy"`
+	Name                  string           `json:"name" binding:"required"`
+	Description           string           `json:"description"`
+	CategoryID            *uuid.UUID       `json:"categoryId"`
+	Visibility            string           `json:"visibility"`
+	RetrievalConfig       *RetrievalConfig `json:"retrievalConfig"`
+	AnswerConfig          *AnswerConfig    `json:"answerConfig"`
+	TagIDs                *[]uuid.UUID     `json:"tagIds,omitempty"`
 }
 
 type KnowledgeBaseResponse struct {
+	DocumentVersionPolicy   string                     `json:"documentVersionPolicy"`
 	ID                      string                     `json:"id"`
 	Name                    string                     `json:"name"`
 	Description             string                     `json:"description"`
