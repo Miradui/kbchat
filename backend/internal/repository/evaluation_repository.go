@@ -19,10 +19,22 @@ type EvaluationRepository struct{ db *gorm.DB }
 
 func NewEvaluationRepository(db *gorm.DB) *EvaluationRepository { return &EvaluationRepository{db: db} }
 
-func (r *EvaluationRepository) ListCases(ctx context.Context, kbID uuid.UUID) ([]model.EvaluationCase, error) {
+func (r *EvaluationRepository) ListCases(ctx context.Context, kbID uuid.UUID, actors ...uuid.UUID) ([]model.EvaluationCase, error) {
 	items := []model.EvaluationCase{}
-	err := r.db.WithContext(ctx).Where("knowledge_base_id = ?", kbID).Order("created_at DESC, id DESC").Limit(200).Find(&items).Error
+	query := r.db.WithContext(ctx).Where("knowledge_base_id = ?", kbID)
+	if len(actors) > 0 {
+		query = query.Where("CAST(scope AS TEXT) IN ('{}','null') OR scope IS NULL OR created_by = ?", actors[0])
+	}
+	err := query.Order("created_at DESC, id DESC").Limit(200).Find(&items).Error
 	return items, err
+}
+func (r *EvaluationRepository) GetCase(ctx context.Context, kbID, id uuid.UUID) (*model.EvaluationCase, error) {
+	var item model.EvaluationCase
+	err := r.db.WithContext(ctx).Where("id = ? AND knowledge_base_id = ?", id, kbID).First(&item).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrEvaluationMissing
+	}
+	return &item, err
 }
 
 func lockEvaluationBase(tx *gorm.DB, kbID uuid.UUID) error {
@@ -47,7 +59,7 @@ func (r *EvaluationRepository) CreateCase(ctx context.Context, item *model.Evalu
 
 func (r *EvaluationRepository) UpdateCase(ctx context.Context, item *model.EvaluationCase) error {
 	res := r.db.WithContext(ctx).Model(&model.EvaluationCase{}).Where("id = ? AND knowledge_base_id = ?", item.ID, item.KnowledgeBaseID).
-		Updates(map[string]any{"question": item.Question, "expected_answer": item.ExpectedAnswer, "required_keywords": item.RequiredKeywords, "require_citation": item.RequireCitation})
+		Updates(map[string]any{"scope": item.Scope, "question": item.Question, "expected_answer": item.ExpectedAnswer, "required_keywords": item.RequiredKeywords, "require_citation": item.RequireCitation})
 	if res.Error != nil {
 		return res.Error
 	}
@@ -106,9 +118,13 @@ func (r *EvaluationRepository) CreateRun(ctx context.Context, run *model.Evaluat
 	return &stored, err
 }
 
-func (r *EvaluationRepository) ListRuns(ctx context.Context, kbID uuid.UUID) ([]model.EvaluationRun, error) {
+func (r *EvaluationRepository) ListRuns(ctx context.Context, kbID uuid.UUID, actors ...uuid.UUID) ([]model.EvaluationRun, error) {
 	items := []model.EvaluationRun{}
-	err := r.db.WithContext(ctx).Where("knowledge_base_id = ?", kbID).Order("created_at DESC, id DESC").Limit(50).Find(&items).Error
+	query := r.db.WithContext(ctx).Where("knowledge_base_id = ?", kbID)
+	if len(actors) > 0 {
+		query = query.Where("is_private = ? OR created_by = ?", false, actors[0])
+	}
+	err := query.Order("created_at DESC, id DESC").Limit(50).Find(&items).Error
 	return items, err
 }
 

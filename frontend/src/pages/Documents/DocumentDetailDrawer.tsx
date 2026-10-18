@@ -33,6 +33,9 @@ import { PdfTextNotice } from './PdfTextNotice';
 import { DocumentVersionDialog } from './DocumentVersionDialog';
 import { documentDisplayStatusLabel, documentDisplayStatusTone, isTerminalDocumentStatus } from './documentDisplay';
 import { documentFailureCopy, documentStalenessHint } from './documentFailure';
+import { documentChatUrl } from '../Chat/documentChatScope';
+import { DocumentTextEditor } from './DocumentTextEditor';
+import { DocumentOCRCorrection } from './DocumentOCRCorrection';
 
 const CHUNK_PAGE_SIZE = 20;
 
@@ -78,6 +81,8 @@ export function DocumentDetailDrawer({
   const [operation, setOperation] = useState<DocumentOperation>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [comparing, setComparing] = useState(false);
+  const [editingText, setEditingText] = useState(false);
+  const [correctingOCR, setCorrectingOCR] = useState(false);
   const [deleteError, setDeleteError] = useState('');
   const [error, setError] = useState('');
   const [previewError, setPreviewError] = useState('');
@@ -104,6 +109,8 @@ export function DocumentDetailDrawer({
     setOperation(null);
     setConfirmDelete(false);
     setComparing(false);
+    setEditingText(false);
+    setCorrectingOCR(false);
     setDeleteError('');
     setLoading(true);
     setError('');
@@ -457,6 +464,9 @@ export function DocumentDetailDrawer({
                     重新处理
                   </Button>}
                   <span className="ui-toolbar__spacer" />
+                  {canWrite && canDownload && document.fileType === 'pdf' && document.pdfTextSummary?.ocr?.completedPages && !document.supersededById ? <Button variant="secondary" disabled={submitting} onClick={() => setCorrectingOCR(true)}>校对 OCR 文本</Button> : null}
+                  {canWrite && ['txt', 'md', 'markdown'].includes(document.fileType) && !document.supersededById && <Button variant="secondary" disabled={submitting} onClick={() => setEditingText(true)}>编辑正文</Button>}
+                  {document.status === 'completed' && hasCapability(knowledgeBase, 'chat.use') && <Link className="ui-button ui-button--secondary" to={documentChatUrl([document])} onClick={onClose}>针对这份资料提问</Link>}
                   <Link
                     className="ui-button ui-button--ghost"
                     to={`/knowledge-bases/${document.knowledgeBaseId}/documents`}
@@ -558,6 +568,7 @@ export function DocumentDetailDrawer({
                                 <strong>#{chunk.chunkIndex}</strong>
                                 {isSource && <Badge tone="accent">引用来源</Badge>}
                                 {chunk.metadata?.textSource === 'ocr' && <Badge tone="neutral">OCR 识别文本</Badge>}
+                                {chunk.metadata?.textSource === 'ocr_corrected' && <Badge tone="neutral">人工校对 OCR 文本</Badge>}
                                 <span className="ui-muted">
                                   {chunk.tokenCount} 词元{chunk.pageNumber ? ` · p.${chunk.pageNumber}` : ''}
                                   {chunk.metadata?.table ? ` · ${tableSourceLabel(chunk.metadata.table as import('../../types/api').TableSource)}` : ''}
@@ -587,6 +598,8 @@ export function DocumentDetailDrawer({
       </Drawer>
 
       {comparing && <DocumentVersionDialog documentId={documentId} key={documentId} onClose={() => setComparing(false)} />}
+      {editingText && document && <DocumentTextEditor key={documentId} document={document} onClose={() => { setEditingText(false); setDetailAttempt((value) => value + 1); }} onSaved={() => onChanged?.()} />}
+      {correctingOCR && document && <DocumentOCRCorrection key={documentId} document={document} onClose={() => { setCorrectingOCR(false); setDetailAttempt((value) => value + 1); }} onSaved={() => onChanged?.()} />}
 
       {confirmDelete && document && (
         <ConfirmDialog

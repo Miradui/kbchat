@@ -1,3 +1,5 @@
+import { chatDraftStore } from './chatDraftStore';
+
 const tokenKey = 'rag.auth.token';
 let authRevision = 0;
 const listeners = new Set<() => void>();
@@ -24,6 +26,7 @@ export const tokenStore = {
   },
 
   clearToken(): void {
+    chatDraftStore.clearAll();
     window.localStorage.removeItem(tokenKey);
     notifyAuthChange();
   },

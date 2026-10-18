@@ -40,6 +40,8 @@ import { EvaluationPanel } from './EvaluationPanel';
 import { UsagePanel } from './UsagePanel';
 import { useKnowledgeBaseOptions, loadKnowledgeBaseOptions } from '../../hooks/useKnowledgeBaseOptions';
 import { chatFeedbackReasonLabel } from '../../utils/chatFeedback';
+import { QualityIssueDialog } from './QualityIssueDialog';
+import type { QualityIssueTarget } from './QualityIssueDialog';
 
 const PAGE_SIZE = 10;
 
@@ -65,7 +67,7 @@ function sameQuestion(a: string, b: string): boolean {
   return normalize(a) === normalize(b);
 }
 
-type CaseDraft = { knowledgeBaseId: string; question: string };
+type CaseDraft = { knowledgeBaseId: string; question: string; sourceSessionId?: string };
 
 /**
  * Each category gets its own label, tone and remedy because the fix differs, and
@@ -140,6 +142,9 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = searchParams.get('tab') === 'evaluation' ? 'evaluation' : searchParams.get('tab') === 'usage' ? 'usage' : 'feedback';
   const knowledgeBaseId = searchParams.get('knowledgeBaseId') || '';
+  const requestedScope = searchParams.get('scope') || '';
+  const qualityScope: ChatQualityOverviewParams['scope'] = ['personal', 'auto', 'multi', 'documents'].includes(requestedScope) ? requestedScope as ChatQualityOverviewParams['scope'] : undefined;
+  const [issueTarget, setIssueTarget] = useState<QualityIssueTarget | null>(null);
   const [period, setPeriod] = useState<ChatQualityPeriod>('month');
   const [caseDraft, setCaseDraft] = useState<CaseDraft | null>(null);
   const [gapNotice, setGapNotice] = useState<{ key: string; message: string } | null>(null);
@@ -168,7 +173,7 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
   const reloadOverview = useCallback(() => {
     const request = ++overviewRequest.current;
     setOverviewState({ loading: true, error: '' });
-    void sources.loadOverview({ period, ...(knowledgeBaseId ? { knowledgeBaseId } : {}) })
+    void sources.loadOverview({ period, ...(qualityScope ? { scope: qualityScope } : {}), ...(knowledgeBaseId ? { knowledgeBaseId } : {}) })
       .then((result) => {
         if (mounted.current && request === overviewRequest.current) {
           setOverview(result);
@@ -180,12 +185,13 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
           setOverviewState({ loading: false, error: getErrorMessage(error, '质量概览加载失败') });
         }
       });
-  }, [knowledgeBaseId, period, sources]);
+  }, [knowledgeBaseId, period, sources, qualityScope]);
 
   const reloadFeedback = useCallback(() => {
     const request = ++feedbackRequest.current;
     setFeedbackState({ loading: true, error: '' });
     const params: ChatQualityFeedbackParams = {
+      ...(qualityScope ? { scope: qualityScope } : {}),
       period,
       page,
       pageSize: PAGE_SIZE,
@@ -204,7 +210,7 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
           setFeedbackState({ loading: false, error: getErrorMessage(error, '负反馈加载失败') });
         }
       });
-  }, [hasCitations, knowledgeBaseId, page, period, sources]);
+  }, [hasCitations, knowledgeBaseId, page, period, sources, qualityScope]);
 
   async function saveGapAsCase(item: ChatKnowledgeGapItem) {
     const key = gapKey(item);
@@ -217,17 +223,18 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
       // server, which enforces access and the per-knowledge-base limit.
     }
     if (!mounted.current) return;
-    if (existing.some((testCase) => sameQuestion(testCase.question, item.question))) {
+    if (existing.some((testCase) => sameQuestion(testCase.question, item.question) && (testCase.sourceSessionId || '') === (qualityScope ? item.sessionId : ''))) {
       setGapNotice({ key, message: '该问题已在此知识库的测试集中' });
       return;
     }
-    setCaseDraft({ knowledgeBaseId: item.knowledgeBaseId, question: item.question });
+    setCaseDraft({ knowledgeBaseId: item.knowledgeBaseId, question: item.question, ...(qualityScope ? { sourceSessionId: item.sessionId } : {}) });
   }
 
   const reloadGaps = useCallback(() => {
     const request = ++gapRequest.current;
     setGapState({ loading: true, error: '' });
     const params: ChatKnowledgeGapParams = {
+      ...(qualityScope ? { scope: qualityScope } : {}),
       period,
       page: gapPage,
       pageSize: PAGE_SIZE,
@@ -246,7 +253,7 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
           setGapState({ loading: false, error: getErrorMessage(error, '知识缺口加载失败') });
         }
       });
-  }, [gapCategory, gapPage, knowledgeBaseId, period, sources]);
+  }, [gapCategory, gapPage, knowledgeBaseId, period, sources, qualityScope]);
 
 
   useEffect(() => { reloadOverview(); }, [reloadOverview]);
@@ -258,8 +265,8 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
   // one control on this page that answers 403 -- and it is a filter on data the user
   // is already looking at.
   const qualityKnowledgeBases = useMemo(
-    () => knowledgeBases.filter((item) => canUnlessUnknown(item, 'quality.read')),
-    [knowledgeBases],
+    () => knowledgeBases.filter((item) => canUnlessUnknown(item, qualityScope && activeTab === 'feedback' ? 'chat.use' : 'quality.read')),
+    [knowledgeBases, qualityScope, activeTab],
   );
 
   const selectedKnowledgeBase = useMemo(
@@ -319,6 +326,10 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
             options={[{ value: 'month', label: '本月' }, { value: 'day', label: '今天' }]}
             value={period}
           />}
+          {activeTab === 'feedback' && <Field label="统计范围"><Select aria-label="统计范围" value={qualityScope ?? ''} onChange={(event) => {
+            setPage(1); setGapPage(1); setOverview(null); setFeedback(null); setGaps(null); setIssueTarget(null); setCaseDraft(null);
+            setSearchParams((current) => { const next = new URLSearchParams(current); if (event.target.value) next.set('scope', event.target.value); else next.delete('scope'); next.delete('knowledgeBaseId'); return next; });
+          }}><option value="">单库运营视图</option><option value="personal">我的全部问答</option><option value="auto">我的自动跨库问答</option><option value="multi">我的固定多库问答</option><option value="documents">我的指定文档问答</option></Select></Field>}
           <Field label="知识库">
             <Select aria-label="质量知识库" onChange={(event) => updateKnowledgeBase(event.target.value)} value={knowledgeBaseId}>
               <option value="">全部知识库</option>
@@ -376,7 +387,7 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
               : !feedback || feedback.items.length === 0 ? <EmptyState description="当前周期没有符合筛选条件的负反馈。" title="还没有负反馈" />
                 : <>
                   <div className="quality-feedback__list">
-                    {feedback.items.map((item) => <FeedbackItem item={item} key={item.messageId} onSave={() => setCaseDraft({ knowledgeBaseId: item.knowledgeBaseId, question: item.question })} />)}
+                    {feedback.items.map((item) => <div key={item.messageId}><FeedbackItem item={item} onSave={() => setCaseDraft({ knowledgeBaseId: item.knowledgeBaseId, question: item.question, ...(qualityScope ? { sourceSessionId: item.sessionId } : {}) })} />{qualityScope && <Button variant="ghost" onClick={() => setIssueTarget(item)}>跟进这个问题</Button>}</div>)}
                   </div>
                   <Pagination onPageChange={setPage} page={feedback.page} pageSize={feedback.pageSize} total={feedback.total} />
                 </>}
@@ -405,15 +416,16 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
               : !gaps || gaps.items.length === 0 ? <EmptyState description={gapEmptyDescription(gapCategory)} title="没有发现知识缺口" />
                 : <>
                   <div className="quality-gaps__list">
-                    {gaps.items.map((item) => <KnowledgeGapItem item={item} canViewDiagnostics={user?.role === 'admin'} key={gapKey(item)}
-                      notice={gapNotice?.key === gapKey(item) ? gapNotice.message : ''} onSave={() => void saveGapAsCase(item)} />)}
+                    {gaps.items.map((item) => <div key={gapKey(item)}><KnowledgeGapItem item={item} canViewDiagnostics={user?.role === 'admin'}
+                      notice={gapNotice?.key === gapKey(item) ? gapNotice.message : ''} onSave={() => void saveGapAsCase(item)} />{qualityScope && <Button variant="ghost" onClick={() => setIssueTarget(item)}>跟进这个问题</Button>}</div>)}
                   </div>
                   <Pagination onPageChange={setGapPage} page={gaps.page} pageSize={gaps.pageSize} total={gaps.total} />
                 </>}
         </section>
         </>}
       </div>
-      {caseDraft && <EvaluationCaseDialog knowledgeBaseId={caseDraft.knowledgeBaseId} initial={{ question: caseDraft.question }} onClose={() => setCaseDraft(null)}
+      {issueTarget && <QualityIssueDialog key={`${issueTarget.sessionId}:${issueTarget.question}`} target={issueTarget} onClose={() => setIssueTarget(null)} onCreateCase={() => { setCaseDraft({ knowledgeBaseId: issueTarget.knowledgeBaseId, question: issueTarget.question, sourceSessionId: issueTarget.sessionId }); setIssueTarget(null); }} />}
+      {caseDraft && <EvaluationCaseDialog knowledgeBaseId={caseDraft.knowledgeBaseId} initial={{ question: caseDraft.question, ...(caseDraft.sourceSessionId ? { sourceSessionId: caseDraft.sourceSessionId } : {}) }} onClose={() => setCaseDraft(null)}
         onSaved={() => setSearchParams({ knowledgeBaseId: caseDraft.knowledgeBaseId, tab: 'evaluation' })} />}
     </AppShell>
   );

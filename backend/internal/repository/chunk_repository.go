@@ -412,7 +412,14 @@ func (r *ChunkRepository) SearchByVectorExact(ctx context.Context, kbID uuid.UUI
 	}
 	var results []SearchResult
 	query := pgvector.NewVector(vector)
-	err := db.Raw(exactVectorSearchSQL, kbID, kbID, query, query, limit).Scan(&results).Error
+	sql := exactVectorSearchSQL
+	args := []any{kbID, kbID}
+	if ids := documentSearchScope(ctx); len(ids) > 0 {
+		sql = strings.Replace(sql, documentVersionSearchCondition, "documents.id IN ?", 1)
+		args = append(args, ids)
+	}
+	args = append(args, query, query, limit)
+	err := db.Raw(sql, args...).Scan(&results).Error
 	return results, err
 }
 
@@ -522,13 +529,12 @@ func (r *ChunkRepository) SearchByKeyword(ctx context.Context, kbID uuid.UUID, q
 // documents.status, so the previous snapshot stays searchable while a document
 // is being reprocessed.
 func publishedChunks(db *gorm.DB, kbID uuid.UUID) *gorm.DB {
-	return db.
+	return applyDocumentSearchScope(db).
 		Table("document_chunks").
 		Joins("JOIN documents ON documents.id = document_chunks.document_id").
 		Joins("JOIN knowledge_bases ON knowledge_bases.id = documents.knowledge_base_id").
 		Where("document_chunks.knowledge_base_id = ?", kbID).
 		Where("documents.knowledge_base_id = ?", kbID).
 		Where("documents.deleted_at IS NULL").
-		Where("knowledge_bases.deleted_at IS NULL").
-		Where(documentVersionSearchCondition)
+		Where("knowledge_bases.deleted_at IS NULL")
 }

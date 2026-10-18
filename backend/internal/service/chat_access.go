@@ -68,7 +68,7 @@ func (s *ChatService) authorizeSessionKnowledgeBase(
 	session *model.ChatSession,
 	capability access.Capability,
 ) error {
-	if session.IsAutomatic() && !session.DeletedAt.Valid {
+	if session.ID != uuid.Nil && session.IsAutomatic() && !session.DeletedAt.Valid {
 		// A concurrent turn may have registered additional prompt sources.
 		current, err := s.chats.FindSessionByIDAndUser(ctx, session.ID, userID)
 		if err != nil {

@@ -66,6 +66,8 @@ func newWorkspaceTestServices(t *testing.T) workspaceTestServices {
 		&model.Document{},
 		&model.DocumentUploadReceipt{},
 		&model.DocumentPDFSnapshot{},
+		&model.ChatQualityIssue{},
+		&model.DocumentPDFCorrection{},
 		&model.DocumentJob{},
 		&model.StorageCleanupJob{},
 		&model.ChatSession{}, &model.ChatSessionKnowledgeBase{},

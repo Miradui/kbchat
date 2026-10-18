@@ -1,5 +1,17 @@
 # 错误码规范
 
+## 知识工作流错误（2026-10-19）
+
+| 错误码 | HTTP | 含义与恢复 |
+| --- | --- | --- |
+| DOCUMENT_SCOPE_UNAVAILABLE | 409 | 指定文档已删除、移动或不可访问；保留历史，重新选择范围，不降级成全库。 |
+| DOCUMENT_EDIT_TOO_LARGE | 400 | 在线编辑原文超过 1 MiB；下载修改后替换。 |
+| DOCUMENT_EDIT_CONFLICT | 409 | OCR 原始发布快照已变化；保留本地校对，重新打开核对。 |
+| DOCUMENT_OCR_NOT_READY | 409 | 没有已发布 OCR 页或快照；先完成 OCR 处理。 |
+| EVALUATION_NOT_CONFIGURED | 503 | 当前服务未配置评测依赖，不能关联用例。 |
+
+文本及 OCR 新版本继续使用 DOCUMENT_ALREADY_SUPERSEDED（409）、DOCUMENT_UPLOAD_REQUEST_CONFLICT（409）和 DOCUMENT_UPLOAD_RESULT_UNAVAILABLE（409）。非法范围/空正文/超限页面/非 OCR 页面为 VALIDATION_ERROR（400）。失败不得清除前端未保存内容；同一内容重试沿用请求 ID。
+
 ## 统一错误响应
 
 所有 API 错误必须返回：

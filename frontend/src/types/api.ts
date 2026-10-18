@@ -600,7 +600,7 @@ export type KnowledgeBaseSearchRequest = {
 };
 
 export type KnowledgeBaseSearchResult = {
-	textSource?: 'ocr';
+	textSource?: 'ocr' | 'ocr_corrected';
   table?: TableSource;
   knowledgeBaseId?: string;
   knowledgeBaseName?: string;
@@ -681,6 +681,7 @@ export type KnowledgeBaseSearchDebug = {
 };
 
 export type ChatSession = {
+  documents?: Array<{ id: string; knowledgeBaseId: string; filename: string }>;
   branchFromSessionId?: string;
   branchFromMessageId?: string;
   scopeMode?: 'auto' | 'manual';
@@ -701,6 +702,8 @@ export type ChatSession = {
   lastMessagePreview?: string;
 };
 
+export type DocumentVersionStatus = { documentId: string; state: 'current' | 'newer_available' | 'unavailable'; newerPending: boolean; current: { id: string; knowledgeBaseId: string; filename: string } | null };
+
 export type ChatSessionListParams = {
   knowledgeBaseId?: string;
   archived?: boolean;
@@ -717,7 +720,7 @@ export type ChatSessionListResponse = {
 };
 
 export type Citation = {
-	textSource?: 'ocr';
+	textSource?: 'ocr' | 'ocr_corrected';
   table?: TableSource;
   knowledgeBaseId?: string;
   knowledgeBaseName?: string;
@@ -774,6 +777,7 @@ export type ChatMessageFeedback = ChatFeedbackDetails & {
 export type ChatQualityPeriod = 'day' | 'month';
 
 export type ChatQualityOverviewParams = {
+  scope?: 'personal' | 'auto' | 'multi' | 'documents';
 	period?: ChatQualityPeriod;
 	knowledgeBaseId?: string;
 };

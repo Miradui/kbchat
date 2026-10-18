@@ -64,10 +64,12 @@ type UseChatThreadOptions = {
   initialMessageId?: string;
   draftKnowledgeBaseId?: string;
   draftKnowledgeBaseIds?: string[];
+  draftDocumentIds?: string[];
   draftScopeMode?: 'auto' | 'manual';
   onSessionCreated: (session: ChatSession) => void;
   onSessionsChanged: () => void;
   onAccessLost?: (sessionId: string) => void;
+  onQuestionSaved?: (sessionId: string, question: string) => void;
 };
 
 /**
@@ -84,10 +86,12 @@ export function useChatThread({
   initialMessageId,
   draftKnowledgeBaseId,
   draftKnowledgeBaseIds,
+  draftDocumentIds,
   draftScopeMode = 'manual',
   onSessionCreated,
   onSessionsChanged,
   onAccessLost,
+  onQuestionSaved,
 }: UseChatThreadOptions) {
   const isDraft = !sessionId;
   const [session, setSession] = useState<ChatSession | null>(null);
@@ -130,6 +134,8 @@ export function useChatThread({
   onSessionsChangedRef.current = onSessionsChanged;
   const onAccessLostRef = useRef(onAccessLost);
   onAccessLostRef.current = onAccessLost;
+  const onQuestionSavedRef = useRef(onQuestionSaved);
+  onQuestionSavedRef.current = onQuestionSaved;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -235,6 +241,7 @@ export function useChatThread({
           (message) => message.clientRequestId === storedRequest.clientRequestId,
         );
         if (accepted) {
+          onQuestionSavedRef.current?.(targetSessionId, storedRequest.question);
           pendingChatRequestStore.clear(targetSessionId, storedRequest.clientRequestId);
           setUnconfirmedSend(null);
           setStoppedStream(null);
@@ -338,6 +345,7 @@ export function useChatThread({
         (message) => message.clientRequestId === pending.clientRequestId,
       );
       if (accepted) {
+        onQuestionSavedRef.current?.(targetSessionId, pending.question);
         pendingChatRequestStore.clear(targetSessionId, pending.clientRequestId);
         setUnconfirmedSend(null);
         setStoppedStream(null);
@@ -421,13 +429,15 @@ export function useChatThread({
 
     // An explicit resend must reuse the original id so the server can dedupe it.
     const clientRequestId = retryOf?.clientRequestId ?? crypto.randomUUID();
+    const confirmQuestion = onQuestionSavedRef.current;
     let targetSessionId = sessionId ?? '';
     let messageRequestStarted = false;
     let streamController: AbortController | null = null;
 
     try {
       if (isDraft) {
-        const created = await createChatSession(draftScopeMode === 'auto' ? undefined : draftKnowledgeBaseIds?.length ? draftKnowledgeBaseIds : draftKnowledgeBaseId, '');
+        const scope = draftScopeMode === 'auto' ? undefined : draftKnowledgeBaseIds?.length ? draftKnowledgeBaseIds : draftKnowledgeBaseId;
+        const created = await (draftDocumentIds?.length ? createChatSession(scope, '', draftDocumentIds) : createChatSession(scope, ''));
         if (!mountedRef.current || sendTokenRef.current !== token) return;
         targetSessionId = created.id;
         activeSessionRef.current = created.id;
@@ -476,6 +486,7 @@ export function useChatThread({
       );
       if (sendAbortRef.current === streamController) sendAbortRef.current = null;
       cancelRequestedRef.current = null;
+      confirmQuestion?.(targetSessionId, question);
       pendingChatRequestStore.clear(targetSessionId, clientRequestId);
       if (isCurrent()) {
         setRerankFallback(response.rerankFallback?.used ? response.rerankFallback : null);
@@ -597,6 +608,7 @@ export function useChatThread({
     handleAccessLost,
     draftKnowledgeBaseId,
     draftKnowledgeBaseIds,
+    draftDocumentIds,
     draftScopeMode,
     isDraft,
     onSessionCreated,

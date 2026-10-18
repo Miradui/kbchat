@@ -33,6 +33,7 @@ type chatRetrievalService interface {
 }
 
 type ChatService struct {
+	evaluations    *EvaluationService
 	cfg            config.Config
 	chats          *repository.ChatRepository
 	knowledgeBases *repository.KnowledgeBaseRepository
@@ -102,7 +103,7 @@ func (s *ChatService) CreateSession(ctx context.Context, userID uuid.UUID, req d
 		return nil, apperror.Validation(map[string]any{"scopeMode": "must be auto or manual"})
 	}
 	if mode == model.ChatScopeAuto {
-		if req.KnowledgeBaseID != "" || len(req.KnowledgeBaseIDs) > 0 {
+		if req.KnowledgeBaseID != "" || len(req.KnowledgeBaseIDs) > 0 || req.DocumentIDs != nil {
 			return nil, apperror.Validation(map[string]any{"scopeMode": "automatic scope cannot include explicit knowledge base IDs"})
 		}
 		available, err := s.knowledgeBases.ListChatKnowledgeBases(ctx, userID)
@@ -129,11 +130,16 @@ func (s *ChatService) CreateSession(ctx context.Context, userID uuid.UUID, req d
 		bases = append(bases, *decision.knowledgeBase)
 	}
 
+	documentScope, err := s.buildDocumentScope(ctx, req.DocumentIDs, ids)
+	if err != nil {
+		return nil, err
+	}
 	title := strings.TrimSpace(req.Title)
 	if title == "" {
 		title = defaultChatSessionTitle
 	}
 	session := &model.ChatSession{
+		DocumentScope:   documentScope,
 		ScopeMode:       mode,
 		UserID:          userID,
 		KnowledgeBaseID: ids[0],
@@ -184,9 +190,10 @@ func (s *ChatService) ListSessions(ctx context.Context, userID uuid.UUID, query 
 		PageSize: pageSize,
 	}
 	for i := range items {
-		scope := toChatSessionResponse(&model.ChatSession{KnowledgeBaseID: items[i].KnowledgeBaseID, KnowledgeBase: model.KnowledgeBase{Name: items[i].KnowledgeBaseName}, KnowledgeBaseLinks: items[i].KnowledgeBaseLinks})
+		scope := toChatSessionResponse(&model.ChatSession{DocumentScope: items[i].DocumentScope, KnowledgeBaseID: items[i].KnowledgeBaseID, KnowledgeBase: model.KnowledgeBase{Name: items[i].KnowledgeBaseName}, KnowledgeBaseLinks: items[i].KnowledgeBaseLinks})
 		messageCount := items[i].MessageCount
 		res.Items = append(res.Items, dto.ChatSessionResponse{
+			Documents:          scope.Documents,
 			ScopeMode:          items[i].ScopeMode,
 			ID:                 items[i].ID.String(),
 			KnowledgeBaseID:    items[i].KnowledgeBaseID.String(),
@@ -458,10 +465,19 @@ func (s *ChatService) SetMessageFeedback(
 // these views beyond the caller's own sessions: an operator sees the questions asked
 // in the knowledge bases they run, which is the only reading under which "answers
 // without citations" is an operational figure rather than a diary.
-func qualityFilter(actorID uuid.UUID, knowledgeBaseID *uuid.UUID, startAt, endAt time.Time) repository.ChatQualityFilter {
+func qualityFilter(actorID uuid.UUID, knowledgeBaseID *uuid.UUID, startAt, endAt time.Time, scopes ...string) repository.ChatQualityFilter {
+	scope := ""
+	roles := access.MemberRolesWith(access.CapQualityRead)
+	if len(scopes) > 0 {
+		scope = scopes[0]
+	}
+	if scope != "" {
+		roles = access.MemberRolesWith(access.CapChatUse)
+	}
 	return repository.ChatQualityFilter{
+		Scope:           scope,
 		ActorID:         actorID,
-		MemberRoles:     access.MemberRolesWith(access.CapQualityRead),
+		MemberRoles:     roles,
 		KnowledgeBaseID: knowledgeBaseID,
 		StartAt:         startAt,
 		EndAt:           endAt,
@@ -474,12 +490,12 @@ func (s *ChatService) GetQualityOverview(
 	query dto.ChatQualityOverviewQuery,
 ) (*dto.ChatQualityOverviewResponse, error) {
 	period := normalizePeriod(query.Period)
-	if err := s.validateQualityKnowledgeBase(ctx, userID, query.KnowledgeBaseID); err != nil {
+	if err := s.validateQualityKnowledgeBase(ctx, userID, query.KnowledgeBaseID, query.Scope); err != nil {
 		return nil, err
 	}
 	endAt := time.Now().UTC()
 	startAt := periodStart(endAt, period)
-	overview, err := s.chats.GetQualityOverview(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt))
+	overview, err := s.chats.GetQualityOverview(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt, query.Scope))
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -659,7 +675,7 @@ func (s *ChatService) ListKnowledgeGaps(
 			"category": "category must be one of all, no_citations, retrieval_failed, model_refused, repeated_rewrite",
 		})
 	}
-	if err := s.validateQualityKnowledgeBase(ctx, userID, query.KnowledgeBaseID); err != nil {
+	if err := s.validateQualityKnowledgeBase(ctx, userID, query.KnowledgeBaseID, query.Scope); err != nil {
 		return nil, err
 	}
 
@@ -676,19 +692,19 @@ func (s *ChatService) ListKnowledgeGaps(
 	endAt := time.Now().UTC()
 	startAt := periodStart(endAt, period)
 
-	noCitationsTotal, err := s.chats.CountNoCitationGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt))
+	noCitationsTotal, err := s.chats.CountNoCitationGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt, query.Scope))
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
-	retrievalFailedTotal, err := s.chats.CountRetrievalFailedGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt))
+	retrievalFailedTotal, err := s.chats.CountRetrievalFailedGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt, query.Scope))
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
-	modelRefusedTotal, err := s.chats.CountModelRefusedGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt))
+	modelRefusedTotal, err := s.chats.CountModelRefusedGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt, query.Scope))
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
-	repeatedRewriteTotal, err := s.chats.CountRepeatedRewriteGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt))
+	repeatedRewriteTotal, err := s.chats.CountRepeatedRewriteGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt, query.Scope))
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -708,20 +724,20 @@ func (s *ChatService) ListKnowledgeGaps(
 	switch category {
 	case repository.ChatKnowledgeGapNoCitations:
 		response.Total = noCitationsTotal
-		items, err = s.chats.ListNoCitationGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt), offset, pageSize)
+		items, err = s.chats.ListNoCitationGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt, query.Scope), offset, pageSize)
 	case repository.ChatKnowledgeGapRetrievalFailed:
 		response.Total = retrievalFailedTotal
-		items, err = s.chats.ListRetrievalFailedGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt), offset, pageSize)
+		items, err = s.chats.ListRetrievalFailedGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt, query.Scope), offset, pageSize)
 	case repository.ChatKnowledgeGapModelRefused:
 		response.Total = modelRefusedTotal
-		items, err = s.chats.ListModelRefusedGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt), offset, pageSize)
+		items, err = s.chats.ListModelRefusedGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt, query.Scope), offset, pageSize)
 	case repository.ChatKnowledgeGapRepeatedRewrite:
 		response.Total = repeatedRewriteTotal
-		items, err = s.chats.ListRepeatedRewriteGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt), offset, pageSize)
+		items, err = s.chats.ListRepeatedRewriteGaps(ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt, query.Scope), offset, pageSize)
 	default:
 		response.Total = noCitationsTotal + retrievalFailedTotal + modelRefusedTotal + repeatedRewriteTotal
 		items, err = s.listCombinedKnowledgeGaps(
-			ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt), offset, pageSize,
+			ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt, query.Scope), offset, pageSize,
 			combinedGapTotals{
 				noCitations:     noCitationsTotal,
 				retrievalFailed: retrievalFailedTotal,
@@ -851,7 +867,7 @@ func (s *ChatService) ListNegativeFeedback(
 	query dto.ChatQualityFeedbackQuery,
 ) (*dto.ChatQualityFeedbackListResponse, error) {
 	period := normalizePeriod(query.Period)
-	if err := s.validateQualityKnowledgeBase(ctx, userID, query.KnowledgeBaseID); err != nil {
+	if err := s.validateQualityKnowledgeBase(ctx, userID, query.KnowledgeBaseID, query.Scope); err != nil {
 		return nil, err
 	}
 	page, pageSize := query.Page, query.PageSize
@@ -867,7 +883,7 @@ func (s *ChatService) ListNegativeFeedback(
 	endAt := time.Now().UTC()
 	startAt := periodStart(endAt, period)
 	items, total, err := s.chats.ListNegativeFeedback(
-		ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt), query.HasCitations, (page-1)*pageSize, pageSize,
+		ctx, qualityFilter(userID, query.KnowledgeBaseID, startAt, endAt, query.Scope), query.HasCitations, (page-1)*pageSize, pageSize,
 	)
 	if err != nil {
 		return nil, apperror.Internal(err)
@@ -917,7 +933,19 @@ func (s *ChatService) ListNegativeFeedback(
 // base I can see", and the repository scopes those rows to what the caller may read.
 // Returning early here only skips the per-knowledge-base check, which has nothing to
 // check.
-func (s *ChatService) validateQualityKnowledgeBase(ctx context.Context, userID uuid.UUID, knowledgeBaseID *uuid.UUID) error {
+func (s *ChatService) validateQualityKnowledgeBase(ctx context.Context, userID uuid.UUID, knowledgeBaseID *uuid.UUID, scopes ...string) error {
+	if len(scopes) > 0 && scopes[0] != "" {
+		switch scopes[0] {
+		case "personal", "auto", "multi", "documents":
+		default:
+			return apperror.Validation(map[string]any{"scope": "无效的质量视图范围"})
+		}
+		if knowledgeBaseID != nil {
+			_, err := s.authorizeKnowledgeBase(ctx, userID, *knowledgeBaseID, access.CapChatUse)
+			return err
+		}
+		return nil
+	}
 	if knowledgeBaseID == nil {
 		return nil
 	}
@@ -992,6 +1020,11 @@ func writeExportCitations(builder *strings.Builder, raw datatypes.JSON) {
 		}
 		if citations[i].PageNumber != nil {
 			builder.WriteString(fmt.Sprintf("（第 %d 页）", *citations[i].PageNumber))
+		}
+		if citations[i].TextSource == "ocr_corrected" {
+			builder.WriteString("（人工校对 OCR 文本）")
+		} else if citations[i].TextSource == "ocr" {
+			builder.WriteString("（OCR 识别文本）")
 		}
 		if table := citations[i].Table; table != nil {
 			name := table.SheetName
@@ -1615,6 +1648,9 @@ func (s *ChatService) generateAnswerWithHooks(
 	history []model.ChatMessage,
 	hooks answerHooks,
 ) (generatedChatAnswer, error) {
+	if _, err := s.validateSessionDocuments(ctx, session); err != nil {
+		return generatedChatAnswer{}, err
+	}
 	generationStart := time.Now()
 	timing := observability.ChatTiming{}
 	// Recorded on every exit path, including failures: how long a broken provider
@@ -1777,6 +1813,9 @@ func (s *ChatService) generateAnswerWithHooks(
 			return generatedChatAnswer{}, err
 		}
 	}
+	if _, err := s.validateSessionDocuments(ctx, session); err != nil {
+		return generatedChatAnswer{}, err
+	}
 	return generatedChatAnswer{
 		answer:         answer,
 		citations:      citations,
@@ -1911,6 +1950,7 @@ func cleanSessionTitle(raw string) string {
 }
 
 func toChatSessionResponse(session *model.ChatSession) dto.ChatSessionResponse {
+	documents, _ := sessionDocuments(session)
 	var sourceSession, sourceMessage *string
 	if session.BranchFromSessionID != nil {
 		value := session.BranchFromSessionID.String()
@@ -1929,6 +1969,7 @@ func toChatSessionResponse(session *model.ChatSession) dto.ChatSessionResponse {
 		bases = append(bases, dto.ChatKnowledgeBaseResponse{ID: link.KnowledgeBaseID.String(), Name: link.KnowledgeBase.Name})
 	}
 	return dto.ChatSessionResponse{
+		Documents:           documents,
 		BranchFromSessionID: sourceSession, BranchFromMessageID: sourceMessage,
 		ScopeMode:        chatScopeMode(session),
 		KnowledgeBaseIDs: ids, KnowledgeBases: bases,

@@ -11,6 +11,15 @@ import (
 )
 
 func (p *Processor) parseDocument(ctx context.Context, document *model.Document, job *model.DocumentJob, path string, settings *tableconfig.Options) (parser.ParsedDocument, error) {
+	if document.FileType == "pdf" {
+		baseline, err := p.documents.PDFCorrection(ctx, document.ID)
+		if err != nil {
+			return parser.ParsedDocument{}, err
+		}
+		if len(baseline) > 0 {
+			return parser.DecodePDFSnapshot(baseline)
+		}
+	}
 	parseCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	var monitoring chan struct{}

@@ -7,6 +7,7 @@ import (
 )
 
 type EvaluationCase struct {
+	Scope            datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'"`
 	ID               uuid.UUID      `gorm:"type:uuid;primaryKey"`
 	KnowledgeBaseID  uuid.UUID      `gorm:"type:uuid;not null;index"`
 	KnowledgeBase    KnowledgeBase  `gorm:"constraint:OnDelete:CASCADE"`
@@ -20,6 +21,7 @@ type EvaluationCase struct {
 }
 
 type EvaluationRun struct {
+	IsPrivate       bool           `gorm:"not null;default:false"`
 	ID              uuid.UUID      `gorm:"type:uuid;primaryKey"`
 	KnowledgeBaseID uuid.UUID      `gorm:"type:uuid;not null;index;uniqueIndex:idx_evaluation_run_request"`
 	KnowledgeBase   KnowledgeBase  `gorm:"constraint:OnDelete:CASCADE"`

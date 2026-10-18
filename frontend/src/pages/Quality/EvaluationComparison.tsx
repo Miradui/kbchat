@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { evaluationScopeLabel } from './evaluationScope';
 
 import { Badge } from '../../components/ui/Badge';
 import type { AnswerConfig, RetrievalConfig } from '../../types/api';
@@ -96,6 +97,7 @@ function Summary({ run, ids, baseline }: { run: EvaluationRun; ids: Set<string>;
   const differences = baseline ? configDifferences(baseline, run) : [];
   return <div className="evaluation-summary">
     <h3>{run.name}</h3><p>{formatDateTime(run.createdAt)} · {evaluationStatusLabels[run.status]}</p>
+    <p>{evaluationScopeLabel(run.cases?.[0])}</p>
     <dl>
       <div><dt>规则通过</dt><dd>{scored.length ? `${passed} / ${scored.length}` : '暂无可评分结果'}</dd></div>
       <div><dt>含引用的回答</dt><dd>{successful.length ? `${citationCount} / ${successful.length}` : '—'}</dd></div>

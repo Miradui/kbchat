@@ -1,6 +1,7 @@
 package dto
 
 type SearchRequest struct {
+	DocumentIDs    []string `json:"documentIds,omitempty"`
 	Query          string   `json:"query" binding:"required"`
 	VectorTopN     int      `json:"vectorTopN"`
 	RerankTopK     int      `json:"rerankTopK"`

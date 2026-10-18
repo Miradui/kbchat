@@ -3,6 +3,7 @@ package dto
 import "time"
 
 type EvaluationCaseRequest struct {
+	SourceSessionID  string   `json:"sourceSessionId,omitempty"`
 	Question         string   `json:"question"`
 	ExpectedAnswer   string   `json:"expectedAnswer"`
 	RequiredKeywords []string `json:"requiredKeywords"`
@@ -10,6 +11,7 @@ type EvaluationCaseRequest struct {
 }
 
 type EvaluationCaseResponse struct {
+	Scope *EvaluationScope `json:"scope,omitempty"`
 	EvaluationCaseRequest
 	ID              string    `json:"id"`
 	KnowledgeBaseID string    `json:"knowledgeBaseId"`
@@ -25,16 +27,17 @@ type EvaluationRunRequest struct {
 }
 
 type EvaluationResult struct {
-	CaseID          string                  `json:"caseId"`
-	Answer          string                  `json:"answer"`
-	AnswerStatus    *string                 `json:"answerStatus"`
-	Citations       []CitationResponse      `json:"citations"`
-	RerankFallback  *RerankFallbackResponse `json:"rerankFallback"`
-	DurationMS      int64                   `json:"durationMs"`
-	RulePassed      *bool                   `json:"rulePassed"`
-	MissingKeywords []string                `json:"missingKeywords"`
-	ErrorCode       string                  `json:"errorCode"`
-	ErrorMessage    string                  `json:"errorMessage"`
+	KnowledgeBaseIDs []string                `json:"knowledgeBaseIds,omitempty"`
+	CaseID           string                  `json:"caseId"`
+	Answer           string                  `json:"answer"`
+	AnswerStatus     *string                 `json:"answerStatus"`
+	Citations        []CitationResponse      `json:"citations"`
+	RerankFallback   *RerankFallbackResponse `json:"rerankFallback"`
+	DurationMS       int64                   `json:"durationMs"`
+	RulePassed       *bool                   `json:"rulePassed"`
+	MissingKeywords  []string                `json:"missingKeywords"`
+	ErrorCode        string                  `json:"errorCode"`
+	ErrorMessage     string                  `json:"errorMessage"`
 }
 
 type EvaluationRuntime struct {
@@ -47,6 +50,7 @@ type EvaluationRuntime struct {
 }
 
 type EvaluationRunResponse struct {
+	IsPrivate       bool                     `json:"isPrivate,omitempty"`
 	ID              string                   `json:"id"`
 	KnowledgeBaseID string                   `json:"knowledgeBaseId"`
 	ClientRequestID string                   `json:"clientRequestId"`

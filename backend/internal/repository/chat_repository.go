@@ -40,6 +40,7 @@ func (r *ChatRepository) CreateSession(ctx context.Context, session *model.ChatS
 }
 
 type ChatSessionListItem struct {
+	DocumentScope      datatypes.JSON
 	ScopeMode          string
 	KnowledgeBaseLinks []model.ChatSessionKnowledgeBase `gorm:"-"`
 	ID                 uuid.UUID
@@ -97,6 +98,7 @@ func (r *ChatRepository) ListSessions(ctx context.Context, userID uuid.UUID, mem
 	err := base().
 		Select(`
 			chat_sessions.id AS id,
+            chat_sessions.document_scope AS document_scope,
 			chat_sessions.scope_mode AS scope_mode,
 			chat_sessions.knowledge_base_id AS knowledge_base_id,
 			knowledge_bases.name AS knowledge_base_name,
@@ -876,6 +878,7 @@ func (r *ChatRepository) ListNegativeFeedback(
 // repository methods, and adding another uuid-and-slice pair to each signature is
 // how a caller ends up passing the wrong actor to the wrong argument.
 type ChatQualityFilter struct {
+	Scope string
 	// ActorID is who is asking. Not the session owner: quality data is about what
 	// other people asked.
 	ActorID uuid.UUID
@@ -904,11 +907,26 @@ func chatQualityScope(db *gorm.DB, filter ChatQualityFilter) *gorm.DB {
 		Where("chat_messages.role = ?", "assistant").
 		Where("chat_sessions.deleted_at IS NULL").
 		Where(reachableKnowledgeBaseCondition(db, filter.ActorID, filter.MemberRoles)).
-		Where(singleBaseChatSQL).
 		Where("knowledge_bases.deleted_at IS NULL").
 		Where("chat_messages.created_at >= ? AND chat_messages.created_at < ?", filter.StartAt, filter.EndAt)
-	if filter.KnowledgeBaseID != nil {
-		scope = scope.Where("chat_sessions.knowledge_base_id = ?", *filter.KnowledgeBaseID)
+	if filter.Scope == "" {
+		scope = scope.Where(singleBaseChatSQL)
+		if filter.KnowledgeBaseID != nil {
+			scope = scope.Where("chat_sessions.knowledge_base_id = ?", *filter.KnowledgeBaseID)
+		}
+	} else {
+		scope = scope.Where("chat_sessions.user_id = ?", filter.ActorID).Where(reachableChatLinks(filter.ActorID, filter.MemberRoles))
+		if filter.KnowledgeBaseID != nil {
+			scope = chatContainsBase(scope, *filter.KnowledgeBaseID)
+		}
+		switch filter.Scope {
+		case "auto":
+			scope = scope.Where("chat_sessions.scope_mode = 'auto'")
+		case "multi":
+			scope = scope.Where("chat_sessions.scope_mode <> 'auto' AND COALESCE(CAST(chat_sessions.document_scope AS TEXT),'[]') = '[]' AND EXISTS (SELECT 1 FROM chat_session_knowledge_bases links WHERE links.session_id = chat_sessions.id)")
+		case "documents":
+			scope = scope.Where("COALESCE(CAST(chat_sessions.document_scope AS TEXT),'[]') <> '[]'")
+		}
 	}
 	return scope
 }

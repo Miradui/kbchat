@@ -1,5 +1,18 @@
 # 数据库设计
 
+## 知识工作流扩展（044–047，2026-10-19）
+
+| 迁移 | 数据与约束 |
+| --- | --- |
+| 044 | `chat_sessions.document_scope JSONB NOT NULL DEFAULT '[]'`，数组最多 20 项；保存文档 id/knowledgeBaseId/filename，固定到选定文档 ID，分支复制范围。 |
+| 045 | `document_pdf_corrections(document_id UUID PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, content JSONB NOT NULL)`；完整不可变页文本基线，格式同 PDF 快照，人工修改页为 `textSource=ocr_corrected`。 |
+| 046 | `evaluation_cases.scope JSONB NOT NULL DEFAULT '{}'` 保存来源会话范围；`evaluation_runs.is_private BOOLEAN NOT NULL DEFAULT false`；既有 cases/results JSON 保存范围及实际来源库。 |
+| 047 | `chat_quality_issues` 主键 `(user_id,session_id,question_key)`，问题键为原问题 SHA-256；保存 question/status/note/document_ids/evaluation_case_id/evaluation_run_id/updated_at。状态为 open/retest/resolved；用户和会话外键 CASCADE，用例和运行外键 SET NULL。 |
+
+校对副本、处理任务、替换链接、上传凭据和校对基线在一次事务提交；提交时锁定源文档并检查已发布快照指纹，与 processor 发布锁串行化。重新处理校对版复用基线，不重新 OCR。已发布快照只在新切片全部成功时替换。
+
+新迁移可重复执行，不回填旧会话范围或推断旧 PDF 的校对内容。存量升级须先完成 034–043，再执行 044–047。浏览器草稿不入数据库。
+
 迁移 040 新增 `document_upload_receipts`：`user_id`、`knowledge_base_id`、`request_id` 联合主键，`fingerprint varchar(64)`、可空 `document_id`、`created_at timestamptz`。凭据与文档/任务/版本链接一起提交，只记录成功请求；文档永久删除将 `document_id` 置空以保留幂等墓碑，用户或知识库永久删除级联清除。按 `document_id` 建索引。未传请求 ID 的旧客户端不创建凭据。
 
 迁移 041 新增 `documents.table_import JSONB NULL`，保存标准化工作表、表头行和原列号选择，原文件及设置在一个文档版本内不可变。旧行 NULL 保留自动解析默认；重处理不清空设置。041 同时扩展 `documents_error_code_check`，允许 `table_import_invalid`。不自动重处理历史文档。

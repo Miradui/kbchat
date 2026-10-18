@@ -56,22 +56,34 @@ func evaluationError(err error) error {
 }
 
 func caseResponse(item model.EvaluationCase) dto.EvaluationCaseResponse {
+	scope, _ := evaluationScope(item.Scope)
+	source := ""
+	if scope != nil {
+		source = scope.SourceSessionID
+	}
 	keywords := []string{}
 	_ = json.Unmarshal(item.RequiredKeywords, &keywords)
-	return dto.EvaluationCaseResponse{ID: item.ID.String(), KnowledgeBaseID: item.KnowledgeBaseID.String(), CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt,
-		EvaluationCaseRequest: dto.EvaluationCaseRequest{Question: item.Question, ExpectedAnswer: item.ExpectedAnswer, RequiredKeywords: keywords, RequireCitation: item.RequireCitation}}
+	return dto.EvaluationCaseResponse{Scope: scope, ID: item.ID.String(), KnowledgeBaseID: item.KnowledgeBaseID.String(), CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt,
+		EvaluationCaseRequest: dto.EvaluationCaseRequest{SourceSessionID: source, Question: item.Question, ExpectedAnswer: item.ExpectedAnswer, RequiredKeywords: keywords, RequireCitation: item.RequireCitation}}
 }
 
 func (s *EvaluationService) ListCases(ctx context.Context, actor, kbID uuid.UUID) ([]dto.EvaluationCaseResponse, error) {
 	if err := s.authorize(ctx, actor, kbID, false); err != nil {
 		return nil, err
 	}
-	items, err := s.repo.ListCases(ctx, kbID)
+	items, err := s.repo.ListCases(ctx, kbID, actor)
 	if err != nil {
 		return nil, evaluationError(err)
 	}
 	res := make([]dto.EvaluationCaseResponse, 0, len(items))
 	for _, item := range items {
+		if err := s.authorizeCaseScope(ctx, actor, item); err != nil {
+			var denied *apperror.Error
+			if !errors.As(err, &denied) || (denied.Status != 403 && denied.Status != 404) {
+				return nil, err
+			}
+			continue
+		}
 		res = append(res, caseResponse(item))
 	}
 	return res, nil
@@ -80,6 +92,29 @@ func (s *EvaluationService) ListCases(ctx context.Context, actor, kbID uuid.UUID
 func (s *EvaluationService) SaveCase(ctx context.Context, actor, kbID, id uuid.UUID, req dto.EvaluationCaseRequest) (*dto.EvaluationCaseResponse, error) {
 	if err := s.authorize(ctx, actor, kbID, false); err != nil {
 		return nil, err
+	}
+	if id != uuid.Nil {
+		existing, err := s.repo.GetCase(ctx, kbID, id)
+		if err != nil {
+			return nil, evaluationError(err)
+		}
+		if err = s.authorizeCaseScope(ctx, actor, *existing); err != nil {
+			return nil, err
+		}
+		scope, _ := evaluationScope(existing.Scope)
+		if scope == nil && req.SourceSessionID != "" {
+			return nil, apperror.Validation(map[string]any{"sourceSessionId": "共享测试问题不能改为私人会话范围，请新建测试问题"})
+		}
+		if scope != nil && req.SourceSessionID != "" && req.SourceSessionID != scope.SourceSessionID {
+			return nil, apperror.Validation(map[string]any{"sourceSessionId": "来源会话范围不可修改，请新建测试问题"})
+		}
+		if scope != nil && req.SourceSessionID == "" {
+			req.SourceSessionID = scope.SourceSessionID
+		}
+	}
+	scope, scopeErr := s.captureScope(ctx, actor, kbID, req.SourceSessionID)
+	if scopeErr != nil {
+		return nil, scopeErr
 	}
 	req.Question, req.ExpectedAnswer = strings.TrimSpace(req.Question), strings.TrimSpace(req.ExpectedAnswer)
 	if req.Question == "" || utf8.RuneCountInString(req.Question) > 4000 || utf8.RuneCountInString(req.ExpectedAnswer) > 8000 || len(req.RequiredKeywords) > 20 {
@@ -98,7 +133,7 @@ func (s *EvaluationService) SaveCase(ctx context.Context, actor, kbID, id uuid.U
 		}
 	}
 	encoded, _ := json.Marshal(keywords)
-	item := model.EvaluationCase{ID: id, KnowledgeBaseID: kbID, CreatedBy: actor, Question: req.Question, ExpectedAnswer: req.ExpectedAnswer, RequiredKeywords: encoded, RequireCitation: req.RequireCitation}
+	item := model.EvaluationCase{Scope: scope, ID: id, KnowledgeBaseID: kbID, CreatedBy: actor, Question: req.Question, ExpectedAnswer: req.ExpectedAnswer, RequiredKeywords: encoded, RequireCitation: req.RequireCitation}
 	var err error
 	if id == uuid.Nil {
 		item.ID = uuid.New()
@@ -117,6 +152,13 @@ func (s *EvaluationService) DeleteCase(ctx context.Context, actor, kbID, id uuid
 	if err := s.authorize(ctx, actor, kbID, false); err != nil {
 		return err
 	}
+	item, err := s.repo.GetCase(ctx, kbID, id)
+	if err != nil {
+		return evaluationError(err)
+	}
+	if err = s.authorizeCaseScope(ctx, actor, *item); err != nil {
+		return err
+	}
 	if err := s.repo.DeleteCase(ctx, kbID, id); err != nil {
 		return evaluationError(err)
 	}
@@ -124,7 +166,7 @@ func (s *EvaluationService) DeleteCase(ctx context.Context, actor, kbID, id uuid
 }
 
 func runResponse(run *model.EvaluationRun, detail bool) (*dto.EvaluationRunResponse, error) {
-	res := &dto.EvaluationRunResponse{ID: run.ID.String(), KnowledgeBaseID: run.KnowledgeBaseID.String(), ClientRequestID: run.ClientRequestID.String(), Name: run.Name, Status: run.Status,
+	res := &dto.EvaluationRunResponse{IsPrivate: run.IsPrivate, ID: run.ID.String(), KnowledgeBaseID: run.KnowledgeBaseID.String(), ClientRequestID: run.ClientRequestID.String(), Name: run.Name, Status: run.Status,
 		ErrorMessage: run.ErrorMessage, CreatedAt: run.CreatedAt, StartedAt: run.StartedAt, FinishedAt: run.FinishedAt}
 	for _, pair := range []struct {
 		data   []byte
@@ -182,20 +224,39 @@ func (s *EvaluationService) CreateRun(ctx context.Context, actor, kbID uuid.UUID
 		return nil, evaluationError(err)
 	}
 	if existing != nil {
+		if err = s.authorizeRunScope(ctx, actor, existing); err != nil {
+			return nil, err
+		}
 		return matchingRun(existing, hash)
 	}
-	items, err := s.repo.ListCases(ctx, kbID)
+	items, err := s.repo.ListCases(ctx, kbID, actor)
 	if err != nil {
 		return nil, evaluationError(err)
 	}
 	snapshots := []dto.EvaluationCaseResponse{}
+	private := false
 	for _, item := range items {
 		if seen[item.ID.String()] {
+			if err = s.authorizeCaseScope(ctx, actor, item); err != nil {
+				return nil, err
+			}
+			if scope, _ := evaluationScope(item.Scope); scope != nil {
+				private = true
+			}
 			snapshots = append(snapshots, caseResponse(item))
 		}
 	}
 	if len(snapshots) != len(req.CaseIDs) {
 		return nil, apperror.NotFound("RESOURCE_NOT_FOUND", "部分测试问题不存在或不属于当前知识库")
+	}
+	if private {
+		scope, _ := json.Marshal(snapshots[0].Scope)
+		for _, item := range snapshots {
+			other, _ := json.Marshal(item.Scope)
+			if item.Scope == nil || string(other) != string(scope) {
+				return nil, apperror.Validation(map[string]any{"caseIds": "同一次评测请选择相同来源范围的测试问题"})
+			}
+		}
 	}
 	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].ID < snapshots[j].ID })
 	cases, _ := json.Marshal(snapshots)
@@ -207,7 +268,10 @@ func (s *EvaluationService) CreateRun(ctx context.Context, actor, kbID uuid.UUID
 		return nil, apperror.Internal(err)
 	}
 	answerConfig, _ := json.Marshal(storedAnswerConfig(kb))
-	run, err := s.repo.CreateRun(ctx, &model.EvaluationRun{ID: uuid.New(), KnowledgeBaseID: kbID, CreatedBy: actor, ClientRequestID: requestID, RequestHash: hash, Name: req.Name, Status: "queued", Cases: cases, Config: config, AnswerConfig: answerConfig, Results: datatypes.JSON("[]"), Runtime: datatypes.JSON("{}")})
+	if private && (snapshots[0].Scope.ScopeMode == model.ChatScopeAuto || len(snapshots[0].Scope.KnowledgeBaseIDs) > 1) {
+		answerConfig, _ = json.Marshal(dto.AnswerConfig{AnswerLanguage: "auto"})
+	}
+	run, err := s.repo.CreateRun(ctx, &model.EvaluationRun{IsPrivate: private, ID: uuid.New(), KnowledgeBaseID: kbID, CreatedBy: actor, ClientRequestID: requestID, RequestHash: hash, Name: req.Name, Status: "queued", Cases: cases, Config: config, AnswerConfig: answerConfig, Results: datatypes.JSON("[]"), Runtime: datatypes.JSON("{}")})
 	if err != nil {
 		return nil, evaluationError(err)
 	}
@@ -225,12 +289,19 @@ func (s *EvaluationService) ListRuns(ctx context.Context, actor, kbID uuid.UUID)
 	if err := s.authorize(ctx, actor, kbID, false); err != nil {
 		return nil, err
 	}
-	items, err := s.repo.ListRuns(ctx, kbID)
+	items, err := s.repo.ListRuns(ctx, kbID, actor)
 	if err != nil {
 		return nil, evaluationError(err)
 	}
 	res := make([]dto.EvaluationRunResponse, 0, len(items))
 	for i := range items {
+		if err := s.authorizeRunScope(ctx, actor, &items[i]); err != nil {
+			var denied *apperror.Error
+			if !errors.As(err, &denied) || (denied.Status != 403 && denied.Status != 404) {
+				return nil, err
+			}
+			continue
+		}
 		item, err := runResponse(&items[i], false)
 		if err != nil {
 			return nil, err
@@ -247,6 +318,9 @@ func (s *EvaluationService) GetRun(ctx context.Context, actor, kbID, id uuid.UUI
 	run, err := s.repo.GetRun(ctx, kbID, id)
 	if err != nil {
 		return nil, evaluationError(err)
+	}
+	if err = s.authorizeRunScope(ctx, actor, run); err != nil {
+		return nil, err
 	}
 	return runResponse(run, true)
 }
@@ -354,7 +428,11 @@ func (s *EvaluationService) evaluateCase(ctx context.Context, run *model.Evaluat
 	result := dto.EvaluationResult{CaseID: item.ID, Citations: []dto.CitationResponse{}, MissingKeywords: []string{}}
 	callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	generated, err := s.chat.generateAnswerWithHooks(callCtx, run.CreatedBy, &model.ChatSession{KnowledgeBaseID: run.KnowledgeBaseID}, item.Question, nil, answerHooks{retrievalConfig: &cfg, answerConfig: &answerConfig})
+	session, err := s.scopeSession(callCtx, run.CreatedBy, run.KnowledgeBaseID, item.Scope)
+	var generated generatedChatAnswer
+	if err == nil {
+		generated, err = s.chat.generateAnswerWithHooks(callCtx, run.CreatedBy, session, item.Question, nil, answerHooks{retrievalConfig: &cfg, answerConfig: &answerConfig})
+	}
 	result.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
 		result.ErrorCode, result.ErrorMessage = "EVALUATION_FAILED", "评测调用失败，请检查系统状态后重试。"
@@ -365,6 +443,11 @@ func (s *EvaluationService) evaluateCase(ctx context.Context, run *model.Evaluat
 		return result
 	}
 	result.Answer, result.AnswerStatus, result.Citations, result.RerankFallback = generated.answer, &generated.answerStatus, generated.citations, generated.rerankFallback
+	if item.Scope != nil {
+		for _, id := range session.KnowledgeBaseIDs() {
+			result.KnowledgeBaseIDs = append(result.KnowledgeBaseIDs, id.String())
+		}
+	}
 	for _, keyword := range item.RequiredKeywords {
 		if !strings.Contains(strings.ToLower(generated.answer), strings.ToLower(keyword)) {
 			result.MissingKeywords = append(result.MissingKeywords, keyword)

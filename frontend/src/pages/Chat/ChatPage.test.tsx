@@ -31,6 +31,7 @@ import type { ChatMessage, ChatSession, ChatSessionListResponse, SendChatMessage
 import { ChatPage } from './ChatPage';
 
 vi.mock('../../api/resources', () => ({
+  getDocumentVersionStatus: vi.fn().mockResolvedValue({ items: [] }),
   getCurrentUser: vi.fn().mockResolvedValue({ id: 'user1', username: 'fixture', displayName: '测试用户', role: 'user' }),
   archiveChatSession: vi.fn(),
   createChatSession: vi.fn(),
@@ -1883,7 +1884,7 @@ describe('ChatPage', () => {
     const input = await screen.findByRole('textbox', { name: '输入问题' });
     await user.type(input, '制度会话问题');
     await user.click(screen.getByRole('button', { name: '发送' }));
-    expect(await screen.findAllByText('制度会话问题')).toHaveLength(1);
+    expect(await screen.findAllByText('制度会话问题', { selector: '.chat-msg__content' })).toHaveLength(1);
 
     expect(screen.getByLabelText('筛选历史会话的知识库')).toBeDisabled();
     screen.getAllByRole('button', { name: '新建对话' }).forEach((button) => {
@@ -2132,7 +2133,7 @@ describe('ChatPage', () => {
     expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat?knowledgeBaseId=kb2');
   });
 
-  it('keeps the typed draft when switching to a knowledge base with existing sessions', async () => {
+  it('restores separate new-conversation drafts when switching knowledge bases', async () => {
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
     vi.mocked(listChatSessions).mockResolvedValue({total: ([session, secondSession]).length, page: 1, pageSize: 20,  items: [session, secondSession] });
     const user = userEvent.setup();
@@ -2153,6 +2154,9 @@ describe('ChatPage', () => {
     await user.selectOptions(await screen.findByLabelText('筛选历史会话的知识库'), secondKnowledgeBase.id);
 
     expect(screen.getByRole('status', { name: '当前位置' })).toHaveTextContent('/chat?knowledgeBaseId=kb2');
+    expect(screen.getByRole('textbox', { name: '输入问题' })).toHaveValue('');
+    await user.type(screen.getByRole('textbox', { name: '输入问题' }), '产品资料问题');
+    await user.selectOptions(screen.getByLabelText('筛选历史会话的知识库'), knowledgeBase.id);
     expect(screen.getByRole('textbox', { name: '输入问题' })).toHaveValue('请对比两份制度');
     expect(createChatSession).not.toHaveBeenCalled();
     expect(listChatMessages).not.toHaveBeenCalled();
@@ -2390,10 +2394,10 @@ describe('ChatPage', () => {
     const conversation = screen.getByRole('region', { name: '问答会话' });
     expect(await within(conversation).findByRole('alert', undefined, { timeout: 3000 }))
       .toHaveTextContent('回答生成失败，请稍后重试。');
-    expect(within(conversation).getAllByText('如何报销？')).toHaveLength(1);
+    expect(within(conversation).getAllByText('如何报销？', { selector: '.chat-msg__content' })).toHaveLength(1);
     expect(within(conversation).getByRole('button', { name: '重试' })).toBeInTheDocument();
     expect(within(conversation).getByRole('button', { name: '修改问题' })).toBeInTheDocument();
-    expect(input).toHaveValue('');
+    expect(input).toHaveValue('如何报销？');
 
     await user.click(within(conversation).getByRole('button', { name: '重试' }));
     await waitFor(() => expect(sendChatMessage).toHaveBeenCalledTimes(2));
@@ -2460,7 +2464,7 @@ describe('ChatPage', () => {
     expect(screen.queryByRole('button', { name: '再检查一次' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '确认重新发送' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
-    expect(input).toHaveValue('');
+    expect(input).toHaveValue('网络中断的问题');
 
     await finishAutomaticSendChecks();
     expect(within(conversation).getByRole('alert')).toHaveTextContent('没有找到这条消息');
@@ -2526,7 +2530,7 @@ describe('ChatPage', () => {
     });
     await user.click(screen.getByRole('button', { name: '再检查一次' }));
 	expect(await screen.findByRole('alert')).toHaveTextContent('没有找到这条消息');
-	expect(input).toHaveValue('');
+	expect(input).toHaveValue('已被服务端接收的问题');
 
 	vi.mocked(listChatMessages).mockResolvedValueOnce({
 		items: [{

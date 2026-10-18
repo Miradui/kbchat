@@ -88,7 +88,7 @@ func (r *ChatRepository) CreateBranch(ctx context.Context, userID, sourceID, mes
 			title += " · 分支"
 		}
 		now := time.Now().UTC().Truncate(time.Microsecond)
-		branch := model.ChatSession{ID: uuid.New(), UserID: userID, KnowledgeBaseID: source.KnowledgeBaseID, ScopeMode: source.ScopeMode, Title: title, CreatedAt: now, UpdatedAt: now,
+		branch := model.ChatSession{DocumentScope: source.DocumentScope, ID: uuid.New(), UserID: userID, KnowledgeBaseID: source.KnowledgeBaseID, ScopeMode: source.ScopeMode, Title: title, CreatedAt: now, UpdatedAt: now,
 			BranchFromSessionID: &sourceID, BranchFromMessageID: &messageID, BranchRequestID: &requestID}
 		created := tx.Omit(clause.Associations).Clauses(clause.OnConflict{DoNothing: true}).Create(&branch)
 		if created.Error != nil {

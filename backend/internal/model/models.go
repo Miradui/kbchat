@@ -231,6 +231,7 @@ type DocumentChunk struct {
 }
 
 type ChatSession struct {
+	DocumentScope       datatypes.JSON             `gorm:"type:jsonb;not null;default:'[]'" json:"-"`
 	BranchFromSessionID *uuid.UUID                 `gorm:"type:uuid;index" json:"-"`
 	BranchFromMessageID *uuid.UUID                 `gorm:"type:uuid" json:"-"`
 	BranchRequestID     *uuid.UUID                 `gorm:"type:uuid;uniqueIndex:idx_chat_branch_request,where:branch_request_id IS NOT NULL" json:"-"`

@@ -47,16 +47,32 @@ func DecodePDFSnapshot(content []byte) (ParsedDocument, error) {
 	if len(content) > MaxPDFSnapshotBytes || json.Unmarshal(content, &snapshot) != nil || snapshot.Version != 1 || snapshot.TotalPages < 1 || snapshot.TotalPages > MaxPDFPages {
 		return ParsedDocument{}, errors.New("invalid PDF snapshot")
 	}
-	document := ParsedDocument{FileType: "pdf"}
+	document := ParsedDocument{FileType: "pdf", PDFTextSummary: &PDFTextSummary{TotalPages: snapshot.TotalPages, PagesWithoutText: []int{}}}
+	nativePages := map[int]bool{}
+	ocrPages := []int{}
 	previous, textBytes := 0, 0
 	for _, page := range snapshot.Pages {
 		textBytes += len(page.Content)
-		if page.PageNumber <= previous || page.PageNumber > snapshot.TotalPages || strings.TrimSpace(page.Content) == "" || (page.TextSource != "" && page.TextSource != "ocr") || textBytes > MaxPDFTextBytes {
+		if page.PageNumber <= previous || page.PageNumber > snapshot.TotalPages || strings.TrimSpace(page.Content) == "" || (page.TextSource != "" && page.TextSource != "ocr" && page.TextSource != "ocr_corrected") || textBytes > MaxPDFTextBytes {
 			return ParsedDocument{}, errors.New("invalid PDF snapshot page")
 		}
 		pageNumber := page.PageNumber
 		document.Segments = append(document.Segments, Segment{Content: page.Content, PageNumber: &pageNumber, TextSource: page.TextSource})
+		if page.TextSource == "" {
+			nativePages[pageNumber] = true
+		} else {
+			ocrPages = append(ocrPages, pageNumber)
+		}
 		previous = pageNumber
+	}
+	document.PDFTextSummary.TextPages = len(nativePages)
+	for page := 1; page <= snapshot.TotalPages; page++ {
+		if !nativePages[page] {
+			document.PDFTextSummary.PagesWithoutText = append(document.PDFTextSummary.PagesWithoutText, page)
+		}
+	}
+	if len(ocrPages) > 0 {
+		document.PDFTextSummary.OCR = &PDFOCRSummary{Status: "completed", Pages: ocrPages, CompletedPages: len(ocrPages), TotalPages: len(document.PDFTextSummary.PagesWithoutText)}
 	}
 	return document, nil
 }

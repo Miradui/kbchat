@@ -15,6 +15,7 @@ const threadMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../../api/resources', () => ({
+  getCurrentUser: vi.fn().mockResolvedValue({ id: 'user1', username: 'fixture', role: 'user' }),
   archiveChatSession: vi.fn(),
   deleteChatSession: vi.fn(),
   exportChatSession: vi.fn(),

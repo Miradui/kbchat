@@ -8,7 +8,7 @@ import type { DocumentCompareResponse, DocumentVersion } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
 import { formatDateTime } from '../../utils/format';
 
-export function DocumentVersionDialog({ documentId, onClose }: { documentId: string; onClose: () => void }) {
+export function DocumentVersionDialog({ documentId, initialBaseId, onClose }: { documentId: string; initialBaseId?: string; onClose: () => void }) {
   const [items, setItems] = useState<DocumentVersion[]>([]);
   const [base, setBase] = useState(''); const [head, setHead] = useState(documentId);
   const [result, setResult] = useState<DocumentCompareResponse | null>(null);
@@ -21,11 +21,11 @@ export function DocumentVersionDialog({ documentId, onClose }: { documentId: str
       if (controller.signal.aborted) return;
       setItems(data.items); setHead(documentId);
       const current = data.items.findIndex((item) => item.id === documentId);
-      setBase(data.items[current > 0 ? current - 1 : 1]?.id ?? '');
+      setBase(initialBaseId && data.items.some((item) => item.id === initialBaseId) ? initialBaseId : data.items[current > 0 ? current - 1 : 1]?.id ?? '');
     }).catch((caught) => { if (!controller.signal.aborted) setError(getErrorMessage(caught, '版本加载失败。')); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => { controller.abort(); pending.current?.abort(); };
-  }, [documentId, attempt]);
+  }, [documentId, initialBaseId, attempt]);
   function changed() { pending.current?.abort(); setBusy(false); setResult(null); setError(''); }
   async function compare() {
     pending.current?.abort(); const controller = new AbortController(); pending.current = controller;

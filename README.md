@@ -23,6 +23,8 @@
 
 XLSX / UTF-8 CSV 按表头和数据行入库，引用标明工作表与原始行号。XLSX 只读取文件已保存的公式结果，不重新计算，也不执行宏；旧 `.xls` 不支持。文件夹 / ZIP 在浏览器中展开为逐文件上传清单。版本对比比较解析文本，不还原版式。范围和上限见 [六项扩展计划](docs/28-feature-extension-plan.md) 与 [RAG 解析规范](docs/05-rag-pipeline.md#xlsx--csv-资料解析)，验证结果见 [六项扩展验收](docs/29-feature-extension-acceptance.md)。已有部署须先执行迁移 034–039，再同步发布前后端。
 
+知识工作流还支持指定文档提问、浏览器聊天草稿、历史引用新版提示、TXT/Markdown 在线版本编辑、OCR 原图校对，以及本人跨库质量视图与缺口复测跟进。实现顺序和验收标准见 [六项计划](docs/32-knowledge-workflow-plan.md)，结果与限制见 [验收记录](docs/33-knowledge-workflow-acceptance.md)。部署这些功能需要迁移 044–047，且先完成 034–043；本轮未更新业务运行环境。
+
 ## 本地启动
 
 需要 Go **1.25**（版本以 [`backend/go.mod`](backend/go.mod) 为准）、Node.js **22.13+（22 LTS）或 24 LTS**、npm、PostgreSQL **16 + pgvector** 和 Redis **7**。后端部分测试使用 SQLite，需要启用 CGO 并安装可用的 C 编译器；Windows 可使用 MinGW-w64 GCC。

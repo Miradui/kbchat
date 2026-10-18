@@ -3,9 +3,8 @@ import type { SetStateAction } from 'react';
 import type { ChatMessage, Citation } from '../../types/api';
 
 type State = {
-  draft: string;
   focusedCitation: { messageId: string; index: number | null } | null;
-  sourcePreview: { citation: Citation; index: number; scope: string } | null;
+  sourcePreview: { citation: Citation; index: number; scope: string; question?: string; relatedDocumentIds?: string[] } | null;
   feedbackSavingIds: Set<string>;
   feedbackTarget: ChatMessage | null;
   editingMessageId: string | null;
@@ -13,7 +12,6 @@ type State = {
 };
 function initialState(): State {
   return {
-    draft: '',
     focusedCitation: null,
     sourcePreview: null,
     feedbackSavingIds: new Set(),
@@ -46,7 +44,6 @@ export function useChatInteractionState(sessionId?: string) {
         });
     }
     return {
-      setDraft: setter('draft'),
       setFocusedCitation: setter('focusedCitation'),
       setSourcePreview: setter('sourcePreview'),
       setFeedbackSavingIds: setter('feedbackSavingIds'),

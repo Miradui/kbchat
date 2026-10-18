@@ -145,6 +145,26 @@ func (s *Service) searchBases(ctx context.Context, ownerID uuid.UUID, kbIDs []uu
 		}
 		bases = append(bases, decision.KnowledgeBase)
 	}
+	documentIDs, err := dto.ParseDocumentIDs(req.DocumentIDs)
+	if err != nil {
+		return nil, err
+	}
+	if len(documentIDs) > 0 {
+		finder, ok := s.chunks.(interface {
+			FindScopeDocuments(context.Context, []uuid.UUID, []uuid.UUID) ([]model.Document, error)
+		})
+		if !ok {
+			return nil, apperror.Internal(fmt.Errorf("document scope lookup is unavailable"))
+		}
+		docs, err := finder.FindScopeDocuments(ctx, documentIDs, kbIDs)
+		if err != nil {
+			return nil, apperror.Internal(err)
+		}
+		if len(docs) != len(documentIDs) {
+			return nil, apperror.NotFound("DOCUMENT_SCOPE_UNAVAILABLE", "所选文档已删除、移动或不可访问，请重新选择提问范围")
+		}
+		ctx = repository.WithDocumentSearchScope(ctx, documentIDs)
+	}
 	// Canonical order keeps quotas and ties independent of request order.
 	sort.Slice(bases, func(i, j int) bool { return bases[i].ID.String() < bases[j].ID.String() })
 	policy := bases[0]
@@ -507,8 +527,8 @@ func chunkTextSource(metadata datatypes.JSON) string {
 		FileType   string `json:"fileType"`
 		TextSource string `json:"textSource"`
 	}
-	if json.Unmarshal(metadata, &source) == nil && source.FileType == "pdf" && source.TextSource == "ocr" {
-		return "ocr"
+	if json.Unmarshal(metadata, &source) == nil && source.FileType == "pdf" && (source.TextSource == "ocr" || source.TextSource == "ocr_corrected") {
+		return source.TextSource
 	}
 	return ""
 }

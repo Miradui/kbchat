@@ -30,7 +30,7 @@ export function EvaluationCaseDialog({ knowledgeBaseId, initial, onClose, onSave
   function close() { if (!pending.current) { if (dirty) setDiscard(true); else onClose(); } }
   async function submit() {
     if (pending.current || !question.trim()) return;
-    const input: EvaluationCaseInput = { question: question.trim(), expectedAnswer: expected.trim(), requiredKeywords: keywords.split('\n').map((word) => word.trim()).filter(Boolean), requireCitation: citation };
+    const input: EvaluationCaseInput = { question: question.trim(), expectedAnswer: expected.trim(), requiredKeywords: keywords.split('\n').map((word) => word.trim()).filter(Boolean), requireCitation: citation, ...(initial?.sourceSessionId ? { sourceSessionId: initial.sourceSessionId } : {}) };
     if (input.requiredKeywords.length > 20 || input.requiredKeywords.some((word) => [...word].length > 100)) { setError('最多 20 个关键词，每个不超过 100 字。'); return; }
     pending.current = true; setBusy(true); setError('');
     try {
@@ -42,6 +42,7 @@ export function EvaluationCaseDialog({ knowledgeBaseId, initial, onClose, onSave
   return <>
     <Dialog open className="evaluation-case-dialog" title={initial?.id ? '编辑测试问题' : '保存测试问题'} description="使用可以独立理解的问题；参考答案供人工核对，关键词和引用要求用于自动检查。" onClose={close}>
       <form className="ui-form" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+        {initial?.sourceSessionId && <p>复测沿用来源会话的自动、跨库或指定文档范围。该测试及运行结果仅本人在仍有全部来源权限时可见。</p>}
         <Field label="测试问题"><textarea aria-label="测试问题" className="ui-input" required disabled={busy} rows={3} maxLength={4000} value={question} onChange={(event) => setQuestion(event.target.value)} /></Field>
         <Field label="参考答案（可选）"><textarea aria-label="参考答案" className="ui-input" disabled={busy} rows={3} maxLength={8000} value={expected} onChange={(event) => setExpected(event.target.value)} /></Field>
         <Field label="必须包含的关键词（可选）" hint="每行一个，最多 20 个。不区分大小写，按字面文本匹配。">

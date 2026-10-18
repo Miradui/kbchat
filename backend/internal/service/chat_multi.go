@@ -65,14 +65,21 @@ func (s *ChatService) searchAutomaticSession(ctx context.Context, userID uuid.UU
 			seen[id] = true
 		}
 	}
-	if err := s.chats.AddSessionKnowledgeBases(ctx, session, links); err != nil {
-		return nil, apperror.Internal(err)
+	if session.ID != uuid.Nil {
+		if err := s.chats.AddSessionKnowledgeBases(ctx, session, links); err != nil {
+			return nil, apperror.Internal(err)
+		}
 	}
 	session.KnowledgeBaseLinks = append(session.KnowledgeBaseLinks, links...)
 	return res, nil
 }
 
 func (s *ChatService) searchSession(ctx context.Context, userID uuid.UUID, session *model.ChatSession, req dto.SearchRequest) (*dto.SearchResponse, error) {
+	var err error
+	req.DocumentIDs, err = s.validateSessionDocuments(ctx, session)
+	if err != nil {
+		return nil, err
+	}
 	if session.IsAutomatic() {
 		return s.searchAutomaticSession(ctx, userID, session, req)
 	}

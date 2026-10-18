@@ -7,9 +7,10 @@ import { IconButton } from '../ui/IconButton';
 import { matchPdfCitation } from './pdfCitation';
 import { loadPdfJs, type PdfLibrary } from './pdfjs';
 
-export type PdfHighlightTarget = { id: string; content: string; textSource?: 'ocr' };
+export type PdfHighlightTarget = { id: string; content: string; textSource?: 'ocr' | 'ocr_corrected' };
 
 type PdfPreviewProps = {
+  lockPage?: boolean;
   url: string;
   filename: string;
   initialPage?: number | null;
@@ -32,7 +33,7 @@ function pdfErrorMessage(error: unknown): string {
 }
 
 /** Renders the already-authorized blob; it never fetches a document API itself. */
-export function PdfPreview({ url, filename, initialPage, highlight }: PdfPreviewProps) {
+export function PdfPreview({ url, filename, initialPage, highlight, lockPage = false }: PdfPreviewProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   const [attempt, setAttempt] = useState(0);
@@ -116,9 +117,9 @@ export function PdfPreview({ url, filename, initialPage, highlight }: PdfPreview
     <section aria-label={`PDF 原文：${filename}`} className="pdf-preview">
       <div aria-label="PDF 阅读控制" className="pdf-preview__toolbar">
         <div className="pdf-preview__controls">
-          <IconButton disabled={!current || page <= 1} label="PDF 上一页" onClick={() => move(page - 1)}><ChevronLeft aria-hidden="true" /></IconButton>
+          <IconButton disabled={lockPage || !current || page <= 1} label="PDF 上一页" onClick={() => move(page - 1)}><ChevronLeft aria-hidden="true" /></IconButton>
           <span className="pdf-preview__page-count">{current ? `第 ${page} / ${current.pdf.numPages} 页` : 'PDF'}</span>
-          <IconButton disabled={!current || page >= current.pdf.numPages} label="PDF 下一页" onClick={() => move(page + 1)}><ChevronRight aria-hidden="true" /></IconButton>
+          <IconButton disabled={lockPage || !current || page >= current.pdf.numPages} label="PDF 下一页" onClick={() => move(page + 1)}><ChevronRight aria-hidden="true" /></IconButton>
         </div>
         <div className="pdf-preview__controls">
           <IconButton disabled={!current || zoom <= MIN_ZOOM} label="缩小 PDF" onClick={() => setZoom((value) => Math.max(MIN_ZOOM, value - ZOOM_STEP))}><ZoomOut aria-hidden="true" /></IconButton>
@@ -138,11 +139,12 @@ export function PdfPreview({ url, filename, initialPage, highlight }: PdfPreview
         <p className="pdf-preview__notice">引用未提供有效页码，可对照上方摘录阅读 PDF。</p>
       )}
       {highlight?.textSource === 'ocr' && <p className="pdf-preview__notice">此引用来自 OCR 识别文本，可定位到扫描页并对照上方摘录阅读；扫描图像暂不支持文字高亮。</p>}
+      {highlight?.textSource === 'ocr_corrected' && <p className="pdf-preview__notice">此引用来自人工校对的 OCR 文本，请对照原图阅读；扫描图像暂不支持文字高亮。</p>}
       <div aria-label="PDF 页面" className="pdf-preview__viewport" ref={viewportRef} tabIndex={0}>
         {error ? <PdfError message={error} onRetry={retry} /> : current && width > 0 ? (
           <PdfPage
             key={`${url}:${attempt}:${page}:${width}:${zoom}`}
-            highlight={validCitationPage && page === citationPage && highlight?.textSource !== 'ocr' ? highlight : undefined}
+            highlight={validCitationPage && page === citationPage && !highlight?.textSource ? highlight : undefined}
             library={current.library}
             locateRequest={locateRequest}
             onRetry={retry}

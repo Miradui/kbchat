@@ -71,10 +71,12 @@ func NewDocumentService(
 // DocumentUploadOptions carries the caller's decision about an already-known
 // file. It is a struct so a later option does not change every call site.
 type DocumentUploadOptions struct {
-	TableImport *tableconfig.Options
-	RequestID   string
-	replaces    *uuid.UUID
-	SourcePath  string
+	pdfCorrection     []byte
+	pdfSourceRevision string
+	TableImport       *tableconfig.Options
+	RequestID         string
+	replaces          *uuid.UUID
+	SourcePath        string
 	// AllowDuplicate records that the user saw the conflict and chose to keep
 	// both copies. Without it a matching content hash is rejected.
 	AllowDuplicate bool
@@ -187,7 +189,7 @@ func (s *DocumentService) uploadSource(ctx context.Context, ownerID, kbID uuid.U
 		JobType: "process_document",
 		Status:  "pending",
 	}
-	if err := s.documents.CommitUpload(ctx, document, job, ownerID, receipt, options.replaces); err != nil {
+	if err := s.documents.CommitUpload(ctx, document, job, ownerID, receipt, options.replaces, repository.PDFCorrectionWrite{Content: options.pdfCorrection, SourceRevision: options.pdfSourceRevision}); err != nil {
 		if receipt != nil {
 			// A lost COMMIT response is not proof of rollback. Keep the reservation
 			// to clean up later unless replay proves which object was committed.
@@ -202,7 +204,7 @@ func (s *DocumentService) uploadSource(ctx context.Context, ownerID, kbID uuid.U
 					return replay, replayErr
 				}
 			}
-			if !errors.Is(err, repository.ErrDocumentAlreadySuperseded) {
+			if !errors.Is(err, repository.ErrDocumentAlreadySuperseded) && !errors.Is(err, repository.ErrPDFCorrectionConflict) {
 				return nil, apperror.Internal(err)
 			}
 		}
@@ -213,6 +215,9 @@ func (s *DocumentService) uploadSource(ctx context.Context, ownerID, kbID uuid.U
 		}
 		if errors.Is(err, repository.ErrDocumentAlreadySuperseded) {
 			return nil, apperror.New(http.StatusConflict, "DOCUMENT_ALREADY_SUPERSEDED", "该文档已被替换，请替换最新版本")
+		}
+		if errors.Is(err, repository.ErrPDFCorrectionConflict) {
+			return nil, apperror.New(http.StatusConflict, "DOCUMENT_EDIT_CONFLICT", "原始识别文本已变化，请重新打开校对")
 		}
 		return nil, apperror.Internal(err)
 	}

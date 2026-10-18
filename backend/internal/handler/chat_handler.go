@@ -282,6 +282,7 @@ func (h *ChatHandler) QualityOverview(c *gin.Context) {
 		return
 	}
 	res, err := h.chats.GetQualityOverview(c.Request.Context(), userID, dto.ChatQualityOverviewQuery{
+		Scope:           c.Query("scope"),
 		Period:          period,
 		KnowledgeBaseID: knowledgeBaseID,
 	})
@@ -349,6 +350,7 @@ func (h *ChatHandler) ListNegativeFeedback(c *gin.Context) {
 		hasCitations = &parsed
 	}
 	res, err := h.chats.ListNegativeFeedback(c.Request.Context(), userID, dto.ChatQualityFeedbackQuery{
+		Scope:           c.Query("scope"),
 		Period:          period,
 		KnowledgeBaseID: knowledgeBaseID,
 		HasCitations:    hasCitations,
@@ -378,6 +380,7 @@ func (h *ChatHandler) ListKnowledgeGaps(c *gin.Context) {
 	// category is validated in the service so the rule holds for every caller
 	// rather than only for requests arriving through this handler.
 	res, err := h.chats.ListKnowledgeGaps(c.Request.Context(), userID, dto.ChatKnowledgeGapQuery{
+		Scope:           c.Query("scope"),
 		Period:          period,
 		KnowledgeBaseID: knowledgeBaseID,
 		Category:        c.Query("category"),

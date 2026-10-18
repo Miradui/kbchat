@@ -18,3 +18,11 @@ func (r *DocumentRepository) PDFSnapshot(ctx context.Context, documentID uuid.UU
 	}
 	return snapshot.Content, err
 }
+func (r *DocumentRepository) PDFCorrection(ctx context.Context, documentID uuid.UUID) ([]byte, error) {
+	var correction model.DocumentPDFCorrection
+	err := r.db.WithContext(ctx).Where("document_id = ?", documentID).First(&correction).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return correction.Content, err
+}

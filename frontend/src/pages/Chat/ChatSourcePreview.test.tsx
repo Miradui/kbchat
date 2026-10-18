@@ -9,7 +9,7 @@ import type { Citation, DocumentItem, DocumentPreviewResponse } from '../../type
 import { downloadBlob } from '../../utils/download';
 import { ChatSourcePreview } from './ChatSourcePreview';
 
-vi.mock('../../api/resources', () => ({ downloadDocument: vi.fn(), getDocument: vi.fn(), getDocumentPreview: vi.fn() }));
+vi.mock('../../api/resources', () => ({ getDocumentVersionStatus: vi.fn().mockResolvedValue({ items: [] }), downloadDocument: vi.fn(), getDocument: vi.fn(), getDocumentPreview: vi.fn() }));
 vi.mock('../../hooks/useMediaQuery', () => ({ useMediaQuery: vi.fn() }));
 vi.mock('../../components/pdf/PdfPreview', () => ({
   PdfPreview: ({ url, filename, initialPage, highlight }: { url: string; filename: string; initialPage?: number | null; highlight?: PdfHighlightTarget }) => (

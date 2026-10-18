@@ -88,6 +88,33 @@ func TestOCRFailureSummaryIsSavedWithoutPublishingPartialText(t *testing.T) {
 	}
 }
 
+func TestCorrectedPDFReprocessAlwaysUsesImmutableBaseline(t *testing.T) {
+	f := newProcessorTestFixture(t, "pdf")
+	baseline := datatypes.JSON(`{"version":1,"totalPages":2,"pages":[{"pageNumber":1,"content":"原生正文"},{"pageNumber":2,"content":"人工校正后的中文","textSource":"ocr_corrected"}]}`)
+	if err := f.db.Create(&model.DocumentPDFCorrection{DocumentID: f.document.ID, Content: baseline}).Error; err != nil {
+		t.Fatal(err)
+	}
+	p := New(f.documents, f.chunks, optionPDFParser{parse: func(context.Context, parser.ParseOptions) (parser.ParsedDocument, error) {
+		t.Fatal("corrected PDF reran OCR/parser")
+		return parser.ParsedDocument{}, nil
+	}}, splitter.New(100, 10), cardinalityEmbedder{})
+	for i := 0; i < 2; i++ {
+		if err := f.db.Model(&model.DocumentJob{}).Where("id = ?", f.job.ID).Update("status", "running").Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Process(context.Background(), &f.job); err != nil {
+			t.Fatal(err)
+		}
+		rows, err := f.chunks.ListByDocument(context.Background(), f.document.ID)
+		if err != nil || len(rows) != 2 {
+			t.Fatal(err, rows)
+		}
+		if rows[1].Content != "人工校正后的中文" || *rows[1].PageNumber != 2 || !strings.Contains(string(rows[1].Metadata), "ocr_corrected") {
+			t.Fatal("correction source lost", rows[1])
+		}
+	}
+}
+
 func TestCancellingOCRInterruptsCurrentPageAndRetainsSnapshot(t *testing.T) {
 	f := newProcessorTestFixture(t, "pdf")
 	old := datatypes.JSON(`{"version":1,"totalPages":1,"pages":[{"pageNumber":1,"content":"original","textSource":"ocr"}]}`)

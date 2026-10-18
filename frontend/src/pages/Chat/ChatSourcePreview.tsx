@@ -14,6 +14,7 @@ import { downloadBlob } from '../../utils/download';
 import { getErrorMessage } from '../../utils/errors';
 import { locateCitation, normalizeSourceText, rangeFromByteOffsets } from './citationLocation';
 import { tableSourceLabel } from '../../utils/tableSource';
+import { CitationVersionNotice } from './CitationVersionNotice';
 
 type PreviewState = {
   document: DocumentItem;
@@ -22,7 +23,9 @@ type PreviewState = {
   url: string;
 };
 
-export function ChatSourcePreview({ citation, index, knowledgeBaseId, canDownload = true, onClose }: {
+export function ChatSourcePreview({ citation, index, knowledgeBaseId, canDownload = true, onClose, question, relatedDocumentIds }: {
+  question?: string;
+  relatedDocumentIds?: string[];
   citation: Citation;
   index: number;
   knowledgeBaseId: string;
@@ -123,6 +126,8 @@ export function ChatSourcePreview({ citation, index, knowledgeBaseId, canDownloa
         <summary>本次回答引用的内容</summary>
         <blockquote>{citation.content}</blockquote>
       </details>
+      {citation.textSource === 'ocr_corrected' && <p className="ui-muted">来源文字经过人工校对，原始扫描图像保持不变。</p>}
+      {state && <CitationVersionNotice documentId={citation.documentId} question={question} relatedDocumentIds={relatedDocumentIds} />}
       {state?.document.fileType === 'xlsx' && <p className="ui-muted">工作表、表头和列以该文档保存的导入设置为准。公式仅显示文件已保存的结果，缺少缓存值的单元格为空；不会重新计算。</p>}
       {downloadError && <p className="ui-inline-error" role="alert">{downloadError}</p>}
       {loading ? <LoadingSkeleton rows={5} /> : error ? (

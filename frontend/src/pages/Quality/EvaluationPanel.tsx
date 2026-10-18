@@ -1,4 +1,5 @@
 import { Plus, RefreshCw } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError } from '../../api/client';
@@ -18,6 +19,7 @@ import { getErrorMessage } from '../../utils/errors';
 import { formatDateTime } from '../../utils/format';
 import { EvaluationCaseDialog } from './EvaluationCaseDialog';
 import { EvaluationComparison, evaluationStatusLabels, isEvaluationActive } from './EvaluationComparison';
+import { evaluationScopeKey, evaluationScopeLabel, firstScopeCases } from './evaluationScope';
 
 function readPending(key: string): EvaluationRunInput | null {
   try {
@@ -72,7 +74,7 @@ export function EvaluationPanel({ knowledgeBase }: { knowledgeBase: KnowledgeBas
       const response = await listEvaluationCases(kbId);
       if (!mounted.current || sequence !== casesRequest.current) return;
       setCases(response.items); setCaseError('');
-      setSelected((current) => current.length ? current.filter((id) => response.items.some((item) => item.id === id)) : response.items.slice(0, 20).map((item) => item.id));
+      setSelected((current) => current.length ? current.filter((id) => response.items.some((item) => item.id === id)) : firstScopeCases(response.items));
     } catch (error) { if (mounted.current && sequence === casesRequest.current) setCaseError(getErrorMessage(error, '测试问题加载失败')); }
     finally { if (mounted.current && sequence === casesRequest.current) setCaseLoading(false); }
   }, [kbId]);
@@ -156,6 +158,7 @@ export function EvaluationPanel({ knowledgeBase }: { knowledgeBase: KnowledgeBas
     if (creatingRef.current || !storageKey) return;
     const request = pendingRef.current || { clientRequestId: crypto.randomUUID(), name: name.trim() || '回归评测', caseIds: selected, config: { ...config } };
     if (!request.caseIds.length || request.caseIds.length > 20) { setCreateError('每次请选择 1–20 道测试问题。'); return; }
+    if (!pendingRef.current && new Set(cases.filter((item) => request.caseIds.includes(item.id)).map(evaluationScopeKey)).size > 1) { setCreateError('同一次评测请选择相同来源范围的问题。'); return; }
     try { sessionStorage.setItem(storageKey, JSON.stringify(request)); } catch { setCreateError('无法保存请求编号，请启用浏览器存储后重试。'); return; }
     pendingRef.current = request; setPending(request);
     creatingRef.current = true; setCreating(true); setCreateError('');
@@ -210,6 +213,7 @@ export function EvaluationPanel({ knowledgeBase }: { knowledgeBase: KnowledgeBas
   const activeRun = candidate?.id === candidateId ? candidate : null;
   const baseRun = baselineId && baseline?.id === baselineId ? baseline : null;
   const formLocked = creating || Boolean(pending);
+  const selectedAnchor = cases.find((item) => selected.includes(item.id));
 
   return <div className="evaluation-panel">
     <section aria-label="测试问题集" className="ui-panel">
@@ -218,9 +222,11 @@ export function EvaluationPanel({ knowledgeBase }: { knowledgeBase: KnowledgeBas
       <div className="ui-panel__body evaluation-cases">
         {caseError && <p className="ui-inline-error" role="alert">{caseError} <Button onClick={() => void loadCases()} variant="link">重试</Button></p>}
         {caseLoading ? <p>正在加载测试问题…</p> : !cases.length ? <EmptyState title="还没有测试问题" description="从差评保存问题，或手工添加常见问题与预期答案。" /> : <>
-          <div className="evaluation-case-actions"><Button disabled={formLocked} onClick={() => setSelected(cases.slice(0, 20).map((item) => item.id))} variant="ghost">选择前 20 题</Button><Button disabled={formLocked} onClick={() => setSelected([])} variant="ghost">取消选择</Button></div>
+          <p className="ui-muted">同一次评测使用相同来源范围；切换范围请先取消选择。</p>
+          <div className="evaluation-case-actions"><Button disabled={formLocked} onClick={() => setSelected(firstScopeCases(cases, selectedAnchor))} variant="ghost">选择前 20 题</Button><Button disabled={formLocked} onClick={() => setSelected([])} variant="ghost">取消选择</Button></div>
           {cases.map((item) => <article className="evaluation-case" key={item.id}>
-            <label><Checkbox id={`evaluation-case-${item.id}`} aria-label={`选择测试问题：${item.question}`} checked={selected.includes(item.id)} disabled={formLocked || (!selected.includes(item.id) && selected.length >= 20)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /><strong>{item.question}</strong></label>
+            <label><Checkbox id={`evaluation-case-${item.id}`} aria-label={`选择测试问题：${item.question}`} checked={selected.includes(item.id)} disabled={formLocked || (!selected.includes(item.id) && (selected.length >= 20 || Boolean(selectedAnchor && evaluationScopeKey(selectedAnchor) !== evaluationScopeKey(item))))} onChange={(event) => setSelected((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /><strong>{item.question}</strong></label>
+            <p>{evaluationScopeLabel(item)} {item.sourceSessionId && <Link to={`/chat/${item.sourceSessionId}`}>查看来源会话</Link>}</p>
             <p>{item.requireCitation ? '要求引用' : '不要求引用'} · {item.requiredKeywords.length ? `关键词：${item.requiredKeywords.join('、')}` : '未设置关键词'}</p>
             <div><Button disabled={formLocked} variant="ghost" onClick={() => setEditing(item)}>编辑</Button><Button disabled={formLocked} variant="ghost" onClick={() => { setDeleting(item); setDeleteError(''); }}>删除</Button></div>
           </article>)}
@@ -271,7 +277,7 @@ export function EvaluationPanel({ knowledgeBase }: { knowledgeBase: KnowledgeBas
       ++casesRequest.current;
       setCaseLoading(false);
       setCases((current) => [item, ...current.filter((existing) => existing.id !== item.id)]);
-      setSelected((current) => current.includes(item.id) || current.length >= 20 ? current : [...current, item.id]); toast.success('测试问题已保存');
+      setSelected((current) => selectedAnchor && evaluationScopeKey(selectedAnchor) !== evaluationScopeKey(item) ? [item.id] : current.includes(item.id) || current.length >= 20 ? current : [...current, item.id]); toast.success('测试问题已保存');
       void loadCases();
     }} />}
     {deleting && <ConfirmDialog title="删除测试问题？" description="已保存的历史评测结果会保留。" confirmLabel="删除" busy={deleteBusy} error={deleteError} onCancel={() => setDeleting(null)} onConfirm={() => void removeCase()} />}

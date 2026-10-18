@@ -7,6 +7,7 @@ import (
 )
 
 type CreateChatSessionRequest struct {
+	DocumentIDs      []string `json:"documentIds"`
 	ScopeMode        string   `json:"scopeMode"`
 	KnowledgeBaseID  string   `json:"knowledgeBaseId"`
 	KnowledgeBaseIDs []string `json:"knowledgeBaseIds"`
@@ -65,6 +66,7 @@ type ChatSessionListQuery struct {
 }
 
 type ChatSessionResponse struct {
+	Documents           []ChatDocumentResponse      `json:"documents,omitempty"`
 	BranchFromSessionID *string                     `json:"branchFromSessionId,omitempty"`
 	BranchFromMessageID *string                     `json:"branchFromMessageId,omitempty"`
 	ScopeMode           string                      `json:"scopeMode"`
@@ -157,6 +159,7 @@ type ChatMessageFeedbackResponse struct {
 }
 
 type ChatQualityOverviewQuery struct {
+	Scope           string
 	Period          string
 	KnowledgeBaseID *uuid.UUID
 }
@@ -185,6 +188,7 @@ type ChatQualityOverviewResponse struct {
 }
 
 type ChatQualityFeedbackQuery struct {
+	Scope           string
 	Period          string
 	KnowledgeBaseID *uuid.UUID
 	HasCitations    *bool
@@ -215,6 +219,7 @@ type ChatQualityFeedbackListResponse struct {
 }
 
 type ChatKnowledgeGapQuery struct {
+	Scope           string
 	Period          string
 	KnowledgeBaseID *uuid.UUID
 	Category        string

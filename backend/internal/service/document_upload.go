@@ -27,14 +27,22 @@ func uploadReceipt(actorID, kbID uuid.UUID, file documentSource, hash, sourcePat
 	// Include the user's decisions, not only the bytes. Future parse settings must
 	// be included here too so a receipt can never acknowledge a different import.
 	payload, _ := json.Marshal(struct {
+		PDFCorrectionHash                 string `json:",omitempty"`
 		Filename, ContentHash, SourcePath string
 		Size                              int64
 		AllowDuplicate                    bool
 		Replaces                          *uuid.UUID
 		TableImport                       *tableconfig.Options `json:",omitempty"`
-	}{file.Filename, hash, sourcePath, file.Size, options.AllowDuplicate, options.replaces, options.TableImport})
+	}{correctionFingerprint(options.pdfCorrection), file.Filename, hash, sourcePath, file.Size, options.AllowDuplicate, options.replaces, options.TableImport})
 	digest := sha256.Sum256(payload)
 	return &model.DocumentUploadReceipt{UserID: actorID, KnowledgeBaseID: kbID, RequestID: id, Fingerprint: hex.EncodeToString(digest[:])}, nil
+}
+func correctionFingerprint(content []byte) string {
+	if len(content) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
 }
 
 func (s *DocumentService) replayUpload(ctx context.Context, expected *model.DocumentUploadReceipt) (*dto.DocumentResponse, error) {

@@ -27,6 +27,22 @@ beforeEach(() => {
 });
 
 describe('evaluation workflow', () => {
+  it('selects only one source scope and lets the user explicitly switch groups', async () => {
+    const scope = { sourceSessionId: 'source', scopeMode: 'auto', knowledgeBaseIds: ['kb1', 'kb2'] };
+    const scoped = { ...item, id: 'private-1', question: '自动跨库问题', sourceSessionId: 'source', scope };
+    const same = { ...scoped, id: 'private-2', question: '同范围另一题' };
+    vi.mocked(listEvaluationCases).mockResolvedValue({ items: [scoped, item, same] });
+    renderWithRouter(<EvaluationPanel knowledgeBase={kb} />);
+    const privateBox = await screen.findByRole('checkbox', { name: '选择测试问题：自动跨库问题' });
+    expect(privateBox).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: '选择测试问题：同范围另一题' })).toBeChecked();
+    const shared = screen.getByRole('checkbox', { name: `选择测试问题：${item.question}` });
+    expect(shared).toBeDisabled(); expect(shared).not.toBeChecked();
+    const user = userEvent.setup(); await user.click(screen.getByRole('button', { name: '取消选择' }));
+    await user.click(shared); expect(privateBox).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: '选择前 20 题' }));
+    expect(shared).toBeChecked(); expect(privateBox).not.toBeChecked();
+  });
   it('keeps a saved case when the original case list arrives late', async () => {
     let resolveOriginal!: (value: { items: EvaluationCase[] }) => void;
     vi.mocked(listEvaluationCases).mockReturnValueOnce(new Promise((resolve) => { resolveOriginal = resolve; })).mockResolvedValue({ items: [item] });

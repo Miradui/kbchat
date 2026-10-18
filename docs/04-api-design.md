@@ -1,5 +1,26 @@
 # API 设计
 
+## 知识工作流接口（2026-10-19）
+
+以下路径省略 `/api/v1`，沿用 JWT、camelCase 和统一错误响应。
+
+| 接口 | 请求与响应 | 授权及边界 |
+| --- | --- | --- |
+| `POST /chat/sessions` | 新增可选 documentIds（1–20 个唯一 UUID）；响应新增 documents 数组，每项含 id/knowledgeBaseId/filename | 与显式 knowledgeBaseId/knowledgeBaseIds 使用，最多 5 库，不能用于 auto；逐库 chat.use 和文档原库归属校验。发送/重生成失效返回 409 DOCUMENT_SCOPE_UNAVAILABLE。 |
+| `POST /documents/version-status` | `{documentIds:[...]}` 最多 20；返回 `{items:[{documentId,state,current?,newerPending}]}`，state 为 current/newer_available/unavailable；current 含 id/knowledgeBaseId/filename | 逐文档可读权限；同库链上有已发布片段的最新有效文档。不返回无权资源元信息。 |
+| `GET /documents/:id/editable-text` | `{documentId,filename,content,maxBytes}` | content.write；完整 TXT/Markdown UTF-8 原文，最多 1 MiB。 |
+| `POST /documents/:id/text-revisions` | `{requestId,content}`，200 文档对象 | content.write；非空 UUID 请求 ID，相同请求幂等，未变更返回原文档，否则创建新版本排队。 |
+| `GET /documents/:id/ocr-correction` | `{documentId,revision,pages:[{pageNumber,content,textSource}]}` | content.write + document.download；仅已发布 OCR/校对页，revision 为完整快照指纹。 |
+| `POST /documents/:id/ocr-corrections` | `{requestId,revision,pages:[{pageNumber,content}]}`，200 新文档对象 | 同上；只提交修改页，不得改原生页。每页 1 MiB、总页文本 8 MiB、最多 500 个物理页。快照变化为 409 DOCUMENT_EDIT_CONFLICT。 |
+| `GET /chat/sessions/:id/quality-issue?question=...` | question/status/note/documentIds/evaluationCaseId/evaluationRunId/updatedAt；无记录返回 open 空记录 | 本人会话、精确原问题、全部来源库 chat.use；失权关联资料/评测不返回引用 ID，保留个人备注。 |
+| `PUT /chat/sessions/:id/quality-issue` | 上述可写字段；status=open/retest/resolved，note 最多 4000 字，documentIds 最多 20 | 幂等更新同会话同问题；用例须同问题同范围，运行须含该用例；已解决由用户设置。 |
+
+质量 overview、negative-feedback、knowledge-gaps 新增 `scope=personal/auto/multi/documents`。不传保持单库运营视图；personal 为本人全部会话，其余为本人自动、固定多库、指定文档会话。统计与列表共同校验本人和每个来源库 chat.use，不能向单库管理员暴露他人的跨库回答。
+
+评测用例新增可选 sourceSessionId；服务器从本人可访问会话捕获 scope（sourceSessionId/scopeMode/knowledgeBaseIds/documents），保存于首选知识库。原 quality.read 权限保持，执行另需 chat.use；私人用例/运行仅创建者且全部来源可访问时可读，auto 运行还重验结果实际来源。共享用例不得原地变成私人范围，私人用例不得改换来源会话；应新建用例。同次运行只接受完全相同的来源范围。运行新增 isPrivate；results 新增 knowledgeBaseIds。评测不创建真实聊天记录。
+
+校对 chunk、检索结果、JSON/SSE citation、历史和导出为 `textSource: "ocr_corrected"`；机器识别保持 `"ocr"`，原生文字省略。pageNumber 指原 PDF 物理页，校对不提供原生文字坐标。
+
 统一前缀：
 
 ```text

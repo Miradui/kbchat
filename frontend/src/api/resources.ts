@@ -465,6 +465,12 @@ export function createTextDocument(knowledgeBaseId: string, input: TextDocumentI
 export function getDocumentPreview(id: string): Promise<DocumentPreviewResponse> {
   return apiRequest<DocumentPreviewResponse>(`/documents/${id}/preview`);
 }
+export function getEditableDocumentText(id: string, signal?: AbortSignal) {
+  return apiRequest<{ documentId: string; filename: string; content: string; maxBytes: number }>(`/documents/${id}/editable-text`, { signal });
+}
+export function saveDocumentTextRevision(id: string, input: { requestId: string; content: string }) {
+  return apiRequest<DocumentItem>(`/documents/${id}/text-revisions`, { method: 'POST', body: input });
+}
 
 export function downloadDocument(id: string): Promise<Blob> {
   return apiBlobRequest(`/documents/${id}/download`);
@@ -693,11 +699,11 @@ export function searchKnowledgeBase(
   });
 }
 
-export function createChatSession(knowledgeBaseId: string | string[] | undefined, title: string): Promise<ChatSession> {
+export function createChatSession(knowledgeBaseId: string | string[] | undefined, title: string, documentIds?: string[]): Promise<ChatSession> {
   return apiRequest<ChatSession>('/chat/sessions', {
     method: 'POST',
-    body: knowledgeBaseId === undefined ? { scopeMode: 'auto', title }
-      : Array.isArray(knowledgeBaseId) ? { knowledgeBaseIds: knowledgeBaseId, title } : { knowledgeBaseId, title },
+    body: { ...(knowledgeBaseId === undefined ? { scopeMode: 'auto', title }
+      : Array.isArray(knowledgeBaseId) ? { knowledgeBaseIds: knowledgeBaseId, title } : { knowledgeBaseId, title }), ...(documentIds?.length ? { documentIds } : {}) },
   });
 }
 
@@ -794,6 +800,17 @@ export function deleteQuestionTemplate(id: string) {
 export function listDocumentVersions(id: string, signal?: AbortSignal) {
   return apiRequest<{ items: import('../types/api').DocumentVersion[] }>(`/documents/${id}/versions`, { signal });
 }
+export function getDocumentVersionStatus(documentIds: string[], signal?: AbortSignal) {
+  return apiRequest<{ items: import('../types/api').DocumentVersionStatus[] }>('/documents/version-status', { method: 'POST', body: { documentIds }, signal });
+}
+export type PDFCorrectionPage = { pageNumber: number; content: string; textSource?: 'ocr' | 'ocr_corrected' };
+export type PDFCorrection = { documentId: string; revision: string; pages: PDFCorrectionPage[] };
+export function getPDFCorrection(id: string, signal?: AbortSignal) {
+  return apiRequest<PDFCorrection>(`/documents/${id}/ocr-correction`, { signal });
+}
+export function savePDFCorrection(id: string, input: { requestId: string; revision: string; pages: PDFCorrectionPage[] }) {
+  return apiRequest<DocumentItem>(`/documents/${id}/ocr-corrections`, { method: 'POST', body: input });
+}
 export function compareDocumentVersions(headId: string, baseId: string, signal?: AbortSignal) {
   return apiRequest<import('../types/api').DocumentCompareResponse>(withQuery(`/documents/${headId}/compare`, { baseId }), { signal });
 }
@@ -821,6 +838,13 @@ export function getChatQualityOverview(
   params: ChatQualityOverviewParams = {},
 ): Promise<ChatQualityOverview> {
   return apiRequest<ChatQualityOverview>(withQuery('/chat/quality/overview', params));
+}
+export type ChatQualityIssue = { question: string; status: 'open' | 'retest' | 'resolved'; note: string; evaluationCaseId: string; evaluationRunId: string; documentIds: string[]; updatedAt?: string | null };
+export function getChatQualityIssue(sessionId: string, question: string, signal?: AbortSignal) {
+  return apiRequest<ChatQualityIssue>(withQuery(`/chat/sessions/${sessionId}/quality-issue`, { question }), { signal });
+}
+export function saveChatQualityIssue(sessionId: string, input: ChatQualityIssue) {
+  return apiRequest<ChatQualityIssue>(`/chat/sessions/${sessionId}/quality-issue`, { method: 'PUT', body: input });
 }
 
 export type ChatUsageParams = { knowledgeBaseId?: string; from?: string; to?: string; groupBy?: ChatUsageGroupBy };

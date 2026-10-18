@@ -53,6 +53,7 @@ import {
 import { documentFailureCopy, documentStalenessHint } from './documentFailure';
 import { importGuidance, importGuidanceMessage } from './importGuidance';
 import { useDocumentList } from './useDocumentList';
+import { documentChatUrl } from '../Chat/documentChatScope';
 
 type DocumentsPageProps = {
   /** Renders inside the knowledge-base shell and pins the knowledge-base filter. */
@@ -497,6 +498,8 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
       {selectedIds.length > 0 && (
         <div className="ui-bulkbar">
           <span className="ui-bulkbar__count">已选择 {selectedIds.length} 个文档</span>
+          <Button variant="secondary" disabled={selectedIds.length > 20 || items.filter((item) => selectedIds.includes(item.id) && item.status === 'completed').length !== selectedIds.length || new Set(items.filter((item) => selectedIds.includes(item.id)).map((item) => item.knowledgeBaseId)).size > 5}
+            onClick={() => navigate(documentChatUrl(items.filter((item) => selectedIds.includes(item.id))))}>针对所选文档提问</Button>
           <Button
             disabled={mutation.isPending(mutationKey('bulk'))}
             variant="secondary"

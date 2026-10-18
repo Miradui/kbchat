@@ -16,6 +16,7 @@ import { IconButton } from '../../components/ui/IconButton';
 import { InlineEdit } from '../../components/ui/InlineEdit';
 import { OverflowMenu } from '../../components/ui/OverflowMenu';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
+import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { AppShell } from '../../layouts/AppShell';
 import type { ChatFeedbackDetails, ChatFeedbackRating, ChatMessage, Citation, KnowledgeBase } from '../../types/api';
 import { knowledgeBaseOptionsKey, queryClient } from '../../store/queryClient';
@@ -39,9 +40,12 @@ import type { ChatSessionScope } from './ChatSessionRail';
 import { useChatSessions } from './useChatSessions';
 import { useChatThread } from './useChatThread';
 import { useChatInteractionState } from './useChatInteractionState';
+import { chatDraftScope, useChatDraft } from './useChatDraft';
 import { useSessionActions } from './useSessionActions';
 import { useChatAnswerVersions } from './useChatAnswerVersions';
 import { ChatStreamView, StreamAnnouncement } from './ChatStreamView';
+import { ChatDocumentPicker } from './ChatDocumentPicker';
+import { documentChatUrl } from './documentChatScope';
 
 /**
  * `/chat` is the draft state and `/chat/:sessionId` is a thread.
@@ -62,12 +66,13 @@ export function ChatPage() {
   const [bookmarkTarget, setBookmarkTarget] = useState<ChatMessage | null>(null);
   const [branchTarget, setBranchTarget] = useState<ChatMessage | null>(null);
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [documentPickerOpen, setDocumentPickerOpen] = useState(false);
   useEffect(() => { setTemplatesOpen(false); }, [sessionId]);
   useEffect(() => { setBranchTarget(null); }, [sessionId]);
   useEffect(() => { setBookmarkTarget(null); }, [sessionId]);
   const railBackdropRef = useRef<HTMLButtonElement>(null);
   const {
-    draft, setDraft, focusedCitation, setFocusedCitation, sourcePreview, setSourcePreview,
+    focusedCitation, setFocusedCitation, sourcePreview, setSourcePreview,
     feedbackSavingIds, setFeedbackSavingIds, feedbackTarget, setFeedbackTarget,
     editingMessageId, setEditingMessageId, editingDraft, setEditingDraft,
   } = useChatInteractionState(sessionId);
@@ -83,7 +88,11 @@ export function ChatPage() {
 
   const urlKnowledgeBaseId = searchParams.get('knowledgeBaseId') ?? '';
   const manyParam = searchParams.get('knowledgeBaseIds') ?? '';
+  const documentParam = searchParams.get('documentIds') ?? '';
+  const draftDocumentIds = useMemo(() => documentParam ? documentParam.split(',') : [], [documentParam]);
   const draftKnowledgeBaseIds = useMemo(() => manyParam ? [...new Set(manyParam.split(',').filter(Boolean))].slice(0, 5) : urlKnowledgeBaseId ? [urlKnowledgeBaseId] : [], [manyParam, urlKnowledgeBaseId]);
+  const { user } = useCurrentUser();
+  const { draft, setDraft, moveToSession, acknowledge } = useChatDraft(user?.id, chatDraftScope(sessionId, draftKnowledgeBaseIds, draftDocumentIds));
   const targetMessageId = searchParams.get('messageId') ?? '';
   const [railScope, setRailScope] = useState<ChatSessionScope>('active');
 
@@ -110,11 +119,14 @@ export function ChatPage() {
     draftKnowledgeBaseId: urlKnowledgeBaseId || undefined,
     draftScopeMode: draftKnowledgeBaseIds.length ? 'manual' : 'auto',
     draftKnowledgeBaseIds: draftKnowledgeBaseIds.length > 1 ? draftKnowledgeBaseIds : undefined,
+    draftDocumentIds: draftDocumentIds.length ? draftDocumentIds : undefined,
     onSessionCreated: (session) => {
+      moveToSession(session.id);
       mergeSession(session);
       navigate(`/chat/${session.id}`, { replace: true });
     },
     onSessionsChanged: () => void reloadSessions(),
+    onQuestionSaved: acknowledge,
     onAccessLost: (targetSessionId) => {
       setBookmarkTarget(null);
       setBranchTarget(null);
@@ -218,10 +230,13 @@ export function ChatPage() {
 
   useEffect(() => { setSourcePreview(null); }, [sourceScope, setSourcePreview]);
 
-  const openSource = useEventCallback((citation: Citation, index: number) => {
+  const openSource = useEventCallback((citation: Citation, index: number, messageId?: string) => {
     if (!automaticScope && !activeKnowledgeBaseIds.includes(citation.knowledgeBaseId ?? activeKnowledgeBaseId)) return;
     sourceTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setSourcePreview({ citation, index, scope: sourceScope });
+    const messageIndex = thread.messages.findIndex((message) => message.id === messageId);
+    const question = messageIndex >= 0 ? thread.messages.slice(0, messageIndex).reverse().find((message) => message.role === 'user')?.content : undefined;
+    const relatedDocumentIds = messageIndex >= 0 ? thread.messages[messageIndex].citations.map((item) => item.documentId) : undefined;
+    setSourcePreview({ citation, index, scope: sourceScope, question, relatedDocumentIds });
   });
 
   function closeSource() {
@@ -277,14 +292,14 @@ export function ChatPage() {
   // The home page hands a question over via `?q=`; consume it into the composer.
   useEffect(() => {
     const seeded = searchParams.get('q');
-    if (!seeded) return;
-    setDraft(seeded);
+    if (!seeded || !user) return;
+    setDraft((current) => current && current !== seeded ? `${current}\n\n${seeded}` : seeded);
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
       next.delete('q');
       return next;
     }, { replace: true });
-  }, [searchParams, setSearchParams, setDraft]);
+  }, [searchParams, setSearchParams, setDraft, user]);
 
   useLayoutEffect(() => { initialScrollRef.current = undefined; prependAnchorRef.current = null; }, [sessionId]);
   useLayoutEffect(() => {
@@ -519,6 +534,10 @@ export function ChatPage() {
             {sessionId && <IconButton disabled={historyLocked} aria-expanded={messageSearch.open} label="查找会话消息" ref={messageSearch.triggerRef} onClick={messageSearch.openSearch}><Search aria-hidden="true" /></IconButton>}
             {loadedSession?.branchFromSessionId && <Link className="ui-button ui-button--ghost" to={`/chat/${loadedSession.branchFromSessionId}${loadedSession.branchFromMessageId ? `?messageId=${encodeURIComponent(loadedSession.branchFromMessageId)}` : ''}`}>查看来源会话</Link>}
           </header>
+          {!sessionId && <div className="ui-toolbar"><Button disabled={interactionLocked} variant="ghost" onClick={() => setDocumentPickerOpen(true)}>指定文档提问</Button>
+            {draftDocumentIds.length > 0 && <span>仅检索所选 {draftDocumentIds.length} 份文档的版本；切换知识库将重选范围。</span>}
+          </div>}
+          {currentSession?.documents?.length ? <details className="ui-inline-notice"><summary>仅检索指定的 {currentSession.documents.length} 份文档</summary><ul>{currentSession.documents.map((document) => <li key={document.id}><Link to={`/documents?documentId=${encodeURIComponent(document.id)}`}>{document.filename}</Link></li>)}</ul></details> : null}
 
           {messageSearch.open && <ChatMessageSearch {...messageSearch} loading={messageSearch.loading || loadingHistory} missingTarget={!loadingHistory && messageSearch.missingTarget} />}
           {targetMessageId && messagesReady && !messageSearch.open && <div className="chat-find__location">
@@ -571,6 +590,7 @@ export function ChatPage() {
             ) : thread.messages.length === 0 && !thread.pendingQuestion && !thread.failedSend && !thread.unconfirmedSend && !thread.stoppedStream ? (
               sessionId ? null : (
                 <ChatEmptyState
+                  documentCount={draftDocumentIds.length}
                   knowledgeBases={knowledgeBases}
                   loading={sessionStore.knowledgeBasesLoading}
                   onSelect={(id) => {
@@ -601,7 +621,7 @@ export function ChatPage() {
                     key={id}
                     located={messageSearch.locatedId === message.id}
                     knowledgeBaseId={activeKnowledgeBaseId || undefined}
-                    onOpenCitation={openSource}
+                    onOpenCitation={(citation, index) => openSource(citation, index, message.id)}
                     message={message}
                     editDraft={editingMessageId === message.id ? editingDraft : ''}
                     editing={editingMessageId === message.id}
@@ -760,7 +780,7 @@ export function ChatPage() {
 
           <ChatComposer
             onTemplates={() => setTemplatesOpen(true)}
-            disabled={!canSend || thread.sending || sessionBusy}
+            disabled={!user || !canSend || thread.sending || sessionBusy}
             error={thread.rateLimitError}
             retryNotice={thread.rateLimitNotice}
             hint={composerHint}
@@ -773,15 +793,14 @@ export function ChatPage() {
               if (sessionBusyRef.current) return;
               const question = draft.trim();
               if (!question) return;
-              setDraft('');
               // A draft thread needs the knowledge base pinned in the URL before
               // the session is created.
-              if (!sessionId && !urlKnowledgeBaseId && activeKnowledgeBaseId) {
+              if (!sessionId && !urlKnowledgeBaseId && activeKnowledgeBaseId && !draftDocumentIds.length) {
                 setSearchParams({ knowledgeBaseId: activeKnowledgeBaseId }, { replace: true });
               }
               void thread.send(question);
             }}
-            placeholder={automaticScope ? '直接提问，自动检索相关知识库…' : multiBase ? `向 ${activeKnowledgeBaseIds.length} 个知识库提问…` : activeKnowledgeBase ? `向「${activeKnowledgeBase.name}」提问…` : '选择知识库后开始提问…'}
+            placeholder={(currentSession?.documents?.length || draftDocumentIds.length) ? '针对所选文档提问…' : automaticScope ? '直接提问，自动检索相关知识库…' : multiBase ? `向 ${activeKnowledgeBaseIds.length} 个知识库提问…` : activeKnowledgeBase ? `向「${activeKnowledgeBase.name}」提问…` : '选择知识库后开始提问…'}
             sending={thread.sending}
             value={draft}
           />
@@ -790,6 +809,8 @@ export function ChatPage() {
           <ChatSourcePreview
             canDownload={canUnlessUnknown(knowledgeBases.find((kb) => kb.id === (visibleSource.citation.knowledgeBaseId ?? activeKnowledgeBaseId)), 'document.download')}
             citation={visibleSource.citation}
+            question={visibleSource.question}
+            relatedDocumentIds={visibleSource.relatedDocumentIds}
             index={visibleSource.index}
             key={`${sourceScope}:${visibleSource.citation.documentId}`}
             knowledgeBaseId={visibleSource.citation.knowledgeBaseId ?? activeKnowledgeBaseId}
@@ -799,6 +820,7 @@ export function ChatPage() {
       </div>
 
       {templatesOpen && <QuestionTemplatesDialog draft={draft} onClose={() => setTemplatesOpen(false)} onInsert={(text) => setDraft((current) => current ? `${current}\n\n${text}` : text)} />}
+      {documentPickerOpen && <ChatDocumentPicker onClose={() => setDocumentPickerOpen(false)} onSelect={(documents) => { setDocumentPickerOpen(false); navigate(documentChatUrl(documents)); }} />}
       {branchTarget && <ChatBranchDialog key={branchTarget.id} message={branchTarget} onClose={() => setBranchTarget(null)} onCreated={mergeSession} onInaccessible={thread.handleAccessLost} />}
       {bookmarkTarget && <ChatBookmarkDialog key={bookmarkTarget.id} target={{ messageId: bookmarkTarget.id, sessionId: bookmarkTarget.sessionId, bookmark: bookmarkTarget.bookmark }}
         onClose={() => setBookmarkTarget(null)} onUpdated={thread.updateMessageBookmark} onInaccessible={thread.handleAccessLost} />}
@@ -864,6 +886,7 @@ export function ChatPage() {
  * Draft-state body. Absorbs what used to be a separate `/chat` landing page.
  */
 function ChatEmptyState({
+  documentCount = 0,
   knowledgeBases,
   loading,
   selectedIds,
@@ -871,6 +894,7 @@ function ChatEmptyState({
   onSelect,
   onAutomatic,
 }: {
+  documentCount?: number;
   knowledgeBases: Array<{ id: string; name: string; description: string }>;
   loading: boolean;
   selectedIds: string[];
@@ -893,8 +917,8 @@ function ChatEmptyState({
   return (
     <div className="chat-launcher">
       <span className="chat-launcher__mark"><Sparkles aria-hidden="true" /></span>
-      <h2>{selectedIds.length ? '在指定知识库中提问' : '直接提问，自动查找资料'}</h2>
-      <p>{selectedIds.length ? '本会话仅检索所选知识库，回答会标注资料来源。' : '每轮根据问题检索可访问的知识库，回答会标注资料来源。'}</p>
+      <h2>{documentCount ? '针对指定文档提问' : selectedIds.length ? '在指定知识库中提问' : '直接提问，自动查找资料'}</h2>
+      <p>{documentCount ? `本会话只检索选定的 ${documentCount} 份文档版本，回答会标注资料来源。` : selectedIds.length ? '本会话仅检索所选知识库，回答会标注资料来源。' : '每轮根据问题检索可访问的知识库，回答会标注资料来源。'}</p>
       <Button aria-pressed={selectedIds.length === 0} disabled={disabled} onClick={onAutomatic} variant={selectedIds.length === 0 ? 'primary' : 'secondary'}>自动检索全部可访问知识库</Button>
       <p>也可以指定范围：选择 1–5 个知识库。</p>
       <div aria-label="可提问的知识库" className="chat-launcher__list">
@@ -916,7 +940,7 @@ function ChatEmptyState({
           </button>
         ))}
       </div>
-      {selectedIds.length > 0 && <p className="chat-launcher__hint">已指定 {selectedIds.length} 个知识库，本会话仅在所选范围内检索。</p>}
+      {selectedIds.length > 0 && !documentCount && <p className="chat-launcher__hint">已指定 {selectedIds.length} 个知识库，本会话仅在所选范围内检索。</p>}
     </div>
   );
 }
