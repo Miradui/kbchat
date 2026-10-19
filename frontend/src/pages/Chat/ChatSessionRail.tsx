@@ -1,5 +1,5 @@
 import { Bookmark, MessageSquarePlus, PanelLeftClose, Search } from 'lucide-react';
-import { useMemo, useRef } from 'react';
+import { useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { RefObject } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -13,6 +13,8 @@ import { SegmentedControl } from '../../components/ui/SegmentedControl';
 import type { ChatSession, KnowledgeBase } from '../../types/api';
 import { formatRelativeTime, relativeDayBucket } from '../../utils/format';
 import { useModalFocus } from '../../components/ui/useModalFocus';
+import { queryClient } from '../../store/queryClient';
+import { tokenStore } from '../../store/tokenStore';
 
 const BUCKET_ORDER = ['今天', '昨天', '最近 7 天', '更早'];
 
@@ -36,6 +38,7 @@ type ChatSessionRailProps = {
   getSessionActions: (session: ChatSession) => OverflowMenuItem[];
   loading: boolean;
   error: string;
+  actionError?: string;
   knowledgeBasesError?: string;
   onKnowledgeBaseChange: (knowledgeBaseId: string) => void;
   onScopeChange: (scope: ChatSessionScope) => void;
@@ -67,6 +70,7 @@ export function ChatSessionRail({
   getSessionActions,
   loading,
   error,
+  actionError = '',
   knowledgeBasesError = '',
   onKnowledgeBaseChange,
   onScopeChange,
@@ -80,6 +84,14 @@ export function ChatSessionRail({
   onBookmarks,
 }: ChatSessionRailProps) {
   const panelRef = useModalFocus<HTMLElement>(overlay && open, () => onCollapse?.(), backdropRef);
+  const listRef = useRef<HTMLDivElement>(null);
+  const revision = useSyncExternalStore(tokenStore.subscribe, tokenStore.getRevision);
+  const scrollKey = useMemo(() => ['chat-rail-scroll', revision, knowledgeBaseId, scope], [revision, knowledgeBaseId, scope]);
+  useLayoutEffect(() => {
+    if (open && !loading && listRef.current) {
+      listRef.current.scrollTop = queryClient.getQueryData<number>(scrollKey) ?? 0;
+    }
+  }, [open, loading, scrollKey]);
   // Filtering and ordering happen server side now; this only buckets by recency
   // so a long history stays scannable. See docs/04-api-design.md (GET /chat/sessions).
   const groups = useMemo(() => {
@@ -97,12 +109,17 @@ export function ChatSessionRail({
   }, [sessions]);
 
   return (
-    <aside aria-label="会话列表" className="chat-rail" ref={panelRef}
+    <aside aria-label="会话列表" className="chat-rail" ref={panelRef} hidden={!overlay && !open}
       role={overlay ? 'dialog' : undefined} aria-modal={overlay && open ? true : undefined}
-      aria-hidden={overlay && !open ? true : undefined} inert={overlay && !open} tabIndex={overlay ? -1 : undefined}>
-      <div className="chat-rail__intro"><strong>会话</strong><span>按知识库筛选历史会话</span></div>
-      {onSearch && <Button className="chat-rail__new" disabled={disabled} variant="secondary" leadingIcon={<Search aria-hidden="true" />} onClick={onSearch}>搜索会话内容</Button>}
-      {onBookmarks && <Button className="chat-rail__new" disabled={disabled} variant="ghost" leadingIcon={<Bookmark aria-hidden="true" />} onClick={onBookmarks}>收藏与笔记</Button>}
+      aria-hidden={!open ? true : undefined} inert={!open} tabIndex={overlay ? -1 : undefined}>
+      <div className="chat-rail__intro">
+        <strong>历史对话</strong>
+        <div className="chat-rail__quick-actions">
+          {onSearch && <IconButton disabled={disabled} label="搜索会话内容" onClick={onSearch}><Search aria-hidden="true" /></IconButton>}
+          {onBookmarks && <IconButton disabled={disabled} label="收藏与笔记" onClick={onBookmarks}><Bookmark aria-hidden="true" /></IconButton>}
+          {onCollapse && <IconButton className="chat-rail__collapse" label="收起会话列表" onClick={onCollapse}><PanelLeftClose aria-hidden="true" /></IconButton>}
+        </div>
+      </div>
       <div className="chat-rail__head">
         <Select
           aria-label="筛选历史会话的知识库"
@@ -115,11 +132,6 @@ export function ChatSessionRail({
             <option key={knowledgeBase.id} value={knowledgeBase.id}>{knowledgeBase.name}</option>
           ))}
         </Select>
-        {onCollapse && (
-          <IconButton className="chat-rail__collapse" label="收起会话列表" onClick={onCollapse}>
-            <PanelLeftClose aria-hidden="true" />
-          </IconButton>
-        )}
       </div>
 
       {knowledgeBasesError && (
@@ -129,7 +141,7 @@ export function ChatSessionRail({
         </div>
       )}
 
-      <Button
+      {overlay && <Button
         className="chat-rail__new"
         disabled={disabled}
         leadingIcon={<MessageSquarePlus aria-hidden="true" />}
@@ -137,7 +149,7 @@ export function ChatSessionRail({
         onClick={onNewChat}
       >
         新建对话
-      </Button>
+      </Button>}
 
       <SegmentedControl
         disabled={disabled}
@@ -150,7 +162,12 @@ export function ChatSessionRail({
         value={scope}
       />
 
-      <div className="chat-rail__list">
+      {actionError && <p className="ui-inline-error" role="alert">{actionError}</p>}
+      <div className="chat-rail__list" ref={listRef} onScroll={(event) => {
+        if (open && !loading && revision === tokenStore.getRevision()) {
+          queryClient.setQueryData(scrollKey, event.currentTarget.scrollTop);
+        }
+      }}>
         {loading && sessions.length === 0 ? (
           <LoadingSkeleton compact columns={1} rows={5} />
         ) : error ? (

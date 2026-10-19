@@ -100,14 +100,10 @@
 .quality-usage__body.is-refreshing { opacity: 0.55; }
 .quality-usage__table td:not(:first-child), .quality-usage__table th:not(:first-child) { font-variant-numeric: tabular-nums; text-align: right; }
 .quality-usage__chart {
-  --usage-series: #2a78d6;
+  --usage-series: var(--accent);
   --usage-grid: var(--line);
   --usage-axis: var(--line-strong);
   margin: 0; position: relative; width: 100%;
-}
-:root[data-theme='dark'] .quality-usage__chart { --usage-series: #3987e5; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .quality-usage__chart { --usage-series: #3987e5; }
 }
 .quality-usage__svg { display: block; font-family: var(--font); height: auto; max-height: 280px; touch-action: none; width: 100%; }
 .quality-usage__grid { stroke: var(--usage-grid); stroke-width: 1; }

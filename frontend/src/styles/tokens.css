@@ -7,40 +7,58 @@
   color-scheme: light;
 
   /* ---- Surfaces ---- */
-  --canvas: #ffffff;
+  --canvas: #fcfcfa;
   --surface: #ffffff;
-  --surface-sunken: #f6f7f9;
-  --surface-hover: #f3f4f6;
-  --surface-active: #e9ebef;
+  --surface-sunken: #f3f4f1;
+  --surface-hover: #e9ece7;
+  --surface-active: #e1e7df;
   --surface-overlay: #ffffff;
 
   /* ---- Lines ---- */
-  --line: #e4e6eb;
-  --line-strong: #c6cbd4;
-  --line-focus: #315ce7;
+  --line: #e3e6e0;
+  --line-strong: #ccd3cc;
+  --line-focus: #356f6d;
 
   /* ---- Text ---- */
-  --text: #20242d;
-  --text-secondary: #505968;
-  --text-muted: #626c7b;
-  --text-faint: #697383;
+  --text: #253c3d;
+  --text-secondary: #526665;
+  --text-muted: #637271;
+  --text-faint: #69786f;
   --text-on-accent: #ffffff;
   --text-on-danger: #ffffff;
 
-  /* ---- Brand accent (single accent; never used decoratively) ---- */
-  --accent: #315ce7;
-  --accent-hover: #244bca;
-  --accent-active: #1e40af;
-  --accent-wash: #edf2ff;
-  --accent-line: #cad8ff;
+  /* ---- Library covers and primary controls ---- */
+  --book-green: #edf3ec;
+  --book-green-ink: #356f6d;
+  --book-green-spine: #b6cdbf;
+  --book-sand: #f7f1e6;
+  --book-sand-ink: #88714e;
+  --book-sand-spine: #b9a684;
+  --book-blue: #ebf1f5;
+  --book-blue-ink: #657f92;
+  --book-blue-spine: #8da6b8;
+  --action: #253c3d;
+  --action-hover: #304e4d;
+  --action-active: #1d302f;
+  --action-text: #ffffff;
+  --shadow-soft: 0 3px 14px rgb(35 57 44 / 4%);
+
+  /* ---- Brand accent ---- */
+  --accent: #356f6d;
+  --accent-hover: #2d605e;
+  --accent-active: #254f4e;
+  --accent-wash: #e9f0e9;
+  --accent-line: #c6d7cc;
+  /* PDF pages keep their original paper color in both themes. */
+  --pdf-highlight: rgb(53 111 109 / 24%);
 
   /* Brand presentation surfaces stay legible in either appearance. */
-  --brand-panel: #152747;
-  --brand-panel-soft: #20385d;
-  --brand-panel-line: #3a5074;
-  --brand-panel-text: #f5f8ff;
-  --brand-panel-muted: #bac9e4;
-  --brand-panel-accent: #a6c0ff;
+  --brand-panel: #1f3532;
+  --brand-panel-soft: #29433d;
+  --brand-panel-line: #46645b;
+  --brand-panel-text: #f4f7f0;
+  --brand-panel-muted: #c2d0c5;
+  --brand-panel-accent: #b4d0c2;
 
   /* ---- Status (only ever used to express status) ---- */
   --ok: #2c6950;
@@ -62,20 +80,21 @@
   --info-line: #c2d5e6;
 
   /* ---- Elevation. Borders carry hierarchy; shadow is for floating layers only. ---- */
-  --shadow-popover: 0 6px 20px rgb(24 40 72 / 10%), 0 1px 3px rgb(24 40 72 / 6%);
-  --shadow-overlay: 0 20px 64px rgb(24 40 72 / 18%), 0 4px 12px rgb(24 40 72 / 8%);
-  --scrim: rgb(15 23 42 / 44%);
+  --shadow-popover: 0 6px 20px rgb(35 57 44 / 10%), 0 1px 3px rgb(35 57 44 / 6%);
+  --shadow-overlay: 0 20px 64px rgb(35 57 44 / 18%), 0 4px 12px rgb(35 57 44 / 8%);
+  --scrim: rgb(18 34 29 / 35%);
 
   /* ---- Focus ---- */
-  --ring: 0 0 0 3px rgb(49 92 231 / 18%);
+  --ring: 0 0 0 3px rgb(53 111 109 / 16%);
   --ring-danger: 0 0 0 3px rgb(176 68 68 / 22%);
 
   /* ---- Radius ---- */
   --r-xs: 4px;
-  --r-sm: 6px;
-  --r-md: 8px;
-  --r-lg: 10px;
-  --r-xl: 12px;
+  --r-sm: 8px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 16px;
+  --r-2xl: 22px;
   --r-pill: 999px;
 
   /* ---- Space (4px base) ---- */
@@ -97,7 +116,7 @@
   --t-body: 14px;
   --t-lead: 16px;
   --t-brand: 20px;
-  --t-title: 24px;
+  --t-title: 28px;
   --t-display: 36px;
 
   --lh-tight: 1.25;
@@ -116,12 +135,13 @@
   --touch: 44px;
 
   /* ---- Layout ---- */
-  --rail-w: 224px;
-  --topbar-h: 56px;
-  --content-max: 1440px;
+  --rail-w: 236px;
+  --topbar-h: 64px;
+  --content-max: 1200px;
   --reading-max: 960px;
   --home-max: 1120px;
-  --chat-reading-max: 840px;
+  --chat-reading-max: 800px;
+  --chat-launcher-max: 750px;
   --chat-rail-w: 248px;
   --chat-preview-w: 400px;
   --category-w: 208px;
@@ -131,7 +151,7 @@
   --icon-sm: 16px;
   --icon-md: 20px;
   --icon-lg: 24px;
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235f6e85' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23637271' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
   /* ---- Motion ---- */
   --fast: 150ms;
@@ -142,30 +162,45 @@
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  --canvas: #181a1f;
-  --surface: #1c1e24;
-  --surface-sunken: #16181d;
-  --surface-hover: #252830;
-  --surface-active: #303540;
-  --surface-overlay: #21242c;
+  --book-green: #2a372d;
+  --book-green-ink: #b4d0c2;
+  --book-green-spine: #587361;
+  --book-sand: #343025;
+  --book-sand-ink: #c6ac7f;
+  --book-sand-spine: #95815e;
+  --book-blue: #263238;
+  --book-blue-ink: #a8c5d5;
+  --book-blue-spine: #637f8f;
+  --action: #e2e9e2;
+  --action-hover: #c7dfd2;
+  --action-active: #b4d0c2;
+  --action-text: #1b211f;
+  --shadow-soft: 0 3px 14px rgb(0 0 0 / 10%);
 
-  --line: #333740;
-  --line-strong: #555e6d;
-  --line-focus: #95b2ff;
+  --canvas: #1b211f;
+  --surface: #222927;
+  --surface-sunken: #181e1c;
+  --surface-hover: #2b3530;
+  --surface-active: #35423a;
+  --surface-overlay: #252e29;
 
-  --text: #eceef2;
-  --text-secondary: #c5cbd5;
-  --text-muted: #abb3c1;
-  --text-faint: #949eaf;
-  --text-on-accent: #14213e;
+  --line: #343e37;
+  --line-strong: #536158;
+  --line-focus: #b4d0c2;
+
+  --text: #e2e9e2;
+  --text-secondary: #c6d1c8;
+  --text-muted: #b2bfb5;
+  --text-faint: #a2aea5;
+  --text-on-accent: #20352f;
   --text-on-danger: #281517;
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a6b5cd' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b2bfb5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
-  --accent: #95b2ff;
-  --accent-hover: #adc3ff;
-  --accent-active: #c3d2ff;
-  --accent-wash: #1e3156;
-  --accent-line: #3e578b;
+  --accent: #b4d0c2;
+  --accent-hover: #c7dfd2;
+  --accent-active: #d6e8df;
+  --accent-wash: #2a3b31;
+  --accent-line: #486353;
 
   --ok: #8cc7a4;
   --ok-wash: #1b3026;
@@ -189,7 +224,7 @@
   --shadow-overlay: 0 16px 48px rgb(0 0 0 / 56%), 0 4px 12px rgb(0 0 0 / 40%);
   --scrim: rgb(0 0 0 / 62%);
 
-  --ring: 0 0 0 3px rgb(149 178 255 / 24%);
+  --ring: 0 0 0 3px rgb(180 208 194 / 24%);
   --ring-danger: 0 0 0 3px rgb(224 133 133 / 26%);
 }
 
@@ -197,30 +232,45 @@
   :root:not([data-theme='light']) {
     color-scheme: dark;
 
-    --canvas: #181a1f;
-    --surface: #1c1e24;
-    --surface-sunken: #16181d;
-    --surface-hover: #252830;
-    --surface-active: #303540;
-    --surface-overlay: #21242c;
+    --book-green: #2a372d;
+    --book-green-ink: #b4d0c2;
+    --book-green-spine: #587361;
+    --book-sand: #343025;
+    --book-sand-ink: #c6ac7f;
+    --book-sand-spine: #95815e;
+    --book-blue: #263238;
+    --book-blue-ink: #a8c5d5;
+    --book-blue-spine: #637f8f;
+    --action: #e2e9e2;
+    --action-hover: #c7dfd2;
+    --action-active: #b4d0c2;
+    --action-text: #1b211f;
+    --shadow-soft: 0 3px 14px rgb(0 0 0 / 10%);
 
-    --line: #333740;
-    --line-strong: #555e6d;
-    --line-focus: #95b2ff;
+    --canvas: #1b211f;
+    --surface: #222927;
+    --surface-sunken: #181e1c;
+    --surface-hover: #2b3530;
+    --surface-active: #35423a;
+    --surface-overlay: #252e29;
 
-    --text: #eceef2;
-    --text-secondary: #c5cbd5;
-    --text-muted: #abb3c1;
-    --text-faint: #949eaf;
-    --text-on-accent: #14213e;
+    --line: #343e37;
+    --line-strong: #536158;
+    --line-focus: #b4d0c2;
+
+    --text: #e2e9e2;
+    --text-secondary: #c6d1c8;
+    --text-muted: #b2bfb5;
+    --text-faint: #a2aea5;
+    --text-on-accent: #20352f;
     --text-on-danger: #281517;
-    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a6b5cd' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b2bfb5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
-    --accent: #95b2ff;
-    --accent-hover: #adc3ff;
-    --accent-active: #c3d2ff;
-    --accent-wash: #1e3156;
-    --accent-line: #3e578b;
+    --accent: #b4d0c2;
+    --accent-hover: #c7dfd2;
+    --accent-active: #d6e8df;
+    --accent-wash: #2a3b31;
+    --accent-line: #486353;
 
     --ok: #8cc7a4;
     --ok-wash: #1b3026;
@@ -244,7 +294,7 @@
     --shadow-overlay: 0 16px 48px rgb(0 0 0 / 56%), 0 4px 12px rgb(0 0 0 / 40%);
     --scrim: rgb(0 0 0 / 62%);
 
-    --ring: 0 0 0 3px rgb(149 178 255 / 24%);
+    --ring: 0 0 0 3px rgb(180 208 194 / 24%);
     --ring-danger: 0 0 0 3px rgb(224 133 133 / 26%);
   }
 }

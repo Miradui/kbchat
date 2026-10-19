@@ -18,6 +18,11 @@ export const queryClient = new QueryClient({
   },
 });
 
+// Navigation position is local UI state, so retain it until the account cache is
+// cleared instead of expiring it while the user reads a long conversation.
+queryClient.setQueryDefaults(['chat-rail-preferences'], { gcTime: Infinity });
+queryClient.setQueryDefaults(['chat-rail-scroll'], { gcTime: Infinity });
+
 // Clear synchronously: a late request from a prior identity must never populate
 // a query observed by the new identity. The revision is also part of every key.
 tokenStore.subscribe(() => queryClient.clear());

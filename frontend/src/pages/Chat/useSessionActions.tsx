@@ -19,7 +19,7 @@ import type { useChatThread } from './useChatThread';
 type Options = {
   sessionId?: string;
   activeSessionIdRef: RefObject<string | undefined>;
-  thread: ReturnType<typeof useChatThread>;
+  thread?: Pick<ReturnType<typeof useChatThread>, 'hasPendingWrite' | 'setSession'>;
   mergeSession: (session: ChatSession) => void;
   removeSession: (id: string) => void;
   reloadSessions: () => Promise<void>;
@@ -67,7 +67,7 @@ export function useSessionActions({
     action: (isCurrent: () => boolean) => Promise<void>,
     failure: string,
   ) {
-    if (sessionBusyRef.current || thread.hasPendingWrite()) return;
+    if (sessionBusyRef.current || thread?.hasPendingWrite()) return;
     const operation = Symbol('session-action');
     const operationSessionId = sessionId;
     sessionActionOperationRef.current = operation;
@@ -96,7 +96,7 @@ export function useSessionActions({
   }
 
   async function handleSessionExport(targetSession: ChatSession) {
-    if (sessionExportOperationRef.current || sessionBusyRef.current || thread.hasPendingWrite())
+    if (sessionExportOperationRef.current || sessionBusyRef.current || thread?.hasPendingWrite())
       return;
     const operation = Symbol('chat-session-export');
     sessionExportOperationRef.current = operation;
@@ -122,9 +122,11 @@ export function useSessionActions({
   function renameSession(target: ChatSession, title: string) {
     void runSessionAction(async (isCurrent) => {
       const updated = await updateChatSessionTitle(target.id, title);
+      // The shared row may still be visible after selecting another session.
+      // mergeSession rejects results from a previous authentication revision.
       mergeSession(updated);
       if (!isCurrent()) return;
-      if (activeSessionIdRef.current === target.id) thread.setSession(updated);
+      if (activeSessionIdRef.current === target.id) thread?.setSession(updated);
       setRenameTarget(null);
       toast.success('会话已重命名');
     }, '会话标题更新失败');
@@ -138,7 +140,7 @@ export function useSessionActions({
               label: '重命名会话',
               icon: <Pencil aria-hidden="true" />,
               onSelect: () => {
-                if (sessionBusyRef.current || thread.hasPendingWrite()) return;
+                if (sessionBusyRef.current || thread?.hasPendingWrite()) return;
                 setSessionActionError('');
                 setRenameTarget(target);
               },
@@ -156,7 +158,7 @@ export function useSessionActions({
                 removeSession(target.id);
                 if (activeSessionIdRef.current === target.id) {
                   skipSessionScopeSyncRef.current = true;
-                  thread.setSession(restored);
+                  thread?.setSession(restored);
                   void reloadSessions();
                 }
                 // The rail only holds one scope at a time, so refetch instead of
@@ -168,7 +170,7 @@ export function useSessionActions({
             label: '归档会话',
             icon: <Archive aria-hidden="true" />,
             onSelect: () => {
-              if (sessionBusyRef.current || thread.hasPendingWrite()) return;
+              if (sessionBusyRef.current || thread?.hasPendingWrite()) return;
               setSessionActionError('');
               setConfirmArchive(target);
             },
@@ -183,7 +185,7 @@ export function useSessionActions({
         icon: <Trash2 aria-hidden="true" />,
         tone: 'danger',
         onSelect: () => {
-          if (sessionBusyRef.current || thread.hasPendingWrite()) return;
+          if (sessionBusyRef.current || thread?.hasPendingWrite()) return;
           setSessionActionError('');
           setConfirmDelete(target);
         },
@@ -200,7 +202,7 @@ export function useSessionActions({
       removeSession(target.id);
       if (activeSessionIdRef.current === target.id) {
         skipSessionScopeSyncRef.current = true;
-        thread.setSession(archivedSession);
+        thread?.setSession(archivedSession);
       }
       setConfirmArchive(null);
       toast.success('会话已归档');

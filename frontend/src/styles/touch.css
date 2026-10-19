@@ -38,6 +38,8 @@
     width: var(--touch);
   }
 
+  .chat-composer__send { height: var(--touch); min-height: var(--touch); min-width: var(--touch); width: var(--touch); }
+
   /*
     The button is 40px, not 44: `.ui-segmented` adds 2px of padding on each side, so
     a 44px button would make the control 48px tall and taller than every button

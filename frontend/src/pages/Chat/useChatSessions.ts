@@ -1,18 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useMemo, useSyncExternalStore } from 'react';
+import { useInfiniteQuery, type InfiniteData } from '@tanstack/react-query';
 
 import { listChatSessions } from '../../api/resources';
 import { useKnowledgeBaseOptions } from '../../hooks/useKnowledgeBaseOptions';
-import type { ChatSession } from '../../types/api';
+import { queryClient } from '../../store/queryClient';
+import { tokenStore } from '../../store/tokenStore';
+import type { ChatSession, ChatSessionListResponse } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
 
-/**
- * Sessions and knowledge bases for the rail.
- *
- * `GET /chat/sessions` filters, paginates, and enriches server side, so the rail
- * asks for exactly the slice it shows instead of pulling everything and grouping
- * in the browser.
- */
 const SESSION_PAGE_SIZE = 50;
+const sessionsKey = ['chat-sessions'] as const;
+type SessionPages = InfiniteData<ChatSessionListResponse, number>;
 
 function sortSessions(sessions: ChatSession[]) {
   return [...sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
@@ -21,138 +19,100 @@ function sortSessions(sessions: ChatSession[]) {
 type UseChatSessionsOptions = {
   /** Empty string means every knowledge base. */
   knowledgeBaseId?: string;
-  /** Archived sessions live behind their own view. */
   archived?: boolean;
 };
 
-export function useChatSessions({
-  knowledgeBaseId = '',
-  archived = false,
-}: UseChatSessionsOptions = {}) {
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [sessionTotal, setSessionTotal] = useState(0);
+/** Shared, identity-scoped history keeps the rail populated across page changes. */
+export function useChatSessions({ knowledgeBaseId = '', archived = false }: UseChatSessionsOptions = {}) {
+  const revision = useSyncExternalStore(tokenStore.subscribe, tokenStore.getRevision);
+  const queryKey = useMemo(() => [...sessionsKey, revision, knowledgeBaseId, archived] as const,
+    [revision, knowledgeBaseId, archived]);
   const options = useKnowledgeBaseOptions();
-  const [sessionsLoading, setSessionsLoading] = useState(true);
-  const [sessionsError, setSessionsError] = useState('');
-  const [loadMoreError, setLoadMoreError] = useState('');
-  const [sessionsLoadingMore, setSessionsLoadingMore] = useState(false);
-  const sessionRequestRef = useRef(0);
-  const sessionPageRef = useRef(1);
-  const loadingMoreRef = useRef(false);
-
-  const loadSessions = useCallback(async () => {
-    const request = ++sessionRequestRef.current;
-    sessionPageRef.current = 1;
-    loadingMoreRef.current = false;
-    setLoadMoreError('');
-    setSessionsLoadingMore(false);
-    setSessionsLoading(true);
-    try {
+  const query = useInfiniteQuery<ChatSessionListResponse, Error, SessionPages, typeof queryKey, number>({
+    queryKey,
+    initialPageParam: 1,
+    retry: false,
+    placeholderData: (previous, previousQuery) => previousQuery?.queryKey[1] === revision ? previous : undefined,
+    queryFn: async ({ pageParam }) => {
       const response = await listChatSessions({
-        archived,
-        knowledgeBaseId: knowledgeBaseId || undefined,
-        page: 1,
-        pageSize: SESSION_PAGE_SIZE,
+        archived, knowledgeBaseId: knowledgeBaseId || undefined,
+        page: pageParam, pageSize: SESSION_PAGE_SIZE,
       });
-      if (sessionRequestRef.current === request) {
-        const total = response.total ?? response.items.length;
-        setSessions(sortSessions(response.items));
-        setSessionTotal(total);
-        sessionPageRef.current = response.page ?? 1;
-        setSessionsError('');
-      }
-    } catch (caught) {
-      if (sessionRequestRef.current === request) {
-        setSessionsError(getErrorMessage(caught, '会话列表加载失败'));
-      }
-    } finally {
-      if (sessionRequestRef.current === request) setSessionsLoading(false);
-    }
-  }, [archived, knowledgeBaseId]);
+      if (revision !== tokenStore.getRevision()) throw new Error('账户已切换');
+      return response;
+    },
+    getNextPageParam: (lastPage, pages, lastPageParam) => {
+      const loaded = pages.reduce((count, page) => count + page.items.length, 0);
+      return lastPage.items.length && loaded < (lastPage.total ?? loaded)
+        ? (lastPage.page ?? lastPageParam) + 1 : undefined;
+    },
+  }, queryClient);
 
+  const sessions = useMemo(() => {
+    const byId = new Map<string, ChatSession>();
+    query.data?.pages.forEach((page) => page.items.forEach((session) => byId.set(session.id, session)));
+    return sortSessions([...byId.values()]);
+  }, [query.data]);
+  const lastPage = query.data?.pages.at(-1);
+  const sessionTotal = lastPage?.total ?? sessions.length;
+
+  const updateCachedSessions = useCallback((sessionId: string, updated?: ChatSession) => {
+    if (revision !== tokenStore.getRevision()) return;
+    const prefix = [...sessionsKey, revision];
+    // Cancel before committing: an older list response must not undo a rename,
+    // archive, deletion, or access-loss cleanup in any cached scope.
+    void queryClient.cancelQueries({ queryKey: prefix });
+    const cached = queryClient.getQueriesData<SessionPages>({ queryKey: prefix });
+    for (const [key, data] of cached) {
+      const filteredKnowledgeBaseId = key[2] as string;
+      const filteredArchived = key[3] as boolean;
+      const belongs = updated && Boolean(updated.archivedAt) === filteredArchived && (
+        !filteredKnowledgeBaseId || (updated.knowledgeBaseIds ?? [updated.knowledgeBaseId]).includes(filteredKnowledgeBaseId)
+      );
+      if (!data && updated && (!belongs || filteredKnowledgeBaseId !== knowledgeBaseId || filteredArchived !== archived)) continue;
+      const pages = data?.pages ?? [{ items: [], total: 0, page: 1, pageSize: SESSION_PAGE_SIZE }];
+      const existing = pages.flatMap((page) => page.items).find((session) => session.id === sessionId);
+      if (data && !existing && !belongs) continue;
+      const delta = belongs ? (existing ? 0 : 1) : existing ? -1 : 0;
+      queryClient.setQueryData<SessionPages>(key, {
+        pageParams: data?.pageParams ?? [1],
+        pages: pages.map((page, index) => ({
+          ...page,
+          total: Math.max(0, (page.total ?? page.items.length) + delta),
+          items: [
+            ...(!existing && belongs && index === 0 ? [updated] : []),
+            ...page.items.flatMap((session) => session.id !== sessionId ? [session]
+              : belongs ? [{ ...session, ...updated }] : []),
+          ],
+        })),
+      });
+    }
+    // Archive/unarchive can move an item into a scope whose pages are incomplete.
+    // Revalidate on the next visit while keeping the current rows visible.
+    void queryClient.invalidateQueries({ queryKey: prefix, refetchType: 'none' });
+  }, [archived, knowledgeBaseId, revision]);
+
+  const mergeSession = useCallback((session: ChatSession) => updateCachedSessions(session.id, session), [updateCachedSessions]);
+  const removeSession = useCallback((id: string) => updateCachedSessions(id), [updateCachedSessions]);
+  const { refetch, fetchNextPage } = query;
+  const reloadSessions = useCallback(async () => { await refetch(); }, [refetch]);
   const loadMoreSessions = useCallback(async () => {
-    if (loadingMoreRef.current || sessionsLoading || sessions.length >= sessionTotal) return;
-    const request = ++sessionRequestRef.current;
-    const page = sessionPageRef.current + 1;
-    loadingMoreRef.current = true;
-    setSessionsLoadingMore(true);
-    setLoadMoreError('');
-    try {
-      const response = await listChatSessions({
-        archived,
-        knowledgeBaseId: knowledgeBaseId || undefined,
-        page,
-        pageSize: SESSION_PAGE_SIZE,
-      });
-      if (sessionRequestRef.current === request) {
-        setSessions((current) => {
-          const byId = new Map(current.map((session) => [session.id, session]));
-          response.items.forEach((session) => byId.set(session.id, session));
-          return sortSessions([...byId.values()]);
-        });
-        setSessionTotal(response.total ?? Math.max(sessionTotal, sessions.length + response.items.length));
-        sessionPageRef.current = response.page ?? page;
-      }
-    } catch (caught) {
-      if (sessionRequestRef.current === request) {
-        setLoadMoreError(getErrorMessage(caught, '更多会话加载失败'));
-      }
-    } finally {
-      loadingMoreRef.current = false;
-      if (sessionRequestRef.current === request) setSessionsLoadingMore(false);
-    }
-  }, [archived, knowledgeBaseId, sessionTotal, sessions, sessionsLoading]);
-
-
-  useEffect(() => {
-    void loadSessions();
-    return () => {
-      sessionRequestRef.current += 1;
-    };
-  }, [loadSessions]);
-
-
-  const mergeSession = useCallback((session: ChatSession) => {
-    // A response that started before this local mutation must not overwrite it.
-    sessionRequestRef.current += 1;
-    setSessionsLoading(false);
-    setSessions((current) => {
-      const index = current.findIndex((item) => item.id === session.id);
-      if (index === -1) {
-        setSessionTotal((total) => total + 1);
-        return sortSessions([session, ...current]);
-      }
-      // Single-session responses omit the list-only fields, so keep whatever the
-      // list already knows rather than blanking the row.
-      const next = [...current];
-      next[index] = { ...current[index], ...session };
-      return sortSessions(next);
-    });
-  }, []);
-
-  const removeSession = useCallback((sessionId: string) => {
-    // Archive/delete commits locally; invalidate an older list response first.
-    sessionRequestRef.current += 1;
-    setSessionsLoading(false);
-    setSessions((current) => {
-      if (!current.some((item) => item.id === sessionId)) return current;
-      setSessionTotal((total) => Math.max(0, total - 1));
-      return current.filter((item) => item.id !== sessionId);
-    });
-  }, []);
+    if (query.isFetching || !query.hasNextPage) return;
+    await fetchNextPage();
+  }, [fetchNextPage, query.hasNextPage, query.isFetching]);
 
   return {
     sessions,
     sessionTotal,
-    hasMoreSessions: sessionTotal > sessions.length,
-    sessionsLoadingMore,
-    loadMoreError,
+    hasMoreSessions: Boolean(query.hasNextPage),
+    sessionsLoadingMore: query.isFetchingNextPage,
+    loadMoreError: query.isFetchNextPageError ? getErrorMessage(query.error, '更多会话加载失败') : '',
     knowledgeBases: options.items,
-    sessionsLoading,
+    sessionsLoading: query.isPending || query.isPlaceholderData,
     knowledgeBasesLoading: options.loading,
-    sessionsError,
+    sessionsError: query.isError && !query.isFetchNextPageError ? getErrorMessage(query.error, '会话列表加载失败') : '',
     knowledgeBasesError: options.error,
-    reloadSessions: loadSessions,
+    reloadSessions,
     loadMoreSessions,
     reloadKnowledgeBases: options.reload,
     mergeSession,

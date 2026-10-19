@@ -1,4 +1,4 @@
-import { FolderInput, Library, Lock, Pencil, Star, Trash2, Globe } from 'lucide-react';
+import { BookOpen, FolderInput, Lock, Pencil, Star, Trash2, Globe } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 import { Badge } from '../../components/ui/Badge';
@@ -21,16 +21,17 @@ export type RowHandlers = {
   onToggleSelected: (id: string) => void;
 };
 
-export function KnowledgeBaseGlyph({ large = false }: { large?: boolean }) {
+export function KnowledgeBaseGlyph({ large = false, tone = 'green' }: { large?: boolean; tone?: 'green' | 'sand' | 'blue' }) {
   return (
     <span
       aria-hidden="true"
       className={[
         'ui-kb-glyph',
+        `ui-kb-glyph--${tone}`,
         large && 'ui-kb-glyph--lg',
       ].filter(Boolean).join(' ')}
     >
-      <Library />
+      <BookOpen />
     </span>
   );
 }
@@ -165,6 +166,8 @@ export function KnowledgeBaseCards({ items, selected, handlers }: ListProps) {
     <div className="kb-cards">
       {items.map((item) => {
         const readiness = getKnowledgeBaseReadiness(item);
+        const coverTones = ['green', 'sand', 'blue'] as const;
+        const tone = coverTones[Array.from(item.id).reduce((sum, character) => sum + character.charCodeAt(0), 0) % coverTones.length];
         return (
           <article
             className={handlers.isPending(item.id) ? 'kb-card is-busy' : 'kb-card'}
@@ -172,14 +175,13 @@ export function KnowledgeBaseCards({ items, selected, handlers }: ListProps) {
             key={item.id}
           >
             <header className="kb-card__head">
-              <Checkbox touchTarget
+              <KnowledgeBaseGlyph large tone={tone} />
+              <span className="kb-card__select"><Checkbox touchTarget
                 aria-label={`选择 ${item.name}`}
                 checked={selected.has(item.id)}
                 disabled={handlers.isPending(item.id)}
                 onChange={() => handlers.onToggleSelected(item.id)}
-              />
-              <KnowledgeBaseGlyph large />
-              <KnowledgeBaseVisibility visibility={item.visibility} />
+              /></span>
               <RowActions handlers={handlers} item={item} />
             </header>
 
@@ -194,6 +196,7 @@ export function KnowledgeBaseCards({ items, selected, handlers }: ListProps) {
               </Badge>
               <span className="ui-muted">{formatCount(item.documentCount)} 文档</span>
               <span className="ui-muted">{formatRelativeTime(item.updatedAt || item.createdAt)}</span>
+              <KnowledgeBaseVisibility visibility={item.visibility} />
             </div>
 
             {(item.tags?.length ?? 0) > 0 && (

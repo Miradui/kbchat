@@ -1,8 +1,9 @@
-import { ArrowUp, Square } from 'lucide-react';
+import { ArrowUp, LayoutTemplate, Square } from 'lucide-react';
 import { useEffect, useId, useRef } from 'react';
-import type { FormEvent, KeyboardEvent } from 'react';
+import type { FormEvent, KeyboardEvent, ReactNode } from 'react';
 
 import { Button } from '../../components/ui/Button';
+import { IconButton } from '../../components/ui/IconButton';
 import { RetryCountdown } from '../../components/feedback/RetryCountdown';
 import type { RetryNotice } from '../../components/feedback/RetryCountdown';
 
@@ -22,6 +23,7 @@ type ChatComposerProps = {
   onSubmit: () => void;
   onCancel: () => void;
   onTemplates?: () => void;
+  tools?: ReactNode;
 };
 
 /**
@@ -40,6 +42,7 @@ export function ChatComposer({
   onSubmit,
   onCancel,
   onTemplates,
+  tools,
 }: ChatComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const hintId = useId();
@@ -87,10 +90,9 @@ export function ChatComposer({
           value={value}
         />
         <div className="chat-composer__actions">
-          {onTemplates && <Button variant="ghost" disabled={disabled || sending} onClick={onTemplates}>提问模板</Button>}
-          <span className="chat-composer__hint">
-            <kbd className="ui-kbd">Enter</kbd> 发送 · <kbd className="ui-kbd">Shift + Enter</kbd> 换行
-          </span>
+          {tools && <div className="chat-composer__scope">{tools}</div>}
+          <span className="chat-composer__spacer" />
+          {onTemplates && <IconButton label="提问模板" disabled={disabled || sending} onClick={onTemplates}><LayoutTemplate aria-hidden="true" /></IconButton>}
           {sending ? (
             <Button
               leadingIcon={<Square aria-hidden="true" />}
@@ -101,15 +103,18 @@ export function ChatComposer({
             </Button>
           ) : (
             <Button
+              aria-label="发送"
+              className="chat-composer__send"
               disabled={disabled || !value.trim()}
               trailingIcon={<ArrowUp aria-hidden="true" />}
               type="submit"
             >
-              发送
+              <span className="sr-only">发送</span>
             </Button>
           )}
         </div>
       </div>
+      <span className="chat-composer__hint">Enter 发送 · Shift + Enter 换行</span>
       {hint && <p className="chat-composer__note" id={hintId}>{hint}</p>}
       {error && (
         <p

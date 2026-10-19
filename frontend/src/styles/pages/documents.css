@@ -6,7 +6,7 @@
 .doc-toolbar .ui-input-group { flex: 1 1 200px; max-width: 280px; }
 
 .doc-results {
-  background: var(--surface);
+  background: var(--canvas);
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   min-height: 180px;
@@ -19,6 +19,7 @@
 .doc-table td:first-child { padding-left: var(--s-4); }
 .doc-table th:last-child,
 .doc-table td:last-child { padding-right: var(--s-4); }
+.doc-table tbody td { padding-top: var(--s-5); padding-bottom: var(--s-5); }
 
 .doc-name {
   align-items: center;
@@ -30,7 +31,7 @@
   text-align: left;
   width: 100%;
 }
-.doc-name > svg { color: var(--text-muted); height: var(--icon-md); width: var(--icon-md); }
+.doc-name > svg { background: var(--book-sand); border-radius: var(--r-sm); color: var(--book-sand-ink); flex: 0 0 auto; height: var(--s-10); padding: var(--s-2); width: var(--s-10); }
 .doc-name:hover { color: var(--accent); }
 
 .doc-status-cell { display: grid; gap: var(--s-1); min-width: 140px; }

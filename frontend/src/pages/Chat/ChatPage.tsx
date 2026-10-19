@@ -1,11 +1,11 @@
-import { Check, Library, MessageSquareText, PanelLeft, Search, Sparkles } from 'lucide-react';
+import { ArrowUpRight, BookOpen, Check, FileText, Files, Globe, Library, MessageSquareText, PanelLeft, Search, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import {
   setChatMessageFeedback,
 } from '../../api/resources';
-import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { EmptyState } from '../../components/feedback/EmptyState';
 import { RerankFallbackNotice } from '../../components/feedback/RerankFallbackNotice';
 import { useToast } from '../../components/feedback/ToastProvider';
@@ -33,7 +33,7 @@ import { QuestionTemplatesDialog } from './QuestionTemplatesDialog';
 import { ChatMarkdown } from './ChatMarkdown';
 import { ChatAssistantLabel, CitationCard, MessageBubble } from './ChatMessage';
 import { ChatSessionRail } from './ChatSessionRail';
-import { ChatSessionRenameDialog } from './ChatSessionRenameDialog';
+import { ChatSessionActionDialogs } from './ChatSessionActionDialogs';
 import { ChatSourcePreview } from './ChatSourcePreview';
 import { canUnlessUnknown } from '../../utils/access';
 import type { ChatSessionScope } from './ChatSessionRail';
@@ -42,6 +42,7 @@ import { useChatThread } from './useChatThread';
 import { useChatInteractionState } from './useChatInteractionState';
 import { chatDraftScope, useChatDraft } from './useChatDraft';
 import { useSessionActions } from './useSessionActions';
+import { useSessionRailPreferences } from './useSessionRailPreferences';
 import { useChatAnswerVersions } from './useChatAnswerVersions';
 import { ChatStreamView, StreamAnnouncement } from './ChatStreamView';
 import { ChatDocumentPicker } from './ChatDocumentPicker';
@@ -61,6 +62,7 @@ export function ChatPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const isNarrow = useMediaQuery('(max-width: 1080px)');
   const [railOpen, setRailOpen] = useState(false);
+  const railToggleRef = useRef<HTMLButtonElement>(null);
   const [searchDialogOpen, setSearchDialogOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [bookmarkTarget, setBookmarkTarget] = useState<ChatMessage | null>(null);
@@ -94,7 +96,12 @@ export function ChatPage() {
   const { user } = useCurrentUser();
   const { draft, setDraft, moveToSession, acknowledge } = useChatDraft(user?.id, chatDraftScope(sessionId, draftKnowledgeBaseIds, draftDocumentIds));
   const targetMessageId = searchParams.get('messageId') ?? '';
-  const [railScope, setRailScope] = useState<ChatSessionScope>('active');
+  const [railPreferences, setRailPreferences] = useSessionRailPreferences();
+  const historyVisible = isNarrow ? railOpen : !railPreferences.collapsed;
+  const [railScope, setRailScope] = useState<ChatSessionScope>(railPreferences.scope);
+  useLayoutEffect(() => {
+    setRailPreferences({ ...railPreferences, knowledgeBaseId: urlKnowledgeBaseId, scope: railScope });
+  }, [railPreferences, railScope, setRailPreferences, urlKnowledgeBaseId]);
 
   activeSessionIdRef.current = sessionId;
 
@@ -150,13 +157,13 @@ export function ChatPage() {
     },
   });
 
-  const {
-    confirmArchive, setConfirmArchive, confirmDelete, setConfirmDelete, renameTarget, setRenameTarget,
-    sessionActionError, setSessionActionError, sessionBusy, sessionBusyRef, sessionExporting,
-    renameSession, getSessionActions, confirmArchiveSession, confirmDeleteSession,
-  } = useSessionActions({
+  const sessionActions = useSessionActions({
     sessionId, activeSessionIdRef, thread, mergeSession, removeSession, reloadSessions, skipSessionScopeSyncRef,
   });
+  const {
+    confirmArchive, confirmDelete, renameTarget, sessionActionError,
+    sessionBusy, sessionBusyRef, sessionExporting, renameSession, getSessionActions,
+  } = sessionActions;
 
   useEffect(() => {
     if (!thread.rateLimitedQuestion) return;
@@ -446,67 +453,121 @@ export function ChatPage() {
     <OverflowMenu disabled={interactionLocked || sessionExporting} label="会话操作" items={getSessionActions(currentSession)} />
   ) : undefined;
 
+  const showLauncher = !sessionId && !thread.loading && thread.messages.length === 0
+    && !thread.pendingQuestion && !thread.failedSend && !thread.unconfirmedSend && !thread.stoppedStream;
+
+  function startNewChat() {
+    if (sessionBusyRef.current || thread.hasPendingWrite()) return;
+    setRailOpen(false);
+    selectKnowledgeBase('');
+  }
+
+  const sessionRail = (
+    <ChatSessionRail
+      backdropRef={railBackdropRef}
+      overlay={isNarrow}
+      open={historyVisible}
+      activeSessionId={sessionId}
+      disabled={interactionLocked}
+      actionsDisabled={interactionLocked || sessionExporting}
+      getSessionActions={(target) => getSessionActions(target, true)}
+      error={sessionStore.sessionsError}
+      knowledgeBaseId={automaticScope ? '' : activeKnowledgeBaseId}
+      knowledgeBases={knowledgeBases}
+      knowledgeBasesError={sessionStore.knowledgeBasesError}
+      loading={sessionStore.sessionsLoading}
+      onCollapse={() => {
+        if (isNarrow) setRailOpen(false);
+        else {
+          setRailPreferences({ ...railPreferences, collapsed: true });
+          requestAnimationFrame(() => railToggleRef.current?.focus());
+        }
+      }}
+      onKnowledgeBaseChange={(knowledgeBaseId) => {
+        if (!sessionBusyRef.current && !thread.hasPendingWrite()) {
+          selectKnowledgeBase(knowledgeBaseId);
+        }
+      }}
+      onNavigate={() => setRailOpen(false)}
+      onSearch={() => { if (!sessionBusyRef.current && !thread.hasPendingWrite()) setSearchDialogOpen(true); }}
+      onBookmarks={() => { if (!sessionBusyRef.current && !thread.hasPendingWrite()) setBookmarksOpen(true); }}
+      onNewChat={startNewChat}
+      onRetry={() => void reloadSessions()}
+      hasMore={sessionStore.hasMoreSessions}
+      loadingMore={sessionStore.sessionsLoadingMore}
+      loadMoreError={sessionStore.loadMoreError}
+      onLoadMore={() => void loadMoreSessions()}
+      onRetryKnowledgeBases={() => void reloadKnowledgeBases()}
+      onScopeChange={setRailScope}
+      scope={railScope}
+      sessions={sessions}
+      sessionTotal={sessionTotal}
+    />
+  );
+
+  const composer = (
+    <ChatComposer
+      tools={<>
+        {!sessionId ? <Button aria-label="自动检索全部可访问知识库" aria-pressed={automaticScope && !draftDocumentIds.length}
+          className="chat-composer__scope-button" disabled={interactionLocked} leadingIcon={<Globe aria-hidden="true" />}
+          onClick={() => { if (!interactionLocked) setSearchParams({}); }} variant="ghost">自动跨库</Button>
+          : <span className="chat-composer__scope-label"><Globe aria-hidden="true" />{currentSession?.documents?.length ? currentSession.documents.length + ' 份文档' : automaticScope ? '自动跨库' : multiBase ? activeKnowledgeBaseIds.length + ' 个知识库' : activeKnowledgeBase?.name || '当前范围'}</span>}
+        {!sessionId && <Button className="chat-composer__scope-button" disabled={interactionLocked} leadingIcon={<FileText aria-hidden="true" />}
+          onClick={() => setDocumentPickerOpen(true)} variant="ghost">指定文档提问</Button>}
+      </>}
+      onTemplates={() => setTemplatesOpen(true)}
+      disabled={!user || !canSend || thread.sending || sessionBusy}
+      error={thread.rateLimitError}
+      retryNotice={thread.rateLimitNotice}
+      hint={composerHint}
+      onCancel={thread.cancelSend}
+      onChange={(value) => {
+        setDraft(value);
+        thread.dismissRateLimitError();
+      }}
+      onSubmit={() => {
+        if (sessionBusyRef.current) return;
+        const question = draft.trim();
+        if (!question) return;
+        // A draft thread needs the knowledge base pinned in the URL before
+        // the session is created.
+        if (!sessionId && !urlKnowledgeBaseId && activeKnowledgeBaseId && !draftDocumentIds.length) {
+          setSearchParams({ knowledgeBaseId: activeKnowledgeBaseId }, { replace: true });
+        }
+        void thread.send(question);
+      }}
+      placeholder={(currentSession?.documents?.length || draftDocumentIds.length) ? '针对所选文档提问…' : automaticScope ? '直接提问，自动检索相关知识库…' : multiBase ? `向 ${activeKnowledgeBaseIds.length} 个知识库提问…` : activeKnowledgeBase ? `向「${activeKnowledgeBase.name}」提问…` : '选择知识库后开始提问…'}
+      sending={thread.sending}
+      value={draft}
+    />
+  );
+
   return (
     <AppShell
       active="chat"
       breadcrumbs={[
         { label: 'AI 问答', to: '/chat' },
-        ...(automaticScope ? [{ label: '自动检索' }] : activeKnowledgeBase ? [{ label: activeKnowledgeBase.name }] : []),
+        ...(showLauncher ? [{ label: '新对话' }] : automaticScope ? [{ label: '自动检索' }] : activeKnowledgeBase ? [{ label: activeKnowledgeBase.name }] : []),
       ]}
       flush
       topbarActions={topbarActions}
+      topbarLeading={(!historyVisible || isNarrow) && <IconButton label="打开会话列表" aria-expanded={historyVisible} ref={railToggleRef}
+        onClick={() => {
+          if (isNarrow) setRailOpen(true);
+          else setRailPreferences({ ...railPreferences, collapsed: false });
+        }}><PanelLeft aria-hidden="true" /></IconButton>}
+      onNewChat={startNewChat}
+      newChatDisabled={interactionLocked}
     >
-      <div className={`chat-layout${railOpen ? ' is-rail-open' : ''}${visibleSource ? ' has-source-preview' : ''}`}>
+      <div className={`chat-layout${railOpen ? ' is-rail-open' : ''}${!isNarrow && historyVisible ? ' has-session-rail' : ''}${visibleSource ? ' has-source-preview' : ''}`}>
         {isNarrow && railOpen && (
           <button aria-hidden="true" className="chat-layout__scrim" onClick={() => setRailOpen(false)} ref={railBackdropRef} tabIndex={-1} type="button" />
         )}
 
-        <ChatSessionRail
-          backdropRef={railBackdropRef}
-          overlay={isNarrow}
-          open={railOpen}
-          activeSessionId={sessionId}
-          disabled={interactionLocked}
-          actionsDisabled={interactionLocked || sessionExporting}
-          getSessionActions={(target) => getSessionActions(target, true)}
-          error={sessionStore.sessionsError}
-          knowledgeBaseId={automaticScope ? '' : activeKnowledgeBaseId}
-          knowledgeBases={knowledgeBases}
-          knowledgeBasesError={sessionStore.knowledgeBasesError}
-          loading={sessionStore.sessionsLoading}
-          onCollapse={isNarrow ? () => setRailOpen(false) : undefined}
-          onKnowledgeBaseChange={(knowledgeBaseId) => {
-            if (!sessionBusyRef.current && !thread.hasPendingWrite()) {
-              selectKnowledgeBase(knowledgeBaseId);
-            }
-          }}
-          onNavigate={() => setRailOpen(false)}
-          onSearch={() => { if (!sessionBusyRef.current && !thread.hasPendingWrite()) setSearchDialogOpen(true); }}
-          onBookmarks={() => { if (!sessionBusyRef.current && !thread.hasPendingWrite()) setBookmarksOpen(true); }}
-          onNewChat={() => {
-            if (sessionBusyRef.current || thread.hasPendingWrite()) return;
-            setRailOpen(false);
-            selectKnowledgeBase('');
-          }}
-          onRetry={() => void reloadSessions()}
-          hasMore={sessionStore.hasMoreSessions}
-          loadingMore={sessionStore.sessionsLoadingMore}
-          loadMoreError={sessionStore.loadMoreError}
-          onLoadMore={() => void loadMoreSessions()}
-          onRetryKnowledgeBases={() => void reloadKnowledgeBases()}
-          onScopeChange={setRailScope}
-          scope={railScope}
-          sessions={sessions}
-          sessionTotal={sessionTotal}
-        />
+        {sessionRail}
 
         <section aria-label="问答会话" className="chat-main">
-          <header className="chat-main__head">
-            {isNarrow && (
-              <IconButton label="打开会话列表" onClick={() => setRailOpen(true)}>
-                <PanelLeft aria-hidden="true" />
-              </IconButton>
-            )}
+          {!showLauncher && <header className="chat-main__head">
             <div className="chat-main__title">
               {currentSession ? (
                 <InlineEdit
@@ -533,10 +594,8 @@ export function ChatPage() {
             )}
             {sessionId && <IconButton disabled={historyLocked} aria-expanded={messageSearch.open} label="查找会话消息" ref={messageSearch.triggerRef} onClick={messageSearch.openSearch}><Search aria-hidden="true" /></IconButton>}
             {loadedSession?.branchFromSessionId && <Link className="ui-button ui-button--ghost" to={`/chat/${loadedSession.branchFromSessionId}${loadedSession.branchFromMessageId ? `?messageId=${encodeURIComponent(loadedSession.branchFromMessageId)}` : ''}`}>查看来源会话</Link>}
-          </header>
-          {!sessionId && <div className="ui-toolbar"><Button disabled={interactionLocked} variant="ghost" onClick={() => setDocumentPickerOpen(true)}>指定文档提问</Button>
-            {draftDocumentIds.length > 0 && <span>仅检索所选 {draftDocumentIds.length} 份文档的版本；切换知识库将重选范围。</span>}
-          </div>}
+          </header>}
+          {!sessionId && draftDocumentIds.length > 0 && <p className="ui-inline-notice">仅检索所选 {draftDocumentIds.length} 份文档的版本；切换知识库将重选范围。</p>}
           {currentSession?.documents?.length ? <details className="ui-inline-notice"><summary>仅检索指定的 {currentSession.documents.length} 份文档</summary><ul>{currentSession.documents.map((document) => <li key={document.id}><Link to={`/documents?documentId=${encodeURIComponent(document.id)}`}>{document.filename}</Link></li>)}</ul></details> : null}
 
           {messageSearch.open && <ChatMessageSearch {...messageSearch} loading={messageSearch.loading || loadingHistory} missingTarget={!loadingHistory && messageSearch.missingTarget} />}
@@ -591,6 +650,8 @@ export function ChatPage() {
               sessionId ? null : (
                 <ChatEmptyState
                   documentCount={draftDocumentIds.length}
+                  composer={composer}
+                  onSuggest={(text) => { if (!interactionLocked) setDraft((current) => current ? current + "\n\n" + text : text); }}
                   knowledgeBases={knowledgeBases}
                   loading={sessionStore.knowledgeBasesLoading}
                   onSelect={(id) => {
@@ -599,7 +660,6 @@ export function ChatPage() {
                     if (ids.length > 5) { toast.error('每个会话最多选择 5 个知识库。'); return; }
                     setSearchParams(ids.length ? { knowledgeBaseId: ids[0], ...(ids.length > 1 ? { knowledgeBaseIds: ids.join(',') } : {}) } : {});
                   }}
-                  onAutomatic={() => { if (!interactionLocked) setSearchParams({}); }}
                   selectedIds={draftKnowledgeBaseIds}
                   disabled={interactionLocked}
                 />
@@ -778,32 +838,7 @@ export function ChatPage() {
             <Button disabled={historyLocked || loadingHistory} variant="ghost" onClick={returnToLatest}>回到最新消息</Button>
           </div>}
 
-          <ChatComposer
-            onTemplates={() => setTemplatesOpen(true)}
-            disabled={!user || !canSend || thread.sending || sessionBusy}
-            error={thread.rateLimitError}
-            retryNotice={thread.rateLimitNotice}
-            hint={composerHint}
-            onCancel={thread.cancelSend}
-            onChange={(value) => {
-              setDraft(value);
-              thread.dismissRateLimitError();
-            }}
-            onSubmit={() => {
-              if (sessionBusyRef.current) return;
-              const question = draft.trim();
-              if (!question) return;
-              // A draft thread needs the knowledge base pinned in the URL before
-              // the session is created.
-              if (!sessionId && !urlKnowledgeBaseId && activeKnowledgeBaseId && !draftDocumentIds.length) {
-                setSearchParams({ knowledgeBaseId: activeKnowledgeBaseId }, { replace: true });
-              }
-              void thread.send(question);
-            }}
-            placeholder={(currentSession?.documents?.length || draftDocumentIds.length) ? '针对所选文档提问…' : automaticScope ? '直接提问，自动检索相关知识库…' : multiBase ? `向 ${activeKnowledgeBaseIds.length} 个知识库提问…` : activeKnowledgeBase ? `向「${activeKnowledgeBase.name}」提问…` : '选择知识库后开始提问…'}
-            sending={thread.sending}
-            value={draft}
-          />
+          {!showLauncher && composer}
         </section>
         {visibleSource && (
           <ChatSourcePreview
@@ -841,43 +876,11 @@ export function ChatPage() {
         navigate(`/chat/${item.sessionId}?messageId=${encodeURIComponent(item.messageId)}`);
       }} />}
 
-      {renameTarget && <ChatSessionRenameDialog key={renameTarget.id} title={renameTarget.title || ''}
-        busy={sessionBusy} error={sessionActionError}
-        onClose={() => { if (!sessionBusyRef.current) { setRenameTarget(null); setSessionActionError(''); } }}
-        onSubmit={(title) => renameSession(renameTarget, title)} />}
-
-      {confirmArchive && (
-        <ConfirmDialog
-          busy={sessionBusy}
-          confirmLabel="归档"
-          description={`归档后“${confirmArchive.title || '未命名会话'}”将移至“已归档”列表，可随时取消归档继续对话。`}
-          error={sessionActionError}
-          onCancel={() => {
-            setSessionActionError('');
-            setConfirmArchive(null);
-          }}
-          onConfirm={confirmArchiveSession}
-          title="归档会话"
-        />
-      )}
+      <ChatSessionActionDialogs actions={sessionActions} />
 
       {feedbackTarget && <ChatFeedbackDialog key={feedbackTarget.id} initial={feedbackTarget.feedback}
         onClose={() => setFeedbackTarget(null)} onSubmit={(details) => handleMessageFeedback(feedbackTarget.id, 'negative', details)} />}
 
-      {confirmDelete && (
-        <ConfirmDialog
-          busy={sessionBusy}
-          confirmLabel="删除"
-          description={`确认删除“${confirmDelete.title || '未命名会话'}”？会话和消息将移入回收站，可在永久删除前恢复。`}
-          error={sessionActionError}
-          onCancel={() => {
-            setSessionActionError('');
-            setConfirmDelete(null);
-          }}
-          onConfirm={confirmDeleteSession}
-          title="删除会话"
-        />
-      )}
     </AppShell>
   );
 }
@@ -886,13 +889,7 @@ export function ChatPage() {
  * Draft-state body. Absorbs what used to be a separate `/chat` landing page.
  */
 function ChatEmptyState({
-  documentCount = 0,
-  knowledgeBases,
-  loading,
-  selectedIds,
-  disabled,
-  onSelect,
-  onAutomatic,
+  documentCount = 0, knowledgeBases, loading, selectedIds, disabled, onSelect, composer, onSuggest,
 }: {
   documentCount?: number;
   knowledgeBases: Array<{ id: string; name: string; description: string }>;
@@ -900,47 +897,44 @@ function ChatEmptyState({
   selectedIds: string[];
   disabled: boolean;
   onSelect: (id: string) => void;
-  onAutomatic: () => void;
+  composer: ReactNode;
+  onSuggest: (text: string) => void;
 }) {
-  if (loading) return <LoadingSkeleton announce columns={2} rows={3} />;
-
-  if (knowledgeBases.length === 0) {
-    return (
-      <EmptyState
+  return (
+    <div className="chat-launcher">
+      <span className="chat-launcher__mark"><Sparkles aria-hidden="true" />你的知识，随时可用</span>
+      <h1>{documentCount ? '针对指定文档提问' : selectedIds.length ? '在指定知识库中提问' : '今天，想从资料中了解什么？'}</h1>
+      <p>{documentCount ? '本会话只检索选定的 ' + documentCount + ' 份文档版本，回答会标注资料来源。' : selectedIds.length ? '本会话仅检索所选知识库，回答会标注资料来源。' : '把问题交给知汇，每一个答案都能找到出处。'}</p>
+      {composer}
+      <div aria-label="提问建议" className="chat-launcher__suggestions">
+        <Button disabled={disabled} leadingIcon={<FileText aria-hidden="true" />} onClick={() => onSuggest('请总结资料中的关键要点，并标注引用来源。')} variant="secondary">总结一份资料</Button>
+        <Button disabled={disabled} leadingIcon={<Files aria-hidden="true" />} onClick={() => onSuggest('请比较所选资料的主要差异，并列出相关依据。')} variant="secondary">对比文档差异</Button>
+        <Button disabled={disabled} leadingIcon={<Search aria-hidden="true" />} onClick={() => onSuggest('请查找资料中的相关规定，说明适用条件并标注出处。')} variant="secondary">查找制度规定</Button>
+      </div>
+      <div className="chat-launcher__scope-heading"><span>继续探索你的知识库</span><Link to="/knowledge-bases">查看全部<ArrowUpRight aria-hidden="true" /></Link></div>
+      {loading ? <LoadingSkeleton announce columns={3} rows={1} /> : knowledgeBases.length === 0 ? <EmptyState
         action={<Link className="ui-button ui-button--primary" to="/knowledge-bases?intent=create"><span>新建知识库</span></Link>}
         description="AI 问答基于知识库中的文档作答。先创建一个知识库并导入文档。"
         title="还没有可提问的知识库"
-      />
-    );
-  }
-
-  return (
-    <div className="chat-launcher">
-      <span className="chat-launcher__mark"><Sparkles aria-hidden="true" /></span>
-      <h2>{documentCount ? '针对指定文档提问' : selectedIds.length ? '在指定知识库中提问' : '直接提问，自动查找资料'}</h2>
-      <p>{documentCount ? `本会话只检索选定的 ${documentCount} 份文档版本，回答会标注资料来源。` : selectedIds.length ? '本会话仅检索所选知识库，回答会标注资料来源。' : '每轮根据问题检索可访问的知识库，回答会标注资料来源。'}</p>
-      <Button aria-pressed={selectedIds.length === 0} disabled={disabled} onClick={onAutomatic} variant={selectedIds.length === 0 ? 'primary' : 'secondary'}>自动检索全部可访问知识库</Button>
-      <p>也可以指定范围：选择 1–5 个知识库。</p>
-      <div aria-label="可提问的知识库" className="chat-launcher__list">
-        {knowledgeBases.map((knowledgeBase) => (
-          <button
-            aria-pressed={selectedIds.includes(knowledgeBase.id)}
-            className={selectedIds.includes(knowledgeBase.id) ? 'chat-launcher__item is-selected' : 'chat-launcher__item'}
-            disabled={disabled || (selectedIds.length >= 5 && !selectedIds.includes(knowledgeBase.id))}
-            key={knowledgeBase.id}
-            onClick={() => onSelect(knowledgeBase.id)}
-            type="button"
-          >
-            <Library aria-hidden="true" />
-            <span className="ui-cell-stack">
-              <strong>{knowledgeBase.name}</strong>
-              <small>{knowledgeBase.description || '未填写描述'}</small>
-            </span>
-            {selectedIds.includes(knowledgeBase.id) && <Check aria-hidden="true" className="chat-launcher__selected" />}
-          </button>
-        ))}
-      </div>
-      {selectedIds.length > 0 && !documentCount && <p className="chat-launcher__hint">已指定 {selectedIds.length} 个知识库，本会话仅在所选范围内检索。</p>}
+      /> : <>
+        <div aria-label="可提问的知识库" className="chat-launcher__list">
+          {knowledgeBases.map((knowledgeBase) => (
+            <button
+              aria-pressed={selectedIds.includes(knowledgeBase.id)}
+              className={selectedIds.includes(knowledgeBase.id) ? 'chat-launcher__item is-selected' : 'chat-launcher__item'}
+              disabled={disabled || (selectedIds.length >= 5 && !selectedIds.includes(knowledgeBase.id))}
+              key={knowledgeBase.id}
+              onClick={() => onSelect(knowledgeBase.id)}
+              type="button"
+            >
+              <span className="chat-launcher__book"><BookOpen aria-hidden="true" /></span>
+              <span className="ui-cell-stack"><strong>{knowledgeBase.name}</strong><small>{knowledgeBase.description || '点击限定提问范围'}</small></span>
+              {selectedIds.includes(knowledgeBase.id) && <Check aria-hidden="true" className="chat-launcher__selected" />}
+            </button>
+          ))}
+        </div>
+        <p className="chat-launcher__hint">{selectedIds.length > 0 && !documentCount ? '已指定 ' + selectedIds.length + ' 个知识库，本会话仅在所选范围内检索。' : '点击卡片限定提问范围，最多选择 5 个知识库。'}</p>
+      </>}
     </div>
   );
 }

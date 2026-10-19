@@ -13,6 +13,10 @@ type CacheEntry = {
 let cache: CacheEntry | null = null;
 
 export const currentUserStore = {
+  getCached(request: CurrentUserRequest): User | null {
+    return cache?.request === request && cache.revision === tokenStore.getRevision() ? cache.user : null;
+  },
+
   load(request: CurrentUserRequest): Promise<User> {
     const revision = tokenStore.getRevision();
     if (!cache || cache.request !== request || cache.revision !== revision) {

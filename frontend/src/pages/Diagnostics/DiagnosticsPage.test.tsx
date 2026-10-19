@@ -13,6 +13,8 @@ vi.mock('../../api/resources', () => ({
   getCurrentUser: vi.fn(),
   getSystemDiagnostics: vi.fn(),
   logout: vi.fn().mockResolvedValue(undefined),
+  listChatSessions: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 50 }),
+  listKnowledgeBases: vi.fn().mockResolvedValue({ items: [] }),
 }));
 
 beforeEach(() => {

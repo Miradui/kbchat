@@ -1,5 +1,5 @@
 import { ChevronsUpDown, LogOut, Menu, Monitor, Moon, Search, Settings, Sun, X } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import type { NavigateFunction } from 'react-router-dom';
@@ -20,6 +20,7 @@ import type { ThemeChoice } from '../store/themeStore';
 import { tokenStore } from '../store/tokenStore';
 import { AccountSettingsDialog } from './AccountSettingsDialog';
 import { UploadTasksButton } from '../pages/Documents/UploadTasksButton';
+import { appShellContext } from './appShellContext';
 
 export type { AppSection } from '../components/navigation/PrimaryNav';
 
@@ -33,6 +34,10 @@ export type AppShellProps = {
   topbarActions?: ReactNode;
   /** Removes content padding, for full-height pages such as chat. */
   flush?: boolean;
+  /** Page-specific controls before the topbar breadcrumbs. */
+  topbarLeading?: ReactNode;
+  onNewChat?: () => void;
+  newChatDisabled?: boolean;
   currentUserRequest?: typeof getCurrentUser;
   logoutRequest?: () => Promise<void>;
   children: ReactNode;
@@ -83,11 +88,25 @@ function getFocusable(container: HTMLElement): HTMLElement[] {
   )).filter((element) => !element.matches(':disabled') && !element.closest('[hidden], [inert], [aria-hidden="true"]'));
 }
 
-export function AppShell({
+export function AppShell(props: AppShellProps) {
+  const register = useContext(appShellContext);
+  const location = useLocation();
+  useLayoutEffect(() => {
+    if (!register) return;
+    const { children: _children, ...configuration } = props;
+    return register(location.key, configuration);
+  }, [register, location.key, props]);
+  return register ? props.children : <AppShellFrame {...props} />;
+}
+
+export function AppShellFrame({
   active,
   breadcrumbs,
   topbarActions,
   flush = false,
+  topbarLeading,
+  onNewChat,
+  newChatDisabled,
   currentUserRequest = getCurrentUser,
   logoutRequest = logout,
   children,
@@ -99,8 +118,8 @@ export function AppShell({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
-  const [userName, setUserName] = useState('当前用户');
-  const [userAvatarUrl, setUserAvatarUrl] = useState('');
+  const [userName, setUserName] = useState(() => currentUser ? currentUser.displayName.trim() || currentUser.username : '当前用户');
+  const [userAvatarUrl, setUserAvatarUrl] = useState(() => currentUser?.avatarUrl?.trim() ?? '');
   const [theme, setTheme] = useState<ThemeChoice>(() => themeStore.get());
   const [loggingOut, setLoggingOut] = useState(false);
   const railRef = useRef<HTMLElement>(null);
@@ -209,8 +228,9 @@ export function AppShell({
     <div className="app">
       <a className="app__skip" href="#main-content">跳到主要内容</a>
       <aside
+        aria-label="工作区导航"
         aria-hidden={railHidden || undefined}
-        className={drawerOpen ? 'rail is-open' : 'rail'}
+        className={`rail${drawerOpen ? ' is-open' : ''}`}
         inert={railHidden || undefined}
         ref={railRef}
       >
@@ -229,7 +249,7 @@ export function AppShell({
           )}
         </div>
 
-        <PrimaryNav active={active} canViewDiagnostics={currentUser?.role === 'admin'} onNavigate={() => setDrawerOpen(false)} />
+        <PrimaryNav active={active} canViewDiagnostics={currentUser?.role === 'admin'} onNavigate={() => setDrawerOpen(false)} onNewChat={onNewChat} newChatDisabled={newChatDisabled} />
 
         <div className="rail__foot">
           <Popover
@@ -322,6 +342,7 @@ export function AppShell({
             </IconButton>
           )}
 
+          {topbarLeading}
           <nav aria-label="面包屑" className="topbar__crumbs">
             {crumbs.map((crumb, index) => (
               <span key={`${crumb.label}-${index}`} style={{ display: 'contents' }}>

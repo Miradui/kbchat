@@ -62,19 +62,24 @@ type PrimaryNavProps = {
   active: AppSection;
   canViewDiagnostics: boolean;
   onNavigate: () => void;
+  onNewChat?: () => void;
+  newChatDisabled?: boolean;
 };
 
-export function PrimaryNav({ active, canViewDiagnostics, onNavigate }: PrimaryNavProps) {
+export function PrimaryNav({ active, canViewDiagnostics, onNavigate, onNewChat, newChatDisabled }: PrimaryNavProps) {
   const visibleGroups = groups.map((group) => ({
     ...group,
     items: group.items.filter((item) => !item.systemAdminOnly || canViewDiagnostics),
   })).filter((group) => group.items.length > 0);
   return (
     <>
-      <Link className="rail__cta" onClick={onNavigate} to="/chat">
+      {onNewChat ? <button className="rail__cta" disabled={newChatDisabled} onClick={() => { onNewChat(); onNavigate(); }} type="button">
         <Plus aria-hidden="true" />
         <span>新建对话</span>
-      </Link>
+      </button> : <Link className="rail__cta" onClick={onNavigate} to="/chat">
+        <Plus aria-hidden="true" />
+        <span>新建对话</span>
+      </Link>}
       <nav aria-label="主导航" className="rail__nav">
         {visibleGroups.map((group) => (
           <div className="rail__group" key={group.label}>

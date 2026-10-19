@@ -6,6 +6,7 @@ import { App } from '../App';
 import { LoadingSkeleton } from '../components/LoadingSkeleton';
 import { ProtectedRoute } from './ProtectedRoute';
 import { RenderBoundary, RenderFailure } from '../components/feedback/RenderBoundary';
+import { WorkspaceLayout } from '../layouts/WorkspaceLayout';
 
 const LoginPage = lazy(() => import('../pages/Login/LoginPage').then((m) => ({ default: m.LoginPage })));
 const HomePage = lazy(() => import('../pages/Home/HomePage').then((m) => ({ default: m.HomePage })));
@@ -73,6 +74,7 @@ export const router = createBrowserRouter([{
     {
       element: <ProtectedRoute />,
       children: [
+        { element: <WorkspaceLayout />, children: [
         { path: 'home', element: <RoutePage><HomePage /></RoutePage> },
 
         { path: 'knowledge-bases', element: <RoutePage><KnowledgeBaseListPage /></RoutePage> },
@@ -97,6 +99,7 @@ export const router = createBrowserRouter([{
 
         { path: 'search', element: <RoutePage><SearchPage /></RoutePage> },
         { path: 'tags', element: <RoutePage><TagsPage /></RoutePage> },
+        ] },
       ],
     },
     { path: '*', element: <Navigate to="/home" replace /> },

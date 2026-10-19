@@ -12,11 +12,16 @@ type UserState = { revision: number; request: UserRequest; user: User | null; lo
 export function useCurrentUser(request: UserRequest = getCurrentUser) {
   const revision = useSyncExternalStore(tokenStore.subscribe, tokenStore.getRevision);
   const [attempt, setAttempt] = useState(0);
-  const [state, setState] = useState<UserState>({ revision, request, user: null, loading: true, error: '' });
+  const [state, setState] = useState<UserState>(() => {
+    const user = currentUserStore.getCached(request);
+    return { revision, request, user, loading: !user, error: '' };
+  });
 
   useEffect(() => {
     let active = true;
-    setState({ revision, request, user: null, loading: true, error: '' });
+    const cached = currentUserStore.getCached(request);
+    setState({ revision, request, user: cached, loading: !cached, error: '' });
+    if (cached) return;
     void currentUserStore.load(request).then((user) => {
       if (!user) throw new Error('无法获取当前账号');
       if (active && tokenStore.getRevision() === revision) {

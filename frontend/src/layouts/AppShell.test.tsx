@@ -1,10 +1,10 @@
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
-import { useLocation } from 'react-router-dom';
+import { Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { getCurrentUser, logout } from '../api/resources';
+import { getCurrentUser, listChatSessions, logout } from '../api/resources';
 import { currentUserStore } from '../store/currentUserStore';
 import { tokenStore } from '../store/tokenStore';
 import { renderWithRouter } from '../test/render';
@@ -14,6 +14,9 @@ vi.mock('../api/resources', () => ({
   getCurrentUser: vi.fn(),
   logout: vi.fn(),
   searchSuggest: vi.fn().mockResolvedValue({ items: [] }),
+  listChatSessions: vi.fn(),
+  listKnowledgeBases: vi.fn().mockResolvedValue({ items: [] }),
+  updateChatSessionTitle: vi.fn(),
 }));
 const mockedGetCurrentUser = vi.mocked(getCurrentUser);
 const mockedLogout = vi.mocked(logout);
@@ -65,6 +68,7 @@ beforeEach(() => {
     displayName: '管理员',
   });
   mockedLogout.mockReset().mockResolvedValue(undefined);
+  vi.mocked(listChatSessions).mockReset().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 50 });
 });
 afterEach(() => {
   document.body.style.overflow = '';
@@ -72,6 +76,35 @@ afterEach(() => {
 });
 
 describe('AppShell', () => {
+  it('keeps history out of the primary navigation on workspace pages', async () => {
+    stubMatchMedia(false);
+    tokenStore.setToken('rail-account');
+    const user = userEvent.setup();
+    renderWithRouter(<Routes>
+      <Route path="/home" element={<AppShell active="home"><p>首页内容</p></AppShell>} />
+      <Route path="/documents" element={<AppShell active="documents"><p>文档内容</p></AppShell>} />
+    </Routes>);
+    await screen.findByRole('button', { name: '管理员' });
+    expect(screen.queryByRole('complementary', { name: '会话列表' })).not.toBeInTheDocument();
+    await user.click(within(screen.getByRole('navigation', { name: '主导航' })).getByRole('link', { name: '文档' }));
+    expect(screen.getByText('文档内容')).toBeInTheDocument();
+    expect(screen.queryByRole('complementary', { name: '会话列表' })).not.toBeInTheDocument();
+    expect(listChatSessions).not.toHaveBeenCalled();
+  });
+
+  it('keeps cached administrator navigation visible on the first render after a page change', async () => {
+    stubMatchMedia(false);
+    mockedGetCurrentUser.mockResolvedValue({ id: 'user-1', username: 'admin', displayName: '管理员', role: 'admin' });
+    const first = renderWithRouter(<AppShell active="home"><p>内容</p></AppShell>);
+    await screen.findByRole('link', { name: '系统诊断' });
+    first.unmount();
+    renderWithRouter(<AppShell active="documents"><p>文档内容</p></AppShell>);
+    expect(screen.getByRole('link', { name: '系统诊断' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '用户管理' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '管理员' })).toBeInTheDocument();
+    expect(mockedGetCurrentUser).toHaveBeenCalledOnce();
+  });
+
   it('shows the authenticated user display name', async () => {
     stubMatchMedia(false);
     const currentUserRequest = vi.fn().mockResolvedValue({

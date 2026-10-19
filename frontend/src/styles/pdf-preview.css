@@ -41,7 +41,7 @@
   transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
 }
 .pdf-preview__text-layer .markedContent { display: contents; }
-.pdf-preview__text-layer .pdf-preview__highlight { background: rgb(49 92 231 / 24%); border-radius: 2px; color: transparent; font: inherit; padding: 0; }
+.pdf-preview__text-layer .pdf-preview__highlight { background: var(--pdf-highlight); border-radius: 2px; color: transparent; font: inherit; padding: 0; }
 .pdf-preview__text-layer ::selection { background: var(--accent-wash); color: transparent; }
 .pdf-preview__text-layer[data-main-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
 .pdf-preview__text-layer[data-main-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }

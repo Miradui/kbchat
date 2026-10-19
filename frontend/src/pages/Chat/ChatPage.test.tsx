@@ -11,6 +11,7 @@ import {
   editChatMessage,
   exportChatSession,
   getChatSession,
+  getCurrentUser,
   getDocument,
   getDocumentPreview,
   getWorkspacePreference,
@@ -26,6 +27,7 @@ import {
   updateChatSessionTitle,
 } from '../../api/resources';
 import { renderWithRouter } from '../../test/render';
+import { currentUserStore } from '../../store/currentUserStore';
 import { downloadBlob } from '../../utils/download';
 import type { ChatMessage, ChatSession, ChatSessionListResponse, SendChatMessageResponse, KnowledgeBase } from '../../types/api';
 import { ChatPage } from './ChatPage';
@@ -209,6 +211,12 @@ async function findSessionTitle(title: string) {
   return screen.findByText(title, { selector: '.ui-inline-edit__text' });
 }
 
+async function findReadyComposer() {
+  const input = await screen.findByRole('textbox', { name: '输入问题' });
+  await waitFor(() => expect(input).toBeEnabled());
+  return input;
+}
+
 async function startSessionTitleEdit(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole('button', { name: '重命名会话' }));
   return screen.getByRole('textbox', { name: '重命名会话' });
@@ -242,6 +250,66 @@ async function submitWithAutomaticChecksPaused() {
 }
 
 describe('ChatPage', () => {
+  it('keeps desktop history in a separate column with one draft composer', async () => {
+    renderWithRouter(<Routes><Route path="/chat" element={<ChatPage />} /></Routes>, ['/chat']);
+    await screen.findByRole('heading', { name: '今天，想从资料中了解什么？' });
+    const navigation = screen.getByRole('complementary', { name: '工作区导航' });
+    expect(within(navigation).queryByRole('complementary', { name: '会话列表' })).not.toBeInTheDocument();
+    expect(within(screen.getByRole('main')).getByRole('complementary', { name: '会话列表' })).toBeInTheDocument();
+    expect(within(navigation).getByRole('button', { name: '新建对话' })).toBeInTheDocument();
+    expect(screen.getAllByRole('textbox', { name: '输入问题' })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: '指定文档提问' })).toBeInTheDocument();
+  });
+
+  it('collapses and restores desktop history without losing its scroll or the draft', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<Routes><Route path="/chat" element={<ChatPage />} /></Routes>, ['/chat']);
+    const input = await findReadyComposer();
+    await user.type(input, '继续编辑的问题');
+    const row = await screen.findByRole('link', { name: /制度问答/ });
+    const list = row.closest('.chat-rail__list')!;
+    fireEvent.scroll(list, { target: { scrollTop: 120 } });
+    await user.click(screen.getByRole('button', { name: '收起会话列表' }));
+    expect(screen.queryByRole('complementary', { name: '会话列表' })).not.toBeInTheDocument();
+    expect(input).toHaveValue('继续编辑的问题');
+    await user.click(screen.getByRole('button', { name: '打开会话列表' }));
+    expect(screen.getByRole('complementary', { name: '会话列表' })).toBeInTheDocument();
+    expect(list.scrollTop).toBe(120);
+    expect(input).toHaveValue('继续编辑的问题');
+    expect(createChatSession).not.toHaveBeenCalled();
+  });
+
+  it('adds a suggested question to the draft without sending or discarding existing text', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<Routes><Route path="/chat" element={<ChatPage />} /></Routes>, ['/chat']);
+    const input = await screen.findByRole('textbox', { name: '输入问题' });
+    await waitFor(() => expect(input).toBeEnabled());
+    await user.type(input, '保留我的补充说明');
+    await user.click(screen.getByRole('button', { name: '总结一份资料' }));
+    expect(input).toHaveValue('保留我的补充说明\n\n请总结资料中的关键要点，并标注引用来源。');
+    expect(createChatSession).not.toHaveBeenCalled();
+    expect(sendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it('enables the draft after knowledge bases load when the account is already cached', async () => {
+    await currentUserStore.load(getCurrentUser);
+    const bases = deferred<{ items: KnowledgeBase[] }>();
+    vi.mocked(listKnowledgeBases).mockReturnValue(bases.promise);
+    vi.mocked(createChatSession).mockResolvedValue(session);
+    vi.mocked(sendChatMessage).mockResolvedValue({ ...replyFields, answer: '回答', citations: [], rerankFallback: null });
+    const user = userEvent.setup();
+    renderWithRouter(<Routes><Route path="/chat/:sessionId?" element={<ChatPage />} /></Routes>, ['/chat?knowledgeBaseId=kb1']);
+
+    expect(screen.getByRole('textbox', { name: '输入问题' })).toBeDisabled();
+    expect(createChatSession).not.toHaveBeenCalled();
+    await act(async () => bases.resolve({ items: [knowledgeBase] }));
+    await user.type(await findReadyComposer(), '资料加载完成后提问');
+    await user.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(sendChatMessage).toHaveBeenCalledWith('s1', expect.objectContaining({
+      content: '资料加载完成后提问',
+    }), expect.any(Object), expect.any(AbortSignal)));
+  });
+
   it('opens the latest page without a long smooth scroll and loads older messages on demand', async () => {
     vi.mocked(listChatMessages).mockResolvedValueOnce({ items: [historicalAnswers[1]], hasMore: true, nextCursor: 'older', revision: 'assistant-new' })
       .mockResolvedValueOnce({ items: [historicalAnswers[0]], nextCursor: 'oldest', revision: 'assistant-new' });
@@ -354,7 +422,7 @@ describe('ChatPage', () => {
       <Routes><Route path="/chat/:sessionId?" element={<ChatPage />} /></Routes>,
       ['/chat?knowledgeBaseId=kb1'],
     );
-    await user.type(await screen.findByRole('textbox', { name: '输入问题' }), '报销发票怎么提交？');
+    await user.type(await findReadyComposer(), '报销发票怎么提交？');
     await user.click(screen.getByRole('button', { name: '发送' }));
     expect(await findSessionTitle(named.title)).toBeInTheDocument();
     expect(within(screen.getByRole('complementary', { name: '会话列表' })).getByRole('link', { name: new RegExp(named.title) })).toBeInTheDocument();
@@ -816,7 +884,7 @@ describe('ChatPage', () => {
       <Routes>
         <Route path="/chat/:sessionId" element={<ChatPage />} />
       </Routes>,
-      ['/chat/s1'],
+      ['/chat/s1?knowledgeBaseId=kb1'],
     );
 
     expect(await screen.findByLabelText('筛选历史会话的知识库')).toHaveValue(knowledgeBase.id);
@@ -946,7 +1014,7 @@ describe('ChatPage', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(screen.getByRole('link', { name: /迟到标题/ })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /迟到标题/ })).toBeInTheDocument();
     expect(screen.getByText('产品问答', { selector: '.ui-inline-edit__text' })).toBeInTheDocument();
   });
 
@@ -2091,7 +2159,8 @@ describe('ChatPage', () => {
       ['/chat?knowledgeBaseId=kb1'],
     );
 
-    expect(await screen.findByText('新对话', { selector: '.chat-main__title-text' })).toBeInTheDocument();
+    const breadcrumbs = screen.getByRole('navigation', { name: '面包屑' });
+    expect(await within(breadcrumbs).findByText('新对话')).toBeVisible();
   });
 
   it('opens a draft when creating another conversation from the chat page', async () => {
@@ -2149,7 +2218,7 @@ describe('ChatPage', () => {
       ['/chat?knowledgeBaseId=kb1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '输入问题' });
+    const input = await findReadyComposer();
     await user.type(input, '请对比两份制度');
     await user.selectOptions(await screen.findByLabelText('筛选历史会话的知识库'), secondKnowledgeBase.id);
 
@@ -2175,7 +2244,7 @@ describe('ChatPage', () => {
       ['/chat?knowledgeBaseId=kb1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '输入问题' });
+    const input = await findReadyComposer();
     expect(createChatSession).not.toHaveBeenCalled();
 
     await user.type(input, '第一次提问');
@@ -2201,7 +2270,7 @@ describe('ChatPage', () => {
       ['/chat?knowledgeBaseId=kb1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '输入问题' });
+    const input = await findReadyComposer();
     expect(input).toBeEnabled();
     await user.type(input, '静态路由首问');
     await user.click(screen.getByRole('button', { name: '发送' }));
@@ -2240,7 +2309,7 @@ describe('ChatPage', () => {
       ['/chat?knowledgeBaseId=kb1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '输入问题' });
+    const input = await findReadyComposer();
     await user.type(input, '只发送一次');
     const form = input.closest('form');
     expect(form).not.toBeNull();
@@ -2273,7 +2342,7 @@ describe('ChatPage', () => {
       ['/chat?knowledgeBaseId=kb1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '输入问题' });
+    const input = await findReadyComposer();
     await user.type(input, '离开前的问题');
     await user.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() => expect(createChatSession).toHaveBeenCalledOnce());
@@ -2354,7 +2423,7 @@ describe('ChatPage', () => {
       ['/chat?knowledgeBaseId=kb1'],
     );
 
-    const input = await screen.findByRole('textbox', { name: '输入问题' });
+    const input = await findReadyComposer();
     await user.type(input, '触发首问');
     await user.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() => expect(listChatMessages).toHaveBeenCalledTimes(1));
