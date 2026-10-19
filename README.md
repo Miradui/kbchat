@@ -153,6 +153,7 @@ deploy/     本地基础服务 Compose
 | 需要了解 | 文档 |
 | --- | --- |
 | 当前实现与交接 | [跨会话交接](docs/12-handoff.md) · [功能优化计划](docs/17-improvement-plan.md) · [前端改进计划](docs/18-frontend-improvement-plan.md) |
+| 审计与缺陷台账 | [2026-10-20 全仓库代码审计](docs/35-code-audit-20261020.md) |
 | 产品与架构 | [PRD](docs/01-prd.md) · [系统架构](docs/02-architecture.md) |
 | 数据与接口 | [数据库设计](docs/03-database-design.md) · [API 设计](docs/04-api-design.md) · [错误码](docs/09-error-codes.md) |
 | 检索行为 | [RAG 链路](docs/05-rag-pipeline.md) |
