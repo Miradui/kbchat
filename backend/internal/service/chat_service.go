@@ -62,6 +62,7 @@ func (s *ChatService) SetUsageRepository(repo *repository.ModelUsageRepository) 
 
 const (
 	chatIntentConversation  = "conversation"
+	chatIntentGeneral       = "general"
 	chatIntentKnowledgeBase = "knowledge_base"
 	defaultChatSessionTitle = "新会话"
 	sessionTitleTimeout     = 5 * time.Second
@@ -1675,7 +1676,7 @@ func (s *ChatService) generateAnswerWithHooks(
 	usageRecords = appendUsageRecord(usageRecords, s.recordUsage(ctx, userID, session, "intent", intentUsage, time.Since(intentStart)))
 	timing.Intent = intent.Intent
 
-	if intent.Intent == chatIntentConversation {
+	if intent.Intent == chatIntentConversation || intent.Intent == chatIntentGeneral {
 		citations := []dto.CitationResponse{}
 		if hooks.onCitations != nil {
 			// Announced even when empty: "this answer has no sources" is
@@ -1684,8 +1685,12 @@ func (s *ChatService) generateAnswerWithHooks(
 				return generatedChatAnswer{}, err
 			}
 		}
+		messages := buildConversationAnswerMessages(question, history, s.cfg.ChatHistoryLimit)
+		if intent.Intent == chatIntentGeneral {
+			messages = buildGeneralAnswerMessages(question, history, s.cfg.ChatHistoryLimit)
+		}
 		answerStart := time.Now()
-		answer, firstToken, usage, err := s.complete(ctx, buildConversationAnswerMessages(question, history, s.cfg.ChatHistoryLimit), hooks.onDelta)
+		answer, firstToken, usage, err := s.complete(ctx, messages, hooks.onDelta)
 		timing.FirstToken = firstToken
 		if err != nil {
 			return generatedChatAnswer{}, chatCompletionError(err)
@@ -1704,13 +1709,13 @@ func (s *ChatService) generateAnswerWithHooks(
 			answer:       answer,
 			citations:    citations,
 			citationJSON: datatypes.JSON(citationJSON),
-			intent:       chatIntentConversation,
-			// Answered, not no_basis: a conversational turn correctly has no
-			// sources, and counting it as a knowledge gap would fill the gap list
-			// with greetings.
+			intent:       intent.Intent,
+			// Answered, not no_basis: a turn that never needs sources correctly has
+			// none, and counting greetings or general questions as knowledge gaps
+			// would fill the gap list with them.
 			answerStatus: AnswerStatusAnswered,
-			// No retrievalQuery: this branch never reaches retrieval, and an empty
-			// one keeps conversation answers out of rewrite clustering entirely.
+			// No retrievalQuery: these turns never reach retrieval, and an empty
+			// one keeps them out of rewrite clustering entirely.
 			usageRecordIDs: usageRecords,
 		}, nil
 	}
@@ -1757,11 +1762,12 @@ func (s *ChatService) generateAnswerWithHooks(
 	// no_basis by default: retrieval succeeded and returned nothing usable, which
 	// is a real statement about the knowledge base rather than a failure.
 	answerStatus := AnswerStatusNoBasis
-	if len(searchRes.Items) > 0 {
-		answerConfig := s.resolveAnswerConfig(ctx, session.KnowledgeBaseID, hooks.answerConfig)
-		if session.IsAutomatic() || len(session.KnowledgeBaseLinks) > 0 {
-			answerConfig = dto.AnswerConfig{AnswerLanguage: "auto"}
-		}
+	answerConfig := s.turnAnswerConfig(ctx, session, searchRes.Items, hooks.answerConfig)
+	// A base that allows general knowledge has said it prefers a labelled answer
+	// over a bare refusal, so an empty result still reaches the model. Every other
+	// turn stops at the refusal and never pays for a generation call.
+	answerWithoutEvidence := len(searchRes.Items) == 0 && answerConfig.AllowGeneralKnowledge
+	if len(searchRes.Items) > 0 || answerWithoutEvidence {
 		var firstToken time.Duration
 		// Streamed through the gate so the marker is never shown to the user. The
 		// gate holds back at most the marker's own length before deciding.
@@ -2226,6 +2232,50 @@ func (s *ChatService) resolveAnswerConfig(ctx context.Context, knowledgeBaseID u
 	return answerConfig
 }
 
+// turnAnswerConfig resolves the answer configuration for this turn.
+//
+// A manual single-base turn uses that base's own configuration, including its
+// prompt addition, model and temperature. Automatic and multi-base turns cannot:
+// no single prompt, model or temperature represents several bases, so those stay
+// at system defaults. The general-knowledge permission is the one setting that
+// still carries over -- it decides whether the answer may contain text that no
+// chunk supports, not how the answer is phrased.
+func (s *ChatService) turnAnswerConfig(ctx context.Context, session *model.ChatSession, items []dto.SearchResultResponse, snapshot *dto.AnswerConfig) dto.AnswerConfig {
+	if !session.IsAutomatic() && len(session.KnowledgeBaseLinks) == 0 {
+		return s.resolveAnswerConfig(ctx, session.KnowledgeBaseID, snapshot)
+	}
+	return dto.AnswerConfig{
+		AnswerLanguage:        "auto",
+		AllowGeneralKnowledge: s.contributorsAllowGeneralKnowledge(ctx, items),
+	}
+}
+
+// contributorsAllowGeneralKnowledge reports whether every base that contributed a
+// chunk to this turn allows un-cited supplements.
+//
+// A supplement would sit next to all of their content, so one base's permission
+// must not loosen another base's grounding: the answer may go un-cited only when
+// all of them agree. A turn with no contributors has nobody to agree, so an empty
+// automatic or multi-base result keeps the refusal it had before.
+func (s *ChatService) contributorsAllowGeneralKnowledge(ctx context.Context, items []dto.SearchResultResponse) bool {
+	decided := map[uuid.UUID]bool{}
+	for _, item := range items {
+		id, err := uuid.Parse(item.KnowledgeBaseID)
+		if err != nil {
+			return false
+		}
+		allowed, seen := decided[id]
+		if !seen {
+			allowed = s.resolveAnswerConfig(ctx, id, nil).AllowGeneralKnowledge
+			decided[id] = allowed
+		}
+		if !allowed {
+			return false
+		}
+	}
+	return len(decided) > 0
+}
+
 func durationMillis(value time.Duration) *int64 {
 	// Zero is a real measurement on a coarse clock; only a negative value means
 	// "not measured".
@@ -2241,11 +2291,12 @@ func buildIntentClassificationMessages(question string, history []model.ChatMess
 		{Role: "system", Content: strings.Join([]string{
 			"你是企业知识库问答系统的意图分类器和检索问题改写器。",
 			"你必须只输出 JSON，不要输出 Markdown，不要输出解释。",
-			"JSON 格式：{\"intent\":\"conversation|knowledge_base\",\"standaloneQuery\":\"...\",\"reason\":\"...\"}",
-			"intent=conversation：用户只是在问候、询问对话历史、询问上一句话、要求回顾聊天进度，且不需要知识库事实依据。",
-			"intent=knowledge_base：用户询问企业知识库内容、要求基于资料回答，或当前问题需要检索文档才能可靠回答。",
+			"JSON 格式：{\"intent\":\"conversation|general|knowledge_base\",\"standaloneQuery\":\"...\",\"reason\":\"...\"}",
+			"intent=conversation：用户只是在问候、询问对话历史、询问上一句话、要求回顾聊天进度，且不需要任何外部事实。",
+			"intent=general：用户询问通用概念、原理、行业惯例或公开知识，回答不需要本组织自己的资料、制度、配置、数值或承诺。",
+			"intent=knowledge_base：用户询问企业知识库内容、要求基于资料回答，或问题涉及本组织自己的资料、制度、配置、数值、承诺，需要检索文档才能可靠回答。",
 			"knowledge_base 时 standaloneQuery 必须是结合历史对话改写后的独立检索问题。",
-			"conversation 时 standaloneQuery 必须为空字符串。",
+			"conversation 和 general 时 standaloneQuery 必须为空字符串。",
 			"不确定时选择 knowledge_base。",
 		}, "\n")},
 	}
@@ -2291,7 +2342,8 @@ func parseChatIntentOutput(raw string, question string) chatIntentDecision {
 
 	decision.Intent = strings.ToLower(strings.TrimSpace(decision.Intent))
 	switch decision.Intent {
-	case chatIntentConversation:
+	case chatIntentConversation, chatIntentGeneral:
+		// Neither turn retrieves, so a rewritten query would only be dead weight.
 		decision.StandaloneQuery = ""
 	case chatIntentKnowledgeBase:
 		decision.StandaloneQuery = strings.TrimSpace(decision.StandaloneQuery)
@@ -2350,6 +2402,31 @@ func buildConversationAnswerMessages(question string, history []model.ChatMessag
 	return messages
 }
 
+// buildGeneralAnswerMessages answers a question the classifier placed outside the
+// knowledge base: a concept, a convention or public knowledge.
+//
+// The prompt states that no chunk exists rather than omitting the section, because
+// an empty 知识片段 block reads to the model like a retrieval result it failed to
+// use. It also keeps the boundary of the turn visible: this answer carries no
+// sources, so it must not look like one that does.
+func buildGeneralAnswerMessages(question string, history []model.ChatMessage, historyLimit int) []chatcore.Message {
+	messages := []chatcore.Message{
+		{Role: "system", Content: strings.Join([]string{
+			"你是企业知识库问答系统中的通用知识助手。",
+			"当前问题属于通用知识，本轮不检索知识库，也没有知识片段。",
+			"直接给出准确、简洁的回答；把握不准的具体数值、版本、规定或机构内部情况要说明不确定，不要编造。",
+			"本回答不来自知识库：不要标注 [source: N] 引用，也不要声称依据了知识库资料。",
+			"可以参考历史对话理解代词和省略，但历史对话不是本轮事实依据。",
+		}, "\n")},
+	}
+	messages = append(messages, recentChatHistory(history, historyLimit)...)
+	messages = append(messages, chatcore.Message{
+		Role:    "user",
+		Content: strings.TrimSpace(question),
+	})
+	return messages
+}
+
 func recentChatHistory(history []model.ChatMessage, limit int) []chatcore.Message {
 	if limit <= 0 {
 		return nil
@@ -2378,7 +2455,15 @@ func buildRAGPrompt(question string, items []dto.SearchResultResponse) string {
 	var builder strings.Builder
 	builder.WriteString("用户问题：\n")
 	builder.WriteString(question)
-	builder.WriteString("\n\n知识片段：\n")
+	builder.WriteString("\n\n")
+	if len(items) == 0 {
+		// Only reachable when the knowledge base allows general knowledge. Saying
+		// so is the honest form of the evidence: an empty 知识片段 block would read
+		// like a retrieval result the model has to explain away.
+		builder.WriteString("本轮未检索到知识片段。\n\n请按系统提示回答用户问题；没有资料支持的内容必须单独标明。")
+		return builder.String()
+	}
+	builder.WriteString("知识片段：\n")
 	for i, item := range items {
 		builder.WriteString(fmt.Sprintf("[source: %d]\n", i+1))
 		if item.KnowledgeBaseID != "" {

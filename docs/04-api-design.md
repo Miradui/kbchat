@@ -1966,6 +1966,8 @@ assistant 消息为 `{ "messageId", "rating", "reason", "comment", "updatedAt" }
 
 如果模型判断用户问题只涉及对话本身，例如问候、询问上一句话、刚才说了什么或聊天进度，服务端应跳过知识库检索，直接基于历史对话回答，并返回空 citations。
 
+如果模型判断问题属于通用概念、原理、行业惯例或公开知识，回答不需要本组织自己的资料，服务端同样跳过检索，直接由模型回答并返回空 citations。该回合 `intent=general`、`answerStatus=answered`，回答不得包含 `[source: N]`，也不得声称依据知识库。常识与知识的分界由模型给出，服务端不按关键词二次判断；分类提示词要求不确定时选 `knowledge_base`。
+
 如果模型判断用户问题需要知识库事实依据，服务端使用 `standaloneQuery` 执行向量召回、Rerank 和最终回答。分类结果解析失败时，默认按知识库问题处理，并使用原始问题作为 `standaloneQuery`。
 
 请求：
@@ -2179,8 +2181,9 @@ MVP 语义：
 
 从 migration 018 起，assistant 消息保存三个新列：
 
-- `intent`：`conversation` 或 `knowledge_base`，即本轮意图分类结果。
-- `retrieval_query`：知识型提问实际使用的检索式（改写后的独立问题）。会话类回答不写。
+- `intent`：`conversation`、`general` 或 `knowledge_base`，即本轮意图分类结果。
+  `general` 自 migration 048 起写入。
+- `retrieval_query`：知识型提问实际使用的检索式（改写后的独立问题）。会话类与常识类回答不写。
 - `retrieval_query_norm`：`retrieval_query` 归一化后的聚类键（小写、去标点、去空白）。
 
 018 不回填历史数据：迁移前的回答无法判断当时的意图，写入任何值都是编造。因此历史行
@@ -2273,6 +2276,8 @@ MVP 语义：
 1. `no_citations`：知识型回答（`intent = 'knowledge_base'`）且 citations 为空，`answer_status`
    不是 `retrieval_failed` / `model_refused`（包括 `no_basis`、019 之前没有状态的行）。即检索
    没有命中、用了固定拒答文案，或检索命中却没有进入回答的引用。**补文档能解决。**
+   开启“允许补充常识”的知识库在无召回时回答属于 `answered`，也落在这一类：内容有答案但没有
+   引用，所以“补文档能解决”这个结论仍然成立。
 2. `retrieval_failed`：`answer_status = 'retrieval_failed'`，检索本身失败（向量化失败、DB
    失败）。**补文档解决不了**，要查的是服务状态，所以必须和上一类分开。
 3. `model_refused`：`answer_status = 'model_refused'`，有引用但模型仍然拒答。同样与知识库

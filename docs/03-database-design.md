@@ -565,3 +565,7 @@ CREATE INDEX idx_model_usage_user_created ON model_usage_records (user_id, creat
 `document_pdf_snapshots` 使用 `document_id UUID PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE` 和 `content JSONB NOT NULL`。内容为 `{version:1,totalPages,pages:[{pageNumber,content,textSource?}]}`，最多 500 个物理页，空白页省略；OCR 页标记 `textSource: "ocr"`。快照与替换后的全部 chunks、Embedding 来源和成功任务状态在同一事务内提交。重新处理失败或取消保留旧快照；软删除随原文隐藏，永久删除级联清除。
 
 该表按文档单独读取，避免列表、状态轮询及知识库查询载入大段 OCR 文本；访问前仍需校验文档所属知识库的能力。043 可重复执行，不为旧记录生成快照，并补齐 `pdf_limit_exceeded/ocr_unavailable/ocr_timeout/ocr_failed/ocr_limit_exceeded` 错误码约束。
+
+## 常识型意图（048）
+
+`048_chat_message_general_intent.sql` 重建 `chat_messages_intent_check`，把 `general` 加入允许值（`conversation` / `general` / `knowledge_base`）。约束按名字先 DROP 再 ADD，可重复执行，不回填历史行。启动时校验约束定义包含 `general`，缺失即报错提示执行 048：否则第一条常识型回答会在生成完成后写库失败。

@@ -181,6 +181,17 @@ func validateSchema(ctx context.Context, db *gorm.DB) error {
 				return fmt.Errorf("database schema incompatible: missing %s; apply migration 043_document_pdf_ocr.sql", code)
 			}
 		}
+		// A stale intent constraint is invisible until an answer has already been
+		// generated: the write at the end of a general turn is what fails, so it is
+		// checked here instead.
+		var intentConstraint string
+		if err := db.WithContext(ctx).Raw(`SELECT pg_get_constraintdef(oid) FROM pg_constraint
+			WHERE conrelid = 'chat_messages'::regclass AND conname = 'chat_messages_intent_check' AND contype = 'c'`).Scan(&intentConstraint).Error; err != nil {
+			return fmt.Errorf("check chat message intent constraint: %w", err)
+		}
+		if !strings.Contains(intentConstraint, "'general'") {
+			return fmt.Errorf("database schema incompatible: chat_messages_intent_check missing general; apply migration 048_chat_message_general_intent.sql")
+		}
 	}
 	return validateTimestampSchema(ctx, db)
 }

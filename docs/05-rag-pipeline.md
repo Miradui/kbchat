@@ -278,8 +278,11 @@ fusionScore = Σ 1 / (k + rank_i)    其中 rank_i 为该 chunk 在第 i 路中�
 
 `intent` 只能是：
 
-1. 会话类问题：问候、询问上一句话、刚才说了什么、聊天记录或对话进度时，直接基于历史对话回答，不执行知识库检索，`citations=[]`。
-2. 知识类问题：需要企业知识库事实依据时，历史只用于理解用户当前问题，不得替代知识片段作为事实依据。
+1. 会话类问题（`conversation`）：问候、询问上一句话、刚才说了什么、聊天记录或对话进度时，直接基于历史对话回答，不执行知识库检索，`citations=[]`。
+2. 常识类问题（`general`）：通用概念、原理、行业惯例或公开知识，回答不需要本组织自己的资料、制度、配置、数值或承诺。不执行检索，由模型直接回答，`citations=[]`，`answerStatus=answered`；回答不得标注 `[source: N]`，也不得声称依据知识库。
+3. 知识类问题（`knowledge_base`）：需要企业知识库事实依据时，历史只用于理解用户当前问题，不得替代知识片段作为事实依据。
+
+常识与知识的分界由模型判断，服务端不按关键词二次裁决；分类提示词要求不确定时选择 `knowledge_base`，即宁可先检索、再由资料不足的口径回答，也不把可能属于本组织的问题当成公开知识。
 
 标准流程：
 
@@ -288,6 +291,7 @@ fusionScore = Σ 1 / (k + rank_i)    其中 rank_i 为该 chunk 在第 i 路中�
 + 用户当前问题
 -> Chat Provider 输出 intent 和 standaloneQuery
 -> 会话类问题：Chat Provider 基于历史直接回答，citations=[]
+-> 常识类问题：Chat Provider 直接回答，citations=[]
 -> 知识类问题：
 -> 使用 standaloneQuery 执行向量检索和 Rerank
 -> 使用最近历史消息 + 本轮 TopK chunks 生成最终回答
@@ -301,8 +305,9 @@ fusionScore = Σ 1 / (k + rank_i)    其中 rank_i 为该 chunk 在第 i 路中�
 4. 最终回答可以参考历史对话理解代词、省略和追问关系。
 5. 最终回答的事实依据只能来自本轮进入 Prompt 的 chunks。
 6. citations 只能来自本轮进入 Prompt 的 chunks，不能来自历史 assistant 消息。
-7. 会话类问题不应返回知识库 citations，避免把无关 chunks 当作来源。
+7. 会话类与常识类问题不应返回知识库 citations，避免把无关 chunks 当作来源。
 8. 分类结果解析失败时默认按 `knowledge_base` 处理，并使用原始问题作为 `standaloneQuery`。
+9. 会话类与常识类问题不写 `retrieval_query`，因此不进入改写聚类；质量指标只统计 `intent=knowledge_base`，这两类都不计入引用率。
 
 ## pgvector 查询约束
 
@@ -396,11 +401,15 @@ JSON、SSE、重新生成与质量评测共用同一组回答约束：
 
 这是提供给模型的行为约束，服务端尚未实现逐句事实校验；通过有限样本不构成所有问题均不产生幻觉的保证。`citations` 仍列出本轮进入 Prompt 的片段，不代表每个片段都足以支持答案，也不改变资料不足与内容拒答的分类。
 
+### 常识型回答提示词
+
+`intent=general` 的回合不检索、不拼 `answerConfig`、不追加依据约束与拒答标记规则：这些规则约束的是资料回答，套到没有资料的回合只会让模型用“无法确认”结束。该分支的系统提示词说明本轮没有知识片段、不得标注 `[source: N]`、不得声称依据知识库，把握不准的具体数值与内部情况要说明不确定；用户消息是问题本身加最近历史。因此常识型回答的 `answerStatus` 记为 `answered`，模型即使拒答也不会被识别为 `model_refused`。
+
 ### 知识库回答配置
 
-知识库 `answerConfig` 只在知识型回答（`intent=knowledge_base` 且有召回片段）的最终生成中生效，不影响意图分类、对话型回答与标题提炼。组装顺序固定：
+知识库 `answerConfig` 只在知识型回答（`intent=knowledge_base`）的最终生成中生效，不影响意图分类、会话型/常识型回答与标题提炼。手动单库会话使用该库的完整配置；自动与多库会话无法用一份 prompt、一个模型代表多个库，因此 `systemPromptAddition`、`model`、`temperature` 保持系统默认，只有 `allowGeneralKnowledge` 继续生效，且要求本轮进入 Prompt 的每个库都允许。组装顺序固定：
 
-1. 上述基础约束不可删除、不可被覆盖。`allowGeneralKnowledge=true` 时只把第二条替换为“优先基于知识片段回答，片段不足时可补充常识并明确标注。”，其余不变；`answerStatus` 口径不变，仍由 `[[NO_ANSWER]]` 标记与召回结果决定。
+1. 上述基础约束不可删除、不可被覆盖。`allowGeneralKnowledge=true` 时只把第二条替换为“优先基于知识片段回答，片段不足时可补充常识并明确标注。”，其余不变；`answerStatus` 口径不变，仍由 `[[NO_ANSWER]]` 标记与召回结果决定（无召回但开启该开关的例外见“无结果处理”）。
 2. `systemPromptAddition`（去首尾空白，最多 2000 个字符）以“知识库回答补充要求：”开头追加在基础与回答依据约束之后，前置说明补充要求仅在不违反依据、引用和资料不足规则时生效。
 3. `answerLanguage=zh` 追加“请使用中文回答。”，`en` 追加“Please answer in English.”，`auto` 不追加语言指令。
 4. 最后追加拒答识别规则（见“模型拒答识别”）。
@@ -426,7 +435,7 @@ citations 携带 chunk metadata 中的 `startOffset` / `endOffset`（见“切�
 
 ## 无结果处理
 
-如果没有 chunk 达到阈值，应返回：
+如果没有 chunk 达到阈值，默认返回：
 
 ```json
 {
@@ -434,6 +443,10 @@ citations 携带 chunk metadata 中的 `startOffset` / `endOffset`（见“切�
   "citations": []
 }
 ```
+
+此时不调用回答模型，`answerStatus=no_basis`，这条拒绝同时是知识缺口队列的输入。
+
+唯一例外是手动单库且 `allowGeneralKnowledge=true`：仍调用回答模型，Prompt 明确写“本轮未检索到知识片段”，回答按常识补充规则单独标注、不附引用，`answerStatus` 按模型是否输出拒答标记记为 `answered` 或 `model_refused`。这种情况下不再产生 `no_basis` 缺口记录，是知识库所有者的显式取舍。自动与多库会话没有唯一所有者可以授权，无召回时保持上面的默认拒绝。
 
 ## 模型拒答识别
 
@@ -453,6 +466,7 @@ citations 携带 chunk metadata 中的 `startOffset` / `endOffset`（见“切�
 5. Rerank 失败默认返回 `RERANK_FAILED`；只有配置 `RERANK_FAILURE_MODE=fallback` 时才允许降级为 vector topK，并必须显式标记 fallback。
 6. 不要把完整无限历史直接塞进 Prompt；必须受 `CHAT_HISTORY_LIMIT` 控制。
 7. 索引与查询必须使用同一个 `lexer.Tokenize`；修改分词规则后必须重跑 `reindex-keywords`，不得让新查询词元与旧索引词元不一致。
+8. 常识与知识的边界由意图分类模型给出。不要在服务端按关键词、句式或长度二次判定，也不要在分类失败时默认放行：解析失败按 `knowledge_base` 处理，让资料不足的口径来解释，而不是让模型猜。
 
 ## 检索 Debug Payload
 
