@@ -2,65 +2,100 @@
 
 [![CI](https://github.com/Miradui/kbchat/actions/workflows/ci.yml/badge.svg)](https://github.com/Miradui/kbchat/actions/workflows/ci.yml)
 
-知汇是一个中文知识库与 AI 问答工作台。上传资料后，系统完成解析、切片、向量化和检索精排，回答可以追溯到实际使用的原文片段。
+知汇是一个支持自行部署的中文知识库与 AI 问答工作台，适合整理团队文档、制度流程、技术资料和常见问题。上传资料后，系统自动解析内容并建立检索索引，用户可以用自然语言提问，通过回答中的引用回到原文核对依据。
 
-后端使用 Go、Gin、GORM、PostgreSQL / pgvector、Redis 和 JWT；前端使用 React、TypeScript 和 Vite。对话、标题、Embedding 与 Rerank 通过独立 Provider 接口接入。
+项目采用 RAG（检索增强生成）：先从知识库中检索相关内容并精排，再将选中的片段交给模型生成回答。对话、Embedding、Rerank 和标题生成通过独立的 Provider 接口接入模型服务。
 
-## 已有功能
+## 核心功能
 
-- **知识管理**：知识库、树形分类、多标签、收藏、最近浏览、批量操作与回收站。
-- **文档处理**：TXT、Markdown、PDF、DOCX、XLSX、CSV 上传，文件夹 / ZIP 导入与来源路径，后台任务进度，重复内容提示、版本替换与文本对比、预览、下载、重新处理和内容片段定位。
-- **检索与问答**：pgvector 向量召回与关键词召回融合、Rerank 精排、多轮问答、流式输出、首问自动命名、回答版本切换、原文引用和会话导出；支持回答收藏与个人备注、会话分支、带变量的个人提问模板。
-- **搜索**：跨知识库查找名称、文件和内容片段，支持键盘建议、命令面板（`Ctrl+K` / `⌘K`）与 CSV 导出。
-- **质量运营**：回答反馈、知识缺口、测试问题集、批量回归评测、运行记录和配置对比。
-- **账户与协作**：资料与密码设置、头像上传、知识库所有者 / 管理员 / 编辑成员 / 只读成员，以及系统诊断。
-- **系统管理**：系统管理员可创建、禁用/启用用户、重置密码和调整系统管理员角色；质量页提供模型 token 用量统计，知识库可定制回答配置。
-- **运行保护**：Redis 登录 IP / 聊天用户限流、query embedding 缓存，以及缓存命中率和限流触发诊断。
+- **知识管理**：知识库、分类、标签、成员协作、收藏和回收站。
+- **文档入库**：支持 TXT、Markdown、PDF、DOCX、XLSX、CSV，以及粘贴文本、文件夹和 ZIP 批量导入；提供处理进度、版本替换、文本对比和原文预览。
+- **检索问答**：向量与关键词混合检索、Rerank 精排、多轮流式对话和原文引用；支持自动跨库检索，也可限定知识库或文档范围。
+- **回答定制**：知识库回答提示词编辑，内置通用问答、制度流程、技术支持、客服答复和资料总结五个模板，支持保存后试问。
+- **质量评估**：回答反馈、知识缺口跟进、测试问题集、批量回归评测和结果对比。
+- **账号管理**：登录、个人设置、用户管理，以及知识库所有者、管理员、编辑和只读成员权限。
 
-公开/私有标记目前用于展示；将知识库设为公开不会自动授予其他用户访问权限。多租户、SSO、复杂 RBAC、审计日志及非 MinIO 的对象存储不在当前范围内。DOCX 仅解析正文、标题、列表和表格文本，不处理图片、公式、文本框、OCR 或旧式 `.doc`。
+DOCX 支持正文、标题、列表和表格文本，不支持图片、公式、文本框及旧式 `.doc`；表格支持 XLSX 和 UTF-8 CSV，不支持 `.xls`。扫描 PDF 的 OCR 默认关闭，需要另外安装 Poppler、Tesseract 和语言包，详见[部署指南](docs/13-deployment.md)。
 
-文档工作流支持上传中断后的结果核对及安全重试、XLSX/CSV 工作表/表头/列设置、全部版本或当前有效版本检索，以及可选的扫描 PDF OCR。OCR 需部署本地 Poppler/Tesseract 与语言包后启用，默认关闭；识别文本按实际页码引用，原图仅定位到页。安装和迁移步骤见 [部署指南](docs/13-deployment.md#文档工作流发布迁移-040043)。
+## 技术栈
 
-XLSX / UTF-8 CSV 按表头和数据行入库，引用标明工作表与原始行号。XLSX 只读取文件已保存的公式结果，不重新计算，也不执行宏；旧 `.xls` 不支持。文件夹 / ZIP 在浏览器中展开为逐文件上传清单。版本对比比较解析文本，不还原版式。范围和上限见 [六项扩展计划](docs/28-feature-extension-plan.md) 与 [RAG 解析规范](docs/05-rag-pipeline.md#xlsx--csv-资料解析)，验证结果见 [六项扩展验收](docs/29-feature-extension-acceptance.md)。已有部署须先执行迁移 034–039，再同步发布前后端。
+| 层次 | 技术 |
+| --- | --- |
+| 前端 | React 19、TypeScript、Vite 7 |
+| 后端 | Go、Gin、GORM、JWT |
+| 数据与检索 | PostgreSQL、pgvector、关键词检索、Rerank |
+| 缓存与限流 | Redis |
+| 文件存储 | 本地文件系统或 MinIO |
 
-知识工作流还支持指定文档提问、浏览器聊天草稿、历史引用新版提示、TXT/Markdown 在线版本编辑、OCR 原图校对，以及本人跨库质量视图与缺口复测跟进。实现顺序和验收标准见 [六项计划](docs/32-knowledge-workflow-plan.md)，结果与限制见 [验收记录](docs/33-knowledge-workflow-acceptance.md)。部署这些功能需要迁移 044–047，且先完成 034–043；本轮未更新业务运行环境。
+```text
+资料上传 → 解析与切片 → Embedding → 存储文档与检索索引
+用户提问 → 向量 / 关键词召回 → Rerank 精排 → 模型生成 → 流式回答与原文引用
+```
 
-## 本地启动
+详细设计见[系统架构](docs/02-architecture.md)与 [RAG 链路](docs/05-rag-pipeline.md)。
 
-需要 Go **1.25**（版本以 [`backend/go.mod`](backend/go.mod) 为准）、Node.js **22.13+（22 LTS）或 24 LTS**、npm、PostgreSQL **16 + pgvector** 和 Redis **7**。后端部分测试使用 SQLite，需要启用 CGO 并安装可用的 C 编译器；Windows 可使用 MinGW-w64 GCC。
+## 环境要求
 
-下面的命令从仓库根目录开始，示例使用 PowerShell。
+| 依赖 | 要求 |
+| --- | --- |
+| Go | 1.25.0 或更新版本，以 [go.mod](backend/go.mod) 为准 |
+| Node.js / npm | Node.js 22.13+（22 LTS）或 24 LTS，使用 npm 安装依赖 |
+| PostgreSQL | 16，安装 pgvector 扩展；下方 Compose 已包含 |
+| Redis | 7；下方 Compose 已包含 |
+| Docker / Docker Compose | 用于启动本地数据库和 Redis；使用已有服务时可跳过 |
+| 模型服务 | 可用的 Chat、Embedding 和 Rerank 服务地址、密钥与模型名称 |
 
-### 1. 准备配置和基础服务
+后端的 SQLite 测试还需要启用 CGO 并安装 C 编译器，Windows 可使用 MinGW-w64 GCC。
 
-首次配置时复制示例文件；已有 `.env` 时直接编辑现有文件。
+## 安装与本地运行
+
+以下命令使用 PowerShell。首次安装从克隆仓库开始；已经克隆的项目直接进入仓库根目录。
+
+### 1. 获取项目并准备配置
 
 ```powershell
 git clone https://github.com/Miradui/kbchat.git
 cd kbchat
 Copy-Item .env.example .env
-docker compose -f deploy/docker-compose.yml up -d
 ```
 
-Compose 只启动 PostgreSQL / pgvector 和 Redis；前后端在下面分别启动。Compose 中的数据库账号仅用于本地开发，与 `.env.example` 对应。
+仅首次配置时复制文件；已有 `.env` 时直接编辑，避免覆盖现有配置。根目录 `.env` 由后端读取，不应提交到 Git。
 
-编辑根目录 `.env`，配置以下项目：
+### 2. 启动数据库和 Redis
 
-| 配置 | 用途 |
+在仓库根目录执行：
+
+```powershell
+docker compose -f deploy/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.yml ps
+```
+
+等待 PostgreSQL 和 Redis 显示为健康状态后继续。Compose 只启动这两个基础服务，数据库默认连接信息与 `.env.example` 对应，仅用于本地开发。使用已有服务时，修改相应连接配置即可。
+
+### 3. 配置模型服务
+
+编辑根目录 `.env`，核对以下配置：
+
+| 配置项 | 说明 |
 | --- | --- |
-| `DATABASE_URL`、`REDIS_ADDR` | 数据库与缓存；使用现有服务时修改连接地址 |
-| `RATE_LIMIT_*`、`TRUSTED_PROXY_CIDRS`、`EMBEDDING_CACHE_TTL` | 登录 / 聊天限流、可信反向代理和查询向量缓存 |
-| `JWT_SECRET` | 替换占位值，使用密码学安全随机源生成至少 32 字节的密钥 |
-| `CHAT_BASE_URL`、`CHAT_API_KEY`、`CHAT_MODEL` | 对话及检索意图处理 |
-| `EMBEDDING_BASE_URL`、`EMBEDDING_API_KEY`、`EMBEDDING_MODEL` | 文档和问题向量化，输出维度必须为 `1536` |
-| `RERANK_ENABLED`、`RERANK_BASE_URL`、`RERANK_API_KEY`、`RERANK_MODEL` | 标准检索链路中的精排服务 |
-| `TITLE_BASE_URL`、`TITLE_API_KEY`、`TITLE_MODEL` | 可选的首问标题提炼；不可用时保留首问摘要 |
+| `DATABASE_URL`、`REDIS_ADDR` | 数据库与 Redis 连接地址 |
+| `JWT_SECRET` | 使用密码学安全随机源生成至少 32 字节的密钥，替换示例值 |
+| `CHAT_BASE_URL`、`CHAT_API_KEY`、`CHAT_MODEL` | 对话模型服务 |
+| `EMBEDDING_BASE_URL`、`EMBEDDING_API_KEY`、`EMBEDDING_MODEL` | 文档和问题的向量化服务 |
+| `EMBEDDING_DIMENSION` | 默认 `1536`，必须与模型输出和数据库向量列维度一致 |
+| `RERANK_ENABLED`、`RERANK_BASE_URL`、`RERANK_API_KEY`、`RERANK_MODEL` | 保持 Rerank 启用，填写精排服务配置 |
+| `TITLE_BASE_URL`、`TITLE_API_KEY`、`TITLE_MODEL` | 可选的对话标题生成服务；不可用时保留首问摘要 |
+| `STORAGE_PROVIDER`、`UPLOAD_DIR` | 默认使用本地文件存储；切换 MinIO 时另配 `MINIO_*` |
 
-模型地址、密钥和模型名称需换成实际服务的配置，示例占位值不能直接运行模型调用。Rerank 服务必须支持 `/rerank` 接口；普通对话 API 地址不一定提供该接口。
+示例中的模型地址、密钥和模型名称需要替换为实际服务配置。Rerank 是标准问答链路的一部分，服务须支持 `POST {RERANK_BASE_URL}/rerank`，普通对话 API 地址不一定提供该接口。
 
-`.env` 只保存在本地，不应提交。完整参数及默认值见 [环境配置](docs/08-env-config.md)。
+首次安装建议使用输出维度为 `1536` 的 Embedding 模型；使用其他维度需同步调整数据库向量列和索引。完整参数见[环境配置](docs/08-env-config.md)，模型切换见[部署指南](docs/13-deployment.md#embedding-模型切换与重建)。
 
-### 2. 启动后端
+### 4. 初始化数据库和账号
+
+以下初始化命令适用于**全新数据库**。已有部署按[升级指南](docs/13-deployment.md#知识工作流发布迁移-044048)执行对应迁移，不要直接重跑全量迁移。
+
+从仓库根目录进入后端目录：
 
 ```powershell
 cd backend
@@ -69,22 +104,23 @@ go run ./cmd/migrate
 go run ./cmd/seed
 go run ./cmd/bootstrap-admin -username admin
 go run ./cmd/doctor
+```
+
+`seed` 创建本地开发账号 `admin` / `123456`，`bootstrap-admin` 将该账号设为首位系统管理员。首次登录后请修改密码。可在运行 seed 前通过进程环境变量 `SEED_USERNAME`、`SEED_PASSWORD`、`SEED_DISPLAY_NAME` 自定义账号，并同步替换管理员初始化命令中的用户名；seed 遇到同名账号会跳过，不会重置密码。
+
+`doctor` 检查数据库、向量扩展与维度、Redis 等基础依赖。模型服务是否可用还需通过文档入库和问答验证。生产环境请使用[系统管理员初始化流程](docs/13-deployment.md#74-初始化系统管理员)，不要使用本地开发默认密码。
+
+### 5. 启动后端
+
+继续在 `backend` 目录执行：
+
+```powershell
 go run ./cmd/server
 ```
 
-默认 API 地址为 `http://127.0.0.1:8080/api/v1`，健康检查为 `http://127.0.0.1:8080/healthz`。
+默认 API 地址为 `http://127.0.0.1:8080/api/v1`。可访问[健康检查](http://127.0.0.1:8080/healthz)确认进程已启动；它不代表所有外部依赖均可用。文档处理、评测等后台任务随后端进程运行。
 
-seed 创建普通系统用户，本地默认账号为 `admin` / `123456`；账号名称本身不赋予管理员权限。可在运行 seed 前通过 `SEED_USERNAME`、`SEED_PASSWORD`、`SEED_DISPLAY_NAME` 设置账号，遇到同名账号会跳过且不重置密码。
-
-`bootstrap-admin -username admin` 将明确指定的现有账号提升为首位系统管理员，保留密码与资料；使用自定义 seed 用户名时替换命令中的 `admin`。同一管理员重复执行不会修改账号，已有其他管理员时拒绝再初始化。诊断接口仅系统管理员可用，知识库协作角色独立判定。
-
-生产首次部署可跳过 seed，直接创建首位管理员：在进程环境中设置 `BOOTSTRAP_ADMIN_PASSWORD` 为强密码，可选设置 `BOOTSTRAP_ADMIN_DISPLAY_NAME`，再运行 `go run ./cmd/bootstrap-admin -username <指定账号> -create`。密码至少 8 个字符、最多 72 个 UTF-8 字节；命令不会覆盖现有普通账号。初始化只在运维 CLI 提供，详见 [部署指南](docs/13-deployment.md#74-初始化系统管理员)。
-
-首次部署的账号流程只需要执行一次 `bootstrap-admin`：之后用该管理员登录，在「系统 → 用户管理」（`/admin/users`）创建其余账号、禁用/启用账号、重置密码和授予/撤销系统管理员，不再需要 seed 或直接操作数据库。创建和重置密码得到的密码只显示一次；系统不允许禁用或降级最后一位启用的管理员，管理员也不能在该页面禁用、降级自己或重置自己的密码（改自己的密码走账户设置）。禁用账号后，其已登录会话在下一次请求即失效。
-
-文档处理、评测和存储清理任务随后端进程运行。处理并发及重试由 `WORKER_CONCURRENCY`、`WORKER_MAX_RETRIES`、`WORKER_RETRY_DELAY` 等参数控制。
-
-### 3. 启动前端
+### 6. 启动前端
 
 打开另一个终端，从仓库根目录执行：
 
@@ -94,84 +130,69 @@ npm ci
 npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-浏览器访问 [知汇本地工作台](http://127.0.0.1:5173)。开发服务器将 `/api` 代理到 `http://localhost:8080`，默认无需设置 `VITE_API_BASE_URL`。
+浏览器打开 [http://127.0.0.1:5173](http://127.0.0.1:5173)，使用初始化的账号登录。
 
-前后端分开部署时，在前端启动或构建环境中设置 `VITE_API_BASE_URL`，并在后端设置匹配的 `CORS_ALLOWED_ORIGINS`。根目录 `.env` 由后端读取，Vite 不会自动读取它；模型密钥不应放入任何 `VITE_*` 变量。
+开发服务器默认将 `/api` 代理到 `http://localhost:8080`。跨域部署时，在前端启动或构建环境中设置 `VITE_API_BASE_URL`，并在后端配置匹配的 `CORS_ALLOWED_ORIGINS`。Vite 不会自动读取仓库根目录 `.env`；模型密钥应仅配置在后端，不要放入 `VITE_*` 变量。
 
-## 检索与存储约定
+### 7. 完成第一次问答
 
-```text
-上传 → 解析 → 切片 → Embedding + 关键词词元 → pgvector
-提问 → 意图识别与问题改写 → 向量召回 + 关键词召回 → RRF 融合 → Rerank → Prompt → 流式回答与引用
-```
+1. 创建知识库，上传一份 TXT、Markdown 或其他受支持的文档。
+2. 等待文档处理完成，再进入问答页面。
+3. 选择该知识库，提出一个能从文档中找到答案的问题。
+4. 查看回答并打开引用，核对来源片段。
 
-- 默认召回 `30` 条、精排保留 `5` 条，最低相关度 `0.3`。历史对话帮助理解追问，事实依据来自本轮进入 Prompt 的片段。
-- 关键词召回默认开启（`KEYWORD_SEARCH_ENABLED`，知识库可单独关闭），用后端分词器生成中文二元组与精确词元，不依赖 PostgreSQL 中文分词扩展；升级到迁移 `024` 后需运行一次 `go run ./cmd/reindex-keywords` 回填既有片段。
-- 引用只允许来自实际进入 Prompt 的最终片段。Rerank 默认启用；`RERANK_FAILURE_MODE=strict` 在精排失败时返回错误，显式选择 `fallback` 才允许按向量顺序降级并标明状态。
-- 查询向量按模型和规范化问题缓存到 Redis，默认保存 24 小时；命中时跳过 Embedding Provider，Redis 缓存故障自动回退为直接调用。
-- 文件默认保存在后端本地 `uploads`。使用 MinIO 时设置 `STORAGE_PROVIDER=minio` 和 `MINIO_*`，bucket 必须保持私有，预览和下载通过鉴权 API。
-- 永久删除先登记持久化清理任务，再异步移除文件。重新处理会在新向量全部成功并提交后替换旧片段。
-- SQL 迁移位于 `backend/migrations/`。已有环境升级应按迁移说明执行；指定单个文件可使用 `go run ./cmd/migrate -migration 024_hybrid_search.sql -timeout 30m`（`-timeout` 默认 30 秒，索引构建按数据量放宽）。
+新对话默认自动检索有权限访问的知识库，也可手动选择知识库或指定文档。回答提示词、模板及其他页面操作见[前端功能说明](docs/10-frontend-spec.md)。
 
-## 测试与 CI
+## 开发与验证
 
-[GitHub Actions CI](.github/workflows/ci.yml) 在 push、pull request 或手动触发时运行两个独立任务，并取消同一引用上过期的运行：
-
-| 任务 | 检查内容 |
-| --- | --- |
-| Backend | 根据 `go.mod` 安装 Go，启用 CGO，缓存依赖，执行 `go vet`、全量测试和构建 |
-| Frontend | 使用 Node.js 22，缓存 npm 依赖，执行 `npm ci`、Hooks ESLint、测试 TypeScript 检查、全量测试、生产 TypeScript/Vite 构建及 11 项路由分包检查 |
-
-CI 使用单元测试中的数据库和 Provider 替身，不需要生产密钥。真实 PostgreSQL、Redis、存储、模型调用及浏览器联调仍需在集成环境验证。
-
-本地检查：
+后端检查，从仓库根目录执行：
 
 ```powershell
 cd backend
 go vet ./...
 go test ./...
 go build ./...
+```
 
-cd ../frontend
-npm ci
-npm test
+前端检查，在另一个终端从仓库根目录执行：
+
+```powershell
+cd frontend
 npm run lint
 npm run typecheck:test
+npm test
 npm run build
 ```
 
-## 目录与文档
+前端构建产物位于 `frontend/dist`。[GitHub Actions](.github/workflows/ci.yml) 会执行前后端的静态检查、测试和构建，无需生产模型密钥。真实模型效果和完整部署环境仍需单独验证，开发约定见 [AGENTS.md](AGENTS.md)。
+
+## 部署与升级
+
+生产部署建议通过 Nginx 提供前端静态文件并代理后端 API，当前后台任务按单个后端实例运行。数据库和上传文件需配置持久化与备份，使用 MinIO 时 bucket 应保持私有。
+
+数据库变更使用显式 SQL 迁移。当前源码要求迁移至 `048`，缺少所需结构时后端会拒绝启动；已有环境应按版本执行迁移并同步更新前后端。详细步骤、管理员初始化、OCR 安装和模型维护见[部署运维指南](docs/13-deployment.md)。
+
+## 项目结构与文档
 
 ```text
-backend/    API、业务服务、GORM 仓储、Provider、后台任务和 SQL 迁移
-frontend/   React 页面、组件、API 客户端和前端测试
-docs/       产品、架构、接口、部署和交接文档
-deploy/     本地基础服务 Compose
+backend/    API、业务服务、数据库访问、模型 Provider、后台任务与 SQL 迁移
+frontend/   React 页面、组件、API 客户端与前端测试
+deploy/     本地 PostgreSQL / Redis 的 Docker Compose 配置
+docs/       产品、架构、接口、配置与部署文档
 .github/    GitHub Actions 工作流
 ```
 
-| 需要了解 | 文档 |
+| 文档 | 内容 |
 | --- | --- |
-| 当前实现与交接 | [跨会话交接](docs/12-handoff.md) · [功能优化计划](docs/17-improvement-plan.md) · [前端改进计划](docs/18-frontend-improvement-plan.md) |
-| 审计与缺陷台账 | [2026-10-20 全仓库代码审计](docs/35-code-audit-20261020.md) |
-| 产品与架构 | [PRD](docs/01-prd.md) · [系统架构](docs/02-architecture.md) |
-| 数据与接口 | [数据库设计](docs/03-database-design.md) · [API 设计](docs/04-api-design.md) · [错误码](docs/09-error-codes.md) |
-| 检索行为 | [RAG 链路](docs/05-rag-pipeline.md) |
-| 前端与交互 | [前端规范](docs/10-frontend-spec.md) · [交互巡检](docs/16-interaction-review.md) |
-| 环境与部署 | [环境配置](docs/08-env-config.md) · [部署运维](docs/13-deployment.md) |
-| 开发约定 | [项目指令](AGENTS.md) · [AI 开发规范](docs/00-ai-development-guide.md) |
+| [产品说明](docs/01-prd.md) | 使用场景与功能范围 |
+| [系统架构](docs/02-architecture.md) | 模块划分与服务边界 |
+| [数据库设计](docs/03-database-design.md) / [API 设计](docs/04-api-design.md) | 数据模型与接口约定 |
+| [RAG 链路](docs/05-rag-pipeline.md) | 解析、检索、回答配置、引用与质量评测 |
+| [环境配置](docs/08-env-config.md) | 配置项及默认值 |
+| [前端功能说明](docs/10-frontend-spec.md) | 页面与交互行为 |
+| [部署运维](docs/13-deployment.md) | 部署、升级、备份与维护 |
+| [开发交接](docs/12-handoff.md) | 当前开发状态与验证记录 |
 
-后端遵循 `handler → service → repository`，数据库访问使用 GORM，模型调用通过 Provider 接口。API 字段采用 camelCase，数据库字段采用 snake_case；知识库访问必须经过所有权及成员权限校验。修改公共接口、schema、默认值或 RAG 行为时，同步更新相关文档。
+## 许可证
 
-### 所有权交接、文本入库与模型维护
-
-知识库所有者可在设置页转移所有权并选择保留为管理员。系统管理员禁用账号前，可在用户管理页把该用户全部知识库（含回收站）转给启用中的账号；操作记录区域汇总所有管理员的账号操作。
-
-文档导入支持“粘贴文本”：填写标题和正文、选择 Markdown 或纯文本，加入清单后开始导入。查重、处理和问答引用与上传文件一致。
-
-新版需执行迁移 029；系统诊断显示 Embedding 来源。换模型前先在 backend 运行 `go run ./cmd/reembed -dry-run`，确认范围后排队重建。改维度还需要迁移向量列与重建索引，详见 [部署指南](docs/13-deployment.md#embedding-模型切换与重建)。
-
-
-### 自动跨库问答
-
-新对话默认自动检索当前有权限访问的知识库，每轮问题可使用不同库；也可在首问前手动选择 1–5 个库限定范围。现有会话保持原范围，回答引用显示来源库。升级须执行迁移 031 并同步发布前后端，详见 [部署指南](docs/13-deployment.md#自动检索发布迁移-031)。
+本项目采用 [Apache License 2.0](LICENSE)。
