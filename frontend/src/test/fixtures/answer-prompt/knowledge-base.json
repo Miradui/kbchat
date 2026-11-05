@@ -1,0 +1,25 @@
+{
+  "id": "e31933f4-641b-4770-98ec-82b10afac25e",
+  "name": "员工制度",
+  "description": "员工办理请假、报销和入职事项的制度资料。",
+  "visibility": "private",
+  "effectiveRole": "owner",
+  "capabilities": ["kb.write", "chat.use", "document.read"],
+  "documentVersionPolicy": "all",
+  "retrievalConfig": {
+    "vectorTopN": 30,
+    "rerankTopK": 5,
+    "scoreThreshold": 0.3,
+    "enableRerank": true,
+    "enableKeyword": true
+  },
+  "answerConfig": {
+    "systemPromptAddition": "回答员工的制度问题时，请优先说明办理条件。",
+    "answerLanguage": "zh",
+    "allowGeneralKnowledge": false,
+    "model": "fixture-chat",
+    "temperature": 0.2
+  },
+  "createdAt": "2026-11-05T00:00:00Z",
+  "updatedAt": "2026-11-05T00:00:00Z"
+}

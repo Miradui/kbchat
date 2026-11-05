@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Button } from './ui/Button';
 import { Dialog } from './ui/Dialog';
 
@@ -8,6 +9,7 @@ type ConfirmDialogProps = {
   cancelLabel?: string;
   busy?: boolean;
   error?: string;
+  children?: ReactNode;
   onCancel: () => void;
   onConfirm: () => void;
 };
@@ -19,6 +21,7 @@ export function ConfirmDialog({
   cancelLabel = '取消',
   busy = false,
   error,
+  children,
   onCancel,
   onConfirm,
 }: ConfirmDialogProps) {
@@ -32,6 +35,7 @@ export function ConfirmDialog({
   return (
     <Dialog open title={title} description={description} onClose={handleCancel}>
       {error && <p className="ui-dialog__error" role="alert">{error}</p>}
+      {children}
       <div className="ui-dialog__actions">
         <Button variant="secondary" disabled={busy} onClick={handleCancel}>{cancelLabel}</Button>
         <Button variant="danger" loading={busy} loadingLabel="处理中" onClick={handleConfirm}>{confirmLabel}</Button>

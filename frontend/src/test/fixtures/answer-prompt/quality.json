@@ -1,0 +1,22 @@
+{
+  "overview": {
+    "period": "month",
+    "startAt": "2026-11-01T00:00:00Z",
+    "endAt": "2026-11-05T00:00:00Z",
+    "answerCount": 0,
+    "feedbackCount": 0,
+    "positiveFeedbackCount": 0,
+    "negativeFeedbackCount": 0,
+    "knowledgeAnswerCount": 0,
+    "withoutCitationsCount": 0,
+    "unclassifiedAnswerCount": 0,
+    "feedbackCoverage": 0,
+    "positiveRate": 0,
+    "withoutCitationsRate": 0
+  },
+  "negative-feedback": { "items": [], "total": 0, "page": 1, "pageSize": 10 },
+  "knowledge-gaps": {
+    "items": [], "total": 0, "page": 1, "pageSize": 10,
+    "noCitationsTotal": 0, "retrievalFailedTotal": 0, "modelRefusedTotal": 0, "repeatedRewriteTotal": 0
+  }
+}

@@ -1,4 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { ReactElement } from 'react';
+import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -6,6 +8,11 @@ import { ToastProvider } from '../../components/feedback/ToastProvider';
 import type { KnowledgeBase } from '../../types/api';
 import { AnswerConfigForm } from './AnswerConfigForm';
 import { RetrievalConfigForm } from './RetrievalConfigForm';
+
+function renderWithRouter(ui: ReactElement) {
+  const router = createMemoryRouter([{ path: '/', element: ui }]);
+  return render(<ToastProvider><RouterProvider router={router} /></ToastProvider>);
+}
 
 const resources = vi.hoisted(() => ({ updateKnowledgeBase: vi.fn(), searchKnowledgeBase: vi.fn() }));
 vi.mock('../../api/resources', () => resources);
@@ -34,7 +41,7 @@ describe('AnswerConfigForm', () => {
   it('submits the answer config while carrying the stored retrieval config', async () => {
     const user = userEvent.setup();
     const onUpdated = vi.fn();
-    render(<ToastProvider><AnswerConfigForm knowledgeBase={knowledgeBase} onUpdated={onUpdated} /></ToastProvider>);
+    renderWithRouter(<AnswerConfigForm knowledgeBase={knowledgeBase} onUpdated={onUpdated} />);
     await user.selectOptions(screen.getByRole('combobox', { name: '回答语言' }), 'en');
     await user.click(screen.getByRole('button', { name: '保存配置' }));
     await waitFor(() => expect(resources.updateKnowledgeBase).toHaveBeenCalledOnce());
@@ -45,20 +52,20 @@ describe('AnswerConfigForm', () => {
   });
 
   it('offers only whitelisted models and disables the override when no whitelist is configured', () => {
-    const { unmount } = render(<ToastProvider><AnswerConfigForm knowledgeBase={knowledgeBase} onUpdated={vi.fn()} /></ToastProvider>);
+    const { unmount } = renderWithRouter(<AnswerConfigForm knowledgeBase={knowledgeBase} onUpdated={vi.fn()} />);
     const select = screen.getByRole('combobox', { name: '回答模型' });
     expect(select).toBeEnabled();
     expect(Array.from((select as HTMLSelectElement).options).map((option) => option.value)).toEqual(['', 'gpt-4.1-mini', 'gpt-4.1']);
     unmount();
 
     capabilities.chatModels = [];
-    render(<ToastProvider><AnswerConfigForm knowledgeBase={{ ...knowledgeBase, answerConfig: { ...knowledgeBase.answerConfig!, model: '' } }} onUpdated={vi.fn()} /></ToastProvider>);
+    renderWithRouter(<AnswerConfigForm knowledgeBase={{ ...knowledgeBase, answerConfig: { ...knowledgeBase.answerConfig!, model: '' } }} onUpdated={vi.fn()} />);
     expect(screen.getByRole('combobox', { name: '回答模型' })).toBeDisabled();
     expect(screen.getByText(/未配置 CHAT_ALLOWED_MODELS/)).toBeInTheDocument();
   });
 
   it('is read-only for members without write access', () => {
-    render(<ToastProvider><AnswerConfigForm knowledgeBase={{ ...knowledgeBase, effectiveRole: 'editor', capabilities: ['chat.use', 'document.read'] }} onUpdated={vi.fn()} /></ToastProvider>);
+    renderWithRouter(<AnswerConfigForm knowledgeBase={{ ...knowledgeBase, effectiveRole: 'editor', capabilities: ['chat.use', 'document.read'] }} onUpdated={vi.fn()} />);
     expect(screen.getByRole('combobox', { name: '回答语言' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: '保存配置' })).not.toBeInTheDocument();
   });
@@ -66,7 +73,7 @@ describe('AnswerConfigForm', () => {
 
 describe('RetrievalConfigForm', () => {
   it('sends the stored answer config alongside the retrieval config so saving one form does not reset the other', async () => {
-    render(<ToastProvider><RetrievalConfigForm knowledgeBase={knowledgeBase} onUpdated={vi.fn()} /></ToastProvider>);
+    renderWithRouter(<RetrievalConfigForm knowledgeBase={knowledgeBase} onUpdated={vi.fn()} />);
     const input = screen.getByRole('spinbutton', { name: '向量召回数量' });
     fireEvent.change(input, { target: { value: '31' } });
     fireEvent.submit(input.closest('form')!);
