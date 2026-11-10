@@ -35,7 +35,8 @@ Read references as the task needs them; search long documents for relevant secti
 | Retrieval, model context or citations | `docs/05-rag-pipeline.md` |
 | Setup, configuration or deployment | `README.md`, `docs/08-env-config.md`, `docs/13-deployment.md` |
 | Frontend behavior or API integration | `docs/10-frontend-spec.md` |
-| Continuing work or known UI issues | `docs/12-handoff.md`, `docs/16-interaction-review.md` |
+| Current status or open work | `docs/12-handoff.md`, `docs/15-backlog.md` |
+| Verification or release acceptance | `docs/14-verification.md` |
 
 ## Key Conventions
 - Keep MVP scope: login, knowledge bases, document upload, parsing, chunking, embedding, pgvector search, Rerank, chat, and citations.

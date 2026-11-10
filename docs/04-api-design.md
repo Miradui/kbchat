@@ -1,37 +1,17 @@
 # API 设计
 
-## 知识工作流接口（2026-10-19）
+基础路径为 `/api/v1`，字段使用camelCase；鉴权、参数和错误以本页及 [错误码](09-error-codes.md) 为准。
 
-以下路径省略 `/api/v1`，沿用 JWT、camelCase 和统一错误响应。
-
-| 接口 | 请求与响应 | 授权及边界 |
-| --- | --- | --- |
-| `POST /chat/sessions` | 新增可选 documentIds（1–20 个唯一 UUID）；响应新增 documents 数组，每项含 id/knowledgeBaseId/filename | 与显式 knowledgeBaseId/knowledgeBaseIds 使用，最多 5 库，不能用于 auto；逐库 chat.use 和文档原库归属校验。发送/重生成失效返回 409 DOCUMENT_SCOPE_UNAVAILABLE。 |
-| `POST /documents/version-status` | `{documentIds:[...]}` 最多 20；返回 `{items:[{documentId,state,current?,newerPending}]}`，state 为 current/newer_available/unavailable；current 含 id/knowledgeBaseId/filename | 逐文档可读权限；同库链上有已发布片段的最新有效文档。不返回无权资源元信息。 |
-| `GET /documents/:id/editable-text` | `{documentId,filename,content,maxBytes}` | content.write；完整 TXT/Markdown UTF-8 原文，最多 1 MiB。 |
-| `POST /documents/:id/text-revisions` | `{requestId,content}`，200 文档对象 | content.write；非空 UUID 请求 ID，相同请求幂等，未变更返回原文档，否则创建新版本排队。 |
-| `GET /documents/:id/ocr-correction` | `{documentId,revision,pages:[{pageNumber,content,textSource}]}` | content.write + document.download；仅已发布 OCR/校对页，revision 为完整快照指纹。 |
-| `POST /documents/:id/ocr-corrections` | `{requestId,revision,pages:[{pageNumber,content}]}`，200 新文档对象 | 同上；只提交修改页，不得改原生页。每页 1 MiB、总页文本 8 MiB、最多 500 个物理页。快照变化为 409 DOCUMENT_EDIT_CONFLICT。 |
-| `GET /chat/sessions/:id/quality-issue?question=...` | question/status/note/documentIds/evaluationCaseId/evaluationRunId/updatedAt；无记录返回 open 空记录 | 本人会话、精确原问题、全部来源库 chat.use；失权关联资料/评测不返回引用 ID，保留个人备注。 |
-| `PUT /chat/sessions/:id/quality-issue` | 上述可写字段；status=open/retest/resolved，note 最多 4000 字，documentIds 最多 20 | 幂等更新同会话同问题；用例须同问题同范围，运行须含该用例；已解决由用户设置。 |
-
-质量 overview、negative-feedback、knowledge-gaps 新增 `scope=personal/auto/multi/documents`。不传保持单库运营视图；personal 为本人全部会话，其余为本人自动、固定多库、指定文档会话。统计与列表共同校验本人和每个来源库 chat.use，不能向单库管理员暴露他人的跨库回答。
-
-评测用例新增可选 sourceSessionId；服务器从本人可访问会话捕获 scope（sourceSessionId/scopeMode/knowledgeBaseIds/documents），保存于首选知识库。原 quality.read 权限保持，执行另需 chat.use；私人用例/运行仅创建者且全部来源可访问时可读，auto 运行还重验结果实际来源。共享用例不得原地变成私人范围，私人用例不得改换来源会话；应新建用例。同次运行只接受完全相同的来源范围。运行新增 isPrivate；results 新增 knowledgeBaseIds。评测不创建真实聊天记录。
-
-校对 chunk、检索结果、JSON/SSE citation、历史和导出为 `textSource: "ocr_corrected"`；机器识别保持 `"ocr"`，原生文字省略。pageNumber 指原 PDF 物理页，校对不提供原生文字坐标。
-
-统一前缀：
-
-```text
-/api/v1
-```
-
-除登录接口外，所有接口必须携带：
-
-```text
-Authorization: Bearer <token>
-```
+| 范围 | 入口 |
+| --- | --- |
+| 通用合同 | [时间](#时间格式)、[错误](#通用错误响应)、[追踪](#请求追踪)、[权限](#权限与能力矩阵) |
+| 账户与系统 | [Auth](#auth)、[Users](#users)、[System](#system)、[诊断](#系统诊断) |
+| 工作台 | [Home](#home)、[Activities](#activities) |
+| 知识管理 | [知识库](#knowledge-bases)、[标签](#知识库标签)、[所有权](#管理员操作记录与知识库转移) |
+| 文档 | [上传与读取](#documents)、[范围与编辑](#文档范围正文编辑ocr校对与问题跟进)、[文本创建](#粘贴文本创建文档)、[版本对比](#文档版本文本对比)、[表格](#表格来源与相对路径) |
+| 删除与恢复 | [回收站](#回收站) |
+| 检索与会话 | [搜索](#search)、[多库](#多知识库语义检索)、[Chat](#chat)、[收藏](#回答收藏与个人备注)、[分支](#对话分支)、[模板](#个人提问模板) |
+| 质量 | [运营](#chat-质量运营)、[评测](#回答质量回归评测) |
 
 ## 时间格式
 
@@ -61,6 +41,126 @@ Content-Type: application/json
 ```
 
 Redis 故障且 `RATE_LIMIT_FAILURE_MODE=closed` 时返回 `503 RATE_LIMIT_UNAVAILABLE`；这不是一次真实超限，不设置 `Retry-After`。`open` 模式放行并记录 warning。
+
+## 请求追踪
+
+后端初始化 OTel 后，HTTP 响应通过 `X-Trace-ID` 返回当前 W3C Trace ID；统一 JSON 错误和聊天 SSE `error` 事件增加 `traceId` 字符串，其他错误字段不变。CORS 允许 `traceparent` / `tracestate`，公开 `X-Trace-ID`；上传/聊天幂等编号保持各自语义。SSE 的 HTTP 200 不代表生成成功，Trace 另记录 `completed/failed/cancelled` 及公开错误码。诊断 `latency` 新增 `chat_first_visible_text`：HTTP 入口到首个非空正文 delta 成功发送的耗时；现有 `chat_first_token` 仍表示模型调用阶段首 delta 耗时。取消不增加 Provider 故障计数。详见 [可观测性](38-observability.md)。
+
+阶段耗时统计现在包含实际发生的失败尝试：Embedding、Rerank、关键词及检索总耗时不再仅保留成功路径。取消继续独立于 Provider 故障计数；没有候选而未发生外部调用时，不增加 Rerank Provider 成功计数。查询 Embedding 与文档入库批次共享耗时/Provider 口径。HTTP/DTO 结构未新增字段，历史指标经独立 OTLP 端点导出，详见 [可观测性](38-observability.md#历史指标看板与告警)。
+
+## 权限与能力矩阵
+
+访问控制的判定单位是**能力**，不是接口。每个知识库相关接口声明它需要哪个能力，
+调用者在该知识库上的角色决定是否放行。角色有四个，成员表只能保存前三个：
+
+| 角色 | 来源 |
+| --- | --- |
+| `viewer` | `knowledge_base_members.role` |
+| `editor` | `knowledge_base_members.role` |
+| `manager` | `knowledge_base_members.role` |
+| `owner` | `knowledge_bases.owner_id`，不是成员行 |
+
+角色是升级关系：`viewer < editor < manager < owner`，上位角色拥有下位角色的全部能力。
+
+| 能力 | 含义 | viewer | editor | manager | owner |
+| --- | --- | --- | --- | --- | --- |
+| `kb.read` | 读取知识库详情、统计、收藏、浏览记录 | ✓ | ✓ | ✓ | ✓ |
+| `kb.search` | 检索该知识库，含全局搜索命中 | ✓ | ✓ | ✓ | ✓ |
+| `kb.write` | 修改名称、描述、分类、标签、visibility | | | ✓ | ✓ |
+| `kb.delete` | 软删除与恢复知识库 | | | | ✓ |
+| `kb.transfer` | 转移知识库所有权 | | | | ✓ |
+| `document.read` | 文档列表、详情、预览、分块 | ✓ | ✓ | ✓ | ✓ |
+| `document.download` | 下载原始上传文件 | | ✓ | ✓ | ✓ |
+| `content.write` | 上传、替换、改元数据、重新处理、软删除与恢复 | | ✓ | ✓ | ✓ |
+| `content.purge` | 永久删除（单个与批量） | | | ✓ | ✓ |
+| `chat.use` | 创建会话与提问 | ✓ | ✓ | ✓ | ✓ |
+| `chat.export` | 导出会话记录 | ✓ | ✓ | ✓ | ✓ |
+| `feedback.write` | 对收到的回答评分 | ✓ | ✓ | ✓ | ✓ |
+| `quality.read` | 问答质量运营数据 | | | ✓ | ✓ |
+| `members.read` | 读取成员名单 | | | ✓ | ✓ |
+| `members.write` | 增删改成员 | | | ✓ | ✓ |
+
+矩阵的唯一定义在 `backend/internal/access/capability.go` 的 `minRole`。这张表由该
+map 生成，改代码不改表就会与实现不一致；`internal/access/capability_test.go` 锁住
+每一格，`internal/service/access_contract_test.go` 按接口逐个断言。
+
+**系统管理员不在这张表里。** `users.role=admin` 只解锁 `/system/diagnostics` 与
+`/admin/users` 这类系统级接口（由 `RequireSystemAdmin` 判定，`403 SYSTEM_ADMIN_REQUIRED`），
+不会给管理员任何一个知识库上的能力：管理员访问别人的私有知识库、文档或会话时，和普通
+外人一样得到 404。两套判定互不叠加，`internal/router/admin_users_route_test.go` 与
+`system_diagnostics_route_test.go` 锁住这一边界。
+
+### 为什么几个能力放在看起来偏高的位置
+
+- `document.download` 归 editor，不是 viewer。分界不是「能否看到内容」——viewer 通过
+  分块和引用已经读到了正文。原始文件带着索引里没有的东西：修订记录、批注、嵌入对象、
+  作者信息。
+- `quality.read` 归 manager。这份数据聚合的是**别人**问了什么、怎么评分的，比编辑内容
+  更进一步，暴露的是同事的使用情况。
+- `content.purge` 归 manager 而不是 owner。永久删除不可逆，但只让 owner 能清空回收站
+  就废掉了委派的意义。整个知识库的删除仍然是 owner 独有的 `kb.delete`。
+- `kb.delete` 只归 owner。删掉容器和整理容器里的东西不是同一件事，被委派管理某个知识库
+  的人不应该能把这个知识库本身移除。
+
+### effectiveRole 与 capabilities
+
+知识库响应带上调用者自己的位置：
+
+```json
+{
+  "id": "uuid",
+  "name": "制度库",
+  "effectiveRole": "editor",
+  "capabilities": ["kb.read", "kb.search", "document.read", "document.download", "content.write", "chat.use", "chat.export", "feedback.write"]
+}
+```
+
+`capabilities` 是 `effectiveRole` 在上表中的那一行，顺序与 `access.Capabilities` 一致。
+两个字段只用于前端隐藏按钮，不是授权依据：服务端每个请求都会重新判定，所以前端漏判只会
+出现一个点了报 403 的按钮，不会放开任何权限。
+
+`capabilities` 为空数组表示无任何能力，不会是 `null`——客户端不必区分「空」和「未知」。
+
+### 404 与 403 的口径
+
+| 情况 | 状态码 |
+| --- | --- |
+| 不是 owner 也不是成员 | 404 |
+| 知识库已软删除 | 404 |
+| 成员身份已被撤销 | 404 |
+| 是成员但角色不够 | 403 |
+
+没有任何立场时一律 404：返回 403 等于确认这个 id 存在，会把资源是否存在泄露给无关用户。
+只有能到达资源、仅仅是角色不够时才返回 403，此时 `details` 点名缺什么：
+
+```json
+{
+  "code": "FORBIDDEN",
+  "message": "当前角色无权执行该操作",
+  "details": {
+    "role": "viewer",
+    "capability": "content.write",
+    "requiredRole": "editor"
+  }
+}
+```
+
+404 的错误码按**调用方问的那个资源**命名，即使拒绝来自它所属的知识库：文档 id 回
+`DOCUMENT_NOT_FOUND`，会话 id 回 `RESOURCE_NOT_FOUND`，知识库 id 回
+`KNOWLEDGE_BASE_NOT_FOUND`。用知识库的错误码回答一个文档请求，会让调用方以为自己
+传错了 id。
+
+### 会话的两道判定
+
+会话接口先按 `chat_sessions.user_id` 过滤，再检查知识库上的 `chat.use`。两道判定都会
+产出 404，但由不同输入触发：别人的会话 id 在第一道就被挡住，自己的会话在所属知识库不再
+可达时（成员被撤销、知识库被删除）由第二道挡住。
+
+### 列表接口
+
+跨知识库的列表（文档、搜索、聊天回收站、质量运营）无法逐行判定，可达性写在查询里：
+`owner_id = 当前用户 OR 存在角色满足该能力的成员行`。角色集合由
+`access.MemberRolesWith(capability)` 给出，不在 SQL 里另写一份。
 
 ## Auth
 
@@ -371,6 +471,172 @@ pageSize=20         最大 100
 
 该接口只读，不反映单个知识库的 `retrievalConfig`。
 
+## 系统诊断
+
+两个接口：`GET /healthz`（含 `/api/v1/healthz`，无需认证）与
+`GET /api/v1/system/diagnostics`（需要登录且当前系统角色为 `admin`）。
+
+### 不返回什么
+
+这是接口契约的一部分，不是实现细节：
+
+- 不返回任何密钥、连接串、DSN、Base URL、主机名、端口或 bucket 名。
+- 不返回驱动或 Provider 的原始错误文本。所有失败都被压缩成下面的封闭原因集合。
+- Provider 只返回模型名，不返回 Base URL：模型名能帮运维定位配置错误，Base URL 属于
+  部署拓扑。
+
+原始错误会以 `WARN` 完整写入服务端日志。约束限制的是 HTTP 响应，不是运维自己的日志，
+而日志才是真正能读到根因的地方。
+
+封闭原因集合（`reason`、`lastFailureReason`）：
+
+```text
+timeout | unreachable | auth_rejected | not_configured | not_found | unavailable
+```
+
+前端按代码映射中文文案，未识别的代码回落到中性文案，不回显原始代码。
+
+### GET /healthz
+
+始终返回 `200`，即使依赖不可用。这是存活探针而不是就绪探针：`503` 会让
+Kubernetes livenessProbe 重启容器，而重启 API 不会让 Redis 恢复，只会在故障上再叠一层
+故障。真实状态放在响应体里。
+
+因为该接口无需认证，响应体只有依赖名和状态，没有 `reason`、没有耗时、没有计数。未配置
+的依赖直接省略。
+
+```json
+{
+  "status": "ok",
+  "env": "production",
+  "dependencies": { "database": "ok", "redis": "ok", "storage": "ok" }
+}
+```
+
+### GET /api/v1/system/diagnostics
+
+通过管理员鉴权后，依赖故障仍返回 `200`，调用方通过响应中的 `status` 判断依赖状态。鉴权先于全部诊断探针：无有效登录或账号已删除返回 `401 UNAUTHORIZED`，普通用户及未知系统角色返回 `403 SYSTEM_ADMIN_REQUIRED`，管理员身份查询失败或超过 2 秒返回脱敏的 `500 INTERNAL_ERROR`，不继续执行诊断。
+
+`status` 取所有依赖状态里最差的一个。`not_configured` 不会拉低整体状态；标准部署会配置 Redis，因为限流和 query embedding 缓存都使用它。
+
+```json
+{
+  "status": "degraded",
+  "checkedAt": "2026-08-30T10:00:00Z",
+  "env": "production",
+  "dependencies": [
+    { "name": "database", "status": "ok", "reason": "", "latencyMs": 3 },
+    { "name": "redis", "status": "down", "reason": "unreachable", "latencyMs": 2001 },
+    { "name": "storage", "status": "not_configured", "reason": "not_configured", "latencyMs": null }
+  ],
+  "queues": {
+    "documents": {
+      "pending": 2, "running": 1, "failed": 4, "completed": 30, "cancelled": 0,
+      "oldestPendingSeconds": 125, "oldestRunningSeconds": 8,
+      "failureWindowHours": 24, "finishedInWindow": 10, "failedInWindow": 2,
+      "recentFailureRate": 0.2
+    },
+    "cleanup": { "backlog": 3, "retrying": 1, "locked": 0, "oldestPendingSeconds": 3600 }
+  },
+  "providers": [
+    {
+      "name": "chat", "configured": true, "model": "gpt-4.1-mini", "status": "ok",
+      "lastSuccessAt": "2026-08-30T09:59:00Z", "lastFailureAt": null,
+      "lastFailureReason": "", "successCount": 128, "failureCount": 0, "recentFailures": 0
+    }
+  ],
+  "latency": [
+    { "metric": "retrieval", "count": 128, "sampleCount": 128, "p50Ms": 120, "p95Ms": 300, "maxMs": 800 }
+  ],
+  "rerankFallbacks": { "provider_unavailable": 4 },
+  "rateLimitTriggers": { "login": 3, "chat": 7 },
+  "embeddingCache": { "hits": 80, "misses": 20, "errors": 1, "hitRate": 0.8 },
+  "vectorSearch": { "pgvectorVersion": "0.5.1", "iterativeScan": false, "exactFallbacks": 2 },
+  "metricsSinceRestart": true
+}
+```
+
+字段口径：
+
+- `dependencies` 只有三项：`database`、`redis`、`storage`。每个探针独立超时 2 秒并并发
+  执行。诊断页最有用的时刻恰好是依赖卡住的时刻，所以探针必须快速失败。
+- `latencyMs` 是本次探针耗时；未探测的依赖为 `null`。
+- 存储探针是只读的，与启动时的 `EnsureReady` 分开：`EnsureReady` 会创建 bucket 并写
+  策略，放在 HTTP 处理器后面会让一次带认证的 GET 重建运维故意删掉的 bucket。
+- `oldestRunningSeconds` 从 `locked_at` 起算，不从 `created_at` 起算：排队一小时、一秒
+  前才开始执行的任务不是卡住的任务。
+- `recentFailureRate` 在窗口内没有已完成任务时为 `null`。`null` 与 `0` 是不同的答案，
+  前端显示"暂无数据"而不是 0%。
+- `failureWindowHours` 固定为 24，按 `updated_at` 统计 `completed` 与 `failed`。
+- `rateLimitTriggers` 只统计真正返回 429 的请求，Redis 故障导致的 closed 拒绝不计入；键固定为 `login` / `chat`，未触发的键可缺省。
+- `embeddingCache.hitRate = hits / (hits + misses)`；缓存错误单独计数，不进入分母。进程尚未发生缓存查询时为 `null`。
+- `vectorSearch.pgvectorVersion` 为数据库中 `vector` 扩展的版本，读取失败或非 PostgreSQL 时为空字符串；`iterativeScan` 在 0.8.0 及以上为 true；`exactFallbacks` 为本进程内向量召回因索引扫描返回不足而改用精确检索的次数（见 RAG 规范“pgvector 查询约束”）。
+
+### Provider 为什么不做探测
+
+`configured` 表示同时配置了 key 和模型名，`status` 与计数来自真实业务流量，而不是探测
+请求。
+
+OpenAI 兼容接口里没有免费的 ping。为了检查而发一次 completion，等于每次打开诊断页都
+让运维付一次钱，而且测出来的延迟不是真实请求的延迟。所以这里报告的是配置完整性加上真
+实调用观察到的健康度。
+
+`recentFailures > 0` 只把 Provider 标成 `degraded` 而不是 `down`：记录器只能看见流量，
+既有近期失败又有近期成功的 Provider 是不稳定，完全没有流量的 Provider 是未知，两者都不
+足以断言它已经挂了。
+
+`rerank` 即使被关闭也会返回一行（`status: not_configured`）：运维要区分的正是"重排坏
+了"和"重排没开"，省掉这一行等于两个问题都不回答。
+
+### 指标是进程内的
+
+`latency`、`rerankFallbacks`、`rateLimitTriggers` 与 `embeddingCache` 都是进程内指标（耗时每项最多保留 512 个样本），服务重启后归零，多实例部署下每个实例各报自己的数据。分位数用 nearest-rank，
+`sampleCount` 是实际参与计算的样本数，会小于 `count`。
+
+这是刻意的取舍：把每次检索和生成都写库会给热路径加一次写入，并需要一张随流量无限增长
+的表。持久化留给日志。`metricsSinceRestart` 恒为 `true`，留作未来接入持久化存储时不破
+坏契约的开关。前端明确写出这一点，而不是暗示它是历史全量数据。
+
+### 系统管理员鉴权与初始化
+
+系统角色取自 `users.role`，仅精确值 `admin` 可访问诊断。知识库 `manager` 或 `owner` 不等同于系统管理员；系统管理员也不能绕过知识库权限与会话归属校验。
+
+登录签发的 JWT 带 `role` 快照，但诊断中间件每次请求查询数据库中的当前角色。因此提升、降权和删除账号立即影响已有 token；旧版不带 `role` 的有效 token 仍可登录，并按数据库角色授权。前端通过当前用户接口控制诊断入口，普通用户直达诊断页面显示权限说明，不请求诊断内容；客户端显示不替代服务端鉴权。
+
+首位管理员仅通过运维 CLI 初始化：`go run ./cmd/bootstrap-admin -username <现有账号>` 保留原密码与资料并提升指定用户。新部署需设置 `BOOTSTRAP_ADMIN_PASSWORD`，再显式加 `-create` 创建账号。已有其他管理员时拒绝初始化，重复指定同一管理员不修改数据；`cmd/seed` 仍只创建普通用户。无公开 HTTP 初始化接口、默认管理员密码或自动授予首位登录者权限。步骤见 [部署指南](13-deployment.md#74-初始化系统管理员)。
+
+`GET /api/v1/system/capabilities` 仍对普通登录用户可用，`/healthz` 及 `/api/v1/healthz` 仍无需登录；密钥、部署拓扑和原始错误的响应保护约束保持适用。
+
+## Embedding 诊断
+
+`GET /system/diagnostics` 新增 `embedding`：`status`、`model`、`configuredDimension`、`columnDimension`、`totalDocuments`、`unknownDocuments`、`mismatchedDocuments`、`groups`。每个 group 为 `{model,dimension,count}`；未知值为 null。只统计知识库和文档均未删除、状态 completed 的文档，包含仍可检索的历史版本。未知与不匹配分别计数；有任一异常时为 degraded，查询失败为 down，不能把失败解释为零文档。原有管理员权限保持。
+
+## Home
+
+### GET /home/summary
+
+工作台首页所需的全部聚合数据，一次返回。查询参数 `period=month|day`（默认 `month`，仅作用于 `stats`）。
+
+```json
+{
+  "period": "month",
+  "stats": { "period": "month", "knowledgeBases": {}, "documents": {}, "views": {}, "questions": {} },
+  "knowledgeBases": [],
+  "knowledgeBaseTotal": 42,
+  "documents": [],
+  "documentTotal": 128,
+  "failedDocuments": [],
+  "failedDocumentTotal": 3,
+  "sessions": [],
+  "sessionTotal": 17
+}
+```
+
+- 每个列表的条数由**服务端**决定（`service.HomeSummaryItemLimit`，当前为 5），前端不再靠 `pageSize` 猜
+- 每个列表都配一个未截断的 `*Total`，因此「最近 5 条 / 共 42 条」不需要第二次请求
+- 各列表元素结构分别与 `GET /knowledge-bases`、`GET /documents`、`GET /chat/sessions` 的列表项一致
+- 该接口只做聚合，复用上述各资源的 service：归属校验和软删除过滤规则仍然只有一份
+
 ## Activities
 
 ### GET /activities
@@ -414,146 +680,6 @@ kb.ownership_transferred
 - 这正是前端合并三个列表做不到的部分：删除、恢复、成员变更都没有可供合并的行
 - **记录是尽力而为的**：写入失败不会让触发它的操作失败。时间线是便利视图，不是审计日志，丢一条记录远好过让用户已经确认的删除操作报错
 - 表结构见 `backend/migrations/012_activities.sql`
-
-## Home
-
-### GET /home/summary
-
-工作台首页所需的全部聚合数据，一次返回。查询参数 `period=month|day`（默认 `month`，仅作用于 `stats`）。
-
-```json
-{
-  "period": "month",
-  "stats": { "period": "month", "knowledgeBases": {}, "documents": {}, "views": {}, "questions": {} },
-  "knowledgeBases": [],
-  "knowledgeBaseTotal": 42,
-  "documents": [],
-  "documentTotal": 128,
-  "failedDocuments": [],
-  "failedDocumentTotal": 3,
-  "sessions": [],
-  "sessionTotal": 17
-}
-```
-
-- 每个列表的条数由**服务端**决定（`service.HomeSummaryItemLimit`，当前为 5），前端不再靠 `pageSize` 猜
-- 每个列表都配一个未截断的 `*Total`，因此「最近 5 条 / 共 42 条」不需要第二次请求
-- 各列表元素结构分别与 `GET /knowledge-bases`、`GET /documents`、`GET /chat/sessions` 的列表项一致
-- 该接口只做聚合，复用上述各资源的 service：归属校验和软删除过滤规则仍然只有一份
-
-## 权限与能力矩阵
-
-访问控制的判定单位是**能力**，不是接口。每个知识库相关接口声明它需要哪个能力，
-调用者在该知识库上的角色决定是否放行。角色有四个，成员表只能保存前三个：
-
-| 角色 | 来源 |
-| --- | --- |
-| `viewer` | `knowledge_base_members.role` |
-| `editor` | `knowledge_base_members.role` |
-| `manager` | `knowledge_base_members.role` |
-| `owner` | `knowledge_bases.owner_id`，不是成员行 |
-
-角色是升级关系：`viewer < editor < manager < owner`，上位角色拥有下位角色的全部能力。
-
-| 能力 | 含义 | viewer | editor | manager | owner |
-| --- | --- | --- | --- | --- | --- |
-| `kb.read` | 读取知识库详情、统计、收藏、浏览记录 | ✓ | ✓ | ✓ | ✓ |
-| `kb.search` | 检索该知识库，含全局搜索命中 | ✓ | ✓ | ✓ | ✓ |
-| `kb.write` | 修改名称、描述、分类、标签、visibility | | | ✓ | ✓ |
-| `kb.delete` | 软删除与恢复知识库 | | | | ✓ |
-| `kb.transfer` | 转移知识库所有权 | | | | ✓ |
-| `document.read` | 文档列表、详情、预览、分块 | ✓ | ✓ | ✓ | ✓ |
-| `document.download` | 下载原始上传文件 | | ✓ | ✓ | ✓ |
-| `content.write` | 上传、替换、改元数据、重新处理、软删除与恢复 | | ✓ | ✓ | ✓ |
-| `content.purge` | 永久删除（单个与批量） | | | ✓ | ✓ |
-| `chat.use` | 创建会话与提问 | ✓ | ✓ | ✓ | ✓ |
-| `chat.export` | 导出会话记录 | ✓ | ✓ | ✓ | ✓ |
-| `feedback.write` | 对收到的回答评分 | ✓ | ✓ | ✓ | ✓ |
-| `quality.read` | 问答质量运营数据 | | | ✓ | ✓ |
-| `members.read` | 读取成员名单 | | | ✓ | ✓ |
-| `members.write` | 增删改成员 | | | ✓ | ✓ |
-
-矩阵的唯一定义在 `backend/internal/access/capability.go` 的 `minRole`。这张表由该
-map 生成，改代码不改表就会与实现不一致；`internal/access/capability_test.go` 锁住
-每一格，`internal/service/access_contract_test.go` 按接口逐个断言。
-
-**系统管理员不在这张表里。** `users.role=admin` 只解锁 `/system/diagnostics` 与
-`/admin/users` 这类系统级接口（由 `RequireSystemAdmin` 判定，`403 SYSTEM_ADMIN_REQUIRED`），
-不会给管理员任何一个知识库上的能力：管理员访问别人的私有知识库、文档或会话时，和普通
-外人一样得到 404。两套判定互不叠加，`internal/router/admin_users_route_test.go` 与
-`system_diagnostics_route_test.go` 锁住这一边界。
-
-### 为什么几个能力放在看起来偏高的位置
-
-- `document.download` 归 editor，不是 viewer。分界不是「能否看到内容」——viewer 通过
-  分块和引用已经读到了正文。原始文件带着索引里没有的东西：修订记录、批注、嵌入对象、
-  作者信息。
-- `quality.read` 归 manager。这份数据聚合的是**别人**问了什么、怎么评分的，比编辑内容
-  更进一步，暴露的是同事的使用情况。
-- `content.purge` 归 manager 而不是 owner。永久删除不可逆，但只让 owner 能清空回收站
-  就废掉了委派的意义。整个知识库的删除仍然是 owner 独有的 `kb.delete`。
-- `kb.delete` 只归 owner。删掉容器和整理容器里的东西不是同一件事，被委派管理某个知识库
-  的人不应该能把这个知识库本身移除。
-
-### effectiveRole 与 capabilities
-
-知识库响应带上调用者自己的位置：
-
-```json
-{
-  "id": "uuid",
-  "name": "制度库",
-  "effectiveRole": "editor",
-  "capabilities": ["kb.read", "kb.search", "document.read", "document.download", "content.write", "chat.use", "chat.export", "feedback.write"]
-}
-```
-
-`capabilities` 是 `effectiveRole` 在上表中的那一行，顺序与 `access.Capabilities` 一致。
-两个字段只用于前端隐藏按钮，不是授权依据：服务端每个请求都会重新判定，所以前端漏判只会
-出现一个点了报 403 的按钮，不会放开任何权限。
-
-`capabilities` 为空数组表示无任何能力，不会是 `null`——客户端不必区分「空」和「未知」。
-
-### 404 与 403 的口径
-
-| 情况 | 状态码 |
-| --- | --- |
-| 不是 owner 也不是成员 | 404 |
-| 知识库已软删除 | 404 |
-| 成员身份已被撤销 | 404 |
-| 是成员但角色不够 | 403 |
-
-没有任何立场时一律 404：返回 403 等于确认这个 id 存在，会把资源是否存在泄露给无关用户。
-只有能到达资源、仅仅是角色不够时才返回 403，此时 `details` 点名缺什么：
-
-```json
-{
-  "code": "FORBIDDEN",
-  "message": "当前角色无权执行该操作",
-  "details": {
-    "role": "viewer",
-    "capability": "content.write",
-    "requiredRole": "editor"
-  }
-}
-```
-
-404 的错误码按**调用方问的那个资源**命名，即使拒绝来自它所属的知识库：文档 id 回
-`DOCUMENT_NOT_FOUND`，会话 id 回 `RESOURCE_NOT_FOUND`，知识库 id 回
-`KNOWLEDGE_BASE_NOT_FOUND`。用知识库的错误码回答一个文档请求，会让调用方以为自己
-传错了 id。
-
-### 会话的两道判定
-
-会话接口先按 `chat_sessions.user_id` 过滤，再检查知识库上的 `chat.use`。两道判定都会
-产出 404，但由不同输入触发：别人的会话 id 在第一道就被挡住，自己的会话在所属知识库不再
-可达时（成员被撤销、知识库被删除）由第二道挡住。
-
-### 列表接口
-
-跨知识库的列表（文档、搜索、聊天回收站、质量运营）无法逐行判定，可达性写在查询里：
-`owner_id = 当前用户 OR 存在角色满足该能力的成员行`。角色集合由
-`access.MemberRolesWith(capability)` 给出，不在 SQL 里另写一份。
 
 ## Knowledge Bases
 
@@ -679,7 +805,7 @@ map 生成，改代码不改表就会与实现不一致；`internal/access/capab
 
 ### GET /knowledge-bases
 
-只返回当前用户拥有的知识库。支持：
+只返回当前用户可达的知识库：owner，或成员表中任意角色的成员。支持：
 
 ```text
 q
@@ -989,6 +1115,86 @@ manager
 
 需要 `kb.delete`（owner 独有）。
 
+## 知识库标签
+
+### GET /knowledge-base-tags
+
+返回当前用户的标签列表，每项带使用量：
+
+```json
+{
+  "items": [
+    {
+      "id": "tag_uuid_1",
+      "name": "product",
+      "knowledgeBaseCount": 2,
+      "createdAt": "2026-08-09T10:00:00Z",
+      "updatedAt": "2026-08-09T10:00:00Z"
+    }
+  ]
+}
+```
+
+`knowledgeBaseCount` 统计当前用户名下引用该标签的知识库数量，**包含回收站中的知识库**。这样它与 `DELETE` 的 `TAG_NOT_EMPTY` 判定口径一致：计数大于 0 就一定删不掉。
+
+`POST` 返回的新标签 `knowledgeBaseCount` 固定为 `0`；`PUT` 返回改名后的实际计数。知识库负载里内嵌的 `tags` 摘要不带该字段。
+
+### POST /knowledge-base-tags
+
+```json
+{
+  "name": "product"
+}
+```
+
+### PUT /knowledge-base-tags/:id
+
+```json
+{
+  "name": "manual"
+}
+```
+
+### DELETE /knowledge-base-tags/:id
+
+删除时若仍被知识库引用，返回 `TAG_NOT_EMPTY`。
+
+### 知识库标签字段
+
+- `POST /knowledge-bases` 和 `PUT /knowledge-bases/:id` 支持 `tagIds: string[]`
+- `GET /knowledge-bases` 支持 `tagIds=uuid,uuid`
+- `GET /knowledge-bases` 和 `GET /knowledge-bases/:id` 返回 `tags`
+
+```json
+{
+  "tagIds": ["tag_uuid_1", "tag_uuid_2"]
+}
+```
+
+```json
+{
+  "tags": [
+    {
+      "id": "tag_uuid_1",
+      "name": "product"
+    }
+  ]
+}
+```
+
+## 管理员操作记录与知识库转移
+
+`GET /admin/activities` 由 `RequireSystemAdmin` 保护，未登录 401，非管理员 403 `SYSTEM_ADMIN_REQUIRED`。查询 `page=1&pageSize=20`，每页最大 100。返回 `{items,total,page,pageSize}`，只包含 `admin.` 前缀活动，按时间倒序，覆盖所有操作者。每项为 `{id,action,resourceType,resourceId,resourceName,actor:{id,username,displayName},createdAt}`。不公开其他用户的知识库活动。禁用和启用分别记录 `admin.user.disabled`、`admin.user.enabled`；显示名实际变化时才记录 `admin.user.updated`。
+
+`GET /admin/users` 的每项新增 `ownedKnowledgeBaseCount`，包括已软删除的知识库。以下转移接口都接收 `{newOwnerId,keepPreviousOwnerAsManager}`，成功返回 200 `{transferredCount}`：
+
+| 接口 | 权限与范围 |
+| --- | --- |
+| `POST /knowledge-bases/:id/transfer-ownership` | `kb.transfer`，仅当前所有者，知识库须未删除；无权限成员 403，陌生人或已删除资源 404 |
+| `POST /admin/users/:id/transfer-knowledge-bases` | 系统管理员，将该用户所有知识库（含回收站）作为一个原子批次转移 |
+
+新所有者必须存在、启用且与旧所有者不同，否则 400 `TRANSFER_TARGET_INVALID`；管理员入口的原用户不存在返回 404 `USER_NOT_FOUND`。锁内检测到单库所有权或状态已变化返回 409 `OWNERSHIP_CHANGED`。事务按固定顺序锁定用户与知识库行，整个批次成功或回滚。新所有者原成员行移除；`keepPreviousOwnerAsManager=true` 时旧所有者成为 manager，否则移除其成员身份。分类不属于新所有者时清空；标签、收藏、浏览历史、其他成员、文档与会话保持。会话仍须同时满足知识库访问与 `chat_sessions.user_id` 校验。`updated_by_id` 记录操作者；为操作者和新所有者记录 `kb.ownership_transferred`，同一人只记一次。
+
 ## Documents
 
 ### GET /documents
@@ -1172,15 +1378,13 @@ field: file
 
 ```json
 {
-  "error": {
-    "code": "DOCUMENT_DUPLICATE_CONTENT",
-    "message": "知识库中已存在内容相同的文档",
-    "details": {
-      "existingDocumentId": "document_uuid",
-      "existingFilename": "policy.md",
-      "existingStatus": "completed",
-      "existingUploadedAt": "2026-06-08T00:00:00Z"
-    }
+  "code": "DOCUMENT_DUPLICATE_CONTENT",
+  "message": "知识库中已存在内容相同的文档",
+  "details": {
+    "existingDocumentId": "document_uuid",
+    "existingFilename": "policy.md",
+    "existingStatus": "completed",
+    "existingUploadedAt": "2026-06-08T00:00:00Z"
   }
 }
 ```
@@ -1407,6 +1611,129 @@ chunkId=chunk_uuid
 }
 ```
 
+## 文档范围、正文编辑、OCR校对与问题跟进
+
+以下路径省略 `/api/v1`，沿用 JWT、camelCase 和统一错误响应。
+
+| 接口 | 请求与响应 | 授权及边界 |
+| --- | --- | --- |
+| `POST /chat/sessions` | 新增可选 documentIds（1–20 个唯一 UUID）；响应新增 documents 数组，每项含 id/knowledgeBaseId/filename | 与显式 knowledgeBaseId/knowledgeBaseIds 使用，最多 5 库，不能用于 auto；逐库 chat.use 和文档原库归属校验。发送/重生成失效返回 409 DOCUMENT_SCOPE_UNAVAILABLE。 |
+| `POST /documents/version-status` | `{documentIds:[...]}` 最多 20；返回 `{items:[{documentId,state,current?,newerPending}]}`，state 为 current/newer_available/unavailable；current 含 id/knowledgeBaseId/filename | 逐文档可读权限；同库链上有已发布片段的最新有效文档。不返回无权资源元信息。 |
+| `GET /documents/:id/editable-text` | `{documentId,filename,content,maxBytes}` | content.write；完整 TXT/Markdown UTF-8 原文，最多 1 MiB。 |
+| `POST /documents/:id/text-revisions` | `{requestId,content}`，200 文档对象 | content.write；非空 UUID 请求 ID，相同请求幂等，未变更返回原文档，否则创建新版本排队。 |
+| `GET /documents/:id/ocr-correction` | `{documentId,revision,pages:[{pageNumber,content,textSource}]}` | content.write + document.download；仅已发布 OCR/校对页，revision 为完整快照指纹。 |
+| `POST /documents/:id/ocr-corrections` | `{requestId,revision,pages:[{pageNumber,content}]}`，200 新文档对象 | 同上；只提交修改页，不得改原生页。每页 1 MiB、总页文本 8 MiB、最多 500 个物理页。快照变化为 409 DOCUMENT_EDIT_CONFLICT。 |
+| `GET /chat/sessions/:id/quality-issue?question=...` | question/status/note/documentIds/evaluationCaseId/evaluationRunId/updatedAt；无记录返回 open 空记录 | 本人会话、精确原问题、全部来源库 chat.use；失权关联资料/评测不返回引用 ID，保留个人备注。 |
+| `PUT /chat/sessions/:id/quality-issue` | 上述可写字段；status=open/retest/resolved，note 最多 4000 字，documentIds 最多 20 | 幂等更新同会话同问题；用例须同问题同范围，运行须含该用例；已解决由用户设置。 |
+
+质量 overview、negative-feedback、knowledge-gaps 新增 `scope=personal/auto/multi/documents`。不传保持单库运营视图；personal 为本人全部会话，其余为本人自动、固定多库、指定文档会话。统计与列表共同校验本人和每个来源库 chat.use，不能向单库管理员暴露他人的跨库回答。
+
+评测用例新增可选 sourceSessionId；服务器从本人可访问会话捕获 scope（sourceSessionId/scopeMode/knowledgeBaseIds/documents），保存于首选知识库。原 quality.read 权限保持，执行另需 chat.use；私人用例/运行仅创建者且全部来源可访问时可读，auto 运行还重验结果实际来源。共享用例不得原地变成私人范围，私人用例不得改换来源会话；应新建用例。同次运行只接受完全相同的来源范围。运行新增 isPrivate；results 新增 knowledgeBaseIds。评测不创建真实聊天记录。
+
+校对 chunk、检索结果、JSON/SSE citation、历史和导出为 `textSource: "ocr_corrected"`；机器识别保持 `"ocr"`，原生文字省略。pageNumber 指原 PDF 物理页，校对不提供原生文字坐标。
+
+统一前缀：
+
+```text
+/api/v1
+```
+
+除登录接口外，所有接口必须携带：
+
+```text
+Authorization: Bearer <token>
+```
+
+## 粘贴文本创建文档
+
+`POST /knowledge-bases/:id/documents/text` 要求 `content.write`，请求：
+
+```json
+{"title":"设备维护手册","content":"# 维护\n每 90 天检查一次。","format":"md","allowDuplicate":false}
+```
+
+`title` trim 后 1–200 个 Unicode 字符；非法文件名字符替换为下划线，再追加扩展名。`format` 仅 `md` / `txt`，缺省 `md`；正文不能全为空白，UTF-8 字节数不超过 `MAX_UPLOAD_SIZE_MB`。非法输入返回 `VALIDATION_ERROR`。正文原始字节参与哈希与存储；与 multipart 上传共享查重、清理预留、文档和任务事务、活动记录与后台处理。成功 201，响应与上传文档相同；重复内容返回 409 `DOCUMENT_DUPLICATE_CONTENT`，`allowDuplicate=true` 可明确保留重复副本。
+
+## 文档版本文本对比
+
+- `GET /documents/:id/versions` 返回 `{items:[{id,filename,status,createdAt,supersededById}]}`，按时间/ID 升序。仅包含该文档双向替换链中同库、未删除的文档，删除或跨库链接停止遍历；最多 100 个版本。
+- `GET /documents/:id/compare?baseId=UUID` 将路径版本作为新版本、`baseId` 作为旧版本。两端均需 `document.read`，且必须来自同一替换链；非法链为 400 `VALIDATION_ERROR`。两个相同 ID 可比较，结果无增删。
+- 响应为 `{base,head,addedLines,removedLines,lines}`；每行 `{kind,content,baseLine,headLine}`，`kind=equal|add|remove`，行号从 1 开始，不存在的一侧为 null。文本按字面返回，不包含渲染 HTML。
+- 两端必须 completed；原文件各最多 50 MiB、解析文本各最多 1 MiB / 2000 行。比较解析文本，不比较 PDF/DOCX 版式或调用模型概括差异；对象读取后重新验证两端权限。错误列表见 `09-error-codes.md`。
+
+## 表格来源与相对路径
+
+上传能力增加 `.xlsx` 和 `.csv`；`.xls` 不支持。解析与压缩包上限见 [RAG 规范](05-rag-pipeline.md#xlsx--csv-资料解析)。表格向量及引用继续使用现有 pipeline，无统计/公式执行接口。
+
+文档上传、全局上传及替换 multipart 请求可带 `sourcePath`。它只作来源展示，统一 `/` 分隔，最后一段必须等于上传文件名；最多 1024 UTF-8 字节、每段最多 255 字，拒绝绝对路径、冒号、控制字符、空段、`.` 和 `..`。非法值为 400 `VALIDATION_ERROR`。文档详情、列表、回收站、上传和替换响应带可选 `sourcePath`，空值省略；替换只保存本次上传提供的路径。ZIP 不作为后端文档格式上传，由浏览器展开后调用原有逐文件 API，全部文件仍逐项鉴权、查重与排队。
+
+检索条目与引用新增可选 `table`：
+
+```json
+{"table":{"sheetName":"库存","rowStart":5,"rowEnd":5,"headerRow":2}}
+```
+
+XLSX 使用工作表名和原始行号；CSV 的工作表名为空，行范围是物理文件行（包括引号字段内换行）。表头不会单独成为数据记录。无来源或无效元数据不生成 `table`；行号不由回答模型推断。JSON/SSE、已保存消息及 Markdown 导出均保留来源。
+
+`GET /documents/:id/preview` 对表格返回 `kind=text`、解析文本与 `tableRows`。每项包括上述四个来源字段以及 `[startOffset,endOffset)`，它是响应 `content` 的 UTF-8 字节区间，用于定位完整数据记录。预览输入文件或解析文本大于 1 MiB 时仍报 `FILE_TOO_LARGE_FOR_PREVIEW`；可查看已有引用摘录和来源标签。表格解析失败为 `DOCUMENT_PREVIEW_FAILED`，触及表格解析上限为 `DOCUMENT_TABLE_TOO_LARGE`。XLSX 只读取已保存公式结果；无缓存值为空，前端说明这一限制。
+
+### 扫描 PDF 的页摘要与来源
+
+`pdfTextSummary` 增加可选 `ocr`，旧客户端/旧记录可省略；它描述本次解析结果，不表示片段已发布：
+
+```json
+{
+  "totalPages": 4,
+  "textPages": 3,
+  "pagesWithoutText": [4],
+  "ocr": { "status": "completed", "totalPages": 3, "completedPages": 3, "pages": [2, 3] }
+}
+```
+
+外层 `textPages` 为原生与 OCR 文字页总数；`ocr.totalPages` 为原本无原生文字、需要尝试识别的页数，`completedPages` 包含成功尝试但没有文字的空白页，`pages` 仅包含确实提取出 OCR 文字的物理页。`status` 为 `disabled/running/completed/unavailable/timeout/failed/limit_exceeded`。摘要在识别期间更新，失败时保留诊断，重处理立即清空；片段与文本快照只在完整处理成功时原子替换。任务取消或失败后，最后一次仍为 `running` 的摘要在文档响应中以 `failed` 返回，具体终止原因由 `jobStatus/errorCode` 表示，不能继续当作运行中。
+
+OCR chunk 的 `metadata.textSource`、检索结果和聊天 citation 增加可选 `textSource: "ocr"`，原生文字省略该字段。JSON/SSE、历史和分支保留该字段；权限矩阵保持，OCR 不能授予原文件下载权限。`pageNumber` 仍为原 PDF 物理页码；OCR 偏移只对应识别文本，不对应原图坐标。PDF 来源显示识别摘录并定位到页，不宣称原生文字高亮。版本对比优先读取已发布 PDF 文本快照，不在 HTTP 请求中执行 OCR；旧文档没有快照时沿用原生解析。
+
+## 回收站
+
+### GET /knowledge-bases/recycle-bin
+
+返回当前用户已删除知识库列表。
+
+### POST /knowledge-bases/:id/restore
+
+恢复当前用户已删除知识库。
+
+### DELETE /knowledge-bases/recycle-bin/:id
+
+永久删除当前用户 owner 的、已在回收站中的知识库，并清理关联文档、chunks、chat sessions、成员、收藏、浏览和标签绑定。关联文件对象通过同事务写入的持久化清理任务异步删除；存储临时失败会重试，不影响数据库删除的原子性。
+
+### POST /knowledge-bases/recycle-bin/empty
+
+清空当前用户 owner 的知识库回收站，采用 all-or-nothing 语义。
+
+知识库回收站刻意保持 owner 独有，不走能力矩阵：`kb.delete` 本来就只有 owner，而回收站
+是 owner 的私有空间——manager 对躺在里面的知识库应该拿到 404，而不是一个「确认它在那里」
+的 403。恢复与批量永久删除同理。
+
+### GET /documents/recycle-bin
+
+返回调用者在有 `content.write` 的知识库下的已删除文档，跨知识库聚合。
+
+### POST /documents/:id/restore
+
+恢复已删除文档。需要所属知识库的 `content.write`。
+
+### DELETE /documents/recycle-bin/:id
+
+永久删除已在回收站中的文档，需要所属知识库的 `content.purge`（manager 起），并清理 chunks 和处理任务。文件对象通过同事务写入的持久化清理任务异步删除。
+
+### POST /documents/recycle-bin/empty
+
+清空调用者有 `content.purge` 的知识库下的文档回收站，数据库删除与全部对象清理任务采用 all-or-nothing 事务语义；对象由后台 worker 删除并在失败时持续重试。
+
+注意列出与清空用的是两个不同能力：editor 看得到自己删掉的文档并能恢复，但清空要 manager。
+
 ## Search
 
 ### GET /search
@@ -1525,6 +1852,7 @@ limit=10
 ```json
 {
   "query": "如何申请报销？",
+  "documentIds": ["document_uuid"],
   "vectorTopN": 30,
   "rerankTopK": 5,
   "enableRerank": true,
@@ -1532,6 +1860,10 @@ limit=10
   "debug": false
 }
 ```
+
+`documentIds` 可选：给出后只在这些文档的 chunk 内检索，且每个 id 必须属于本次请求的知识库范围，
+否则返回 409 `DOCUMENT_SCOPE_UNAVAILABLE`（不是 404——知识库仍然可读，只是所选文档已删除、移动或
+不可访问）。该字段与对话侧 `POST /chat/sessions/:id/messages` 的 `documentIds` 语义一致。
 
 响应：
 
@@ -1588,7 +1920,7 @@ limit=10
       ]
     },
     "keywordStage": {
-      "status": "completed|disabled",
+      "status": "completed|disabled|failed",
       "items": [
         {
           "chunkId": "uuid",
@@ -1629,7 +1961,7 @@ limit=10
 }
 ```
 
-`vectorStage.exactFallback` 为 true 表示近似索引扫描返回的候选少于 `vectorTopN` 且知识库还有更多可检索片段，本次已改用精确检索，`items` 是精确结果；未回退时省略该字段。`keywordStage` 是关键词召回的原始结果，按 `keywordScore` 降序；关键词召回未启用时 `status=disabled` 且 `items=[]`。`fusionStage` 是两路召回的 RRF 融合结果，即精排的输入；`vectorRank` / `keywordRank` 为该 chunk 在各自召回列表中的 1-based 名次，缺席一路为 `null`。关键词召回未启用时 `status=skipped`，`items` 与 `vectorStage` 顺序一致且 `fusionScore=0`。`finalStage` 的 `keywordScore` 与 `fusionScore` 在对应阶段没有分数时为 `null`。
+`vectorStage.exactFallback` 为 true 表示近似索引扫描返回的候选少于 `vectorTopN` 且知识库还有更多可检索片段，本次已改用精确检索，`items` 是精确结果；未回退时省略该字段。`keywordStage` 是关键词召回的原始结果，按 `keywordScore` 降序；关键词召回未启用时 `status=disabled` 且 `items=[]`，关键词召回查询失败时 `status=failed` 且 `items=[]`——该失败不终止检索，回答退化为纯向量召回（失败原因不进响应，只记日志）。`fusionStage` 是两路召回的 RRF 融合结果，即精排的输入；`vectorRank` / `keywordRank` 为该 chunk 在各自召回列表中的 1-based 名次，缺席一路为 `null`。关键词召回未启用或失败时 `status=skipped`，`items` 与 `vectorStage` 顺序一致且 `fusionScore=0`。`finalStage` 的 `keywordScore` 与 `fusionScore` 在对应阶段没有分数时为 `null`。
 
 默认 `RERANK_FAILURE_MODE=strict`，Rerank 失败返回：
 
@@ -1840,6 +2172,8 @@ Markdown 按消息创建时间升序包含会话标题、`知识库：<名称>`�
 ### POST /chat/sessions/:id/archive
 
 归档当前用户会话。必须校验 session 属于当前用户，且对每个关联知识库均具有 `chat.use`。归档后默认 `GET /chat/sessions` 不再返回该会话，但 `GET /chat/sessions/:id` 仍可查看详情并返回 `archivedAt`。该接口幂等。
+
+已归档会话的发送（JSON/SSE）、编辑和重新生成返回 `409 CHAT_SESSION_ARCHIVED`；模型生成期间被归档时，最终提交事务重新检查归档状态并拒绝写入或删除后续消息。流式已开始时通过同名错误事件告知，不能发送成功 `done`。取消归档后方可继续；读取及从归档会话创建分支保留原有权限约定。
 
 成功响应为 `200 OK`，返回归档后的会话；重复归档返回同一个 `archivedAt`：
 
@@ -2100,9 +2434,9 @@ data: {"status":500,"code":"CHAT_COMPLETION_FAILED","message":"回答生成失�
 
 **中断语义（必须理解这一条）**
 
-**生成全部完成之前不写库。** 因此：
+**未完成的生成正文不保存为半条assistant消息。** 检索基础设施失败可另存标记为`retrieval_failed`的完整失败回合；已报告模型用量及日志/Trace也可能已记录。因此：
 
-- 流在中途断开 —— 客户端掉线、Provider 出错、进程重启 —— **不会留下任何痕迹**，不存在半条 assistant 消息
+- 生成流在中途断开时不保存被截断的assistant正文；不能据此推断没有任何用量、日志或失败记录
 - 客户端按同一 `clientRequestId` 到消息列表里对账：查不到就说明没落库，可以安全地用**同一个 ID** 重发
 - 反之，如果连接是在服务端已提交之后、`done` 送达之前断的，对账会查到那对消息，客户端直接采用，不会重发
 - 选择丢弃而不是落一条部分消息，是因为被截断的回答会进入历史，之后每一轮都会把它当成上下文读进去
@@ -2118,7 +2452,7 @@ data: {"status":500,"code":"CHAT_COMPLETION_FAILED","message":"回答生成失�
 
 ### POST /chat/sessions/:sessionId/messages/:messageId/regenerate
 
-重新生成指定 assistant 消息。必须校验 session 属于当前用户，且 session 所属知识库属于当前用户。
+重新生成最后一条提问的指定 assistant 回答版本。必须校验 session 属于当前用户，且对所有关联知识库具有 `chat.use`。如果目标回答后已出现新的 user 消息，在调用模型前返回 `409 CHAT_MESSAGE_CHANGED`；同一末轮问题的较早回答版本仍可重新生成。
 
 MVP 语义：
 
@@ -2170,12 +2504,49 @@ MVP 语义：
 4. citations 只返回本轮 chunks，不返回历史消息来源。
 5. 会话类问题的 `citations` 必须为空，不能附带无关知识库片段。
 
+## 回答收藏与个人备注
+
+| 方法 / 路径 | 请求与响应 |
+| --- | --- |
+| `GET /chat/bookmarks` | `q` 可选、最多 200 字；`page` 默认 1、范围 1–1000000，`pageSize` 默认 20、范围 1–100。返回 `{items,total,page,pageSize}`。 |
+| `PUT /chat/messages/:messageId/bookmark` | `{note}`，trim 后最多 4000 字，允许空备注；请求体最多 100 KiB。幂等创建/更新，200 返回 `{messageId,note,createdAt,updatedAt}`。 |
+| `DELETE /chat/messages/:messageId/bookmark` | 204；在回答仍可访问的前提下重复删除成功。 |
+
+仅收藏本人可访问会话中的 assistant 回答，精确绑定回答版本；提问返回 400 `VALIDATION_ERROR`。没有访问立场、会话已删除或任一依赖撤权返回 404 `RESOURCE_NOT_FOUND`。归档会话包括在结果中；计数与条目共用全部依赖权限条件。`q` 对回答、备注和会话标题做字面关键词搜索，不把 `%/_` 当通配符。
+
+列表条目包含消息搜索字段 `{messageId,sessionId,sessionTitle,archivedAt,role,createdAt,excerpt}` 和 `bookmark`；摘录沿用会话搜索的纯文本及高亮区间格式。消息历史 DTO 额外带可选 `bookmark`，由批量查询加载；无收藏时省略。普通消息查询、个人模板及收藏不跨账号缓存。
+
+## 对话分支
+
+`POST /chat/sessions/:id/branches`，请求体最多 16 KiB：
+
+```json
+{"messageId":"assistant-message-uuid","clientRequestId":"new-request-uuid","title":"可选标题"}
+```
+
+201 返回新会话详情，含可选 `branchFromSessionId` / `branchFromMessageId`。标题 trim 后最多 100 字；不填则由来源标题附加“ · 分支”。来源须属于调用者且全部依赖可访问，允许从归档会话创建。只接受 assistant 消息，复制按时间/ID 排序的历史前缀，恰好结束于选中的回答版本；最多 10000 条消息 / 16 MiB 正文、引用和回退元数据。
+
+复制保留内容、引用、意图、检索式和回答状态，继承自动/手动模式及完整依赖；副本使用新 ID，不复制收藏、评价、未确认写入、请求编号或模型用量。来源会话不变。创建、依赖和消息复制在同一事务中，来源行锁使相同请求并发重试返回同一个分支；已存在请求编号用于不同目标或已软删除分支时报 409 `CHAT_BRANCH_REQUEST_CONFLICT`。来源永久删除后分支保留，链接置空；分支始终独立检查自己的知识库依赖。
+
+## 个人提问模板
+
+| 方法 / 路径 | 请求与响应 |
+| --- | --- |
+| `GET /chat/templates` | 与收藏相同的 `q/page/pageSize`，搜索标题和正文；返回 `{items,total,page,pageSize}`。 |
+| `POST /chat/templates` | `{title,body}`，201 返回模板。 |
+| `PUT /chat/templates/:templateId` | `{title,body}`，200 返回更新模板。 |
+| `DELETE /chat/templates/:templateId` | 204；不存在或非本人模板返回 404。 |
+
+模板响应 `{id,title,body,variables,createdAt,updatedAt}`。标题 trim 后 1–100 字，正文 1–12000 字，请求体最多 100 KiB。变量语法为 `{{变量名}}`，变量名最多 40 个 Unicode 字符，只含字母、数字、下划线或连字符；最多 20 个不同变量，按第一次出现排序，重复变量只列一次，畸形括号返回 400 `VALIDATION_ERROR`。权限仅个人归属，不依附特定知识库；不调用模型或自动发送聊天。前端填值和插入草稿，不新增服务端模板执行接口。
+
 ## Chat 质量运营
 
-三个接口共用同一套范围规则：只统计当前用户自己的会话，会话和知识库都必须未软删除，
-且只统计 `role = 'assistant'` 的消息。`period` 只接受 `day` 或 `month`（默认
-`month`），`day` 指今天零点至现在，`month` 指本月一号零点至现在。可选
-`knowledgeBaseId` 必须属于当前用户，否则返回 `KNOWLEDGE_BASE_NOT_FOUND`。
+三个接口共用同一套范围规则：按知识库可达性统计，而不是只统计调用者自己的会话——运营视图要能回答
+「这个库里别人问了什么、哪里没答好」，只看自己的提问等于没有运营价值。传 `scope`
+（`personal` / `auto` / `multi` / `documents`）时才改为调用者自己的会话，规则见本文开头第 18 行。
+会话和知识库都必须未软删除，且只统计 `role = 'assistant'` 的消息。`period` 只接受 `day` 或 `month`
+（默认 `month`），`day` 指今天零点至现在，`month` 指本月一号零点至现在。可选
+`knowledgeBaseId` 必须属于当前用户可达范围，否则返回 `KNOWLEDGE_BASE_NOT_FOUND`。
 
 ### 意图与检索式落库
 
@@ -2454,407 +2825,3 @@ MVP 语义：
 评测写请求体上限 128 KiB。格式、字段或 UUID 不合法返回 `VALIDATION_ERROR`；不存在的测试问题/运行返回
 `RESOURCE_NOT_FOUND`，不可访问的知识库返回 `KNOWLEDGE_BASE_NOT_FOUND`，可读但角色不足返回 403。
 既有环境先执行 `021_quality_evaluations.sql`，再重启服务启用评测 worker。
-
-## 系统诊断
-
-两个接口：`GET /healthz`（含 `/api/v1/healthz`，无需认证）与
-`GET /api/v1/system/diagnostics`（需要登录且当前系统角色为 `admin`）。
-
-### 不返回什么
-
-这是接口契约的一部分，不是实现细节：
-
-- 不返回任何密钥、连接串、DSN、Base URL、主机名、端口或 bucket 名。
-- 不返回驱动或 Provider 的原始错误文本。所有失败都被压缩成下面的封闭原因集合。
-- Provider 只返回模型名，不返回 Base URL：模型名能帮运维定位配置错误，Base URL 属于
-  部署拓扑。
-
-原始错误会以 `WARN` 完整写入服务端日志。约束限制的是 HTTP 响应，不是运维自己的日志，
-而日志才是真正能读到根因的地方。
-
-封闭原因集合（`reason`、`lastFailureReason`）：
-
-```text
-timeout | unreachable | auth_rejected | not_configured | not_found | unavailable
-```
-
-前端按代码映射中文文案，未识别的代码回落到中性文案，不回显原始代码。
-
-### GET /healthz
-
-始终返回 `200`，即使依赖不可用。这是存活探针而不是就绪探针：`503` 会让
-Kubernetes livenessProbe 重启容器，而重启 API 不会让 Redis 恢复，只会在故障上再叠一层
-故障。真实状态放在响应体里。
-
-因为该接口无需认证，响应体只有依赖名和状态，没有 `reason`、没有耗时、没有计数。未配置
-的依赖直接省略。
-
-```json
-{
-  "status": "ok",
-  "env": "production",
-  "dependencies": { "database": "ok", "redis": "ok", "storage": "ok" }
-}
-```
-
-### GET /api/v1/system/diagnostics
-
-通过管理员鉴权后，依赖故障仍返回 `200`，调用方通过响应中的 `status` 判断依赖状态。鉴权先于全部诊断探针：无有效登录或账号已删除返回 `401 UNAUTHORIZED`，普通用户及未知系统角色返回 `403 SYSTEM_ADMIN_REQUIRED`，管理员身份查询失败或超过 2 秒返回脱敏的 `500 INTERNAL_ERROR`，不继续执行诊断。
-
-`status` 取所有依赖状态里最差的一个。`not_configured` 不会拉低整体状态；标准部署会配置 Redis，因为限流和 query embedding 缓存都使用它。
-
-```json
-{
-  "status": "degraded",
-  "checkedAt": "2026-08-30T10:00:00Z",
-  "env": "production",
-  "dependencies": [
-    { "name": "database", "status": "ok", "reason": "", "latencyMs": 3 },
-    { "name": "redis", "status": "down", "reason": "unreachable", "latencyMs": 2001 },
-    { "name": "storage", "status": "not_configured", "reason": "not_configured", "latencyMs": null }
-  ],
-  "queues": {
-    "documents": {
-      "pending": 2, "running": 1, "failed": 4, "completed": 30, "cancelled": 0,
-      "oldestPendingSeconds": 125, "oldestRunningSeconds": 8,
-      "failureWindowHours": 24, "finishedInWindow": 10, "failedInWindow": 2,
-      "recentFailureRate": 0.2
-    },
-    "cleanup": { "backlog": 3, "retrying": 1, "locked": 0, "oldestPendingSeconds": 3600 }
-  },
-  "providers": [
-    {
-      "name": "chat", "configured": true, "model": "gpt-4.1-mini", "status": "ok",
-      "lastSuccessAt": "2026-08-30T09:59:00Z", "lastFailureAt": null,
-      "lastFailureReason": "", "successCount": 128, "failureCount": 0, "recentFailures": 0
-    }
-  ],
-  "latency": [
-    { "metric": "retrieval", "count": 128, "sampleCount": 128, "p50Ms": 120, "p95Ms": 300, "maxMs": 800 }
-  ],
-  "rerankFallbacks": { "provider_unavailable": 4 },
-  "rateLimitTriggers": { "login": 3, "chat": 7 },
-  "embeddingCache": { "hits": 80, "misses": 20, "errors": 1, "hitRate": 0.8 },
-  "vectorSearch": { "pgvectorVersion": "0.5.1", "iterativeScan": false, "exactFallbacks": 2 },
-  "metricsSinceRestart": true
-}
-```
-
-字段口径：
-
-- `dependencies` 只有三项：`database`、`redis`、`storage`。每个探针独立超时 2 秒并并发
-  执行。诊断页最有用的时刻恰好是依赖卡住的时刻，所以探针必须快速失败。
-- `latencyMs` 是本次探针耗时；未探测的依赖为 `null`。
-- 存储探针是只读的，与启动时的 `EnsureReady` 分开：`EnsureReady` 会创建 bucket 并写
-  策略，放在 HTTP 处理器后面会让一次带认证的 GET 重建运维故意删掉的 bucket。
-- `oldestRunningSeconds` 从 `locked_at` 起算，不从 `created_at` 起算：排队一小时、一秒
-  前才开始执行的任务不是卡住的任务。
-- `recentFailureRate` 在窗口内没有已完成任务时为 `null`。`null` 与 `0` 是不同的答案，
-  前端显示"暂无数据"而不是 0%。
-- `failureWindowHours` 固定为 24，按 `updated_at` 统计 `completed` 与 `failed`。
-- `rateLimitTriggers` 只统计真正返回 429 的请求，Redis 故障导致的 closed 拒绝不计入；键固定为 `login` / `chat`，未触发的键可缺省。
-- `embeddingCache.hitRate = hits / (hits + misses)`；缓存错误单独计数，不进入分母。进程尚未发生缓存查询时为 `null`。
-- `vectorSearch.pgvectorVersion` 为数据库中 `vector` 扩展的版本，读取失败或非 PostgreSQL 时为空字符串；`iterativeScan` 在 0.8.0 及以上为 true；`exactFallbacks` 为本进程内向量召回因索引扫描返回不足而改用精确检索的次数（见 RAG 规范“pgvector 查询约束”）。
-
-### Provider 为什么不做探测
-
-`configured` 表示同时配置了 key 和模型名，`status` 与计数来自真实业务流量，而不是探测
-请求。
-
-OpenAI 兼容接口里没有免费的 ping。为了检查而发一次 completion，等于每次打开诊断页都
-让运维付一次钱，而且测出来的延迟不是真实请求的延迟。所以这里报告的是配置完整性加上真
-实调用观察到的健康度。
-
-`recentFailures > 0` 只把 Provider 标成 `degraded` 而不是 `down`：记录器只能看见流量，
-既有近期失败又有近期成功的 Provider 是不稳定，完全没有流量的 Provider 是未知，两者都不
-足以断言它已经挂了。
-
-`rerank` 即使被关闭也会返回一行（`status: not_configured`）：运维要区分的正是"重排坏
-了"和"重排没开"，省掉这一行等于两个问题都不回答。
-
-### 指标是进程内的
-
-`latency`、`rerankFallbacks`、`rateLimitTriggers` 与 `embeddingCache` 都是进程内指标（耗时每项最多保留 512 个样本），服务重启后归零，多实例部署下每个实例各报自己的数据。分位数用 nearest-rank，
-`sampleCount` 是实际参与计算的样本数，会小于 `count`。
-
-这是刻意的取舍：把每次检索和生成都写库会给热路径加一次写入，并需要一张随流量无限增长
-的表。持久化留给日志。`metricsSinceRestart` 恒为 `true`，留作未来接入持久化存储时不破
-坏契约的开关。前端明确写出这一点，而不是暗示它是历史全量数据。
-
-### 系统管理员鉴权与初始化
-
-系统角色取自 `users.role`，仅精确值 `admin` 可访问诊断。知识库 `manager` 或 `owner` 不等同于系统管理员；系统管理员也不能绕过知识库权限与会话归属校验。
-
-登录签发的 JWT 带 `role` 快照，但诊断中间件每次请求查询数据库中的当前角色。因此提升、降权和删除账号立即影响已有 token；旧版不带 `role` 的有效 token 仍可登录，并按数据库角色授权。前端通过当前用户接口控制诊断入口，普通用户直达诊断页面显示权限说明，不请求诊断内容；客户端显示不替代服务端鉴权。
-
-首位管理员仅通过运维 CLI 初始化：`go run ./cmd/bootstrap-admin -username <现有账号>` 保留原密码与资料并提升指定用户。新部署需设置 `BOOTSTRAP_ADMIN_PASSWORD`，再显式加 `-create` 创建账号。已有其他管理员时拒绝初始化，重复指定同一管理员不修改数据；`cmd/seed` 仍只创建普通用户。无公开 HTTP 初始化接口、默认管理员密码或自动授予首位登录者权限。步骤见 [部署指南](13-deployment.md#74-初始化系统管理员)。
-
-`GET /api/v1/system/capabilities` 仍对普通登录用户可用，`/healthz` 及 `/api/v1/healthz` 仍无需登录；密钥、部署拓扑和原始错误的响应保护约束保持适用。
-
-## AI 开发约束
-
-1. API 字段使用 camelCase。
-2. 数据库字段使用 snake_case。
-3. 任何知识库相关接口必须走能力矩阵判定，不要在 repository 里写 `owner_id = ?`。
-4. citations 只能来自最终进入 Prompt 的 rerank chunks。
-5. 不要返回未授权资源是存在还是不存在的敏感细节；可统一返回 `RESOURCE_NOT_FOUND` 或 `FORBIDDEN`。
-
-## P1 标签扩展
-
-### GET /knowledge-base-tags
-
-返回当前用户的标签列表，每项带使用量：
-
-```json
-{
-  "items": [
-    {
-      "id": "tag_uuid_1",
-      "name": "product",
-      "knowledgeBaseCount": 2,
-      "createdAt": "2026-08-09T10:00:00Z",
-      "updatedAt": "2026-08-09T10:00:00Z"
-    }
-  ]
-}
-```
-
-`knowledgeBaseCount` 统计当前用户名下引用该标签的知识库数量，**包含回收站中的知识库**。这样它与 `DELETE` 的 `TAG_NOT_EMPTY` 判定口径一致：计数大于 0 就一定删不掉。
-
-`POST` 返回的新标签 `knowledgeBaseCount` 固定为 `0`；`PUT` 返回改名后的实际计数。知识库负载里内嵌的 `tags` 摘要不带该字段。
-
-### POST /knowledge-base-tags
-
-```json
-{
-  "name": "product"
-}
-```
-
-### PUT /knowledge-base-tags/:id
-
-```json
-{
-  "name": "manual"
-}
-```
-
-### DELETE /knowledge-base-tags/:id
-
-删除时若仍被知识库引用，返回 `TAG_NOT_EMPTY`。
-
-### 知识库标签字段
-
-- `POST /knowledge-bases` 和 `PUT /knowledge-bases/:id` 支持 `tagIds: string[]`
-- `GET /knowledge-bases` 支持 `tagIds=uuid,uuid`
-- `GET /knowledge-bases` 和 `GET /knowledge-bases/:id` 返回 `tags`
-
-```json
-{
-  "tagIds": ["tag_uuid_1", "tag_uuid_2"]
-}
-```
-
-```json
-{
-  "tags": [
-    {
-      "id": "tag_uuid_1",
-      "name": "product"
-    }
-  ]
-}
-```
-
-## P1 回收站扩展
-
-### GET /knowledge-bases/recycle-bin
-
-返回当前用户已删除知识库列表。
-
-### POST /knowledge-bases/:id/restore
-
-恢复当前用户已删除知识库。
-
-### DELETE /knowledge-bases/recycle-bin/:id
-
-永久删除当前用户 owner 的、已在回收站中的知识库，并清理关联文档、chunks、chat sessions、成员、收藏、浏览和标签绑定。关联文件对象通过同事务写入的持久化清理任务异步删除；存储临时失败会重试，不影响数据库删除的原子性。
-
-### POST /knowledge-bases/recycle-bin/empty
-
-清空当前用户 owner 的知识库回收站，采用 all-or-nothing 语义。
-
-知识库回收站刻意保持 owner 独有，不走能力矩阵：`kb.delete` 本来就只有 owner，而回收站
-是 owner 的私有空间——manager 对躺在里面的知识库应该拿到 404，而不是一个「确认它在那里」
-的 403。恢复与批量永久删除同理。
-
-### GET /documents/recycle-bin
-
-返回调用者在有 `content.write` 的知识库下的已删除文档，跨知识库聚合。
-
-### POST /documents/:id/restore
-
-恢复已删除文档。需要所属知识库的 `content.write`。
-
-### DELETE /documents/recycle-bin/:id
-
-永久删除已在回收站中的文档，需要所属知识库的 `content.purge`（manager 起），并清理 chunks 和处理任务。文件对象通过同事务写入的持久化清理任务异步删除。
-
-### POST /documents/recycle-bin/empty
-
-清空调用者有 `content.purge` 的知识库下的文档回收站，数据库删除与全部对象清理任务采用 all-or-nothing 事务语义；对象由后台 worker 删除并在失败时持续重试。
-
-注意列出与清空用的是两个不同能力：editor 看得到自己删掉的文档并能恢复，但清空要 manager。
-
-## P1 权限设置扩展
-
-- 新增 `GET /knowledge-bases/:id/permissions`
-- 新增 `PUT /knowledge-bases/:id/permissions`
-- 新增 `GET /users/search`
-- 新增 `POST /knowledge-bases/:id/members`
-- 新增 `PUT /knowledge-bases/:id/members/:userId`
-- 新增 `DELETE /knowledge-bases/:id/members/:userId`
-- `owner` 始终来自 `knowledge_bases.owner_id`，成员表只保存 `manager` / `member`
-- owner 和 manager 可管理成员；owner 不能被删除或降级
-- P2 已把成员角色改为 `viewer` / `editor` / `manager`，见「权限与能力矩阵」
-
-## P1 批量操作兼容扩展
-
-- 新增 `POST /knowledge-bases/batch-favorite`
-- 新增 `POST /knowledge-bases/batch-move-category`
-- 新增 `POST /knowledge-bases/batch-delete`
-- 新增 `POST /knowledge-bases/batch-restore`
-- 新增 `POST /documents/batch-delete`
-- 新增 `POST /documents/batch-restore`
-- 新增 `POST /documents/batch-reprocess`
-- 新增 `POST /knowledge-base-categories/reorder`
-- 新增 `GET /knowledge-bases/workspace-preference`
-- 新增 `PUT /knowledge-bases/workspace-preference`
-- 当前批量接口仅覆盖知识库工作台主操作，且全部按 owner 维度校验
-- 当前批量接口采用 all-or-nothing 语义，不返回部分成功结果
-
-## P2 首次使用与知识库质量
-
-- 新增 `POST /documents/:id/replace`（201 + 新文档，旧文档标记 `supersededById`）
-- `POST /documents` 与 `POST /knowledge-bases/:kbId/documents` 新增 `allowDuplicate` 表单字段
-- 内容重复返回 409 `DOCUMENT_DUPLICATE_CONTENT`，`details` 点名冲突文档
-- 替换已被替换过的文档返回 409 `DOCUMENT_ALREADY_SUPERSEDED`
-- 文档响应新增 `errorCode`、`supersededById`、`supersededAt`、`isStale`、`staleAfterDays`
-- 会话消息新增 `answerStatus`，`GET /chat/knowledge-gaps` 的 `category` 扩展到四类
-- `errorCode` 与 `answerStatus` 都是封闭集合；`errorCode` 的 CHECK 已由迁移 039 扩充，`answerStatus` 保持迁移 019 的约束
-
-## P2 权限与协作
-
-- 成员角色从 `manager` / `member` 改为 `viewer` / `editor` / `manager`；migration 020
-  把既有 `member` 行改写为 `viewer`
-- 判定单位从「是不是 owner」改为 14 个能力，矩阵见「权限与能力矩阵」
-- 知识库响应新增 `effectiveRole` 与 `capabilities`
-- 无立场（非 owner 非成员、知识库已删除、成员已撤销）一律 404；角色不够才 403，
-  `details` 带 `role`、`capability`、`requiredRole`
-- 404 的错误码按调用方问的资源命名，不按拒绝来源命名
-- 下载、导出、质量运营数据、永久删除各自校验独立能力，不再一律等同 owner
-- 跨知识库列表的可达性写在查询里，角色集合来自 `access.MemberRolesWith`
-- 知识库回收站保持 owner 独有，不走矩阵（回收站是 owner 的私有空间）
-- 本阶段不引入组织树、SSO 或通用策略引擎
-
-## 管理员操作记录与知识库转移
-
-`GET /admin/activities` 由 `RequireSystemAdmin` 保护，未登录 401，非管理员 403 `SYSTEM_ADMIN_REQUIRED`。查询 `page=1&pageSize=20`，每页最大 100。返回 `{items,total,page,pageSize}`，只包含 `admin.` 前缀活动，按时间倒序，覆盖所有操作者。每项为 `{id,action,resourceType,resourceId,resourceName,actor:{id,username,displayName},createdAt}`。不公开其他用户的知识库活动。禁用和启用分别记录 `admin.user.disabled`、`admin.user.enabled`；显示名实际变化时才记录 `admin.user.updated`。
-
-`GET /admin/users` 的每项新增 `ownedKnowledgeBaseCount`，包括已软删除的知识库。以下转移接口都接收 `{newOwnerId,keepPreviousOwnerAsManager}`，成功返回 200 `{transferredCount}`：
-
-| 接口 | 权限与范围 |
-| --- | --- |
-| `POST /knowledge-bases/:id/transfer-ownership` | `kb.transfer`，仅当前所有者，知识库须未删除；无权限成员 403，陌生人或已删除资源 404 |
-| `POST /admin/users/:id/transfer-knowledge-bases` | 系统管理员，将该用户所有知识库（含回收站）作为一个原子批次转移 |
-
-新所有者必须存在、启用且与旧所有者不同，否则 400 `TRANSFER_TARGET_INVALID`；管理员入口的原用户不存在返回 404 `USER_NOT_FOUND`。锁内检测到单库所有权或状态已变化返回 409 `OWNERSHIP_CHANGED`。事务按固定顺序锁定用户与知识库行，整个批次成功或回滚。新所有者原成员行移除；`keepPreviousOwnerAsManager=true` 时旧所有者成为 manager，否则移除其成员身份。分类不属于新所有者时清空；标签、收藏、浏览历史、其他成员、文档与会话保持。会话仍须同时满足知识库访问与 `chat_sessions.user_id` 校验。`updated_by_id` 记录操作者；为操作者和新所有者记录 `kb.ownership_transferred`，同一人只记一次。
-
-## 粘贴文本创建文档
-
-`POST /knowledge-bases/:id/documents/text` 要求 `content.write`，请求：
-
-```json
-{"title":"设备维护手册","content":"# 维护\n每 90 天检查一次。","format":"md","allowDuplicate":false}
-```
-
-`title` trim 后 1–200 个 Unicode 字符；非法文件名字符替换为下划线，再追加扩展名。`format` 仅 `md` / `txt`，缺省 `md`；正文不能全为空白，UTF-8 字节数不超过 `MAX_UPLOAD_SIZE_MB`。非法输入返回 `VALIDATION_ERROR`。正文原始字节参与哈希与存储；与 multipart 上传共享查重、清理预留、文档和任务事务、活动记录与后台处理。成功 201，响应与上传文档相同；重复内容返回 409 `DOCUMENT_DUPLICATE_CONTENT`，`allowDuplicate=true` 可明确保留重复副本。
-
-## Embedding 诊断
-
-`GET /system/diagnostics` 新增 `embedding`：`status`、`model`、`configuredDimension`、`columnDimension`、`totalDocuments`、`unknownDocuments`、`mismatchedDocuments`、`groups`。每个 group 为 `{model,dimension,count}`；未知值为 null。只统计知识库和文档均未删除、状态 completed 的文档，包含仍可检索的历史版本。未知与不匹配分别计数；有任一异常时为 degraded，查询失败为 down，不能把失败解释为零文档。原有管理员权限保持。
-
-## 回答收藏与个人备注
-
-| 方法 / 路径 | 请求与响应 |
-| --- | --- |
-| `GET /chat/bookmarks` | `q` 可选、最多 200 字；`page` 默认 1、范围 1–1000000，`pageSize` 默认 20、范围 1–100。返回 `{items,total,page,pageSize}`。 |
-| `PUT /chat/messages/:messageId/bookmark` | `{note}`，trim 后最多 4000 字，允许空备注；请求体最多 100 KiB。幂等创建/更新，200 返回 `{messageId,note,createdAt,updatedAt}`。 |
-| `DELETE /chat/messages/:messageId/bookmark` | 204；在回答仍可访问的前提下重复删除成功。 |
-
-仅收藏本人可访问会话中的 assistant 回答，精确绑定回答版本；提问返回 400 `VALIDATION_ERROR`。没有访问立场、会话已删除或任一依赖撤权返回 404 `RESOURCE_NOT_FOUND`。归档会话包括在结果中；计数与条目共用全部依赖权限条件。`q` 对回答、备注和会话标题做字面关键词搜索，不把 `%/_` 当通配符。
-
-列表条目包含消息搜索字段 `{messageId,sessionId,sessionTitle,archivedAt,role,createdAt,excerpt}` 和 `bookmark`；摘录沿用会话搜索的纯文本及高亮区间格式。消息历史 DTO 额外带可选 `bookmark`，由批量查询加载；无收藏时省略。普通消息查询、个人模板及收藏不跨账号缓存。
-
-## 文档版本文本对比
-
-- `GET /documents/:id/versions` 返回 `{items:[{id,filename,status,createdAt,supersededById}]}`，按时间/ID 升序。仅包含该文档双向替换链中同库、未删除的文档，删除或跨库链接停止遍历；最多 100 个版本。
-- `GET /documents/:id/compare?baseId=UUID` 将路径版本作为新版本、`baseId` 作为旧版本。两端均需 `document.read`，且必须来自同一替换链；非法链为 400 `VALIDATION_ERROR`。两个相同 ID 可比较，结果无增删。
-- 响应为 `{base,head,addedLines,removedLines,lines}`；每行 `{kind,content,baseLine,headLine}`，`kind=equal|add|remove`，行号从 1 开始，不存在的一侧为 null。文本按字面返回，不包含渲染 HTML。
-- 两端必须 completed；原文件各最多 50 MiB、解析文本各最多 1 MiB / 2000 行。比较解析文本，不比较 PDF/DOCX 版式或调用模型概括差异；对象读取后重新验证两端权限。错误列表见 `09-error-codes.md`。
-
-## 对话分支
-
-`POST /chat/sessions/:id/branches`，请求体最多 16 KiB：
-
-```json
-{"messageId":"assistant-message-uuid","clientRequestId":"new-request-uuid","title":"可选标题"}
-```
-
-201 返回新会话详情，含可选 `branchFromSessionId` / `branchFromMessageId`。标题 trim 后最多 100 字；不填则由来源标题附加“ · 分支”。来源须属于调用者且全部依赖可访问，允许从归档会话创建。只接受 assistant 消息，复制按时间/ID 排序的历史前缀，恰好结束于选中的回答版本；最多 10000 条消息 / 16 MiB 正文、引用和回退元数据。
-
-复制保留内容、引用、意图、检索式和回答状态，继承自动/手动模式及完整依赖；副本使用新 ID，不复制收藏、评价、未确认写入、请求编号或模型用量。来源会话不变。创建、依赖和消息复制在同一事务中，来源行锁使相同请求并发重试返回同一个分支；已存在请求编号用于不同目标或已软删除分支时报 409 `CHAT_BRANCH_REQUEST_CONFLICT`。来源永久删除后分支保留，链接置空；分支始终独立检查自己的知识库依赖。
-
-## 个人提问模板
-
-| 方法 / 路径 | 请求与响应 |
-| --- | --- |
-| `GET /chat/templates` | 与收藏相同的 `q/page/pageSize`，搜索标题和正文；返回 `{items,total,page,pageSize}`。 |
-| `POST /chat/templates` | `{title,body}`，201 返回模板。 |
-| `PUT /chat/templates/:templateId` | `{title,body}`，200 返回更新模板。 |
-| `DELETE /chat/templates/:templateId` | 204；不存在或非本人模板返回 404。 |
-
-模板响应 `{id,title,body,variables,createdAt,updatedAt}`。标题 trim 后 1–100 字，正文 1–12000 字，请求体最多 100 KiB。变量语法为 `{{变量名}}`，变量名最多 40 个 Unicode 字符，只含字母、数字、下划线或连字符；最多 20 个不同变量，按第一次出现排序，重复变量只列一次，畸形括号返回 400 `VALIDATION_ERROR`。权限仅个人归属，不依附特定知识库；不调用模型或自动发送聊天。前端填值和插入草稿，不新增服务端模板执行接口。
-
-## 表格来源与相对路径
-
-上传能力增加 `.xlsx` 和 `.csv`；`.xls` 不支持。解析与压缩包上限见 [RAG 规范](05-rag-pipeline.md#xlsx--csv-资料解析)。表格向量及引用继续使用现有 pipeline，无统计/公式执行接口。
-
-文档上传、全局上传及替换 multipart 请求可带 `sourcePath`。它只作来源展示，统一 `/` 分隔，最后一段必须等于上传文件名；最多 1024 UTF-8 字节、每段最多 255 字，拒绝绝对路径、冒号、控制字符、空段、`.` 和 `..`。非法值为 400 `VALIDATION_ERROR`。文档详情、列表、回收站、上传和替换响应带可选 `sourcePath`，空值省略；替换只保存本次上传提供的路径。ZIP 不作为后端文档格式上传，由浏览器展开后调用原有逐文件 API，全部文件仍逐项鉴权、查重与排队。
-
-检索条目与引用新增可选 `table`：
-
-```json
-{"table":{"sheetName":"库存","rowStart":5,"rowEnd":5,"headerRow":2}}
-```
-
-XLSX 使用工作表名和原始行号；CSV 的工作表名为空，行范围是物理文件行（包括引号字段内换行）。表头不会单独成为数据记录。无来源或无效元数据不生成 `table`；行号不由回答模型推断。JSON/SSE、已保存消息及 Markdown 导出均保留来源。
-
-`GET /documents/:id/preview` 对表格返回 `kind=text`、解析文本与 `tableRows`。每项包括上述四个来源字段以及 `[startOffset,endOffset)`，它是响应 `content` 的 UTF-8 字节区间，用于定位完整数据记录。预览输入文件或解析文本大于 1 MiB 时仍报 `FILE_TOO_LARGE_FOR_PREVIEW`；可查看已有引用摘录和来源标签。表格解析失败为 `DOCUMENT_PREVIEW_FAILED`，触及表格解析上限为 `DOCUMENT_TABLE_TOO_LARGE`。XLSX 只读取已保存公式结果；无缓存值为空，前端说明这一限制。
-
-### 扫描 PDF 的页摘要与来源
-
-`pdfTextSummary` 增加可选 `ocr`，旧客户端/旧记录可省略；它描述本次解析结果，不表示片段已发布：
-
-```json
-{
-  "totalPages": 4,
-  "textPages": 3,
-  "pagesWithoutText": [4],
-  "ocr": { "status": "completed", "totalPages": 3, "completedPages": 3, "pages": [2, 3] }
-}
-```
-
-外层 `textPages` 为原生与 OCR 文字页总数；`ocr.totalPages` 为原本无原生文字、需要尝试识别的页数，`completedPages` 包含成功尝试但没有文字的空白页，`pages` 仅包含确实提取出 OCR 文字的物理页。`status` 为 `disabled/running/completed/unavailable/timeout/failed/limit_exceeded`。摘要在识别期间更新，失败时保留诊断，重处理立即清空；片段与文本快照只在完整处理成功时原子替换。任务取消或失败后，最后一次仍为 `running` 的摘要在文档响应中以 `failed` 返回，具体终止原因由 `jobStatus/errorCode` 表示，不能继续当作运行中。
-
-OCR chunk 的 `metadata.textSource`、检索结果和聊天 citation 增加可选 `textSource: "ocr"`，原生文字省略该字段。JSON/SSE、历史和分支保留该字段；权限矩阵保持，OCR 不能授予原文件下载权限。`pageNumber` 仍为原 PDF 物理页码；OCR 偏移只对应识别文本，不对应原图坐标。PDF 来源显示识别摘录并定位到页，不宣称原生文字高亮。版本对比优先读取已发布 PDF 文本快照，不在 HTTP 请求中执行 OCR；旧文档没有快照时沿用原生解析。

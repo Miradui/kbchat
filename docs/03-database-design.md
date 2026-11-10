@@ -1,25 +1,8 @@
 # 数据库设计
 
-## 知识工作流扩展（044–047，2026-10-19）
+数据库为PostgreSQL + pgvector，需启用 `CREATE EXTENSION IF NOT EXISTS vector`，当前源码要求迁移至 **049**。本页SQL是字段/关系摘录，不替代 [SQL迁移](../backend/migrations)；初始化、升级和备份见 [部署运维](13-deployment.md#7-数据库初始化和升级)。权限以 [API能力矩阵](04-api-design.md#权限与能力矩阵) 为准。
 
-| 迁移 | 数据与约束 |
-| --- | --- |
-| 044 | `chat_sessions.document_scope JSONB NOT NULL DEFAULT '[]'`，数组最多 20 项；保存文档 id/knowledgeBaseId/filename，固定到选定文档 ID，分支复制范围。 |
-| 045 | `document_pdf_corrections(document_id UUID PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, content JSONB NOT NULL)`；完整不可变页文本基线，格式同 PDF 快照，人工修改页为 `textSource=ocr_corrected`。 |
-| 046 | `evaluation_cases.scope JSONB NOT NULL DEFAULT '{}'` 保存来源会话范围；`evaluation_runs.is_private BOOLEAN NOT NULL DEFAULT false`；既有 cases/results JSON 保存范围及实际来源库。 |
-| 047 | `chat_quality_issues` 主键 `(user_id,session_id,question_key)`，问题键为原问题 SHA-256；保存 question/status/note/document_ids/evaluation_case_id/evaluation_run_id/updated_at。状态为 open/retest/resolved；用户和会话外键 CASCADE，用例和运行外键 SET NULL。 |
-
-校对副本、处理任务、替换链接、上传凭据和校对基线在一次事务提交；提交时锁定源文档并检查已发布快照指纹，与 processor 发布锁串行化。重新处理校对版复用基线，不重新 OCR。已发布快照只在新切片全部成功时替换。
-
-新迁移可重复执行，不回填旧会话范围或推断旧 PDF 的校对内容。存量升级须先完成 034–043，再执行 044–047。浏览器草稿不入数据库。
-
-迁移 040 新增 `document_upload_receipts`：`user_id`、`knowledge_base_id`、`request_id` 联合主键，`fingerprint varchar(64)`、可空 `document_id`、`created_at timestamptz`。凭据与文档/任务/版本链接一起提交，只记录成功请求；文档永久删除将 `document_id` 置空以保留幂等墓碑，用户或知识库永久删除级联清除。按 `document_id` 建索引。未传请求 ID 的旧客户端不创建凭据。
-
-迁移 041 新增 `documents.table_import JSONB NULL`，保存标准化工作表、表头行和原列号选择，原文件及设置在一个文档版本内不可变。旧行 NULL 保留自动解析默认；重处理不清空设置。041 同时扩展 `documents_error_code_check`，允许 `table_import_invalid`。不自动重处理历史文档。
-
-数据库使用 PostgreSQL，向量能力使用 pgvector。
-
-迁移 042 新增 `knowledge_bases.document_version_policy VARCHAR(16) NOT NULL DEFAULT 'all'`，约束为 `all/current`，旧库和新库默认均保持全部版本。当前有效版本根据既有 `superseded_by_id` 链及已发布 `document_chunks` 动态选择，不改写历史切片，也不依据处理中会变化的 `documents.status` 判断快照是否可用。
+表按账户、知识管理、文档、任务、会话和评测分组，迁移补充集中在文末。不得把文件二进制写入数据库。
 
 ## 时间约定
 
@@ -28,15 +11,7 @@
 - Go 模型继续使用 `time.Time`、`*time.Time` 和 `gorm.DeletedAt`，由 GORM 的 PostgreSQL 方言映射为 `timestamptz`；原生 pgx 驱动处理带不同时区的参数，无需自定义时间编码。
 - API 时间携带 `Z` 或明确的时区偏移，前端按浏览器时区显示；数据库中的 UTC 数值不等于用户本地钟面时间。
 - 旧库先执行 `023_timestamps_with_time_zone.sql`：使用 `USING 列名 AT TIME ZONE 'UTC'` 将无时区字段转为 `TIMESTAMPTZ`，保持旧值当前按 UTC 读取时的含义，不额外校正历史偏差。已有 `TIMESTAMPTZ` 字段跳过，重复执行不会再次换算时间。
-- 启动检查会拒绝仍有无时区业务时间字段的 PostgreSQL schema，并提示执行 023；启动期 `AutoMigrate` 不负责修改已有列类型。全新数据库按顺序执行全部迁移，001–022 保留历史定义，以下示例展示 023 后的结构。升级与备份步骤见 [部署指南](13-deployment.md#73-已有数据库)。
-
-## 扩展
-
-迁移 025 为 `users` 增加 `status`、`last_login_at`、`created_by`；迁移 026 新增 `model_usage_records` 保存模型调用用途、模型名、token 和延迟；迁移 027 为 `knowledge_bases` 增加 `answer_config`。
-
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-```
+- 启动检查会拒绝仍有无时区业务时间字段的 PostgreSQL schema，并提示执行 023；启动期只做只读结构断言，不会修改已有列类型。全新数据库按顺序执行全部迁移，001–022 保留历史定义，以下示例展示 023 后的结构。升级与备份步骤见 [部署指南](13-deployment.md#73-已有数据库)。
 
 ## users
 
@@ -165,11 +140,13 @@ CREATE TABLE knowledge_base_members (
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (knowledge_base_id, user_id),
-    CONSTRAINT knowledge_base_members_role_check CHECK (role IN ('manager', 'member'))
+    CONSTRAINT knowledge_base_members_role_check CHECK (role IN ('viewer', 'editor', 'manager'))
 );
 ```
 
-`owner` 不写入成员表，始终来自 `knowledge_bases.owner_id`。当前成员角色只支持 `manager` 和 `member`；owner 和 manager 可管理成员，owner 不能被删除或降级。
+`owner` 不写入成员表，始终来自 `knowledge_bases.owner_id`。角色集合为 `viewer` / `editor` / `manager`：
+迁移 009 建表时是 `manager` / `member`，迁移 020 把 `member` 改写为 `viewer` 并加入 `editor`，同时重建
+上面的 CHECK。owner 和 manager 可管理成员，owner 不能被删除或降级。
 
 ## knowledge_base_workspace_preferences
 
@@ -187,6 +164,32 @@ CREATE TABLE knowledge_base_workspace_preferences (
 ```
 
 用于保存当前用户知识库工作台的视图偏好，不影响权限判断，也不改变实际数据过滤规则。
+
+## knowledge_base_tags 与 knowledge_base_tag_bindings
+
+```sql
+CREATE TABLE knowledge_base_tags (
+    id UUID PRIMARY KEY,
+    owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name VARCHAR(64) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE UNIQUE INDEX uk_kb_tags_owner_name
+ON knowledge_base_tags (owner_id, name);
+
+CREATE TABLE knowledge_base_tag_bindings (
+    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+    tag_id UUID NOT NULL REFERENCES knowledge_base_tags(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (knowledge_base_id, tag_id)
+);
+
+CREATE INDEX idx_kb_tags_owner_id ON knowledge_base_tags (owner_id);
+CREATE INDEX idx_kb_tag_bindings_kb_id ON knowledge_base_tag_bindings (knowledge_base_id);
+CREATE INDEX idx_kb_tag_bindings_tag_id ON knowledge_base_tag_bindings (tag_id);
+```
 
 ## documents
 
@@ -262,6 +265,7 @@ CREATE TABLE document_jobs (
     status VARCHAR(32) DEFAULT 'pending',
     retry_count INT DEFAULT 0,
     error_message TEXT,
+    traceparent VARCHAR(55) NOT NULL DEFAULT '',
     locked_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
@@ -397,7 +401,13 @@ CREATE TABLE evaluation_cases (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+```
 
+`require_citation` 的 `DEFAULT TRUE` 从不生效：`requireCitation` 在 API 里是非指针 `bool` 且没有
+`omitempty`，省略即发送 `false`，GORM 也会显式写入该列。默认「需要引用」只能由客户端显式传 `true`
+表达，建表默认值只对绕过 API 的直插有意义。
+
+```sql
 CREATE TABLE evaluation_runs (
     id UUID PRIMARY KEY,
     knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
@@ -434,6 +444,36 @@ worker 通过 `FOR UPDATE SKIP LOCKED` 领取运行并发放 `lease_token`。每
 结果写入必须同时匹配运行 id、lease token 和 running 状态，取消清除租约，禁止迟到写入。
 超过 2 分钟没有续租的运行标记 failed，不自动重放。知识库软删除后不可读取/领取并停止续租；
 永久删除依赖外键级联删除两张表中的数据。评测不写 `chat_sessions` 或 `chat_messages`。
+
+## model_usage_records
+
+```sql
+CREATE TABLE model_usage_records (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+    session_id UUID REFERENCES chat_sessions(id) ON DELETE SET NULL,
+    message_id UUID REFERENCES chat_messages(id) ON DELETE SET NULL,
+    purpose VARCHAR(32) NOT NULL,
+    provider VARCHAR(64) NOT NULL,
+    model VARCHAR(128) NOT NULL,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    total_tokens INTEGER,
+    latency_ms BIGINT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_model_usage_kb_created ON model_usage_records (knowledge_base_id, created_at);
+CREATE INDEX idx_model_usage_user_created ON model_usage_records (user_id, created_at);
+```
+
+每次模型调用一行：`purpose` 为 `intent` / `answer` / `title` / `evaluation`；`provider` 为 `MODEL_PROVIDER`；`model` 为请求时使用的模型名（全局配置或知识库覆盖），不采用服务商响应中回显的别名，以便与 `MODEL_PRICING` 和 `CHAT_ALLOWED_MODELS` 对应；2026-09-26 之前写入的行可能是回显名。token 列在 Provider 未返回 usage 时为 NULL，不估算。Chat 的 intent / answer / title 调用在助手消息落库后关联 `message_id`（2026-09-28 之前的标题记录可能为空，不回填）；评测调用 `session_id` 与 `message_id` 为 NULL，只归属知识库。`latency_ms` 是该次模型调用自身的耗时。
+
+## 已发布 PDF 文本快照（043）
+
+`document_pdf_snapshots` 使用 `document_id UUID PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE` 和 `content JSONB NOT NULL`。内容为 `{version:1,totalPages,pages:[{pageNumber,content,textSource?}]}`，最多 500 个物理页，空白页省略；OCR 页标记 `textSource: "ocr"`。快照与替换后的全部 chunks、Embedding 来源和成功任务状态在同一事务内提交。重新处理失败或取消保留旧快照；软删除随原文隐藏，永久删除级联清除。
+
+该表按文档单独读取，避免列表、状态轮询及知识库查询载入大段 OCR 文本；访问前仍需校验文档所属知识库的能力。043 可重复执行，不为旧记录生成快照，并补齐 `pdf_limit_exceeded/ocr_unavailable/ocr_timeout/ocr_failed/ocr_limit_exceeded` 错误码约束。
 
 ## 索引
 
@@ -476,63 +516,6 @@ USING gin (search_vector);
 
 向量索引自迁移 024 起为 HNSW，替换了早期的 `idx_chunks_embedding`（ivfflat）；HNSW 不需要在数据到位后重建，增量写入后的召回率更稳定。查询时后端在事务内 `SET LOCAL hnsw.ef_search = max(40, vectorTopN)`，保证 HNSW 至少返回请求数量的候选。全新数据库依次执行 001–024 时，早期迁移创建的 ivfflat 索引会在 024 中被删除，空表上的代价可以忽略。
 
-## P1 Tag Extension
-
-```sql
-CREATE TABLE knowledge_base_tags (
-    id UUID PRIMARY KEY,
-    owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    name VARCHAR(64) NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE UNIQUE INDEX uk_kb_tags_owner_name
-ON knowledge_base_tags (owner_id, name);
-
-CREATE TABLE knowledge_base_tag_bindings (
-    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
-    tag_id UUID NOT NULL REFERENCES knowledge_base_tags(id) ON DELETE CASCADE,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    PRIMARY KEY (knowledge_base_id, tag_id)
-);
-
-CREATE INDEX idx_kb_tags_owner_id ON knowledge_base_tags (owner_id);
-CREATE INDEX idx_kb_tag_bindings_kb_id ON knowledge_base_tag_bindings (knowledge_base_id);
-CREATE INDEX idx_kb_tag_bindings_tag_id ON knowledge_base_tag_bindings (tag_id);
-```
-
-## AI 开发约束
-
-1. 所有查询 documents、chunks、chat sessions 时必须校验知识库 owner。
-2. 删除 document 时必须级联删除 chunks。
-3. citations 保存在 assistant 消息的 `citations` 字段。
-4. 不要创建多租户相关表。
-5. 不要把文件二进制内容写入数据库。
-## model_usage_records
-
-```sql
-CREATE TABLE model_usage_records (
-    id UUID PRIMARY KEY,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
-    session_id UUID REFERENCES chat_sessions(id) ON DELETE SET NULL,
-    message_id UUID REFERENCES chat_messages(id) ON DELETE SET NULL,
-    purpose VARCHAR(32) NOT NULL,
-    provider VARCHAR(64) NOT NULL,
-    model VARCHAR(128) NOT NULL,
-    prompt_tokens INTEGER,
-    completion_tokens INTEGER,
-    total_tokens INTEGER,
-    latency_ms BIGINT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_model_usage_kb_created ON model_usage_records (knowledge_base_id, created_at);
-CREATE INDEX idx_model_usage_user_created ON model_usage_records (user_id, created_at);
-```
-
-每次模型调用一行：`purpose` 为 `intent` / `answer` / `title` / `evaluation`；`provider` 为 `MODEL_PROVIDER`；`model` 为请求时使用的模型名（全局配置或知识库覆盖），不采用服务商响应中回显的别名，以便与 `MODEL_PRICING` 和 `CHAT_ALLOWED_MODELS` 对应；2026-09-26 之前写入的行可能是回显名。token 列在 Provider 未返回 usage 时为 NULL，不估算。Chat 的 intent / answer / title 调用在助手消息落库后关联 `message_id`（2026-09-28 之前的标题记录可能为空，不回填）；评测调用 `session_id` 与 `message_id` 为 NULL，只归属知识库。`latency_ms` 是该次模型调用自身的耗时。
-
 ## 迁移 024–029
 
 迁移 024 为 `document_chunks` 增加 `search_vector` 并把向量索引换为 HNSW；025 为 `users` 增加 `status`、`last_login_at`、`created_by`；026 新增 `model_usage_records`；027 为 `knowledge_bases` 增加 `answer_config`（`systemPromptAddition`、`answerLanguage`、`allowGeneralKnowledge`、`model`、`temperature`）；028 为 `evaluation_runs` 增加 `answer_config` 快照。029 为 documents 增加 embedding_model 与 embedding_dimension；后端启动时检查这些迁移对应的列或表，缺失即报错。
@@ -543,7 +526,7 @@ CREATE INDEX idx_model_usage_user_created ON model_usage_records (user_id, creat
 
 启动和 doctor 查询 `pg_attribute.atttypmod`，按当前 search_path 解析 `document_chunks.embedding`；必须与 `EMBEDDING_DIMENSION` 一致，否则拒绝启动。模型切换与重建步骤见 [部署指南](13-deployment.md#embedding-模型切换与重建)。
 
-## 六项功能扩展（迁移 034–039）
+## 收藏、分支、模板与文档来源（034–039）
 
 | 迁移 | 数据与约束 |
 | --- | --- |
@@ -560,12 +543,31 @@ CREATE INDEX idx_model_usage_user_created ON model_usage_records (user_id, creat
 
 表格不新增表或向量列。`document_chunks.metadata.table` 保存 `{sheetName,rowStart,rowEnd,headerRow}`，CSV 工作表名为空，XLSX 行起止相同。对应 `structureType=table_row`；无通用文本偏移和物理页码。该来源随实际检索片段保存到 `chat_messages.citations`，历史 JSON 缺少 `table` 时兼容原有格式。
 
-## 已发布 PDF 文本快照（043）
+## 文档范围、校对与私人评测（040–047）
 
-`document_pdf_snapshots` 使用 `document_id UUID PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE` 和 `content JSONB NOT NULL`。内容为 `{version:1,totalPages,pages:[{pageNumber,content,textSource?}]}`，最多 500 个物理页，空白页省略；OCR 页标记 `textSource: "ocr"`。快照与替换后的全部 chunks、Embedding 来源和成功任务状态在同一事务内提交。重新处理失败或取消保留旧快照；软删除随原文隐藏，永久删除级联清除。
+| 迁移 | 数据与约束 |
+| --- | --- |
+| 044 | `chat_sessions.document_scope JSONB NOT NULL DEFAULT '[]'`，数组最多 20 项；保存文档 id/knowledgeBaseId/filename，固定到选定文档 ID，分支复制范围。 |
+| 045 | `document_pdf_corrections(document_id UUID PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, content JSONB NOT NULL)`；完整不可变页文本基线，格式同 PDF 快照，人工修改页为 `textSource=ocr_corrected`。 |
+| 046 | `evaluation_cases.scope JSONB NOT NULL DEFAULT '{}'` 保存来源会话范围；`evaluation_runs.is_private BOOLEAN NOT NULL DEFAULT false`；既有 cases/results JSON 保存范围及实际来源库。 |
+| 047 | `chat_quality_issues` 主键 `(user_id,session_id,question_key)`，问题键为原问题 SHA-256；保存 question/status/note/document_ids/evaluation_case_id/evaluation_run_id/updated_at。状态为 open/retest/resolved；用户和会话外键 CASCADE，用例和运行外键 SET NULL。 |
 
-该表按文档单独读取，避免列表、状态轮询及知识库查询载入大段 OCR 文本；访问前仍需校验文档所属知识库的能力。043 可重复执行，不为旧记录生成快照，并补齐 `pdf_limit_exceeded/ocr_unavailable/ocr_timeout/ocr_failed/ocr_limit_exceeded` 错误码约束。
+校对副本、处理任务、替换链接、上传凭据和校对基线在一次事务提交；提交时锁定源文档并检查已发布快照指纹，与 processor 发布锁串行化。重新处理校对版复用基线，不重新 OCR。已发布快照只在新切片全部成功时替换。
+
+新迁移可重复执行，不回填旧会话范围或推断旧 PDF 的校对内容。已有环境根据实际迁移记录补齐至049；048意图约束与049任务上下文都是当前启动要求。浏览器草稿不入数据库。
+
+迁移 040 新增 `document_upload_receipts`：`user_id`、`knowledge_base_id`、`request_id` 联合主键，`fingerprint varchar(64)`、可空 `document_id`、`created_at timestamptz`。凭据与文档/任务/版本链接一起提交，只记录成功请求；文档永久删除将 `document_id` 置空以保留幂等墓碑，用户或知识库永久删除级联清除。按 `document_id` 建索引。未传请求 ID 的旧客户端不创建凭据。
+
+迁移 041 新增 `documents.table_import JSONB NULL`，保存标准化工作表、表头行和原列号选择，原文件及设置在一个文档版本内不可变。旧行 NULL 保留自动解析默认；重处理不清空设置。041 同时扩展 `documents_error_code_check`，允许 `table_import_invalid`。不自动重处理历史文档。
+
+数据库使用 PostgreSQL，向量能力使用 pgvector。
+
+迁移 042 新增 `knowledge_bases.document_version_policy VARCHAR(16) NOT NULL DEFAULT 'all'`，约束为 `all/current`，旧库和新库默认均保持全部版本。当前有效版本根据既有 `superseded_by_id` 链及已发布 `document_chunks` 动态选择，不改写历史切片，也不依据处理中会变化的 `documents.status` 判断快照是否可用。
 
 ## 常识型意图（048）
 
 `048_chat_message_general_intent.sql` 重建 `chat_messages_intent_check`，把 `general` 加入允许值（`conversation` / `general` / `knowledge_base`）。约束按名字先 DROP 再 ADD，可重复执行，不回填历史行。启动时校验约束定义包含 `general`，缺失即报错提示执行 048：否则第一条常识型回答会在生成完成后写库失败。
+
+## 文档任务追踪上下文（049）
+
+迁移 `049_document_job_traceparent.sql` 为 `document_jobs` 增加 `traceparent VARCHAR(55) NOT NULL DEFAULT ''`。GORM 创建任务时从当前请求上下文自动填写；历史任务为空，不回填。worker 每次执行从此字段恢复父上下文，重试不覆盖它。该字段不通过公开 DTO 返回，不存储 baggage 或业务内容；启动检查拒绝缺少该列的 PostgreSQL schema。迁移可重复执行，无新增索引，操作方法见 [可观测性](38-observability.md)。

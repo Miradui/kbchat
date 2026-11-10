@@ -1,16 +1,6 @@
 # 错误码规范
 
-## 知识工作流错误（2026-10-19）
-
-| 错误码 | HTTP | 含义与恢复 |
-| --- | --- | --- |
-| DOCUMENT_SCOPE_UNAVAILABLE | 409 | 指定文档已删除、移动或不可访问；保留历史，重新选择范围，不降级成全库。 |
-| DOCUMENT_EDIT_TOO_LARGE | 400 | 在线编辑原文超过 1 MiB；下载修改后替换。 |
-| DOCUMENT_EDIT_CONFLICT | 409 | OCR 原始发布快照已变化；保留本地校对，重新打开核对。 |
-| DOCUMENT_OCR_NOT_READY | 409 | 没有已发布 OCR 页或快照；先完成 OCR 处理。 |
-| EVALUATION_NOT_CONFIGURED | 503 | 当前服务未配置评测依赖，不能关联用例。 |
-
-文本及 OCR 新版本继续使用 DOCUMENT_ALREADY_SUPERSEDED（409）、DOCUMENT_UPLOAD_REQUEST_CONFLICT（409）和 DOCUMENT_UPLOAD_RESULT_UNAVAILABLE（409）。非法范围/空正文/超限页面/非 OCR 页面为 VALIDATION_ERROR（400）。失败不得清除前端未保存内容；同一内容重试沿用请求 ID。
+HTTP状态、业务码和异步文档处理分类分别定义；资源范围见 [API权限矩阵](04-api-design.md#权限与能力矩阵)。
 
 ## 统一错误响应
 
@@ -30,7 +20,8 @@
 | --- | --- |
 | `code` | 稳定错误码，前端用于判断错误类型 |
 | `message` | 用户可读错误信息 |
-| `details` | 调试信息或字段错误，不能包含密钥 |
+| `details` | 可公开的错误分类或字段错误，不含密钥、原始SQL、连接串或文件绝对路径 |
+| `traceId` | 可选请求追踪编号；JSON错误与SSE error事件支持，响应头同时提供X-Trace-ID |
 
 ## 基础错误码
 
@@ -49,6 +40,7 @@
 
 | HTTP | code | message |
 | --- | --- | --- |
+| 409 | `CHAT_SESSION_ARCHIVED` | 会话已归档，请取消归档后重试 |
 | 404 | `KNOWLEDGE_BASE_NOT_FOUND` | 知识库不存在 |
 | 404 | `DOCUMENT_NOT_FOUND` | 文档不存在 |
 | 404 | `DOCUMENT_FILE_NOT_FOUND` | 文档原始文件不存在 |
@@ -66,7 +58,9 @@
 | 409 | `DOCUMENT_UPLOAD_RESULT_UNAVAILABLE` | 请求曾成功提交，但文档已删除、移动或不可访问 |
 | 400 | `DOCUMENT_TABLE_IMPORT_INVALID` | 工作表、表头行或列选择无效或不存在 |
 | 500 | `DOCUMENT_UPLOAD_FAILED` | 文档上传失败 |
-| 500 | `DOCUMENT_PROCESS_FAILED` | 文档处理失败 |
+| 400 | `DOCUMENT_EXTENSION_IMMUTABLE` | 重命名不能修改文件扩展名 |
+| 409 | `DOCUMENT_JOB_ACTIVE` | 文档正在处理中，处理完成后才能移动 |
+| 409 | `DOCUMENT_JOB_NOT_CANCELLABLE` | 文档当前没有可取消的处理任务 |
 | 404 | `CATEGORY_NOT_FOUND` | 分类不存在 |
 | 409 | `CATEGORY_NOT_EMPTY` | 分类仍包含子分类或知识库 |
 | 404 | `TAG_NOT_FOUND` | 标签不存在 |
@@ -79,6 +73,9 @@
 | 404 | `MEMBER_NOT_FOUND` | 知识库成员不存在 |
 | 400 | `OWNER_MEMBER_IMMUTABLE` | 所有者成员权限不能通过成员接口修改 |
 | 400 | `INVALID_MEMBER_ROLE` | 成员角色不合法 |
+| 400 | `INVALID_BATCH_TAG_MODE` | 批量标签模式不合法 |
+| 400 | `INVALID_CURRENT_PASSWORD` | 当前密码不正确 |
+| 400 | `PASSWORD_UNCHANGED` | 新密码不能与当前密码相同 |
 | 400 | `INVALID_VISIBILITY` | 知识库可见性不合法 |
 | 400 | `INVALID_WORKSPACE_VIEW_MODE` | 工作台视图模式不合法 |
 | 400 | `INVALID_WORKSPACE_SCOPE` | 工作台范围不合法 |
@@ -92,8 +89,65 @@
 | 409 | `CHAT_MESSAGE_CHANGED` | 编辑生成期间会话被修改，或历史分页 revision 已变化 / since、after 锚点已删除；重新加载会话后重试 |
 | 404 | `CHAT_MESSAGE_NOT_FOUND` | 定位目标已不存在或不属于当前会话；会话仍可访问时局部提示 |
 | 400 | `EXPORT_TOO_LARGE` | 搜索结果过多，请缩小范围后再导出 |
+| 501 | `USAGE_NOT_CONFIGURED` | 用量统计尚未配置 |
+
+异步文档处理失败不在这张表里：它不经过统一错误响应，而是写进 `documents.error_code`（封闭集合，见
+[数据库设计](03-database-design.md#documents)）。因此不存在 `DOCUMENT_PROCESS_FAILED` 这个 API 错误码，
+客户端按文档状态与 `error_code` 展示失败原因。
 
 `RATE_LIMITED` 必须同时设置整数秒 `Retry-After` 响应头，并在 `details.retryAfter` 返回相同值。`RATE_LIMIT_UNAVAILABLE` 只用于 Redis 故障且限流失败策略为 `closed` 的情况，不得设置 `Retry-After`，也不得计入真实限流触发次数。
+
+## 文档范围、编辑与跟进错误
+
+| 错误码 | HTTP | 含义与恢复 |
+| --- | --- | --- |
+| DOCUMENT_SCOPE_UNAVAILABLE | 409 | 指定文档已删除、移动或不可访问；保留历史，重新选择范围，不降级成全库。 |
+| DOCUMENT_EDIT_TOO_LARGE | 400 | 在线编辑原文超过 1 MiB；下载修改后替换。 |
+| DOCUMENT_EDIT_CONFLICT | 409 | OCR 原始发布快照已变化；保留本地校对，重新打开核对。 |
+| DOCUMENT_OCR_NOT_READY | 409 | 没有已发布 OCR 页或快照；先完成 OCR 处理。 |
+| EVALUATION_NOT_CONFIGURED | 503 | 当前服务未配置评测依赖，不能关联用例。 |
+
+文本及 OCR 新版本继续使用 DOCUMENT_ALREADY_SUPERSEDED（409）、DOCUMENT_UPLOAD_REQUEST_CONFLICT（409）和 DOCUMENT_UPLOAD_RESULT_UNAVAILABLE（409）。非法范围/空正文/超限页面/非 OCR 页面为 VALIDATION_ERROR（400）。失败不得清除前端未保存内容；同一内容重试沿用请求 ID。
+
+## 所有权转移
+
+| HTTP | 错误码 | 含义 |
+| --- | --- | --- |
+| 400 | `TRANSFER_TARGET_INVALID` | 新所有者不存在、已禁用、为空或与原所有者相同 |
+| 409 | `OWNERSHIP_CHANGED` | 加锁复查时单库所有权或状态已变化，应刷新后重试 |
+
+管理员入口的原用户不存在使用 `USER_NOT_FOUND`；权限仍使用现有 401 / 403 / 404 合同。
+
+## 收藏、分支、版本与表格扩展
+
+| HTTP | 错误码 | 含义 |
+| --- | --- | --- |
+| 400 | `DOCUMENT_VERSION_LIMIT` | 同链在线可选版本超过 100 个 |
+| 409 | `DOCUMENT_COMPARE_NOT_READY` | 至少一个版本尚未完成处理 |
+| 400 | `DOCUMENT_COMPARE_EMPTY` | 未提取到可比较文本 |
+| 400 | `DOCUMENT_COMPARE_PARSE_FAILED` | 原文件无法重新解析 |
+| 400 | `DOCUMENT_COMPARE_TOO_LARGE` | 超出每版 50 MiB 原文件、1 MiB 文本或 2000 行限制 |
+| 409 | `CHAT_BRANCH_REQUEST_CONFLICT` | 分支请求编号已用于不同目标或已软删除分支 |
+| 400 | `CHAT_BRANCH_TOO_LARGE` | 历史前缀超过 10000 条消息或 16 MiB |
+| 400 | `DOCUMENT_TABLE_TOO_LARGE` | 预览表格触及解析上限 |
+| 400 | `DOCUMENT_PREVIEW_FAILED` | 预览无法解析文档 |
+
+收藏、模板、来源路径、非同链对比、无效分支目标等输入问题沿用 `VALIDATION_ERROR`；不存在、非本人或依赖不可访问的会话/消息/模板沿用 404 `RESOURCE_NOT_FOUND`。知识库角色不足仍沿用能力矩阵的 403。
+
+异步文档错误集合由迁移 039 新增 `table_limit_exceeded`。它是确定性失败，必须拆分/修复文件，不自动重试；不是 HTTP 错误码。空表、仅表头或没有缓存结果的公式数据可能得到 `empty_content`，前端按表格类型解释，避免把修复建议误写为 OCR。表格预览仍受 `FILE_TOO_LARGE_FOR_PREVIEW` 输入/输出上限约束。
+
+## 回归评测错误
+
+| Code | HTTP 状态 | 含义 |
+| --- | --- | --- |
+| `EVALUATION_LIMIT` | 409 | 同库已达 200 题或已有 3 个 queued/running 运行 |
+| `EVALUATION_REQUEST_CONFLICT` | 409 | 同一用户、知识库、请求编号被用于不同规范化请求 |
+| `EVALUATION_FAILED` | 每题结果字段 | 无可用稳定业务码的评测调用错误，使用通用用户消息 |
+
+题目、检索参数和反馈详情不合法仍用 `VALIDATION_ERROR`。评测中已知的 Provider 业务错误沿用
+`EMBEDDING_FAILED`、`RERANK_FAILED` 等稳定错误码，只写入该题 `errorCode/errorMessage`；
+该题的 `rulePassed=null`，与规则未通过区分。运行级中断以 status=failed 与 errorMessage 表达，
+外部调用不会因进程失联自动重放。
 
 ## 字段校验错误示例
 
@@ -213,58 +267,6 @@
 2. 解析器和 Provider 的原始错误文本只进服务端日志和任务记录，不进 `errorCode` 也不进
    `errorMessage`。分类给用户，原文给日志。
 
-## 回归评测错误
-
-| Code | HTTP 状态 | 含义 |
-| --- | --- | --- |
-| `EVALUATION_LIMIT` | 409 | 同库已达 200 题或已有 3 个 queued/running 运行 |
-| `EVALUATION_REQUEST_CONFLICT` | 409 | 同一用户、知识库、请求编号被用于不同规范化请求 |
-| `EVALUATION_FAILED` | 每题结果字段 | 无可用稳定业务码的评测调用错误，使用通用用户消息 |
-
-题目、检索参数和反馈详情不合法仍用 `VALIDATION_ERROR`。评测中已知的 Provider 业务错误沿用
-`EMBEDDING_FAILED`、`RERANK_FAILED` 等稳定错误码，只写入该题 `errorCode/errorMessage`；
-该题的 `rulePassed=null`，与规则未通过区分。运行级中断以 status=failed 与 errorMessage 表达，
-外部调用不会因进程失联自动重放。
-
-## AI 开发约束
-
-1. 不要返回 Go panic、SQL 错误或模型原始错误给前端。
-2. 不要在 `details` 中包含 API Key、数据库连接串、文件绝对路径。
-3. 前端必须优先展示 `message`。
-4. 业务代码必须使用稳定 `code`，不要用动态字符串作为错误码。
-5. 401 和 403 必须区分：未登录是 401，无权限是 403。
-6. 403 和 404 必须按上文「什么时候不是 403 而是 404」区分：没有立场用 404，角色不够用 403。
-   不要为了「信息更清楚」把无立场的情况改成 403。
-7. 知识库能力不足的 403 `FORBIDDEN`，其 `details` 必须带 `role`、`capability`、`requiredRole`，由
-   `authz.ForbiddenCapability` 统一构造，不要在各处手写。
-
-## 所有权转移
-
-| HTTP | 错误码 | 含义 |
-| --- | --- | --- |
-| 400 | `TRANSFER_TARGET_INVALID` | 新所有者不存在、已禁用、为空或与原所有者相同 |
-| 409 | `OWNERSHIP_CHANGED` | 加锁复查时单库所有权或状态已变化，应刷新后重试 |
-
-管理员入口的原用户不存在使用 `USER_NOT_FOUND`；权限仍使用现有 401 / 403 / 404 合同。
-
-## 收藏、分支、版本与表格扩展
-
-| HTTP | 错误码 | 含义 |
-| --- | --- | --- |
-| 400 | `DOCUMENT_VERSION_LIMIT` | 同链在线可选版本超过 100 个 |
-| 409 | `DOCUMENT_COMPARE_NOT_READY` | 至少一个版本尚未完成处理 |
-| 400 | `DOCUMENT_COMPARE_EMPTY` | 未提取到可比较文本 |
-| 400 | `DOCUMENT_COMPARE_PARSE_FAILED` | 原文件无法重新解析 |
-| 400 | `DOCUMENT_COMPARE_TOO_LARGE` | 超出每版 50 MiB 原文件、1 MiB 文本或 2000 行限制 |
-| 409 | `CHAT_BRANCH_REQUEST_CONFLICT` | 分支请求编号已用于不同目标或已软删除分支 |
-| 400 | `CHAT_BRANCH_TOO_LARGE` | 历史前缀超过 10000 条消息或 16 MiB |
-| 400 | `DOCUMENT_TABLE_TOO_LARGE` | 预览表格触及解析上限 |
-| 400 | `DOCUMENT_PREVIEW_FAILED` | 预览无法解析文档 |
-
-收藏、模板、来源路径、非同链对比、无效分支目标等输入问题沿用 `VALIDATION_ERROR`；不存在、非本人或依赖不可访问的会话/消息/模板沿用 404 `RESOURCE_NOT_FOUND`。知识库角色不足仍沿用能力矩阵的 403。
-
-异步文档错误集合由迁移 039 新增 `table_limit_exceeded`。它是确定性失败，必须拆分/修复文件，不自动重试；不是 HTTP 错误码。空表、仅表头或没有缓存结果的公式数据可能得到 `empty_content`，前端按表格类型解释，避免把修复建议误写为 OCR。表格预览仍受 `FILE_TOO_LARGE_FOR_PREVIEW` 输入/输出上限约束。
-
 ## 扫描 PDF OCR 错误
 
 迁移 043 将下列错误加入异步 `documents.error_code`，前端按码显示具体建议。它们不会自动重试以免反复消耗识别资源，用户修正配置或文件后可手动重新处理；不是 HTTP 错误码。
@@ -278,3 +280,15 @@
 | `pdf_limit_exceeded` | PDF 超过 500 页、8 MiB 解析文本或 16 MiB 序列化快照；拆分后上传 |
 
 完整识别后仍没有文字使用 `empty_content`；空白页不是 OCR 失败。错误不会发布一部分 OCR 内容，已有片段及已发布 PDF 文本快照保持原值。原始工具输出不传给客户端。
+
+## 错误处理约束
+
+1. 不要返回 Go panic、SQL 错误或模型原始错误给前端。
+2. 不要在 `details` 中包含 API Key、数据库连接串、文件绝对路径。
+3. 前端必须优先展示 `message`。
+4. 业务代码必须使用稳定 `code`，不要用动态字符串作为错误码。
+5. 401 和 403 必须区分：未登录是 401，无权限是 403。
+6. 403 和 404 必须按上文「什么时候不是 403 而是 404」区分：没有立场用 404，角色不够用 403。
+   不要为了「信息更清楚」把无立场的情况改成 403。
+7. 知识库能力不足的 403 `FORBIDDEN`，其 `details` 必须带 `role`、`capability`、`requiredRole`，由
+   `authz.ForbiddenCapability` 统一构造，不要在各处手写。

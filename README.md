@@ -93,7 +93,7 @@ docker compose -f deploy/docker-compose.yml ps
 
 ### 4. 初始化数据库和账号
 
-以下初始化命令适用于**全新数据库**。已有部署按[升级指南](docs/13-deployment.md#知识工作流发布迁移-044048)执行对应迁移，不要直接重跑全量迁移。
+以下初始化命令适用于**全新数据库**。已有部署按[升级指南](docs/13-deployment.md#73-已有数据库)执行对应迁移，不要直接重跑全量迁移。
 
 从仓库根目录进入后端目录：
 
@@ -118,7 +118,7 @@ go run ./cmd/doctor
 go run ./cmd/server
 ```
 
-默认 API 地址为 `http://127.0.0.1:8080/api/v1`。可访问[健康检查](http://127.0.0.1:8080/healthz)确认进程已启动；它不代表所有外部依赖均可用。文档处理、评测等后台任务随后端进程运行。
+默认 API 地址为 `http://127.0.0.1:8080/api/v1`。可访问[健康检查](http://127.0.0.1:8080/healthz)确认进程已启动；该接口检查已配置的数据库、Redis和存储，但依赖异常时仍返回HTTP 200，须查看响应体状态；模型服务需另行验证。文档处理、评测等后台任务随后端进程运行。
 
 ### 6. 启动前端
 
@@ -170,14 +170,16 @@ npm run build
 
 生产部署建议通过 Nginx 提供前端静态文件并代理后端 API，当前后台任务按单个后端实例运行。数据库和上传文件需配置持久化与备份，使用 MinIO 时 bucket 应保持私有。
 
-数据库变更使用显式 SQL 迁移。当前源码要求迁移至 `048`，缺少所需结构时后端会拒绝启动；已有环境应按版本执行迁移并同步更新前后端。详细步骤、管理员初始化、OCR 安装和模型维护见[部署运维指南](docs/13-deployment.md)。
+数据库变更使用显式 SQL 迁移。当前源码要求迁移至 `049`，缺少所需结构时后端会拒绝启动；已有环境应按版本执行迁移并同步更新前后端。详细步骤、管理员初始化、OCR 安装和模型维护见[部署运维指南](docs/13-deployment.md)。
 
 ## 项目结构与文档
+
+完整入口见 [文档导航](docs/README.md)，当前状态、验证证据和未关闭事项分别维护，不将历史验收当作当前部署状态。
 
 ```text
 backend/    API、业务服务、数据库访问、模型 Provider、后台任务与 SQL 迁移
 frontend/   React 页面、组件、API 客户端与前端测试
-deploy/     本地 PostgreSQL / Redis 的 Docker Compose 配置
+deploy/     本地 PostgreSQL / Redis 与可选 OTel / Prometheus / Grafana / Jaeger 配置
 docs/       产品、架构、接口、配置与部署文档
 .github/    GitHub Actions 工作流
 ```
@@ -191,7 +193,10 @@ docs/       产品、架构、接口、配置与部署文档
 | [环境配置](docs/08-env-config.md) | 配置项及默认值 |
 | [前端功能说明](docs/10-frontend-spec.md) | 页面与交互行为 |
 | [部署运维](docs/13-deployment.md) | 部署、升级、备份与维护 |
-| [开发交接](docs/12-handoff.md) | 当前开发状态与验证记录 |
+| [可观测性](docs/38-observability.md) | 调用链、历史指标、Grafana 看板、告警规则与日志关联 |
+| [开发交接](docs/12-handoff.md) | 当前状态与验证边界 |
+| [验证与发布验收](docs/14-verification.md) | 检查命令、真实服务边界、证据索引与发布清单 |
+| [有效待办](docs/15-backlog.md) | 未关闭问题与明确暂缓项 |
 
 ## 许可证
 

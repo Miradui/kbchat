@@ -36,7 +36,7 @@ Gin Backend
 | `backend/internal/retrieval` | 向量召回、关键词召回、RRF 融合、Rerank、阈值过滤和检索管线 |
 | `backend/internal/storage` | 本地 / MinIO 文件保存、读取、物化和删除 |
 | `backend/internal/job` | 后台任务领取、执行与重试 |
-| `backend/internal/logger`、`backend/internal/observability` | zap 日志、进程内指标和可公开的失败分类 |
+| `backend/internal/logger`、`backend/internal/observability` | zap 日志、OTel Trace/OTLP 导出、进程内指标和可公开的失败分类 |
 | `backend/internal/apperror` | 统一业务错误 |
 | `backend/migrations` | PostgreSQL 结构与数据迁移 |
 
@@ -111,7 +111,7 @@ Chat、Embedding 和 Title 使用 `github.com/sashabaranov/go-openai` 调用兼�
 
 ## 异步任务
 
-- `documents.status` 记录用户可见状态，`document_jobs` 记录后台处理、租约和重试；后端 worker 从数据库领取任务。
+- `documents.status`记录用户可见状态，`document_jobs`记录后台处理、领取锁定和重试；后端worker从数据库领取。文档任务尚无多实例租约，保持单实例。
 - 存储永久清理通过持久化任务重试；评测运行由后台执行并记录进度与取消状态。持久化结构见 `03-database-design.md`。
 - Redis 承担登录 / 聊天固定窗口计数和 query embedding 缓存；这些数据允许过期或在故障时按配置降级，持久任务状态仍保存在 PostgreSQL。
 - 启动 server 会启动后台处理，真实环境操作边界见 `00-ai-development-guide.md`。
@@ -129,3 +129,9 @@ Chat、Embedding 和 Title 使用 `github.com/sashabaranov/go-openai` 调用兼�
 - 业务数据库访问使用 GORM，经 repository 执行；handler 不直接访问数据库或模型。
 - 聊天的知识检索复用 retrieval 管线，引用只来自本轮进入 Prompt 的片段。
 - 保持单体应用和明确模块职责，新增目录应有实际职责和调用方。
+
+## 可观测性边界
+
+HTTP、Provider HTTP、GORM与Redis复用OTel集成，业务阶段在service/retrieval/document埋点；数据访问仍经repository。任务保存W3C traceparent以关联重启后的worker。Recorder同时服务即时诊断与独立于Trace采样的Metrics，SystemService经queue repository注册有界采集。
+
+Collector分发Trace到Jaeger、Metrics到Prometheus，Grafana读取历史指标并通过exemplar链接Jaeger；zap保留Trace关联。遥测异步导出，不写业务明细表、不作为业务成功前置条件。配置与数据边界见 [可观测性](38-observability.md)。

@@ -1,33 +1,30 @@
-# 生产部署指南
+# 部署运维
 
-2026-10-19 知识工作流扩展新增迁移 044–047（文档范围、OCR 校对基线、私人范围评测、缺口跟进）。存量库须先完成 034–043，再顺序执行这四个 SQL 文件并部署匹配的前后端；启动检查会拒绝缺列/缺表的结构。本轮未迁移业务 public 或更新业务运行进程。没有新增环境变量或模型默认变更；维持单实例。备份除原文件外须包括校对基线表，重处理依赖其中的人工修改；浏览器草稿仅在本地，不在服务器备份内。验收范围见 `33-knowledge-workflow-acceptance.md`。
+当前源码要求数据库迁移至 **049**。本页面向Linux单机部署：Nginx提供静态前端并代理Go后端，后端连接PostgreSQL/pgvector、Redis、本地/MinIO存储及模型服务。文档worker保持单实例。
 
-本文档描述当前仓库可实际执行的单机生产部署方案：
+`deploy/docker-compose.yml` 默认提供PostgreSQL/Redis，可选观测profile提供Collector、Jaeger、Prometheus和Grafana；它不包含业务前后端镜像、Nginx或TLS。当前环境是否已升级须现场核实，不能使用历史PID或旧迁移记录判断。
 
-```text
-Browser
-  -> Nginx (80/443)
-     -> /            frontend/dist
-     -> /api/*       Gin backend :8080
-                         -> PostgreSQL + pgvector
-                         -> Redis
-                         -> Local upload directory
-                         -> Chat / Title / Embedding / Rerank providers
-```
-
-当前 `deploy/docker-compose.yml` 只包含 PostgreSQL 和 Redis，不包含 backend、frontend、Nginx 或 TLS。本文采用 Docker Compose 运行基础设施，systemd 运行 Go 后端，Nginx 托管前端静态文件并反向代理 API。
+| 任务 | 入口 |
+| --- | --- |
+| 首次运行 | 根目录 [README](../README.md) |
+| 配置与默认值 | [环境配置](08-env-config.md) 与 [`.env.example`](../.env.example) |
+| 数据库初始化/升级 | [第7节](#7-数据库初始化和升级) |
+| 常规发布 | [第11节](#11-日常发布流程) |
+| 备份恢复 | [第12节](#12-备份和恢复) |
+| 发布验收 | [验证清单](14-verification.md#候选版本发布清单) |
+| Trace、指标和告警 | [可观测性](38-observability.md) |
 
 ## 1. 部署边界
 
 当前版本具备以下部署特征：
 
 1. 后端是单体进程，HTTP API 和文档处理 worker 在同一个进程中运行。
-2. 上传文件保存在本地目录，必须持久化并定期备份。
+2. 原文件存于本地目录或私有MinIO；两者均须持久化并定期备份，历史本地路径不自动迁移。
 3. 前端生产构建输出到 `frontend/dist`，仓库不提交该目录。
 4. 前端默认请求同源 `/api/v1`，推荐通过 Nginx 同源反代。
-5. 项目当前没有 CORS 中间件，不推荐将前端和 API 部署到不同域名。
-6. 当前 migration runner 没有迁移版本表，只适合全新数据库首次执行全部迁移。
-7. `/healthz` 只检查 HTTP 进程存活，不检查数据库、Redis 或模型 Provider。
+5. 项目支持显式 CORS 来源白名单；优先同域反向代理，跨域时按 `CORS_ALLOWED_ORIGINS` 配置实际前端来源。
+6. migration runner没有版本台账；全新库可全量执行，已有库只能按部署记录选择未应用文件。
+7. `/healthz`及`/api/v1/healthz`始终返回HTTP 200，同时在响应体汇总已配置的数据库、Redis、存储状态；不探测模型，不能只据200判断就绪。
 
 由于内置 worker 的任务领取约束，在没有额外验证前，生产环境只运行一个 backend 实例。MinIO 解决共享文件存储问题，但不改变 worker 的单实例约束。
 
@@ -39,7 +36,7 @@ Browser
 | --- | --- |
 | 操作系统 | Linux x86_64，例如 Ubuntu 24.04 LTS |
 | Go | 1.25，与 `backend/go.mod` 一致 |
-| Node.js | 20 或更高版本 |
+| Node.js | 22.12或更高的受支持版本；CI使用Node 22 |
 | Docker | Docker Engine 26+ 与 Compose 2.24.4+ |
 | PostgreSQL | PostgreSQL 15 或 16，安装 pgvector 扩展：HNSW 需要 ≥ 0.5.0，建议 ≥ 0.8.0（支持迭代索引扫描）。低于 0.8.0 时服务仍能返回完整结果，但依赖精确检索回退，知识库较大时检索变慢；`go run ./cmd/doctor` 与诊断页会显示版本。自建或托管数据库须自行核对版本，Compose 镜像 `pgvector/pgvector:pg16` 随拉取时间变化 |
 | Redis | Redis 7 |
@@ -77,88 +74,35 @@ sudo install -d -o rag -g rag -m 0750 /var/lib/rag/uploads
 
 ## 4. 生产环境变量
 
-创建 `/etc/rag/rag.env`，权限设为 `0640`，所有示例值都必须替换：
+以 [`.env.example`](../.env.example) 为唯一完整模板，保存为 `/etc/rag/rag.env`，按实际环境设置下列生产项。其他默认值及模型/存储约束见 [环境配置](08-env-config.md)，不要另维护一份不同步的完整变量清单。
 
-```env
-APP_ENV=production
-SERVER_PORT=8080
+| 配置 | 生产要求 |
+| --- | --- |
+| `APP_ENV` | `production` |
+| `DATABASE_URL` | 独立数据库凭据；特殊字符URL编码，远端连接使用服务商要求的TLS配置 |
+| `JWT_SECRET` | 至少32字节的安全随机密钥，替换示例值 |
+| `REDIS_ADDR` / `REDIS_PASSWORD` | 实际地址与密码；固定窗口限流和Embedding缓存共用客户端 |
+| `TRUSTED_PROXY_CIDRS` | 同机Nginx通常为`127.0.0.1/32,::1/128`；按真实代理链配置，不能信任全部网段 |
+| `CHAT_*` / `EMBEDDING_*` / `RERANK_*` | 实际模型端点、凭据与模型；标准RAG启用Rerank，默认strict失败策略 |
+| `TITLE_*` | 可选独立标题模型；未配置密钥时使用首问摘要兜底 |
+| `STORAGE_PROVIDER` | `local`或`minio`；MinIO保持私有，历史本地文件仍需保留 |
+| `UPLOAD_DIR` | 例如`/var/lib/rag/uploads`，独立持久目录 |
+| `RAG_ALLOW_AUTOMIGRATE` | 保持false；生产禁止GORM自动建表 |
+| `OTEL_EXPORTER_OTLP_*_ENDPOINT` | 按需设置Trace/Metrics两个端点；观测组件不作为业务成功前置条件 |
 
-DATABASE_URL=postgres://rag:replace-with-db-password@127.0.0.1:5432/rag?sslmode=disable
-REDIS_ADDR=127.0.0.1:6379
-REDIS_PASSWORD=replace-with-redis-password
-REDIS_DB=0
-RATE_LIMIT_ENABLED=true
-RATE_LIMIT_LOGIN_PER_MINUTE=10
-RATE_LIMIT_CHAT_PER_MINUTE=30
-RATE_LIMIT_FAILURE_MODE=open
-TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128
-EMBEDDING_CACHE_TTL=24h
-
-JWT_SECRET=replace-with-at-least-32-random-bytes
-JWT_EXPIRES_IN=24h
-
-MODEL_PROVIDER=openai_compatible
-
-CHAT_BASE_URL=https://provider.example.com/v1
-CHAT_API_KEY=replace-with-chat-api-key
-CHAT_MODEL=replace-with-chat-model
-
-TITLE_BASE_URL=https://provider.example.com/v1
-TITLE_API_KEY=replace-with-title-api-key
-TITLE_MODEL=replace-with-title-model
-
-EMBEDDING_BASE_URL=https://provider.example.com/v1
-EMBEDDING_API_KEY=replace-with-embedding-api-key
-EMBEDDING_MODEL=replace-with-embedding-model
-EMBEDDING_DIMENSION=1536
-
-RERANK_ENABLED=true
-RERANK_BASE_URL=https://provider.example.com/v1
-RERANK_API_KEY=replace-with-rerank-api-key
-RERANK_MODEL=replace-with-rerank-model
-RERANK_FAILURE_MODE=strict
-
-STORAGE_PROVIDER=minio
-UPLOAD_DIR=/var/lib/rag/uploads
-MINIO_ENDPOINT=https://minio.example.com
-MINIO_ACCESS_KEY=replace-with-minio-access-key
-MINIO_SECRET_KEY=replace-with-minio-secret-key
-MINIO_BUCKET=rag-documents
-MINIO_REGION=
-MINIO_USE_SSL=true
-MAX_UPLOAD_SIZE_MB=50
-
-VECTOR_TOP_N=30
-RERANK_TOP_K=5
-SCORE_THRESHOLD=0.3
-CHAT_HISTORY_LIMIT=10
-
-WORKER_CONCURRENCY=2
-WORKER_MAX_RETRIES=3
-WORKER_RETRY_DELAY=10s
-```
-
-设置权限：
+环境文件权限：
 
 ```bash
 sudo chown root:rag /etc/rag/rag.env
 sudo chmod 0640 /etc/rag/rag.env
 ```
 
-注意事项：
-
-- 数据库密码包含特殊字符时，必须在 `DATABASE_URL` 中进行 URL 编码。
-- MinIO bucket 必须保持私有，不需要为浏览器设置公开读权限；下载和预览由 backend 代理。backend 会读取 bucket policy，发现任何 bucket policy 时拒绝启动，避免匿名访问绕过 JWT 与 owner 校验。
-- endpoint 显式写 `http://` 或 `https://` 时，其 scheme 优先于 `MINIO_USE_SSL`。生产环境应使用 HTTPS。
-- backend 启动时会检查 bucket，并在不存在时自动创建；endpoint、凭据或权限错误会阻止启动。若由运维预建 bucket，凭据除对象读、写、删除和统计权限外还必须能够读取 bucket policy。
-- 切换前的本地文件不会自动搬迁到 MinIO，backend 会继续通过 `UPLOAD_DIR` 读取这些历史路径；确认完成迁移前不要删除旧上传目录。
-- 使用云数据库时应按服务商要求设置 `sslmode=require` 或更严格模式。
-- `EMBEDDING_DIMENSION` 必须保持为 `1536`，除非已经执行对应 schema migration 并重建全部 embedding。
-- `RERANK_FAILURE_MODE=strict` 会在 Rerank Provider 失败时终止本次检索；`fallback` 会降级为 vector topK。
-- 如果暂时没有 Rerank Provider，可以显式设置 `RERANK_ENABLED=false`，但检索质量会下降且 `rerankScore` 为空。
-- 同机 Nginx 反代时只信任 loopback CIDR。若 Nginx 与 backend 分属容器或主机，应把 `TRUSTED_PROXY_CIDRS` 改成 backend 实际看到的代理网段；不要为省事信任 `0.0.0.0/0` 或 `::/0`。
-- `RATE_LIMIT_FAILURE_MODE=open` 在 Redis 故障时保持业务可用并写 warning；安全要求优先的部署可改为 `closed`，此时登录和回答生成接口返回 503。query embedding 缓存始终自动降级到 Provider。
-- 生产服务器的项目目录中不要保留 `.env`。配置加载器会用项目内 `.env` 覆盖进程环境变量。
+- 项目目录不保留开发 `.env`。`godotenv.Load`只补齐未设置变量，systemd/进程环境优先。
+- MinIO endpoint显式scheme优先于`MINIO_USE_SSL`，生产使用HTTPS。bucket须私有；backend检查bucket policy并在发现policy时拒绝启动，凭据需可读取policy及必要对象权限。bucket不存在时会尝试创建。
+- 本地文件不会自动搬迁到MinIO；确认迁移与恢复完成前不能删除旧上传目录。
+- Embedding模型或维度变更必须遵循下文重建流程，不能只改配置。
+- `RATE_LIMIT_FAILURE_MODE=open`在Redis故障时放行业务并记录warning；`closed`令受限接口返回503。Embedding缓存始终降级到Provider。
+- 暂时显式关闭Rerank时，分数为空且结果必须保持未精排语义；这不是标准RAG质量验收。
 
 ## 5. 启动 PostgreSQL 和 Redis
 
@@ -283,26 +227,34 @@ cd /opt/rag/app/backend
 
 该命令会按文件名顺序执行 `backend/migrations/*.sql`。
 
-另外，当前 `cmd/server` 启动时仍会调用 GORM `AutoMigrate`。因此生产数据库账号暂时仍需要创建 `vector` 扩展和缺失表的 DDL 权限；数据库迁移与应用启动期 DDL 尚未解耦。后续如果收紧为 DML-only 账号，需要先修改后端启动流程并补充 migration 权限验证。
+`cmd/server` 启动时不再创建表：它只做只读结构断言，缺列、缺表或缺少 001/020/039/041/043/048 的 CHECK 约束都会直接拒绝启动并提示对应迁移。生产数据库账号因此不需要 DDL 权限。仅当显式设置 `RAG_ALLOW_AUTOMIGRATE=true` 且 `APP_ENV` 不是 `production` 时，启动才会退回 GORM 建表；这条路径只适合可丢弃的本地库，建出的表与迁移不等价，见环境配置文档。
 
 ### 7.3 已有数据库
 
-当前 migration runner 不记录已经执行的 migration，并且部分 migration 不能重复执行。已有数据库不要直接运行不带参数的 `rag-migrate`。
+当前源码要求迁移至 **049**。根据目标库的实际记录逐文件补齐，不根据旧交接猜测当前版本；同编号文件以完整文件名为准。
 
-升级时应：
+| 迁移范围 | 关键内容与额外操作 |
+| --- | --- |
+| 001–022 | 初始模型、权限/回收站、质量与头像等历史结构 |
+| 023 | UTC/timestamptz；保持旧值按UTC读取的含义，不自动纠正历史时差 |
+| 024 | tsvector/GIN/HNSW；迁移后执行关键词回填，可按数据量放宽超时 |
+| 025–029 | 账号状态/用量/回答配置及向量来源；旧向量来源保持未知 |
+| 030–033 | 多库关联、自动范围、PDF页摘要、历史分页索引 |
+| 034–039 | 收藏、版本链索引、分支、模板、来源路径及表格错误码 |
+| 040–043 | 上传凭据、表格设置、版本策略、PDF快照与OCR错误码；不自动重处理旧PDF |
+| 044–047 | 指定文档范围、OCR校对基线、私人评测与问题跟进 |
+| 048 | `general`意图约束；缺少时启动拒绝 |
+| 049 | 文档任务traceparent；缺列时启动拒绝 |
 
-1. 先备份 PostgreSQL。
-2. 记录生产环境最后执行的 migration 文件名。
-3. 审查新版本中新增的 migration。
-4. 只按文件名顺序执行尚未应用的文件。
-
-使用 `-migration` 精确指定已审核的单个文件。该参数只接受 `migrations/` 目录中的文件名，不接受路径；单文件会在一个数据库事务中执行：
+已完成048的环境可单独应用最新迁移：
 
 ```bash
-./bin/rag-migrate -migration 014_chat_message_feedback.sql
+./bin/rag-migrate -migration 049_document_job_traceparent.sql
 ```
 
-指定单文件不会检查它的前置 migration 是否已经执行。在补齐正式的 schema migration 版本表之前，仍需按顺序逐个执行，且部署记录必须明确保存已执行到哪个 migration。
+先备份并停止旧写入者，再迁移并启动匹配的前后端。迁移不会自动重建向量或回填OCR/旧来源，确需重处理时单独执行。不要用AutoMigrate补迁移：它可能创建缺少CHECK/外键的表，使后续`CREATE TABLE IF NOT EXISTS`跳过真实结构。当前发布要求检查以迁移与`database.EnsureSchema`为准。
+
+`-migration`只接受`migrations/`中的完整文件名，不接受路径；单文件在一个事务中执行，但不会检查前置迁移，必须保留部署台账。
 
 升级到 `timestamptz` 时，确认 001–022 已执行，备份数据库并停止旧版 backend 和 worker，再执行：
 
@@ -312,9 +264,9 @@ cd /opt/rag/app/backend
 
 023 仅处理连接 `current_schema()` 下已知业务表的无时区时间列，按表合并 `ALTER COLUMN`，使用 `AT TIME ZONE 'UTC'` 保持现有时间含义；已是 `timestamptz` 的列跳过，可重复执行。这是类型升级，不自动修正历史时间偏差。迁移需要表锁，宜安排维护窗口；单文件事务失败会回滚，命令当前总超时为 30 秒，大库应提前评估耗时。
 
-核对记录数、时间值、默认值和索引后启动新版 backend。新版启动检查发现旧时间列会报错并提示 023；`AutoMigrate` 只创建缺失表，不会代替这次类型迁移。其他 schema 或环境须按自己的连接配置与迁移记录分别升级。
+核对记录数、时间值、默认值和索引后启动新版 backend。新版启动检查发现旧时间列会报错并提示 023；启动不再自动建表，也不会代替这次类型迁移。其他 schema 或环境须按自己的连接配置与迁移记录分别升级。
 
-升级到混合检索（迁移 024）时，确认 001–023 已执行，在维护窗口内执行：
+尚未完成混合检索迁移024时，确认001–023已执行，在维护窗口内执行：
 
 ```bash
 ./bin/rag-migrate -migration 024_hybrid_search.sql -timeout 30m
@@ -324,14 +276,6 @@ cd /opt/rag/app/backend
 024 为 `document_chunks` 增加 `search_vector tsvector` 列与 GIN 索引，并用 HNSW 索引替换 ivfflat 向量索引，可重复执行。构建 HNSW 索引会读取整张表，`-timeout` 应按数据量放宽（默认 30 秒只适合空库或小库），并可为会话提高 `maintenance_work_mem`。迁移完成后 `rag-reindex-keywords` 按主键分批回填已有 chunk 的关键词索引，每批独立提交，可中断后重跑；回填期间旧 chunk 继续参与向量召回，只是暂不参与关键词召回。新版 backend 可在回填进行时启动。`-batch` 控制每批数量（默认 200），`-timeout` 默认 1 小时。
 
 ### 7.4 初始化系统管理员
-
-升级到 2026-09-20 之后的版本还需依次执行 025–029：
-
-```bash
-for m in 025_user_status_and_admin.sql 026_model_usage_records.sql 027_kb_answer_config.sql 028_evaluation_answer_config.sql 029_document_embedding_identity.sql; do ./bin/rag-migrate -migration $m; done
-```
-
-025 为 `users` 增加状态与最近登录时间；026 新建 `model_usage_records`；027 为 `knowledge_bases` 增加 `answer_config`；028 为 `evaluation_runs` 增加 `answer_config` 快照。029 增加文档向量来源，存量值保持未知。这些迁移都是 `ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS`，可重复执行，耗时与表锁都很短。新版 backend 启动时会检查 024–029 对应的列与表，缺失时直接报错并指出需要的迁移文件。
 
 先执行数据库迁移，再通过 CLI 指定首位系统管理员。新部署可直接创建账号，密码至少 8 个字符、最多 72 个 UTF-8 字节：
 
@@ -381,6 +325,8 @@ ReadWritePaths=/var/lib/rag/uploads
 WantedBy=multi-user.target
 ```
 
+后端收到 SIGTERM/SIGINT 后停止接收新请求，取消文档、清理和评测 worker，并最多用 25 秒等待 HTTP 请求与 worker 收尾；超时关闭连接。`TimeoutStopSec=30` 留出进程退出余量。请求头读取上限为 5 秒、空闲连接上限为 60 秒；SSE 不使用覆盖整个响应的 `WriteTimeout`。停机时尚未完成的流必须按未确认结果处理。
+
 加载并启动：
 
 ```bash
@@ -409,6 +355,8 @@ server {
     location /api/ {
         proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_cache off;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -476,10 +424,10 @@ curl -fsS https://rag.example.com/api/v1/healthz
 预期响应：
 
 ```json
-{"env":"production","status":"ok"}
+{"env":"production","status":"ok","dependencies":{"database":"ok","redis":"ok","storage":"ok"}}
 ```
 
-此响应只能证明 HTTP 进程存活。数据库和 Redis 就绪状态以 `rag-doctor` 为准，模型 Provider 需要通过真实 embedding、搜索和聊天流程验证。
+HTTP 200表示进程仍能响应；依赖异常时仍返回200，必须查看`status`和`dependencies`。未配置的依赖可省略。受保护的管理员诊断提供更多原因与队列状态；模型Provider仍需真实入库、检索和问答验证。
 
 ### 10.3 前端和业务冒烟
 
@@ -500,13 +448,11 @@ curl -fsS https://rag.example.com/api/v1/healthz
 
 推荐顺序：
 
-1. 备份 PostgreSQL 和上传目录。
-2. 发布新代码到服务器。
-3. 执行 `go test ./...` 和 `npm ci && npm run build`。
-4. 审查并执行本次新增 migration。
-5. 构建新的后端二进制。
-6. 执行 `sudo systemctl restart rag-backend`。
-7. 执行健康检查和完整业务冒烟。
+1. 在独立构建目录完成候选版本的后端 test/vet/build，以及前端 `npm ci`、lint、`typecheck:test`、test、build；CI 使用一次性 PostgreSQL 验证完整迁移和启动约束。
+2. 安排单实例维护窗口，按下一节停止后端并完成数据库、对象文件、历史本地文件的一致性备份。
+3. 保持后端停止，发布匹配的前后端构建，并审查、执行本次新增 migration。
+4. 运行 doctor，启动 `rag-backend`，执行健康检查与完整业务冒烟，再恢复用户访问。
+5. 失败时保持维护状态；涉及 schema 变更的回退须使用匹配的备份与旧程序版本，不能只替换二进制。
 
 当前后端是单实例部署，重启期间会有短暂不可用。不要在未验证任务领取语义和共享上传存储前横向扩容 backend。
 
@@ -518,16 +464,23 @@ curl -fsS https://rag.example.com/api/v1/healthz
 - MinIO 的 `rag-documents` bucket；仍有历史本地路径时同时备份 `/var/lib/rag/uploads`。
 - `/etc/rag/rag.env` 的加密副本。
 
-使用 Compose PostgreSQL 时可以执行：
+单实例必须先停止所有写入者，包括 HTTP 后端及其文档、清理、评测 worker；暂停外部导入、迁移和直接存储写入。数据库与文件在整个备份期间均保持静止。下面示例假设本指南的唯一 systemd 后端，操作者有 `/var/backups/rag` 写权限；若有其他进程，先确认全部停止。每次使用全新目录，不复用历史镜像：
 
 ```bash
-docker exec rag-postgres pg_dump -U rag -d rag -Fc > rag-$(date +%F-%H%M).dump
-mc mirror --overwrite production/rag-documents ./rag-documents-backup
+set -euo pipefail
+sudo systemctl stop rag-backend
+test "$(systemctl show rag-backend --property=ActiveState --value)" = inactive
+test "$(systemctl show rag-backend --property=MainPID --value)" = 0
+backup_dir="$(mktemp -d /var/backups/rag/backup-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX)"
+docker exec rag-postgres pg_dump -U rag -d rag -Fc > "$backup_dir/database.dump"
+mc mirror production/rag-documents "$backup_dir/rag-documents"
 # 仅在仍有历史本地文件时执行：
-tar -C /var/lib/rag -czf rag-uploads-$(date +%F-%H%M).tar.gz uploads
+tar -C /var/lib/rag -czf "$backup_dir/uploads.tar.gz" uploads
 ```
 
-恢复数据库前应停止 backend，避免 worker 在恢复期间继续处理任务。数据库 schema 回滚不保证向后兼容；涉及 migration 的版本回退优先恢复配套数据库备份。
+文件复制成功后，按运维密钥管理流程保存配置的加密副本，记录程序版本、migration 版本、bucket、时间和各备份文件校验和。检查 `pg_restore --list`、归档可读性及对象清单后，才能标记这组备份完成。任何步骤失败都保留为未完成备份，后端继续停止，不能将其作为可恢复版本。全部完成后才可继续发布，或在不升级时启动原后端。不要设置失败后自动重启写入者的 shell trap。
+
+恢复演练在独立目标进行：保持目标后端停止，将同一组数据库、MinIO 文件、历史本地文件及配置恢复到匹配的程序版本；不要混用不同批次。确认 schema/doctor 通过、数据库内文件引用能读取，并以隔离账号验证登录、文档预览/下载、检索和引用后，才开放写入。记录缺失文件、校验结果与演练时间；仅列出备份文件不等于恢复成功。Redis 缓存不作为权威备份，浏览器本地草稿不在服务器备份内。
 
 ## 13. 常见问题
 
@@ -588,17 +541,7 @@ try_files $uri $uri/ /index.html;
 
 ## 15. 生产部署待补齐事项
 
-以下生产部署配套尚未实现或完成验证：
-
-- backend、frontend 的 Dockerfile。
-- 完整生产 Docker Compose。
-- Nginx/Caddy 配置文件和自动 TLS。
-- migration 版本跟踪表。
-- 依赖就绪探针。
-- 多实例任务领取与共享上传存储的部署验证；本地 / 私有 MinIO 存储已实现。
-- 自动化发布、滚动升级和一键回滚。
-
-在这些能力补齐前，不应宣称当前仓库支持完整的一键容器化生产部署。
+生产Dockerfile/完整Compose、自动TLS、迁移版本台账、自动发布/回滚及多实例任务租约尚未作为一键生产方案交付。当前仅有手工单机部署流程；缺口与启动条件集中见 [有效待办](15-backlog.md)，发布判断见 [验证清单](14-verification.md#候选版本发布清单)。
 
 ## Embedding 模型切换与重建
 
@@ -619,90 +562,16 @@ go run ./cmd/reembed -only-mismatched=false -batch 100
 
 改维度：备份数据库和源文件、停止写入与检索，准备针对实际目标维度的 SQL 迁移。先移除 HNSW 索引，清空旧向量（旧维度不能直接当作新维度向量），把列类型改为 `vector(目标维度)`，重建 `vector_cosine_ops` HNSW 索引并更新配置；经 doctor 校验后执行 `reembed -only-mismatched=false`，全部完成并验证后再开放。该维护操作应作为单独的部署变更审核，不能用 029 代替。重处理会更换 chunk ID；旧 citations 保留内容/页码/偏移，但其 chunkId 跳转可能失效。
 
-当前 document worker 仍要求单实例。部署多实例或重叠滚动发布之前必须完成 P14 租约与 fencing；共享文件需要 MinIO，诊断指标仍按进程统计，Redis 故障默认放行。
+当前 document worker 仍要求单实例。部署多实例或重叠滚动发布之前必须完成 任务租约与 fencing；共享文件需要 MinIO，诊断指标仍按进程统计，Redis 故障默认放行。
 
-
-## 多库会话发布（迁移 030）
-
-新版服务启动前，在已有 029 的基础上执行 `go run ./cmd/migrate -migration 030_chat_session_knowledge_bases.sql`（backend目录）；已有数据库按7.3逐项升级，不使用不带参数的迁移命令。迁移可重复执行；旧会话继续单库，已有文档无需重新 Embedding。必须同时发布支持新响应字段的前端与后端；旧后端只校验首选库，创建跨库会话后不能降级运行旧后端。
-
-最初多库验收仅在隔离 schema 执行001–030；用户随后于2026-09-29授权更新当前数据库，postgres/public 已执行029/030/031。根 `.env` 保持原值，尤其 `RERANK_ENABLED=false`；标准精排需要部署者启用真实 Rerank 配置。所有库继续共享 Embedding，禁止直接切模型而保留不同空间的旧向量。多库不改变单实例 worker 限制。
-
-
-## 自动检索发布（迁移 031）
-
-在 030 基础上执行 `031_chat_automatic_scope.sql`（入口 `cd backend; go run ./cmd/migrate -migration 031_chat_automatic_scope.sql`），同时发布前后端。迁移可重复执行，现有会话保持 manual，新建无范围会话默认 auto；不重建向量。自动会话必须由支持每轮授权与历史依赖累计的后端处理，不能降级到不识别 scope_mode 的版本。
-
-代码验证使用本地 fixture。用户随后授权更新当前数据库，已于2026-09-29对配置中的 postgres/public 执行029/030/031；所需表、字段、默认值和约束及启动结构检查通过，15个旧会话全部保持manual，业务行数不变。根 `.env` 未修改，本次未重启后端或启动worker；应用需运行对应新版前后端。Rerank 继续受全局开关控制；不要把关闭状态的结果标为已精排。
-
-## PDF 页提取摘要发布（迁移 032）
-
-发布本次后端前执行 `cd backend; go run ./cmd/migrate -migration 032_document_pdf_text_summary.sql`，再发布对应前后端。迁移添加可空的 `documents.pdf_text_summary JSONB`，可重复执行；新后端启动会检查该列存在。文档统计接口无需额外索引或数据回填。
-
-旧文档摘要保持未知，不自动解析或调用模型；后续新上传或用户主动重处理会写入摘要。重处理沿用现有切片/Embedding 流程及成本，本次迁移不会自行排队。2026-10-08 在隔离 PostgreSQL schema 验证 032、完整新环境迁移和真实文档流程；2026-10-13 用户确认发布后，业务 postgres/public 已执行 032，新列为可空 JSONB。根 `.env` 和模型配置保持原值，单实例与任务租约暂缓的边界不变。
-
-## 聊天历史分页发布（迁移 033）
-
-先补齐上方 032，再执行 `cd backend; go run ./cmd/migrate -migration 033_chat_message_history_index.sql`，发布对应前后端。033 为 `chat_messages(session_id, created_at, id)` 增加可重复执行的普通复合索引，不修改消息或向量、不调用模型；普通建索引会影响并发写入，大表应安排维护窗口。后端不带分页参数仍兼容旧全量协议，新前端配套使用分页元数据；部署后检查最新页、向上加载、全文查找和导出。
-
-2026-10-08 已在隔离 PostgreSQL schema 验证完整 001–033（含两个 010，共 34 个 SQL 文件）、033 重复执行及真实游标读取。2026-10-13 业务 postgres/public 已执行 032/033；迁移前后六类业务表行数和内容指纹一致，新索引有效。032 列仍是新版后端启动前提，033 索引不在启动结构必需检查中。详见 [分页与真实 PDF 验收](26-chat-history-and-real-pdf-acceptance.md)。
-
-### 2026-10-13 本地启动记录
-
-此前发布基于提交 `2a4adbd`，后端构建到 `backend/bin/rag-server-2a4adbd.exe`；前端重新生产构建并以 Vite preview 监听 `127.0.0.1:5173`，代理到后端 8080。本次为本地运行验证，不代表完成公网容器化生产部署。当时的 PID 与日志记录在忽略目录 `output/release-20261013/`；同日搜索功能更新后的当前运行版本见下文。
-
-配置中的远端 Redis 首次握手实测约 246ms，超过默认 200ms 总命令预算；本次仅在后端启动环境设置 `REDIS_OPERATION_TIMEOUT=500ms`。doctor 与应用数据库/Redis/存储探测均通过，根 `.env` 不变。手动重启时，在启动后端的 PowerShell 中再次设置该变量：
-
-```powershell
-$env:REDIS_OPERATION_TIMEOUT = '500ms'
-cd backend
-go run ./cmd/server
-```
-
-上述命令需在旧后端已停止后执行，保持单实例。前端可在另一终端从仓库根目录执行 `cd frontend; npm run preview -- --host 127.0.0.1 --port 5173 --strictPort`。此预算调整增加 Redis 故障时单次最多等待到 500ms；默认 5 秒冷却、无自动重试、故障降级语义保持。
-
-### 同日会话内容搜索更新
-
-搜索接口及 `around/after` 历史读取需要配套新版前后端，不增加迁移或配置。2026-10-13 已完成隔离 PostgreSQL 和浏览器验收，随后停止上述旧后端，启动当前工作区构建 `backend/bin/rag-server-chat-search-20261013.exe`；前端 5173 生产预览读取新构建。后端保留进程级 500ms Redis 预算，根 `.env` 未变，业务 public 不重复迁移。
-
-当前本地后端 PID 28716、前端 PID 23488，8080 健康检查及 5173 页面/搜索资源正常，新搜索路由未登录返回 401；始终保持单实例。进程会随重启变化，后续操作先核实端口和可执行文件。当前搜索改动尚未提交 Git，运行记录在忽略目录 `output/chat-search-20261013/local-runtime*.json`。详见 [会话搜索验收](27-chat-search-acceptance.md)。
-
-## 六项功能扩展发布（迁移 034–039）
-
-回答收藏、文档版本对比、对话分支、提问模板、文件夹 / ZIP 与表格资料需要配套前后端及新迁移。全新数据库执行全部迁移；已经执行到 033 的数据库，备份后先停止旧后端，再按顺序执行：
-
-```powershell
-cd backend
-go run ./cmd/migrate -migration 034_chat_bookmarks.sql
-go run ./cmd/migrate -migration 035_document_version_index.sql
-go run ./cmd/migrate -migration 036_chat_branches.sql
-go run ./cmd/migrate -migration 037_question_templates.sql
-go run ./cmd/migrate -migration 038_document_source_path.sql
-go run ./cmd/migrate -migration 039_table_error_code.sql
-```
-
-随后发布新版后端和前端，核对启动结构检查、登录、已有会话读取及新功能。部署仍只运行一个业务后端，文档任务租约继续暂缓。迁移不会重建向量、回填表格、修改模型/检索默认或根 `.env`；旧文档的来源路径为空。新增表格解析依赖随 Go 构建，ZIP 依赖随前端构建，无需额外 Python/Excel 服务。
-
-034/036/037 的外键和唯一约束、038 的来源路径约束以及 039 的失败码约束均需通过实际 SQL 迁移建立。启动检查能发现必要字段及 039 约束缺失，不能将启动期 `AutoMigrate` 当作已升级的凭据。新约束为兼容性扩展，但已有 XLSX/CSV 或分支数据后，回退旧程序可能丢失来源展示或无法重新处理新类型；保留迁移，按备份和应用版本协调回退，不删除业务数据。
-
-本轮仅在隔离 schema 验收，已完成回归、实际 PostgreSQL 和 1920×1080 浏览器检查并清理临时环境，详见 [六项扩展验收](29-feature-extension-acceptance.md)。当前 public 仍停在 033，8080/5173 仍运行此前会话搜索版本。不得把隔离验收服务或其固定模型响应当作业务发布。最新验收和发布状态以 `12-handoff.md` 为准。
-
-## 文档工作流发布（迁移 040–043）
-
-上传恢复、表格设置、版本检索策略与扫描 PDF OCR 需要配套新版前后端。已到 039 的数据库在备份并停止旧后端后按顺序执行；仍到 033 的环境先执行上节 034–039：
-
-```powershell
-cd backend
-go run ./cmd/migrate -migration 040_document_upload_receipts.sql
-go run ./cmd/migrate -migration 041_document_table_import.sql
-go run ./cmd/migrate -migration 042_document_version_policy.sql
-go run ./cmd/migrate -migration 043_document_pdf_ocr.sql
-```
-
-040 建立上传提交凭据与删除墓碑，041 保存表格配置，042 默认全部版本，043 保存已发布 PDF 页文本并扩展失败码。迁移不自动重处理、不改已有向量或模型参数。成功入库的 OCR 页可引用并按物理页预览，图像区域不做文字高亮；版本比较复用与片段原子发布的快照。历史 NULL 数据保持未知，按需手动重处理。
+## OCR工具与历史文档
 
 OCR 默认为关闭。Linux/Debian 可由部署管理员安装 `poppler-utils tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng`；Windows 使用受信任的 Poppler/Tesseract 5 发行包，并设置可执行文件与 tessdata 的绝对路径。原生工具运行在后端机器，需具备读上传临时副本和创建临时图像的权限。确认 `pdftoppm -v`、`tesseract --version` 和 `tesseract --list-langs` 正常，且包含所配置语言；便携安装为最后一条补充 `--tessdata-dir <语言目录>`。随后启用 `PDF_OCR_ENABLED=true` 并启动单实例新版服务，完整参数见环境配置文档。
 
 OCR 工具不随 Go 可执行文件或当前容器镜像内置；需要在自定义运行镜像中安装上述系统包，或者部署到已安装工具的机器。修改路径或安装依赖不要求修改业务数据；重新处理失败文档即可重试。部署 OCR 语言包与资源预算由管理员控制，上传者不能指定任意命令、路径或额外参数。图片内包含少量可提取文字的混合页不会强制 OCR，不保证复杂版面、手写内容或低清扫描的识别率。
 
-本轮运行验证使用隔离 schema 和临时前端构建，未执行 public 迁移、重启 8080/5173 或改写根 `.env`。最新实际结果和清理状态见 `31-document-workflow-acceptance.md` 与 `12-handoff.md`。
+## 可观测性部署
+
+Trace、Metrics、Collector、Jaeger、Prometheus与Grafana的配置/端口/保留期以 [可观测性](38-observability.md) 为准。
+
+本地启动：`docker compose -f deploy/docker-compose.yml --profile observability up -d grafana`。该profile不启动业务应用；观测数据持久化与业务数据备份分别管理。
