@@ -58,6 +58,55 @@ describe('ChatComposer', () => {
     expect(props.onSubmit).not.toHaveBeenCalled();
   });
 
+  it('keeps a Chinese candidate in the draft when the keyboard omits isComposing', () => {
+    const { props, input } = renderComposer();
+
+    fireEvent.compositionStart(input);
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 13, isComposing: false });
+
+    expect(props.onSubmit).not.toHaveBeenCalled();
+    expect(input).toHaveValue('问题');
+
+    fireEvent.compositionEnd(input, { data: '问题' });
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 13 });
+
+    expect(props.onSubmit).toHaveBeenCalledOnce();
+  });
+
+  it('does not send on Safari candidate confirmation after compositionend', () => {
+    const { props, input } = renderComposer();
+
+    fireEvent.compositionStart(input);
+    fireEvent.compositionEnd(input, { data: '问题' });
+    // Safari can deliver compositionend before the confirming Enter, with
+    // isComposing already false but the IME process key code still set.
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229, isComposing: false });
+
+    expect(props.onSubmit).not.toHaveBeenCalled();
+    expect(input).toHaveValue('问题');
+
+    fireEvent.keyUp(input, { key: 'Enter', keyCode: 13 });
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 13 });
+
+    expect(props.onSubmit).toHaveBeenCalledOnce();
+  });
+
+  it('blocks form submission during composition and allows the send button after confirmation', async () => {
+    const { props, input } = renderComposer();
+    const form = input.closest('form');
+    expect(form).not.toBeNull();
+
+    fireEvent.compositionStart(input);
+    fireEvent.submit(form!);
+
+    expect(props.onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.compositionEnd(input, { data: '问题' });
+    await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    expect(props.onSubmit).toHaveBeenCalledOnce();
+  });
+
   it('does not send a blank message', async () => {
     const { props, input } = renderComposer({ value: '   ' });
 

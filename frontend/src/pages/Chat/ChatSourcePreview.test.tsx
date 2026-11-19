@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -152,6 +152,27 @@ describe('ChatSourcePreview', () => {
     expect(downloadDocument).not.toHaveBeenCalled();
   });
 
+  it('scrolls only the original text viewport when locating a citation', async () => {
+    vi.mocked(getDocumentPreview).mockResolvedValue({ ...preview, kind: 'text', content: '前文\n引用正文\n后文' });
+    render(<ChatSourcePreview citation={citation} index={1} knowledgeBaseId="kb1" onClose={vi.fn()} />);
+    const text = await screen.findByLabelText('文档原文');
+    const mark = text.querySelector('mark')!;
+    const scroll = vi.fn();
+    const scrollAncestors = vi.fn();
+    text.scrollTo = scroll;
+    mark.scrollIntoView = scrollAncestors;
+    text.scrollTop = 100;
+    Object.defineProperty(text, 'clientHeight', { configurable: true, value: 300 });
+    Object.defineProperty(text, 'clientTop', { configurable: true, value: 1 });
+    vi.spyOn(text, 'getBoundingClientRect').mockReturnValue({ top: 200, height: 302 } as DOMRect);
+    vi.spyOn(mark, 'getBoundingClientRect').mockReturnValue({ top: 900, height: 20 } as DOMRect);
+
+    await userEvent.click(screen.getByRole('button', { name: '定位到引用' }));
+
+    expect(scroll).toHaveBeenCalledWith({ top: 659, behavior: 'instant' });
+    expect(scrollAncestors).not.toHaveBeenCalled();
+  });
+
   it('locates a heading-prefixed Markdown chunk by its byte offsets', async () => {
     const source = '# 产品手册\r\n\r\n## 安装 😀\r\n\r\n安装前请确认 emoji 😀 与中文路径。\r\n\r\n后续章节\r\n';
     const body = '安装前请确认 emoji 😀 与中文路径。';
@@ -165,6 +186,42 @@ describe('ChatSourcePreview', () => {
     const text = await screen.findByLabelText('文档原文');
     expect(text.querySelector('mark')).toHaveTextContent(body);
     expect(screen.getByRole('button', { name: '定位到引用' })).toBeInTheDocument();
+  });
+
+  it('renders the cited Markdown table in both the excerpt and original without breaking its highlight', async () => {
+    const table = '| 项目 | 普通员工标准 |\n| --- | --- |\n| 高铁 | 二等座 |\n| 上海住宿 | 每晚450元以内 |';
+    const source = `# 差旅标准 😀\n\n## 交通与住宿\n\n${table}\n\n## 报销时限\n\n15个自然日内提交。`;
+    const start = new TextEncoder().encode(source.slice(0, source.indexOf(table))).length;
+    vi.mocked(getDocument).mockResolvedValue({ ...documentItem, filename: '差旅.md', fileType: 'md' });
+    vi.mocked(getDocumentPreview).mockResolvedValue({ ...preview, filename: '差旅.md', fileType: 'md', kind: 'text', content: `\ufeff${source.replace(/\n/gu, '\r\n')}` });
+    render(<ChatSourcePreview citation={{ ...citation, filename: '差旅.md', pageNumber: null, content: `差旅标准 > 交通与住宿\n${table}`, startOffset: start, endOffset: start + new TextEncoder().encode(table).length }} index={1} knowledgeBaseId="kb1" onClose={vi.fn()} />);
+
+    const original = await screen.findByLabelText('文档原文');
+    expect(within(original).getByRole('heading', { name: '交通与住宿' })).toBeInTheDocument();
+    expect(screen.getAllByRole('table')).toHaveLength(2);
+    expect(within(original).getByRole('cell', { name: '每晚450元以内' }).querySelector('mark')).toHaveTextContent('每晚450元以内');
+    expect(original.querySelector('mark')).toHaveTextContent('项目');
+    expect(within(original).getByText('15个自然日内提交。').querySelector('mark')).toBeNull();
+    const scroll = vi.fn();
+    original.scrollTo = scroll;
+    await userEvent.click(screen.getByRole('button', { name: '定位到引用' }));
+    expect(scroll).toHaveBeenCalledOnce();
+  });
+
+  it('renders document Markdown safely without loading images or interpreting chat citation markers', async () => {
+    const content = '# 测试\n\n**说明** [source: 1]\n\n<script>alert(1)</script>\n\n<img src="https://example.com/tracker" />\n\n![示意图](https://example.com/image.png)\n\n[危险](javascript:alert) [参考](https://example.com/docs)';
+    vi.mocked(getDocument).mockResolvedValue({ ...documentItem, filename: '测试.MD', fileType: 'md' });
+    vi.mocked(getDocumentPreview).mockResolvedValue({ ...preview, filename: '测试.MD', fileType: 'md', kind: 'text', content });
+    const { container } = render(<ChatSourcePreview citation={{ ...citation, filename: '测试.MD', pageNumber: null, content }} index={1} knowledgeBaseId="kb1" onClose={vi.fn()} />);
+
+    const original = await screen.findByLabelText('文档原文');
+    expect(within(original).getByRole('heading', { name: '测试' })).toBeInTheDocument();
+    expect(container.querySelector('script, img, iframe')).toBeNull();
+    expect(container.querySelector('a[href^="javascript:"]')).toBeNull();
+    expect(screen.getAllByText('[图片：示意图]')).toHaveLength(2);
+    expect(within(original).getByRole('link', { name: '参考' })).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(original).toHaveTextContent('[source: 1]');
+    expect(screen.queryByRole('button', { name: /查看来源/ })).not.toBeInTheDocument();
   });
 
   it('still says the excerpt cannot be located when neither offsets nor text match', async () => {

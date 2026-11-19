@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -11,6 +12,35 @@ import (
 
 	"kbchat/backend/internal/model"
 )
+
+func TestBatchMoveCategoryRollsBackWhenLaterKnowledgeBaseIsDeleted(t *testing.T) {
+	db := newKnowledgeBaseRepositoryTestDB(t)
+	owner := model.User{Username: "owner", PasswordHash: "fixture"}
+	if err := db.Create(&owner).Error; err != nil {
+		t.Fatal(err)
+	}
+	first := model.KnowledgeBase{OwnerID: owner.ID, Name: "first"}
+	second := model.KnowledgeBase{OwnerID: owner.ID, Name: "second"}
+	for _, kb := range []*model.KnowledgeBase{&first, &second} {
+		if err := db.Create(kb).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Delete(&second).Error; err != nil {
+		t.Fatal(err)
+	}
+	categoryID := uuid.New()
+	err := NewKnowledgeBaseRepository(db).BatchMoveCategory(context.Background(), owner.ID, []uuid.UUID{first.ID, second.ID}, &categoryID)
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("expected deleted target rejection, got %v", err)
+	}
+	if err := db.First(&first, "id = ?", first.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if first.CategoryID != nil {
+		t.Fatal("earlier move survived a deleted target")
+	}
+}
 
 // A whole-row Save wrote owner_id back from the caller's snapshot, so a manager
 // renaming a knowledge base while its owner transferred it silently undid the

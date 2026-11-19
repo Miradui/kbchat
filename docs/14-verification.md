@@ -303,3 +303,89 @@ repository 的测试 schema 使用 `rag_it_<UTC 时间戳>_<随机>`，连接带
 - 远端：查询到 `origin/dev` 最新历史 run `44523440691` 对 `ebe0144` 结论为 failure；它不能代表本次合并候选。推送后需查询新提交对应 CI 结束状态，不能沿用历史失败或本地通过结论。
 
 本次冲突解决后的代码、配置、SQL、文档和CI内容身份保存于 `output/merge-observability-20261119/candidate-manifest.json`，命令及退出码保存于同目录 `backend-results.json`、`frontend-results.json`、`observability-results.json` 及各检查日志。派生报告不参与自身哈希，相关输入不排除；该目录被Git忽略，克隆后不保证存在。C01/C02/C04通过当前合并范围；C03复用现有标题事务/归档/退役/遥测断言及迁移缺列破坏场景，不新增关键规则或独立功能；C05限于一次性PostgreSQL和观测配置/规则，真实业务部署与浏览器未验收；C06在推送后继续核对新提交CI。代码独立复核未发现可行动回归，文档复核发现的入口/保留期/证据引用已补齐。
+
+### ENV-OBS-002：本机环境更新与监控部署（2026-11-19）
+
+状态：完成，本机应用和监控部署及适用实测通过。任务为Infrastructure / L3，用户授权重新部署本机环境及监控。源码为 `e1cda2442db7b0d3051ede5ef1d63e74f8fc8005`，本轮未修改应用源码；沿用OrbStack的deploy项目、数据库/Redis原卷、1024维向量及Ollama/Rerank配置。
+
+- 在停止前后端、确认后端进程退出后备份本机数据库/原文件、根.env、LaunchAgents及旧程序；备份目录权限0700。数据库dump已在独立临时容器恢复，1个用户、0篇文档及vector(1024)一致。仅执行缺失的 `049_document_job_traceparent.sql`，未重跑全库迁移或退役迁移。
+- 当前源码重新构建前端及六个后端命令，构建通过。安装新二进制并设置本地Trace/Metrics OTLP端点，默认只读EnsureSchema启动成功；doctor确认1024维、pgvector 0.8.7和Redis正常。应用健康、登录、管理员诊断与首页API通过，1920×1080浏览器首页/诊断页显示正常。
+- Collector、Jaeger、Prometheus已运行：真实应用Trace可查询，应用心跳/请求计数/队列成功状态进入Prometheus；观测工作流使用SQLite及模型HTTP夹具向真实本机Collector转发，两个定向测试通过。Grafana 13.3.0及数据源代理查询通过，18个面板查询均能执行；Jaeger查询到真实诊断请求的16个span，Prometheus当前实例心跳新鲜、两个队列采集成功，8条规则health=ok且inactive。
+- 本地compose override为四个监控服务增加unless-stopped；现有manage.sh覆盖完整observability profile。后端LaunchAgent退出预算改为30秒，保留单个backend/worker。
+
+证据位于 `output/local-env-monitoring-20261119/`：初始源码SHA-256、build-results.json、migration/doctor/app-health、backup-restore、live-otlp-workflow及core-metrics/Trace回执；本地运行资料和备份被Git忽略，不能作为克隆仓库的必备文件。真实模型RAG质量、MinIO/OCR及生产发布不在本次部署验证结论内。
+
+本轮补充结果：新版启停脚本已实际完成一次全环境restart，采用bootout并等待旧PID退出后bootstrap；六个容器均running且unless-stopped，前后端/重排LaunchAgents运行，只有单个backend。1920×1080浏览器检查首页、系统诊断、Jaeger真实Trace、Prometheus告警及Grafana看板通过；缺少真实模型/问答流量的面板如实显示No data。
+
+保留的失败与修正：镜像下载耗时较长，应用先恢复；首次直接执行Grafana表达式未展开模板变量而返回400，使用实际服务及5m窗口展开后18项通过。restart后旧实例最后一次队列采集失败值短暂保留，第一次检查未通过；旧样本过期后重新检查通过，未删除历史指标或放宽断言。原重启脚本的kickstart -k改为bootout/等待/bootstrap，以遵守退出预算。
+
+C01/C02/C04/C05通过上述部署范围；C03行为Red/Break不适用，本次未修改应用关键规则，复用已通过的迁移/观测断言，实测备份恢复与重启；C06固定e1cda24源码、已安装二进制、前端构建、容器镜像ID、部署配置与证据SHA-256，敏感.env仅记录哈希。最终回执为同目录 `final-manifest.json`、`deploy-result.json`、`evidence/live-checks.json`、`evidence/containers-final.json`、`evidence/status-final.log`与浏览器截图。源码对应CI在前轮已实际通过（run 44538596582），本轮只修改本机运行配置/脚本及部署记录，没有新增应用代码或推送。升级备份保留在该目录的backup，权限0700，未自动删除。
+
+### BUG-IME-001：中文输入法确认回车误发送（2026-11-19）
+
+状态：修复及本地验收通过，任务为Bugfix / L2。基线为dev@e1cda24加既有部署文档差异；暂存区为空，保留既有文档与未跟踪文件。普通发送只经过ChatComposer，新对话与已有会话共享同一实例逻辑。
+
+- 问题：键盘发送仅检查nativeEvent.isComposing，组合状态未暴露或compositionend早于确认Enter到达时会错误提交；Safari的确认键可仍带keyCode=229。补充compositionstart/end状态、229兼容判断及表单组合状态守卫；确认后的下一次Enter和点击发送正常，Shift+Enter继续换行。没有新增延时窗口、后端改动或改变现有输入法期间不发送的产品合同。
+- C01/C03：新增三个事件序列用例，修复前均因onSubmit意外调用而失败（3失败/7通过、退出1）；修复后10项通过（退出0），覆盖缺少原生组合标记、Safari确认顺序、组合期间表单提交及确认后恢复发送。Red同时证明关键组合状态/229守卫的目标回退可被捕获；未另做破坏实验。
+- C02/C04：Node22.23.5，ChatComposer、ChatPage及播报/导出4文件121项通过；前端lint、测试TypeScript、生产构建与11路由分包均退出0。变更局限于共享输入框，未扩大到首页导航或编辑重生成快捷键。
+- C05/C06：测试使用jsdom合成composition/keyboard事件，不冒充真实操作系统输入法验收；未调用业务模型，未启动/停止用户接管的后端，未提交/推送或触发远端CI。基线全文/哈希、Red/Green、门禁日志及最终内容身份保存在 `output/chat-ime-20261119/`；目录被Git忽略，克隆后不保证存在。
+
+现代Web指南采用ime-safe-enter-submit的229兼容策略，保持显式发送按钮与既有原生表单路径。没有新增LESSONS事项。
+
+### DATA-DEMO-001：本机演示资料（2026-11-19）
+
+状态：完成，用户授权补充本机测试数据。任务为Infrastructure / L2；以现有用户admin通过应用API创建3个明确标记【演示】的私有知识库、6篇合成Markdown文档和6道带参考答案/引用要求的评测问题。批次为kbchat-demo-20261119-v1，资料明确说明虚构用途；保留原有1个知识库，不覆盖既有内容。文本上传使用固定requestId，知识库及评测问题先精确匹配再创建，结果及时保存便于对账。
+
+6篇文档均由真实worker完成解析、切片、1024维本地Embedding；API预览可读。三组样例语义检索经过本地Rerank并返回相关片段，无降级；分别覆盖远程办公制度、产品套餐表格和恢复/备份多段资料。6道评测问题已保存但未执行评测运行，本次未调用用户新配置的Chat模型，不据检索结果声称回答质量通过。
+
+处理了本次数据导入的运行前置：用户手动后端从backend/cmd/server启动，相对UPLOAD_DIR指向缺失目录；创建该处uploads到既有backend/uploads的相对符号链接，health由storage=down恢复为全部ok。未重启/终止用户进程或修改.env；两个启动目录共用相同存储，避免演示资料分散。
+
+证据在 `output/demo-data-20261119/`：dataset.json及documents保存资料全文，before-inventory.json保存既有知识库ID，state.json保存新资源ID/requestId，run.log、retrieval-checks.json、verification.json保存处理/预览/检索/健康及资料哈希。C01/C04/C05/C06通过本次新增数据范围；C02/C03的应用构建与Red/Break不适用，本次未改应用源码或规则。保留已有IME修复和文档差异，未提交/推送，无新增LESSONS事项。
+
+### BUG-MD-001：聊天原文预览Markdown排版（2026-11-20）
+
+状态：修复及本地验收通过，任务为Bugfix / L2。用户截图中的Markdown表格在聊天引用摘录及原文中均显示为管道文本；文档详情已有安全渲染，但ChatSourcePreview仍使用blockquote/pre直接输出。基线为dev@e1cda24加已有IME修复及部署/演示文档差异，暂存区为空；旧差异保留。
+
+- 将既有文档阅读渲染抽为共享DocumentMarkdown，保持GFM、skipHtml、默认URL过滤、图片替代文字和普通source标记。聊天两处采用同一渲染，非Markdown及PDF仍走原路径；跨页面阅读样式移到共享样式表。
+- 高亮沿用既有BOM/CRLF规范化和UTF-8字节转换，在完整Markdown的AST文本节点上标记，不向原文插入HTML或拆断表格。实体/转义/代码不能直接映射时标记相交文本单元；定位ref指向首个标记，同文档切换引用重算高亮。滚动容器及表格可键盘聚焦。
+- C01/C03：两项用户场景回归在旧代码明确失败（找不到标题/表格，2失败19通过，退出1）；修复后通过。另覆盖中文/emoji/CRLF、重复段落、实体/转义、加粗/链接、列表/代码、同文档切换、清除高亮以及HTML/危险链接/远程图片边界。没有新增安全授权规则，不另做全局安全策略变更。
+- C02/C04：Node22.23.5，7个相关文件179项通过；lint、测试TypeScript、生产构建及11路由分包通过。初次类型检查发现Root可含Doctype的类型不兼容，改为只替换匹配的文本节点后复验通过，原失败日志保留。
+- C05：1920×1080本机真实前端与用户运行中的后端，打开已有“北京出差住宿报销多少？”会话的差旅文档；摘录及原文均有表格，原文12个表格单元格高亮，点击定位可用；切换到第二条引用后表格标记清除、仅对应段落高亮。页面宽度与scrollWidth均为1920，无整页横向溢出；未发送消息、调用模型或重启后端。
+- C06：源码输入、构建、命令/退出码与截图位于 `output/markdown-preview-20261120/`（baseline.json、red.log、checks.json、verification.json及browser-*.jpg）；目录被Git忽略，报告本身不参与循环哈希。独立代码复核未发现可行动缺陷；未提交/推送或触发远端CI，不据本地验证宣称已发布。
+
+现代Web指南仅用于避免不可信HTML进入危险DOM入口，继续通过既有React Markdown节点渲染；没有新增LESSONS事项。
+
+### BUG-PREVIEW-001：来源预览掉到页面下方（2026-11-20）
+
+状态：修复及本地验收通过，Bugfix / L2。用户确认点击回答编号后预览落到页面下方、被遮挡或挤变形。基线为dev@e1cda24加已有IME、Markdown及部署/演示文档差异，保留既有工作区和空暂存区。
+
+- 根因：桌面分栏从1280px开始，但旧的max-width:1599px规则仍让chat-preview跨全部网格列，面板被放到下一行，并和对话平分可用高度。1440×900实测修复前预览top=478、width=1204，聊天高度422，页面scrollHeight=1201；与既定右侧360px分栏合同冲突。上一轮1920验证未覆盖该断点，保留其历史范围，不当作本次布局通过证据。
+- 移除失效跨列规则，将最小阅读高度仅用于1279px及以下抽屉；桌面内容按可用高度收缩并内部滚动。引用自动定位及按钮共用容器scrollTo，避免scrollIntoView带动页面和其他面板。Markdown、权限及聊天写入流程未改。
+- C01/C03：浏览器尺寸证据直接复现错位；定位范围测试在旧实现失败（2失败20通过），修复后通过。C02/C04：4个相关文件133项通过，lint、测试TypeScript、生产构建/11路由分包通过。本次无新授权或并发关键规则，不另做Break。
+- C05：真实前端与现有演示会话，在1440×900重复打开/关闭/切换引用及定位，预览恢复top=56、left=1080、width=360，对话高度844，页面scrollHeight=900。1280/1599/1600/1920宽边界检查均保持同顶右侧分栏和无页面溢出；1279px抽屉的标题和页面位置在定位后保持。标准1920×1080验收同时通过；额外尺寸只针对已复现的断点缺陷。未重启后端或发送模型请求。
+- C06：输入快照、差异、Red/Green、门禁和浏览器尺寸/截图存于 `output/citation-layout-20261120/`（before/、baseline.json、red.log、green.log、checks.json、browser-red.json、browser-green.json、verification.json），目录被Git忽略。未提交/推送或触发远端CI。
+
+使用Modern Web Guidance的css-layout指导保留明确网格列和容器内滚动，未以隐藏页面溢出来掩盖错位。
+
+### REL-COMPOSE-001：Docker/Compose发布候选（2026-11-20）
+
+任务：Infrastructure / L3。用户授权“先弄成可发布的版本”，明确Docker/Compose。版本为0.1.0-rc.1；基线dev@e1cda24加已完成的IME、Markdown、预览布局修复与部署/演示记录。单后端/worker、本地文件具名卷为本候选的验收范围，用户手动运行的原环境保持运行。安装/升级合同统一见 [Docker发布说明](../deploy/RELEASE.md)，发布内容见 [变更说明](../deploy/CHANGELOG.md)。
+
+交付：多阶段前后端Dockerfile（基础镜像digest固定、构建上下文白名单、非root后端及只读根文件系统）、生产Nginx/Compose、内部数据库/Redis、精确可信代理IP、持久卷、35秒停止预算、依赖响应体探针、可选独立监控栈。release.sh提供空库初始化、首位管理员、停止后指定迁移、备份及空目标恢复；源码打包仅使用已提交Git内容，不含真实env/数据/证据。CI新增Linux amd64整套容器构建及初始化/重启冒烟。
+
+发布阻断修复：CHK-001全局文档回收站列表/清空排除已删除知识库；CHK-002批量收藏、取消、分类移动统一repository事务，后续数据库失败全部回滚，分类移动仅更新相关字段；额外发现的批量删库同类缺口一并修复。后续目标被删除导致零行更新也回滚。既有权限预检、用户资料、RAG候选和引用合同保持。
+
+| 验收 | 实际结果与边界 |
+| --- | --- |
+| C01 | 近期前端修复全部纳入；明确单实例、本地卷和显式迁移，R01–R09及多实例未扩展；生产秘密不进入构建/提交 |
+| C02 | 最终后端1594个测试/子测试pass事件、5项真实服务条件跳过；vet/build及repository/service/router/job/server五包race通过。前端111文件952项、lint/测试类型/build和11路由分包通过。Docker arm64镜像构建及整栈启动通过，amd64由最终提交CI确认 |
+| C03 | SQLite旧实现复现收藏/取消/分类部分写入和回收站越界（5子场景失败），批量删库另有有效Red；原生PG触发器验证四类批量回滚。隔离移除清空回收站过滤后目标断言失败；放行restarting的脚本副本被测试拒绝。初始化已有库/运行中迁移备份拒绝用实际Compose及fake-Docker状态测试覆盖 |
+| C04 | 一次性PG完整SQL迁移/约束和回滚通过；生产Compose初始化1024维、管理员、SPA刷新、应用健康、重启通过。独立权限场景验证未授权读取/跨用户会话拒绝、viewer正文可读且原文件拒绝、撤权后不可读、归档写入409、已删库文档不被清空及恢复后可读 |
+| C05 | 隔离容器真实入库6文档，三组Embedding/Rerank检索无降级；DeepSeek当前模型deepseek-flash六题规则全部通过，人工对照合成资料及引用编号一致。流式问答期间SIGTERM约3秒正常退出且返回done；带六篇原文件/向量/会话引用的停写备份恢复到独立空项目，下载哈希、三组检索和持久消息/引用验证通过。1920×1080生产Nginx前端登录、文档/刷新、Markdown引用及评测结果页面通过。可选监控组合的Trace、心跳与18面板已查询通过 |
+| C06 | 最终提交与CI回执、源码/镜像/产物摘要保存在output/release-compose-20261120；交付包由package-release.sh从最终已提交内容生成，SHA256SUMS可核对。正式远端发布/镜像仓库推送和目标业务部署不由本地候选准备替代 |
+
+实际失败及修正保留：第一次容器启动因动态地址分配占用固定Nginx IP失败，改为固定地址在动态池外后初始化/重启/CI冒烟通过；脚本运行中编辑导致一次旧进程解析错误，脚本固定后重新构建/语法检查通过；权限验收脚本误将restore的204期待为200，按实际API合同修正并对账后复验通过。独立审查发现的宿主COMPOSE_PROJECT_NAME污染和restarting绕过停写守卫已修复，并以同名变量污染的实际冒烟及独立状态测试验证。
+
+证据入口：baseline.json、guards-red.log/guards-green.log、batch-delete-red.log、guards-postgres.log、backend-final-checks.json、frontend-checks.json、compose-smoke.log、init/start日志、acceptance/evaluation-runs.json与manual-answer-review.json、stream-shutdown.json、backup/restore日志与restore-verification.json、access-acceptance.json、optional-monitoring.json、browser-*.jpg及最终verification.json。包含真实凭据的runtime.env和备份仅留在被忽略的本地目录且权限受限，不进入发布包。
+
+剩余边界：六题仅为有限合成样本，非总体模型质量保证；生产域名/TLS、外部网关真实客户端IP、用户语料、MinIO及启用OCR要在实际目标配置复验。镜像提供OCR工具但本轮默认关闭。SSE没有周期心跳、worker没有各自独立心跳、文本超大资料统一预算、迁移版本台账及多实例仍在待办，当前单实例发布不承诺这些能力。

@@ -42,6 +42,7 @@ export function ChatComposer({
   tools,
 }: ChatComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const composing = useRef(false);
   const hintId = useId();
   const errorId = useId();
   const describedBy = [hint ? hintId : '', error ? errorId : ''].filter(Boolean).join(' ') || undefined;
@@ -55,14 +56,15 @@ export function ChatComposer({
 
   function submit(event?: FormEvent) {
     event?.preventDefault();
-    if (disabled || !value.trim()) return;
+    if (composing.current || disabled || !value.trim()) return;
     onSubmit();
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== 'Enter' || event.shiftKey) return;
-    // IME composition must not be interrupted mid-word.
-    if (event.nativeEvent.isComposing) return;
+    // Safari can end composition before the confirming Enter keydown, leaving
+    // isComposing false. Its IME keyCode (229) still identifies candidate input.
+    if (composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
     event.preventDefault();
     submit();
   }
@@ -80,6 +82,8 @@ export function ChatComposer({
           // gesture anyway, and the on-screen hint next to it is hidden below 680px.
           enterKeyHint="send"
           onChange={(event) => onChange(event.target.value)}
+          onCompositionStart={() => { composing.current = true; }}
+          onCompositionEnd={() => { composing.current = false; }}
           onKeyDown={onKeyDown}
           placeholder={placeholder}
           ref={ref}

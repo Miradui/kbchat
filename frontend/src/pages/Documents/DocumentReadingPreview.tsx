@@ -1,7 +1,6 @@
 import { useState } from 'react';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 
+import { DocumentMarkdown } from '../../components/markdown/DocumentMarkdown';
 import { SegmentedControl } from '../../components/ui/SegmentedControl';
 
 /** Document prose never runs the chat citation plugin or loads remote images. */
@@ -24,22 +23,7 @@ export function DocumentReadingPreview({ content, fileType }: { content: string;
         </div>
       )}
       {markdown && mode === 'reading' ? (
-        <article aria-label="文档正文" className="doc-prose">
-          <Markdown
-            skipHtml
-            remarkPlugins={[remarkGfm]}
-            components={{
-              h1: ({ children }) => <h4 className="doc-prose__title">{children}</h4>,
-              h2: ({ children }) => <h5 className="doc-prose__subtitle">{children}</h5>,
-              h3: ({ children }) => <h6>{children}</h6>,
-              h4: ({ children }) => <h6>{children}</h6>,
-              h5: ({ children }) => <h6>{children}</h6>,
-              a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>,
-              img: ({ alt }) => <span className="doc-prose__image">[图片{alt ? `：${alt}` : ''}]</span>,
-              table: ({ children }) => <div aria-label="文档表格" className="doc-prose__table" role="region" tabIndex={0}><table>{children}</table></div>,
-            }}
-          >{content}</Markdown>
-        </article>
+        <DocumentMarkdown content={content} />
       ) : (
         <pre aria-label={markdown ? '文档原始文本' : '文档正文'} className={`doc-preview__text${markdown ? ' doc-preview__text--source' : ''}`}>{content}</pre>
       )}

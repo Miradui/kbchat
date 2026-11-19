@@ -1,0 +1,32 @@
+# Optional local/admin-only monitoring ports. Combine with compose.production.yml.
+services:
+  jaeger:
+    extends: {file: docker-compose.yml, service: jaeger}
+    restart: unless-stopped
+    ports: !override
+      - '127.0.0.1:${JAEGER_PORT:-16686}:16686'
+    networks: [web]
+  otel-collector:
+    extends: {file: docker-compose.yml, service: otel-collector}
+    restart: unless-stopped
+    ports: !reset []
+    networks: [web]
+  prometheus:
+    extends: {file: docker-compose.yml, service: prometheus}
+    restart: unless-stopped
+    ports: !override
+      - '127.0.0.1:${PROMETHEUS_PORT:-9090}:9090'
+    networks: [web]
+  grafana:
+    extends: {file: docker-compose.yml, service: grafana}
+    restart: unless-stopped
+    ports: !override
+      - '127.0.0.1:${GRAFANA_PORT:-3000}:3000'
+    networks: [web]
+  backend:
+    environment:
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-collector:4318/v1/traces
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: http://otel-collector:4318/v1/metrics
+volumes:
+  rag_prometheus_data:
+  rag_grafana_data:

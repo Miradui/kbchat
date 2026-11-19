@@ -25,7 +25,7 @@
 .chat-preview__head { align-items: center; border-bottom: 1px solid var(--line); display: flex; flex: 0 0 auto; gap: var(--s-2); min-height: var(--topbar-h); padding: var(--s-3) var(--s-5); }
 .chat-preview__head h2 { flex: 1; font-size: var(--t-lead); }
 .chat-preview__body { display: flex; flex: 1; flex-direction: column; gap: var(--s-4); height: 100%; min-height: 0; min-width: 0; }
-.chat-preview > .chat-preview__body { padding: var(--s-5); }
+.chat-preview > .chat-preview__body { height: auto; overflow-y: auto; overscroll-behavior: contain; padding: var(--s-5); }
 .chat-preview__info { align-items: flex-start; display: flex; flex: 0 0 auto; gap: var(--s-3); }
 .chat-preview__info > svg { color: var(--accent); flex: 0 0 auto; height: var(--icon-lg); width: var(--icon-lg); }
 .chat-preview__info > div { min-width: 0; }
@@ -33,15 +33,18 @@
 .chat-preview__info p { color: var(--text-muted); font-size: var(--t-small); margin-top: var(--s-1); }
 .chat-preview__excerpt { background: var(--accent-wash); border: 1px solid var(--accent-line); border-radius: var(--r-sm); flex: 0 0 auto; font-size: var(--t-small); padding: var(--s-3); }
 .chat-preview__excerpt summary { color: var(--accent); cursor: pointer; font-weight: 600; }
-.chat-preview__excerpt blockquote { color: var(--text-secondary); line-height: var(--lh-normal); margin-top: var(--s-2); max-height: calc(var(--s-20) * 2); overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; }
+.chat-preview__excerpt-content { color: var(--text-secondary); line-height: var(--lh-normal); margin-top: var(--s-2); max-height: calc(var(--s-20) * 2); overflow: auto; overflow-wrap: anywhere; }
+.chat-preview__excerpt-content > blockquote { white-space: pre-wrap; }
 .chat-preview__toolbar { align-items: center; color: var(--text-muted); display: flex; flex: 0 0 auto; flex-wrap: wrap; font-size: var(--t-small); gap: var(--s-2); justify-content: space-between; }
 .chat-preview__toolbar small { font-size: var(--t-micro); }
-.chat-preview__text { background: var(--surface-sunken); border: 1px solid var(--line); border-radius: var(--r-sm); flex: 1; font-family: var(--font); font-size: var(--t-lead); line-height: var(--lh-reading); min-height: 0; overflow: auto; overflow-wrap: anywhere; padding: var(--s-4); white-space: pre-wrap; }
+.chat-preview__text { background: var(--surface-sunken); border: 1px solid var(--line); border-radius: var(--r-sm); flex: 1; font-family: var(--font); font-size: var(--t-lead); line-height: var(--lh-reading); min-height: 0; overflow: auto; overflow-wrap: anywhere; overscroll-behavior: contain; padding: var(--s-4); white-space: pre-wrap; }
 .chat-preview__text mark { background: var(--accent-wash); border-bottom: 1px solid var(--accent); color: var(--text); }
+.chat-preview__markdown { white-space: normal; }
 .chat-preview__body > .pdf-preview { flex: 1; min-height: 0; }
 .chat-preview__error { align-items: flex-start; color: var(--text-muted); display: flex; flex-direction: column; font-size: var(--t-body); gap: var(--s-3); }
-@media (max-width: 1599px) {
-  .chat-preview { grid-column: 1 / -1; }
+/* Only the modal drawer needs a minimum reading height. Desktop previews stay
+   in the grid's right column and shrink to the available viewport height. */
+@media (max-width: 1279px) {
   .chat-preview__text, .chat-preview__body > .pdf-preview { min-height: calc(var(--s-20) * 3); }
 }
 

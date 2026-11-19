@@ -5,6 +5,7 @@
 @import './account-settings.css';
 @import './uploads.css';
 @import './pdf-preview.css';
+@import './document-markdown.css';
 @import './pages/auth.css';
 @import './pages/home.css';
 @import './pages/library.css';

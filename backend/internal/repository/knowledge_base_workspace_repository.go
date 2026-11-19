@@ -36,6 +36,18 @@ func (r *KnowledgeBaseFavoriteRepository) Set(ctx context.Context, userID, kbID 
 		Create(&item).Error
 }
 
+func (r *KnowledgeBaseFavoriteRepository) BatchSet(ctx context.Context, userID uuid.UUID, ids []uuid.UUID, favorite bool) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		repo := NewKnowledgeBaseFavoriteRepository(tx)
+		for _, id := range ids {
+			if err := repo.Set(ctx, userID, id, favorite); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 type KnowledgeBaseViewRepository struct {
 	db *gorm.DB
 }

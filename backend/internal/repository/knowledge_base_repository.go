@@ -427,8 +427,42 @@ func (r *KnowledgeBaseRepository) TouchUpdatedBy(ctx context.Context, kbID, user
 		}).Error
 }
 
+// BatchMoveCategory changes only the intended fields and rolls back every item
+// if a database error or a concurrent deletion invalidates a later write.
+func (r *KnowledgeBaseRepository) BatchMoveCategory(ctx context.Context, actorID uuid.UUID, ids []uuid.UUID, categoryID *uuid.UUID) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, id := range ids {
+			result := tx.Model(&model.KnowledgeBase{}).Where("id = ?", id).Updates(map[string]any{
+				"category_id": categoryID, "updated_by_id": actorID, "updated_at": time.Now(),
+			})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return gorm.ErrRecordNotFound
+			}
+		}
+		return nil
+	})
+}
+
 func (r *KnowledgeBaseRepository) Delete(ctx context.Context, kb *model.KnowledgeBase) error {
 	return r.db.WithContext(ctx).Delete(kb).Error
+}
+
+func (r *KnowledgeBaseRepository) BatchDelete(ctx context.Context, ids []uuid.UUID) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, id := range ids {
+			result := tx.Delete(&model.KnowledgeBase{}, "id = ?", id)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return gorm.ErrRecordNotFound
+			}
+		}
+		return nil
+	})
 }
 
 func (r *KnowledgeBaseRepository) Restore(ctx context.Context, id uuid.UUID) error {

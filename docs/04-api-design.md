@@ -947,7 +947,7 @@ period=month|day
 
 ### POST /knowledge-bases/batch-move-category
 
-批量移动调用者具有 `kb.write` 的知识库分类。`categoryId` 可为 `null`，表示移出分类；目标分类仍必须属于调用者。写入前检查整批权限，数据库故障下的原子性见下文实现边界。
+批量移动调用者具有 `kb.write` 的知识库分类。`categoryId` 可为 `null`，表示移出分类；目标分类仍必须属于调用者。写入前检查整批权限，写入在同一事务内执行；任一数据库错误则整批回滚。
 
 ```json
 {
@@ -977,7 +977,7 @@ period=month|day
 
 响应与其他批量接口一致：`{ "processedCount": 2 }`。
 
-**批量收藏/分类移动的实现边界（CHK-002）**：当前service先检查整批权限，再逐项写入，没有包围整批的数据库事务；权限拒绝可在首次写入前结束，但中途数据库失败的原子性尚未验证。本次保留既有all-or-nothing要求，不把它改成允许部分完成。继续工作应按 [有效待办](15-backlog.md) 注入中途故障核实；标签批量写入已有repository事务，不混作同一缺口。
+**批量收藏/分类移动**：service先检查整批权限，repository在同一个事务内执行收藏、取消收藏或分类更新；后续写入失败会回滚前面已执行的操作。分类移动仅更新categoryId、updatedBy和updatedAt，目标在写入时已删除/不存在也整批失败。SQLite故障注入及原生PostgreSQL回滚验证覆盖该合同。
 
 ### POST /knowledge-bases/batch-delete
 

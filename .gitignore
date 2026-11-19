@@ -19,3 +19,9 @@ output/
 # Frontend
 frontend/dist/
 frontend/node_modules/
+
+# Operator-specific Compose credentials and macOS metadata
+/deploy/.env.production
+/deploy/.env.production.*
+!/deploy/.env.production.example
+.DS_Store

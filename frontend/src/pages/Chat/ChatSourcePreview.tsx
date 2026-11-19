@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 
 import { downloadDocument, getDocument, getDocumentPreview } from '../../api/resources';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
+import { DocumentMarkdown } from '../../components/markdown/DocumentMarkdown';
 import { PdfPreview } from '../../components/pdf/PdfPreview';
 import { RenderBoundary } from '../../components/feedback/RenderBoundary';
 import { Button } from '../../components/ui/Button';
@@ -22,6 +23,20 @@ type PreviewState = {
   file: Blob | null;
   url: string;
 };
+
+function scrollToCitation(mark: HTMLElement | null) {
+  const viewport = mark?.closest<HTMLElement>('.chat-preview__text');
+  if (!mark || !viewport) return;
+  const target = mark.getBoundingClientRect();
+  const frame = viewport.getBoundingClientRect();
+  // scrollIntoView also scrolls the page and surrounding panels. Only move the
+  // source text, keeping the answer, composer and preview header in place.
+  viewport.scrollTo?.({
+    top: viewport.scrollTop + target.top - frame.top - viewport.clientTop
+      - (viewport.clientHeight - Math.min(target.height, viewport.clientHeight)) / 2,
+    behavior: 'instant',
+  });
+}
 
 export function ChatSourcePreview({ citation, index, knowledgeBaseId, canDownload = true, onClose, question, relatedDocumentIds }: {
   question?: string;
@@ -89,12 +104,13 @@ export function ChatSourcePreview({ citation, index, knowledgeBaseId, canDownloa
   }, [citation.documentId, citation.chunkId, overlay]);
 
   const content = normalizeSourceText(state?.preview.content ?? '');
+  const markdown = ['md', 'markdown'].includes((state?.preview.fileType ?? citation.filename.split('.').pop() ?? '').toLowerCase());
   const sourceRow = citation.table ? state?.preview.tableRows?.find((row) => row.sheetName === citation.table?.sheetName && row.rowStart === citation.table.rowStart && row.rowEnd === citation.table.rowEnd && row.headerRow === citation.table.headerRow) : undefined;
   const tableMatch = sourceRow ? rangeFromByteOffsets(content, sourceRow.startOffset, sourceRow.endOffset) : null;
   const match = state?.preview.kind === 'text' ? citation.table ? tableMatch : locateCitation(content, citation) : null;
   const matchStart = match?.start ?? -1;
   useEffect(() => {
-    if (!loading) matchRef.current?.scrollIntoView?.({ block: 'center', behavior: 'auto' });
+    if (!loading) scrollToCitation(matchRef.current);
   }, [loading, citation.chunkId, matchStart]);
 
   async function download() {
@@ -124,7 +140,9 @@ export function ChatSourcePreview({ citation, index, knowledgeBaseId, canDownloa
       </div>
       <details className="chat-preview__excerpt" open>
         <summary>本次回答引用的内容</summary>
-        <blockquote>{citation.content}</blockquote>
+        <div className="chat-preview__excerpt-content">
+          {markdown ? <DocumentMarkdown content={citation.content} label="引用摘录" /> : <blockquote>{citation.content}</blockquote>}
+        </div>
       </details>
       {citation.textSource === 'ocr_corrected' && <p className="ui-muted">来源文字经过人工校对，原始扫描图像保持不变。</p>}
       {state && <CitationVersionNotice documentId={citation.documentId} question={question} relatedDocumentIds={relatedDocumentIds} />}
@@ -139,12 +157,16 @@ export function ChatSourcePreview({ citation, index, knowledgeBaseId, canDownloa
         <>
           <div className="chat-preview__toolbar">
             <span>文档原文</span>
-            {match ? <Button leadingIcon={<LocateFixed aria-hidden="true" />} onClick={() => matchRef.current?.scrollIntoView?.({ block: 'center', behavior: 'auto' })} variant="ghost">定位到引用</Button>
+            {match ? <Button leadingIcon={<LocateFixed aria-hidden="true" />} onClick={() => scrollToCitation(matchRef.current)} variant="ghost">定位到引用</Button>
               : <small>可对照上方摘录阅读原文</small>}
           </div>
-          <pre aria-label="文档原文" className="chat-preview__text" tabIndex={0}>
-            {match ? <>{content.slice(0, match.start)}<mark ref={matchRef}>{content.slice(match.start, match.end)}</mark>{content.slice(match.end)}</> : content || '文档没有可预览的文本内容。'}
-          </pre>
+          {markdown ? (
+            <DocumentMarkdown className="chat-preview__text chat-preview__markdown" content={content || '文档没有可预览的文本内容。'} highlight={match} highlightRef={matchRef} label="文档原文" tabIndex={0} />
+          ) : (
+            <pre aria-label="文档原文" className="chat-preview__text" tabIndex={0}>
+              {match ? <>{content.slice(0, match.start)}<mark ref={matchRef}>{content.slice(match.start, match.end)}</mark>{content.slice(match.end)}</> : content || '文档没有可预览的文本内容。'}
+            </pre>
+          )}
         </>
       ) : !canDownload && state?.preview.kind === 'file' ? (
         <p className="ui-muted">可阅读上方引用内容；下载原始文件需要编辑者及以上权限。</p>

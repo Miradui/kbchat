@@ -1,0 +1,86 @@
+# Single backend/worker. Explicit migrations; never scale backend or overlap upgrades.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: kbchat
+      POSTGRES_USER: kbchat
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the release env file}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U kbchat -d kbchat']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [data]
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in the release env file}
+    command: [sh, -c, 'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"']
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [data]
+  backend:
+    image: kbchat-backend:${KBCHAT_VERSION:-local}
+    build:
+      context: ../backend
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 35s
+    env_file:
+      - ${KBCHAT_ENV_FILE:-.env.production}
+    environment:
+      APP_ENV: production
+      SERVER_PORT: '8080'
+      RAG_ALLOW_AUTOMIGRATE: 'false'
+      # Generate URL-safe hex passwords (openssl rand -hex 32).
+      DATABASE_URL: postgres://kbchat:${POSTGRES_PASSWORD}@postgres:5432/kbchat?sslmode=disable
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      UPLOAD_DIR: /app/uploads
+      TRUSTED_PROXY_CIDRS: ${KBCHAT_PROXY_IP:-172.30.80.2}/32
+      MAX_UPLOAD_SIZE_MB: '50'
+    volumes:
+      - uploads:/app/uploads
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [data, web]
+  frontend:
+    image: kbchat-frontend:${KBCHAT_VERSION:-local}
+    build:
+      context: ../frontend
+    restart: unless-stopped
+    ports:
+      - '${KBCHAT_BIND:-127.0.0.1}:${KBCHAT_PORT:-8088}:8080'
+    depends_on:
+      backend: {condition: service_healthy}
+    networks:
+      web:
+        ipv4_address: ${KBCHAT_PROXY_IP:-172.30.80.2}
+networks:
+  data:
+    internal: true
+  web:
+    ipam:
+      config:
+        - subnet: ${KBCHAT_SUBNET:-172.30.80.0/24}
+          ip_range: ${KBCHAT_DYNAMIC_RANGE:-172.30.80.128/25}
+volumes:
+  postgres_data:
+  redis_data:
+  uploads:

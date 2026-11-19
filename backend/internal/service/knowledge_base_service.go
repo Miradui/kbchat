@@ -438,10 +438,8 @@ func (s *KnowledgeBaseService) BatchSetFavorite(ctx context.Context, ownerID uui
 	if err := s.ensureKnowledgeBasesCapability(ctx, ownerID, ids, access.CapKnowledgeBaseRead); err != nil {
 		return nil, err
 	}
-	for _, id := range ids {
-		if err := s.favorites.Set(ctx, ownerID, id, req.Favorite); err != nil {
-			return nil, apperror.Internal(err)
-		}
+	if err := s.favorites.BatchSet(ctx, ownerID, ids, req.Favorite); err != nil {
+		return nil, apperror.Internal(err)
 	}
 	return &dto.KnowledgeBaseBatchResultResponse{ProcessedCount: len(ids)}, nil
 }
@@ -457,16 +455,8 @@ func (s *KnowledgeBaseService) BatchMoveCategory(ctx context.Context, ownerID uu
 	if err := s.ensureCategoryOwner(ctx, ownerID, req.CategoryID); err != nil {
 		return nil, err
 	}
-	for _, id := range ids {
-		kb, err := s.findKnowledgeBaseForCapability(ctx, ownerID, id, access.CapKnowledgeBaseWrite)
-		if err != nil {
-			return nil, err
-		}
-		kb.CategoryID = req.CategoryID
-		kb.UpdatedByID = editorID(ownerID)
-		if err := s.repo.Update(ctx, kb); err != nil {
-			return nil, apperror.Internal(err)
-		}
+	if err := s.repo.BatchMoveCategory(ctx, ownerID, ids, req.CategoryID); err != nil {
+		return nil, apperror.Internal(err)
 	}
 	return &dto.KnowledgeBaseBatchResultResponse{ProcessedCount: len(ids)}, nil
 }
@@ -510,14 +500,8 @@ func (s *KnowledgeBaseService) BatchDelete(ctx context.Context, ownerID uuid.UUI
 	if err := s.ensureKnowledgeBasesCapability(ctx, ownerID, ids, access.CapKnowledgeBaseDelete); err != nil {
 		return nil, err
 	}
-	for _, id := range ids {
-		kb, err := s.findKnowledgeBaseForCapability(ctx, ownerID, id, access.CapKnowledgeBaseDelete)
-		if err != nil {
-			return nil, err
-		}
-		if err := s.repo.Delete(ctx, kb); err != nil {
-			return nil, apperror.Internal(err)
-		}
+	if err := s.repo.BatchDelete(ctx, ids); err != nil {
+		return nil, apperror.Internal(err)
 	}
 	return &dto.KnowledgeBaseBatchResultResponse{ProcessedCount: len(ids)}, nil
 }

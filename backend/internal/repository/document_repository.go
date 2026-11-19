@@ -656,6 +656,7 @@ func (r *DocumentRepository) EmptyDeletedForActor(ctx context.Context, actorID u
 			Model(&model.Document{}).
 			Joins("JOIN knowledge_bases ON knowledge_bases.id = documents.knowledge_base_id").
 			Where(reachableKnowledgeBaseCondition(tx, actorID, memberRoles)).
+			Where("knowledge_bases.deleted_at IS NULL").
 			Where("documents.deleted_at IS NOT NULL").
 			Order("documents.id asc").
 			Clauses(clause.Locking{Strength: "UPDATE", Table: clause.Table{Name: "documents"}}).
@@ -718,6 +719,7 @@ func (r *DocumentRepository) ListDeletedForActor(ctx context.Context, actorID uu
 		Model(&model.Document{}).
 		Joins("JOIN knowledge_bases ON knowledge_bases.id = documents.knowledge_base_id").
 		Where(reachableKnowledgeBaseCondition(r.db, actorID, memberRoles)).
+		Where("knowledge_bases.deleted_at IS NULL").
 		Where("documents.deleted_at IS NOT NULL")
 
 	var total int64

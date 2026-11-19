@@ -2,7 +2,7 @@
 
 当前源码的迁移要求见 [数据库设计](03-database-design.md)，并与实际SQL和启动检查核对。本页面向Linux单机部署：Nginx提供静态前端并代理Go后端，后端连接PostgreSQL/pgvector、Redis、本地/MinIO存储及模型服务。文档worker保持单实例。
 
-当前 `deploy/docker-compose.yml` 提供PostgreSQL/Redis及可选observability profile（Collector/Jaeger/Prometheus/Grafana），不含业务前后端镜像、Nginx或TLS。当前环境是否已升级须现场核实，不能用旧PID或迁移记录判断。
+Docker完整单实例部署使用 [compose.production.yml](../deploy/compose.production.yml) 和 [发布脚本](../deploy/release.sh)，安装、升级及备份恢复步骤见 [Docker发布说明](../deploy/RELEASE.md)。下文保留Linux原生systemd部署方式。开发用 `deploy/docker-compose.yml` 提供PostgreSQL/Redis及可选observability profile（Collector/Jaeger/Prometheus/Grafana）；TLS入口由实际环境配置。当前环境是否已升级须现场核实，不能用旧PID或迁移记录判断。
 
 | 任务 | 入口 |
 | --- | --- |
@@ -544,7 +544,7 @@ try_files $uri $uri/ /index.html;
 
 ## 15. 生产部署待补齐事项
 
-生产Dockerfile/完整Compose、自动TLS、迁移版本台账、自动发布/回滚及多实例任务租约尚未作为一键生产方案交付。当前仅有手工单机部署流程；缺口与启动条件集中见 [有效待办](15-backlog.md)，发布判断见 [验证清单](14-verification.md#候选版本发布清单)。
+前后端Dockerfile及完整单实例Compose、显式迁移和备份恢复脚本已提供；自动TLS、迁移版本台账、自动发布/回滚及多实例任务租约仍未交付。缺口与启动条件集中见 [有效待办](15-backlog.md)，发布判断见 [验证清单](14-verification.md#候选版本发布清单)。
 
 ## Embedding 模型切换与重建
 

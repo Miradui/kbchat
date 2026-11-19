@@ -47,6 +47,22 @@ DOCX 支持正文、标题、列表和表格文本，不支持图片、公式、
 
 后端的 SQLite 测试还需要启用 CGO 并安装 C 编译器，Windows 可使用 MinGW-w64 GCC。
 
+## Docker / Compose 发布
+
+单实例容器部署入口见 [Docker发布说明](deploy/RELEASE.md)。包含前后端镜像、PostgreSQL/Redis、显式初始化/升级、备份恢复及可选监控；只需填写模型和随机密钥配置，不使用开发默认密码。
+
+```bash
+cp deploy/.env.production.example deploy/.env.production
+chmod 600 deploy/.env.production
+# 编辑配置，填写模型、JWT、数据库/Redis和首次管理员密码
+./deploy/release.sh build
+./deploy/release.sh init
+./deploy/release.sh admin admin
+./deploy/release.sh start
+```
+
+默认仅本机访问 `http://127.0.0.1:8088`，公网部署需接入目标环境的HTTPS入口。已有库按 [升级步骤](deploy/RELEASE.md#升级) 操作，不执行init。版本见 [VERSION](VERSION)。
+
 ## 安装与本地运行
 
 以下命令使用 PowerShell。首次安装从克隆仓库开始；已经克隆的项目直接进入仓库根目录。
@@ -178,7 +194,7 @@ npm run build
 ```text
 backend/    API、业务服务、数据库访问、模型 Provider、后台任务与 SQL 迁移
 frontend/   React 页面、组件、API 客户端与前端测试
-deploy/     本地 PostgreSQL / Redis Compose 配置
+deploy/     开发依赖与生产 Compose、发布/备份恢复脚本和监控配置
 docs/       产品、架构、接口、配置与部署文档
 .github/    GitHub Actions 工作流
 ```
