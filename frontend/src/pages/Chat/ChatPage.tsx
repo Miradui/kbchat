@@ -7,6 +7,7 @@ import {
   setChatMessageFeedback,
 } from '../../api/resources';
 import { EmptyState } from '../../components/feedback/EmptyState';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { RerankFallbackNotice } from '../../components/feedback/RerankFallbackNotice';
 import { useToast } from '../../components/feedback/ToastProvider';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
@@ -77,6 +78,7 @@ export function ChatPage() {
     focusedCitation, setFocusedCitation, sourcePreview, setSourcePreview,
     feedbackSavingIds, setFeedbackSavingIds, feedbackTarget, setFeedbackTarget,
     editingMessageId, setEditingMessageId, editingDraft, setEditingDraft,
+    editConfirm, setEditConfirm,
   } = useChatInteractionState(sessionId);
   const sourceTriggerRef = useRef<HTMLElement | null>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -439,13 +441,24 @@ export function ChatPage() {
     if (thread.editingId) return;
     setEditingMessageId(null); setEditingDraft('');
   });
-  const submitEditing = useEventCallback((messageId: string, content: string) => {
-    if (archived || interactionLocked || thread.editingId || !content.trim()) return;
+  const runEdit = useEventCallback((messageId: string, content: string) => {
     void thread.editMessage(messageId, content).then(() => {
       if (activeSessionIdRef.current === sessionId && editingMessageId === messageId) {
         setEditingMessageId(null); setEditingDraft(''); toast.success('消息已更新并重新生成');
       }
     }).catch((caught) => toast.error(getErrorMessage(caught, '消息更新失败，请稍后重试')));
+  });
+  const submitEditing = useEventCallback((messageId: string, content: string) => {
+    if (archived || interactionLocked || thread.editingId || !content.trim()) return;
+    // The server replaces the whole tail. A partial history window cannot prove
+    // this is the last question, so it also requires confirmation.
+    const index = thread.messages.findIndex((message) => message.id === messageId);
+    const tail = index < 0 ? [] : thread.messages.slice(index + 1);
+    if (hasNewerMessages || tail.some((message) => message.role === 'user')) {
+      setEditConfirm({ messageId, content });
+      return;
+    }
+    runEdit(messageId, content);
   });
   const focusCitation = useEventCallback((messageId: string, index: number | null) => setFocusedCitation({ messageId, index }));
 
@@ -472,6 +485,7 @@ export function ChatPage() {
       actionsDisabled={interactionLocked || sessionExporting}
       getSessionActions={(target) => getSessionActions(target, true)}
       error={sessionStore.sessionsError}
+      refetchError={sessionStore.sessionsRefetchError}
       knowledgeBaseId={automaticScope ? '' : activeKnowledgeBaseId}
       knowledgeBases={knowledgeBases}
       knowledgeBasesError={sessionStore.knowledgeBasesError}
@@ -573,6 +587,10 @@ export function ChatPage() {
                 <InlineEdit
                   busy={sessionBusy}
                   disabled={interactionLocked}
+                  // Remount per session: the field stays open until its save is
+                  // confirmed, so switching sessions must not leave the previous
+                  // session's draft in the header.
+                  key={currentSession.id}
                   label="重命名会话"
                   onSubmit={(title) => renameSession(currentSession, title)}
                   value={currentSession.title || ''}
@@ -877,6 +895,21 @@ export function ChatPage() {
       }} />}
 
       <ChatSessionActionDialogs actions={sessionActions} />
+
+      {editConfirm && (
+        <ConfirmDialog
+          busy={Boolean(thread.editingId)}
+          confirmLabel="删除并重新生成"
+          description="将删除这条提问之后的全部消息，并基于新的提问重新生成回答。此操作不可撤销。"
+          onCancel={() => setEditConfirm(null)}
+          onConfirm={() => {
+            const pending = editConfirm;
+            setEditConfirm(null);
+            runEdit(pending.messageId, pending.content);
+          }}
+          title="编辑这条提问会删除后续消息"
+        />
+      )}
 
       {feedbackTarget && <ChatFeedbackDialog key={feedbackTarget.id} initial={feedbackTarget.feedback}
         onClose={() => setFeedbackTarget(null)} onSubmit={(details) => handleMessageFeedback(feedbackTarget.id, 'negative', details)} />}

@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -13,9 +14,9 @@ func TestRecorderNilReceiverIsSafe(t *testing.T) {
 	// Instrumented call paths are constructed without a recorder in existing
 	// tests, so every method has to tolerate a nil receiver rather than forcing
 	// those constructors to change.
-	recorder.ObserveDuration(MetricRetrieval, time.Second)
-	recorder.ObserveSince(MetricRetrieval, time.Now())
-	recorder.RecordProviderResult(ProviderChat, errors.New("boom"))
+	recorder.ObserveDuration(context.Background(), MetricRetrieval, time.Second)
+	recorder.ObserveSince(context.Background(), MetricRetrieval, time.Now())
+	recorder.RecordProviderResult(context.Background(), ProviderChat, errors.New("boom"))
 	recorder.RecordRerankFallback("provider_unavailable")
 	recorder.RecordRateLimitTrigger(RateLimitScopeLogin)
 	recorder.RecordEmbeddingCacheResult(EmbeddingCacheResultHit)
@@ -35,7 +36,7 @@ func TestRecorderNilReceiverIsSafe(t *testing.T) {
 func TestRecorderPercentilesOnKnownDistribution(t *testing.T) {
 	recorder := NewRecorder()
 	for i := 1; i <= 100; i++ {
-		recorder.ObserveDuration(MetricRetrieval, time.Duration(i)*time.Millisecond)
+		recorder.ObserveDuration(context.Background(), MetricRetrieval, time.Duration(i)*time.Millisecond)
 	}
 
 	stats := recorder.Snapshot().Durations[MetricRetrieval]
@@ -58,10 +59,10 @@ func TestRecorderRingEvictsOldestSamplesButKeepsLifetimeCount(t *testing.T) {
 	// Fill past capacity with a low value, then push capacity worth of a high
 	// value. If eviction works, no low sample survives to move the percentiles.
 	for i := 0; i < sampleCapacity; i++ {
-		recorder.ObserveDuration(MetricChatGeneration, time.Millisecond)
+		recorder.ObserveDuration(context.Background(), MetricChatGeneration, time.Millisecond)
 	}
 	for i := 0; i < sampleCapacity; i++ {
-		recorder.ObserveDuration(MetricChatGeneration, time.Second)
+		recorder.ObserveDuration(context.Background(), MetricChatGeneration, time.Second)
 	}
 
 	stats := recorder.Snapshot().Durations[MetricChatGeneration]
@@ -78,7 +79,7 @@ func TestRecorderRingEvictsOldestSamplesButKeepsLifetimeCount(t *testing.T) {
 
 func TestRecorderDropsNegativeSamples(t *testing.T) {
 	recorder := NewRecorder()
-	recorder.ObserveDuration(MetricRerank, -time.Second)
+	recorder.ObserveDuration(context.Background(), MetricRerank, -time.Second)
 
 	if stats, ok := recorder.Snapshot().Durations[MetricRerank]; ok {
 		t.Fatalf("negative sample was recorded: %#v", stats)
@@ -87,8 +88,8 @@ func TestRecorderDropsNegativeSamples(t *testing.T) {
 
 func TestRecorderProviderHealthTracksLastOutcomeAndReason(t *testing.T) {
 	recorder := NewRecorder()
-	recorder.RecordProviderResult(ProviderChat, nil)
-	recorder.RecordProviderResult(ProviderChat, &fakeStatusError{message: "unauthorized", status: 401})
+	recorder.RecordProviderResult(context.Background(), ProviderChat, nil)
+	recorder.RecordProviderResult(context.Background(), ProviderChat, &fakeStatusError{message: "unauthorized", status: 401})
 
 	stats := recorder.Snapshot().Providers[ProviderChat]
 	if stats.SuccessCount != 1 || stats.FailureCount != 1 {
@@ -110,7 +111,7 @@ func TestRecorderRecentFailureCountExcludesOldFailures(t *testing.T) {
 	current := time.Now()
 	recorder.now = func() time.Time { return current }
 
-	recorder.RecordProviderResult(ProviderEmbedding, errors.New("boom"))
+	recorder.RecordProviderResult(context.Background(), ProviderEmbedding, errors.New("boom"))
 	// Move past the window: the failure is still in the lifetime total but must
 	// stop making a currently healthy provider look broken.
 	current = current.Add(recentFailureWindow + time.Minute)
@@ -183,8 +184,8 @@ func TestRecorderIsSafeForConcurrentUse(t *testing.T) {
 		go func(worker int) {
 			defer waitGroup.Done()
 			for j := 0; j < perWorker; j++ {
-				recorder.ObserveDuration(MetricRetrieval, time.Duration(j)*time.Millisecond)
-				recorder.RecordProviderResult(ProviderChat, nil)
+				recorder.ObserveDuration(context.Background(), MetricRetrieval, time.Duration(j)*time.Millisecond)
+				recorder.RecordProviderResult(context.Background(), ProviderChat, nil)
 				recorder.RecordRerankFallback("provider_unavailable")
 				recorder.RecordRateLimitTrigger(RateLimitScopeChat)
 				recorder.RecordEmbeddingCacheResult(EmbeddingCacheResultHit)
@@ -214,7 +215,7 @@ func TestRecorderObserveSinceUsesInjectedClock(t *testing.T) {
 	start := time.Now()
 	recorder.now = func() time.Time { return start.Add(250 * time.Millisecond) }
 
-	recorder.ObserveSince(MetricChatFirstToken, start)
+	recorder.ObserveSince(context.Background(), MetricChatFirstToken, start)
 
 	stats := recorder.Snapshot().Durations[MetricChatFirstToken]
 	if stats.Max != 250*time.Millisecond {

@@ -2,12 +2,16 @@ package service
 
 import (
 	"context"
+	"errors"
+	"net/http"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"kbchat/backend/internal/access"
 	"kbchat/backend/internal/apperror"
 	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/repository"
 )
 
 // authorizeSession checks both halves of a chat session's access: the session must
@@ -36,6 +40,42 @@ func (s *ChatService) authorizeSession(
 		return nil, apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
 	}
 	return session, s.authorizeSessionKnowledgeBase(ctx, userID, session, capability)
+}
+
+// authorizeWritableSession is authorizeSession plus the archived check that every
+// path appending or replacing messages must pass.
+//
+// Archived sessions are read-only in the UI and in EditMessageAndRegenerate, but
+// send, stream and regenerate used to skip the check. Besides letting a stale tab
+// keep writing to an archived transcript, the automatic scope then tried to
+// register a newly hit knowledge base through AddSessionKnowledgeBases, whose row
+// lock excludes archived sessions; that surfaced as a 500 and was recorded as a
+// retrieval_failed answer inside the archived conversation. One assertion here
+// removes the whole class.
+func (s *ChatService) authorizeWritableSession(
+	ctx context.Context,
+	userID, sessionID uuid.UUID,
+	capability access.Capability,
+) (*model.ChatSession, error) {
+	session, err := s.authorizeSession(ctx, userID, sessionID, capability)
+	if err != nil {
+		return nil, err
+	}
+	if session.ArchivedAt != nil {
+		return nil, chatWriteError(repository.ErrChatSessionArchived)
+	}
+	return session, nil
+}
+
+// Entry checks and transactional write conflicts expose the same state error.
+func chatWriteError(err error) error {
+	if errors.Is(err, repository.ErrChatSessionArchived) {
+		return apperror.New(http.StatusConflict, "CHAT_SESSION_ARCHIVED", "会话已归档，请取消归档后重试")
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return apperror.NotFound("RESOURCE_NOT_FOUND", "resource not found")
+	}
+	return apperror.Internal(err)
 }
 
 // authorizeDeletedSession is authorizeSession for a session in the recycle bin.

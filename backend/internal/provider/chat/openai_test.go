@@ -22,6 +22,40 @@ func newOpenAIStreamTestProvider(serverURL string) *OpenAICompatibleProvider {
 	})
 }
 
+func TestChatRejectsOversizedJSON(t *testing.T) {
+	for _, mode := range []string{"blocking", "stream_json", "stream_fallback"} {
+		t.Run(mode, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request chatRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if mode == "stream_fallback" && request.Stream {
+					w.WriteHeader(http.StatusNotImplemented)
+					fmt.Fprint(w, `{"error":{"message":"stream unsupported"}}`)
+					return
+				}
+				fmt.Fprintf(w, `{"choices":[{"message":{"role":"assistant","content":"%s"}}]}`, strings.Repeat("x", 4*1024*1024+1))
+			}))
+			defer server.Close()
+			provider := newOpenAIStreamTestProvider(server.URL)
+			messages := []chatcore.Message{{Role: "user", Content: "question"}}
+			var answer string
+			var err error
+			if mode == "blocking" {
+				answer, err = provider.Chat(context.Background(), messages)
+			} else {
+				answer, err = provider.ChatStream(context.Background(), messages, nil)
+			}
+			if err == nil || answer != "" {
+				t.Fatalf("oversized JSON must fail without an answer: bytes=%d err=%v", len(answer), err)
+			}
+		})
+	}
+}
+
 func TestChatStreamCompletesOnlyAfterDone(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request chatRequest
@@ -317,6 +351,18 @@ func TestChatStreamFallbackKeepsModelAndTemperatureOverrides(t *testing.T) {
 // Vendors often echo a canonical alias ("deepseek-flash") for the requested
 // name ("deepseek-v4-flash"). Usage records the requested name because pricing
 // and the answer-model whitelist are keyed by it.
+func TestChatStreamRejectsOversizedFrame(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"`+strings.Repeat("x", 4*1024*1024)+`"}}]}`+"\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+	_, _, err := newOpenAIStreamTestProvider(server.URL).ChatStreamWithUsage(context.Background(), []chatcore.Message{{Role: "user", Content: "question"}}, func(string) error { return nil })
+	if err == nil {
+		t.Fatal("oversized upstream frame must be rejected")
+	}
+}
+
 func TestUsageReportsTheRequestedModelNotTheEchoedAlias(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {

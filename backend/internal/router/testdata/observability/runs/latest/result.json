@@ -1,0 +1,32 @@
+{
+  "collectorOutageBusinessCompleted": true,
+  "failedStageDurationIncluded": true,
+  "logsCorrelated": true,
+  "metricSensitiveDataExported": false,
+  "metricsExported": true,
+  "retrievalFailure": true,
+  "sensitiveDataExported": false,
+  "spanNames": [
+    "chat.persist",
+    "document.chunk",
+    "document.parse",
+    "document.process",
+    "document.publish",
+    "document.storage_read",
+    "model.chat",
+    "model.chat_stream",
+    "model.embedding",
+    "rag.answer",
+    "rag.intent",
+    "rag.query_embedding",
+    "rag.retrieval"
+  ],
+  "streamFailureCounted": true,
+  "streamOutcomes": [
+    "completed",
+    "failed",
+    "cancelled"
+  ],
+  "workerAttempts": 2,
+  "workerRestartLinked": true
+}

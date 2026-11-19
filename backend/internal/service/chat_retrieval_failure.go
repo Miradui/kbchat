@@ -10,6 +10,7 @@ import (
 
 	"kbchat/backend/internal/apperror"
 	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/repository"
 )
 
 // emptyCitationJSON is an empty JSON array rather than NULL, matching what the
@@ -73,7 +74,7 @@ func (s *ChatService) recordRetrievalFailure(
 	clientRequestID uuid.UUID,
 	content string,
 	history []model.ChatMessage,
-) {
+) error {
 	generated := generatedChatAnswer{
 		answer:       retrievalFailedAnswer,
 		citationJSON: emptyCitationJSON,
@@ -82,11 +83,16 @@ func (s *ChatService) recordRetrievalFailure(
 	}
 	userMessage, assistantMessage, err := buildChatMessagePair(session.ID, clientRequestID, content, generated)
 	if err != nil {
-		return
+		return nil
 	}
 	// Best effort: the caller is already returning an error, so a failure to
-	// record it must not replace that error with a different one.
-	if err := s.chats.CreateMessagesIfUnchanged(ctx, chatMessageIDs(history), userMessage, assistantMessage); err == nil {
+	// record it must not replace that error. A concurrent archive is a state
+	// conflict instead: no failure turn may be saved to a read-only session.
+	err = s.chats.CreateMessagesIfUnchanged(ctx, chatMessageIDs(history), userMessage, assistantMessage)
+	if err == nil {
 		s.updateSessionTitleIfNeeded(ctx, session, content, history, assistantMessage)
+	} else if errors.Is(err, repository.ErrChatSessionArchived) {
+		return chatWriteError(err)
 	}
+	return nil
 }

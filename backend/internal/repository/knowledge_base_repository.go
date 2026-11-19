@@ -205,39 +205,59 @@ func (r *KnowledgeBaseRepository) Stats(ctx context.Context, ownerID uuid.UUID, 
 	return current, previous, nil
 }
 
-// StatsForKnowledgeBase narrows the same owner-scoped counting rules to a single
-// knowledge base. KnowledgeBaseCount is left at zero because it carries no
+// StatsForKnowledgeBase counts one knowledge base for the caller: documents come
+// from the knowledge base itself, while views and questions stay limited to the
+// caller's own activity. KnowledgeBaseCount is left at zero because it carries no
 // meaning for one row; callers expose documents, views and questions only.
-func (r *KnowledgeBaseRepository) StatsForKnowledgeBase(ctx context.Context, ownerID, kbID uuid.UUID, start, previousStart time.Time) (KnowledgeBaseStats, KnowledgeBaseStats, error) {
-	current, err := r.statsForRange(ctx, ownerID, &kbID, start, time.Time{})
+func (r *KnowledgeBaseRepository) StatsForKnowledgeBase(ctx context.Context, actorID, kbID uuid.UUID, start, previousStart time.Time) (KnowledgeBaseStats, KnowledgeBaseStats, error) {
+	current, err := r.statsForRange(ctx, actorID, &kbID, start, time.Time{})
 	if err != nil {
 		return KnowledgeBaseStats{}, KnowledgeBaseStats{}, err
 	}
-	previous, err := r.statsForRange(ctx, ownerID, &kbID, previousStart, start)
+	previous, err := r.statsForRange(ctx, actorID, &kbID, previousStart, start)
 	if err != nil {
 		return KnowledgeBaseStats{}, KnowledgeBaseStats{}, err
 	}
 	return current, previous, nil
 }
 
-func (r *KnowledgeBaseRepository) statsForRange(ctx context.Context, ownerID uuid.UUID, kbID *uuid.UUID, start, end time.Time) (KnowledgeBaseStats, error) {
+// statsForRange counts one period of activity. actorID is the caller: it scopes
+// the view and question counts to that user's own activity, and scopes the
+// knowledge base and document counts to their own knowledge bases when no single
+// knowledge base was named.
+//
+// A named knowledge base is identified by its id alone. Filtering it by owner_id
+// returned 0 documents, 0 views and 0 questions for every manager and viewer,
+// including their own activity, even though kb.read authorizes exactly this view.
+func (r *KnowledgeBaseRepository) statsForRange(ctx context.Context, actorID uuid.UUID, kbID *uuid.UUID, start, end time.Time) (KnowledgeBaseStats, error) {
 	var stats KnowledgeBaseStats
-	kbQuery := r.db.WithContext(ctx).Model(&model.KnowledgeBase{}).Where("owner_id = ?", ownerID).Where("deleted_at IS NULL")
+	kbQuery := r.db.WithContext(ctx).Model(&model.KnowledgeBase{}).Where("knowledge_bases.deleted_at IS NULL")
 	docQuery := r.db.WithContext(ctx).Model(&model.Document{}).
 		Joins("JOIN knowledge_bases ON knowledge_bases.id = documents.knowledge_base_id").
-		Where("knowledge_bases.owner_id = ?", ownerID).
 		Where("knowledge_bases.deleted_at IS NULL").
 		Where("documents.deleted_at IS NULL")
 	viewQuery := r.db.WithContext(ctx).Model(&model.KnowledgeBaseViewEvent{}).
 		Joins("JOIN knowledge_bases ON knowledge_bases.id = knowledge_base_view_events.knowledge_base_id").
-		Where("knowledge_bases.owner_id = ? AND knowledge_base_view_events.user_id = ?", ownerID, ownerID).
+		Where("knowledge_base_view_events.user_id = ?", actorID).
 		Where("knowledge_bases.deleted_at IS NULL")
 	questionQuery := r.db.WithContext(ctx).Model(&model.ChatMessage{}).
 		Joins("JOIN chat_sessions ON chat_sessions.id = chat_messages.session_id").
 		Joins("JOIN knowledge_bases ON knowledge_bases.id = chat_sessions.knowledge_base_id").
-		Where("knowledge_bases.owner_id = ? AND chat_sessions.user_id = ? AND chat_messages.role = ?", ownerID, ownerID, "user").
+		Where("chat_sessions.user_id = ? AND chat_messages.role = ?", actorID, "user").
 		Where("chat_sessions.deleted_at IS NULL").
 		Where("knowledge_bases.deleted_at IS NULL")
+
+	if kbID != nil {
+		kbQuery = kbQuery.Where("knowledge_bases.id = ?", *kbID)
+		docQuery = docQuery.Where("knowledge_bases.id = ?", *kbID)
+		viewQuery = viewQuery.Where("knowledge_bases.id = ?", *kbID)
+		questionQuery = questionQuery.Where("knowledge_bases.id = ?", *kbID)
+	} else {
+		kbQuery = kbQuery.Where("knowledge_bases.owner_id = ?", actorID)
+		docQuery = docQuery.Where("knowledge_bases.owner_id = ?", actorID)
+		viewQuery = viewQuery.Where("knowledge_bases.owner_id = ?", actorID)
+		questionQuery = questionQuery.Where("knowledge_bases.owner_id = ?", actorID)
+	}
 
 	if !start.IsZero() {
 		kbQuery = kbQuery.Where("knowledge_bases.created_at >= ?", start)
@@ -252,12 +272,10 @@ func (r *KnowledgeBaseRepository) statsForRange(ctx context.Context, ownerID uui
 		questionQuery = questionQuery.Where("chat_messages.created_at < ?", end)
 	}
 
-	if kbID != nil {
-		docQuery = docQuery.Where("knowledge_bases.id = ?", *kbID)
-		viewQuery = viewQuery.Where("knowledge_bases.id = ?", *kbID)
-		questionQuery = questionQuery.Where("knowledge_bases.id = ?", *kbID)
-	} else if err := kbQuery.Count(&stats.KnowledgeBaseCount).Error; err != nil {
-		return stats, err
+	if kbID == nil {
+		if err := kbQuery.Count(&stats.KnowledgeBaseCount).Error; err != nil {
+			return stats, err
+		}
 	}
 	if err := docQuery.Count(&stats.DocumentCount).Error; err != nil {
 		return stats, err
@@ -373,11 +391,30 @@ func (r *KnowledgeBaseRepository) FindDeletedByIDAndOwner(ctx context.Context, i
 	return &kb, err
 }
 
-// Update writes the knowledge base's own columns. Associations are omitted:
+// Update writes the knowledge base's mutable columns by name.
+//
+// A whole-row Save also wrote owner_id back from the caller's snapshot: a
+// manager renaming a knowledge base while its owner transferred it restored the
+// old owner, and the new owner immediately saw 404 while the activity log
+// recorded a successful transfer. deleted_at is excluded for the same reason --
+// restore and delete are their own statements. Associations are omitted:
 // callers load Owner and UpdatedBy for display, and saving them would copy the
 // preloaded UpdatedBy.ID back over updated_by_id and upsert the user rows.
 func (r *KnowledgeBaseRepository) Update(ctx context.Context, kb *model.KnowledgeBase) error {
-	return r.db.WithContext(ctx).Omit(clause.Associations).Save(kb).Error
+	return r.db.WithContext(ctx).
+		Model(&model.KnowledgeBase{}).
+		Where("id = ?", kb.ID).
+		Updates(map[string]any{
+			"name":                    kb.Name,
+			"description":             kb.Description,
+			"updated_by_id":           kb.UpdatedByID,
+			"category_id":             kb.CategoryID,
+			"visibility":              kb.Visibility,
+			"retrieval_config":        kb.RetrievalConfig,
+			"answer_config":           kb.AnswerConfig,
+			"document_version_policy": kb.DocumentVersionPolicy,
+			"updated_at":              time.Now(),
+		}).Error
 }
 
 func (r *KnowledgeBaseRepository) TouchUpdatedBy(ctx context.Context, kbID, userID uuid.UUID) error {

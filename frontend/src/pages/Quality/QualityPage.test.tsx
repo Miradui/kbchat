@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -121,8 +121,13 @@ const gaps: ChatKnowledgeGapListResponse = {
   ],
 };
 
-function createSources() {
-  return {
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+}
+
+function createSources() {  return {
     loadOverview: vi.fn().mockResolvedValue(overview),
     loadFeedback: vi.fn().mockResolvedValue(feedback),
     loadKnowledgeGaps: vi.fn().mockResolvedValue(gaps),
@@ -176,6 +181,23 @@ describe('QualityPage', () => {
       hasCitations: false, page: 1, pageSize: 10,
     })));
     expect(sources.loadOverview).toHaveBeenCalled();
+  });
+
+  it('drops the previous range while the newly filtered data loads', async () => {
+    const user = userEvent.setup();
+    const sources = createSources();
+    const pending = deferred<ChatQualityOverview>();
+    renderWithRouter(<QualityPage sources={sources} />, ['/quality']);
+    await screen.findByText('60%');
+
+    sources.loadOverview.mockReturnValueOnce(pending.promise);
+    await user.selectOptions(screen.getByRole('combobox', { name: '质量知识库' }), 'kb-1');
+
+    // A panel only shows its skeleton when it has no data, so leaving the old rows
+    // in place presented the previous range's numbers as the new filter's answer.
+    await waitFor(() => expect(screen.queryByText('60%')).not.toBeInTheDocument());
+    await act(async () => { pending.resolve(overview); });
+    expect(await screen.findByText('60%')).toBeInTheDocument();
   });
 
   it('shows both knowledge gap categories with their occurrence counts and links', async () => {

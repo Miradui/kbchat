@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
+	tracing "github.com/uptrace/opentelemetry-go-extra/otelgorm"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
@@ -32,6 +33,10 @@ func Open(cfg config.Config) (*gorm.DB, error) {
 		_ = sqlDB.Close()
 		return nil, err
 	}
+	if err := db.Use(tracing.NewPlugin(tracing.WithoutMetrics(), tracing.WithoutQueryVariables())); err != nil {
+		_ = sqlDB.Close()
+		return nil, err
+	}
 
 	return db, nil
 }
@@ -52,6 +57,32 @@ func postgresConnectionConfig(dsn string) (*pgx.ConnConfig, error) {
 	return cfg, nil
 }
 
+// EnsureSchema asserts that the database matches the SQL migrations and writes
+// nothing.
+//
+// This is what startup uses. Creating a missing table here would be worse than
+// failing: GORM's CreateTable emits a definition without the CHECK constraints,
+// foreign keys or cascade rules from 001 and later, and the SQL migration's
+// `CREATE TABLE IF NOT EXISTS` then skips the real one forever.
+func EnsureSchema(ctx context.Context, db *gorm.DB) error {
+	return validateSchema(ctx, db)
+}
+
+// AllowAutoMigrate reports whether schema creation was explicitly requested.
+//
+// It is refused in production so that a stray environment variable cannot turn
+// the documented "migrate, then start" order into silent schema drift.
+func AllowAutoMigrate(cfg config.Config) bool {
+	if !cfg.AllowAutoMigrate {
+		return false
+	}
+	return !strings.EqualFold(strings.TrimSpace(cfg.AppEnv), "production")
+}
+
+// AutoMigrate creates missing tables from the GORM models and then validates the
+// schema. Only for throwaway local databases, and only behind AllowAutoMigrate:
+// the tables it creates are not migration-equivalent, and re-running the SQL
+// migrations afterwards will not repair them.
 func AutoMigrate(ctx context.Context, db *gorm.DB) error {
 	if err := db.WithContext(ctx).Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
 		return err
@@ -123,6 +154,7 @@ func validateSchema(ctx context.Context, db *gorm.DB) error {
 			column    string
 			migration string
 		}{
+			{&model.DocumentJob{}, "traceparent", "049_document_job_traceparent.sql"},
 			{&model.DocumentChunk{}, "search_vector", "024_hybrid_search.sql"},
 			{&model.User{}, "status", "025_user_status_and_admin.sql"},
 			{&model.User{}, "created_by", "025_user_status_and_admin.sql"},
@@ -191,6 +223,30 @@ func validateSchema(ctx context.Context, db *gorm.DB) error {
 		}
 		if !strings.Contains(intentConstraint, "'general'") {
 			return fmt.Errorf("database schema incompatible: chat_messages_intent_check missing general; apply migration 048_chat_message_general_intent.sql")
+		}
+		// These constraints exist only in the SQL migrations. A table created by
+		// AutoMigrate omits them, and every later `CREATE TABLE IF NOT EXISTS`
+		// keeps that constraint-free version, so startup asserts them instead of
+		// letting invalid statuses and roles through unnoticed.
+		for _, required := range []struct {
+			table      string
+			constraint string
+			marker     string
+			migration  string
+		}{
+			{"documents", "documents_status_check", "'parsing'", "001_init_schema.sql"},
+			{"document_jobs", "document_jobs_status_check", "'pending'", "001_init_schema.sql"},
+			{"chat_messages", "chat_messages_role_check", "'assistant'", "001_init_schema.sql"},
+			{"knowledge_base_members", "knowledge_base_members_role_check", "'viewer'", "020_member_role_matrix.sql"},
+		} {
+			var definition string
+			if err := db.WithContext(ctx).Raw(`SELECT pg_get_constraintdef(oid) FROM pg_constraint
+				WHERE conrelid = to_regclass(?) AND conname = ? AND contype = 'c'`, required.table, required.constraint).Scan(&definition).Error; err != nil {
+				return fmt.Errorf("check %s constraint: %w", required.constraint, err)
+			}
+			if !strings.Contains(definition, required.marker) {
+				return fmt.Errorf("database schema incompatible: %s missing %s; reapply migration %s on a table created by the migration, not by AutoMigrate", required.constraint, required.marker, required.migration)
+			}
 		}
 	}
 	return validateTimestampSchema(ctx, db)

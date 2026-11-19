@@ -61,8 +61,17 @@ const (
 )
 
 type Config struct {
-	PDFOCR                  PDFOCRConfig
-	AppEnv                  string
+	PDFOCR              PDFOCRConfig
+	AppEnv              string
+	OTelServiceName     string
+	OTelTracesEndpoint  string
+	OTelMetricsEndpoint string
+	// AllowAutoMigrate is the explicit opt-in for creating missing tables from
+	// the GORM models at startup. It exists only for throwaway local databases:
+	// the created tables lack the CHECK constraints and foreign keys from the
+	// SQL migrations, and re-running those migrations will not repair them.
+	// Refused when AppEnv is production; see database.AllowAutoMigrate.
+	AllowAutoMigrate        bool
 	ServerPort              string
 	CORSAllowedOrigins      []string
 	DatabaseURL             string
@@ -131,6 +140,10 @@ func Load() Config {
 	return Config{
 		PDFOCR:                  loadPDFOCR(),
 		AppEnv:                  getEnv("APP_ENV", defaultAppEnv),
+		OTelServiceName:         getEnv("OTEL_SERVICE_NAME", "rag-backend"),
+		OTelTracesEndpoint:      strings.TrimSpace(getEnv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")),
+		OTelMetricsEndpoint:     strings.TrimSpace(getEnv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "")),
+		AllowAutoMigrate:        getEnvBool("RAG_ALLOW_AUTOMIGRATE", false),
 		ServerPort:              getEnv("SERVER_PORT", defaultServerPort),
 		CORSAllowedOrigins:      splitCommaSeparated(getEnv("CORS_ALLOWED_ORIGINS", defaultCORSAllowedOrigins)),
 		DatabaseURL:             getEnv("DATABASE_URL", defaultDatabaseURL),

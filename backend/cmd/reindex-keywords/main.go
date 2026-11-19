@@ -39,8 +39,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 
-	if err := database.AutoMigrate(ctx, db); err != nil {
-		log.Fatal("database migration failed", zap.Error(err))
+	if err := database.EnsureSchema(ctx, db); err != nil {
+		log.Fatal("database schema incompatible; apply the migrations before reindexing", zap.Error(err))
 	}
 
 	start := time.Now()

@@ -72,7 +72,7 @@ repository 的测试 schema 使用 `rag_it_<UTC 时间戳>_<随机>`，连接带
 
 ## 已有证据索引
 
-以下是从历次记录提炼的历史事实与本地证据入口，本轮整理没有重跑这些测试。路径用代码表示，避免把被忽略且可能不存在的产物当成仓库必备文件。
+以下按当时版本与环境保存验证结果；历史记录不替代当前版本检查。路径用代码表示，避免把被忽略且可能不存在的产物当成仓库必备文件。
 
 | 时间与范围 | 证据及结论 | 适用限制 |
 | --- | --- | --- |
@@ -94,6 +94,7 @@ repository 的测试 schema 使用 `rag_it_<UTC 时间戳>_<随机>`，连接带
 | 2026-11-05，知识库提示词交互 | `frontend/src/test/fixtures/answer-prompt/runs/latest/`、`output/answer-prompt-followup-20261105/` | 生产页面与 HTTP 夹具；16 文件/191 项，不代表模型效果验证 |
 | 2026-11-10，Trace 与日志关联 | `backend/internal/router/testdata/observability/runs/latest/`、`output/observability-20261110/` | 真实 Jaeger，业务数据库/模型/存储为夹具 |
 | 2026-11-11，Metrics 与告警 | `output/observability-phase2-20261110/live/`、同一 router 稳定结果；27 包/1534 pass 事件、6包race、18查询、10组告警通过 | 真实 Collector/Prometheus/Grafana/Jaeger；历史样本重启保留，业务库/真实模型/MinIO/容器运行未联调 |
+| 2026-11-19，提交前本地回归 | `output/git-push-20261119/verification-summary.json`；后端 `go test -count=1 ./...` 27个有测试包通过，vet/build通过；前端110文件/922项中921项通过，lint、测试类型检查、构建及11路由分包检查通过 | `viewport-units.test.ts` 发现 `library.css` 的既有 `40vh`，1项失败；测试与样式均与原HEAD一致。构建改用工作区临时目录后通过；真实服务测试开关关闭，未运行真实服务、迁移或部署验收 |
 
 ## 记录格式
 

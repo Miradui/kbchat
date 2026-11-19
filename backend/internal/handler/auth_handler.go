@@ -21,7 +21,7 @@ func NewAuthHandler(auth *service.AuthService) *AuthHandler {
 
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req dto.LoginRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
@@ -63,7 +63,7 @@ func (h *AuthHandler) UpdateProfile(c *gin.Context) {
 	}
 
 	var req dto.UpdateProfileRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
@@ -85,7 +85,7 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	}
 
 	var req dto.ChangePasswordRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}

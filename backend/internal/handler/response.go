@@ -6,12 +6,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"kbchat/backend/internal/apperror"
+	"kbchat/backend/internal/observability"
 )
 
 func RespondError(c *gin.Context, err error) {
 	status, payload := errorPayload(err)
+	trace.SpanFromContext(c.Request.Context()).SetAttributes(attribute.String("app.error_code", payload.Code))
 	c.JSON(status, gin.H{
+		"traceId": observability.TraceID(c.Request.Context()),
 		"code":    payload.Code,
 		"message": payload.Message,
 		"details": payload.Details,

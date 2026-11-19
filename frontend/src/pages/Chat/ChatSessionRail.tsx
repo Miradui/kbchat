@@ -38,6 +38,8 @@ type ChatSessionRailProps = {
   getSessionActions: (session: ChatSession) => OverflowMenuItem[];
   loading: boolean;
   error: string;
+  /** A failed refresh of an already loaded list; the list itself stays visible. */
+  refetchError?: string;
   actionError?: string;
   knowledgeBasesError?: string;
   onKnowledgeBaseChange: (knowledgeBaseId: string) => void;
@@ -70,6 +72,7 @@ export function ChatSessionRail({
   getSessionActions,
   loading,
   error,
+  refetchError = '',
   actionError = '',
   knowledgeBasesError = '',
   onKnowledgeBaseChange,
@@ -163,6 +166,12 @@ export function ChatSessionRail({
       />
 
       {actionError && <p className="ui-inline-error" role="alert">{actionError}</p>}
+      {refetchError && (
+        <div className="ui-inline-notice" role="status">
+          <span>{refetchError}</span>
+          <Button variant="link" onClick={onRetry}>重试</Button>
+        </div>
+      )}
       <div className="chat-rail__list" ref={listRef} onScroll={(event) => {
         if (open && !loading && revision === tokenStore.getRevision()) {
           queryClient.setQueryData(scrollKey, event.currentTarget.scrollTop);

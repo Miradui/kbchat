@@ -17,6 +17,42 @@ import (
 	"kbchat/backend/internal/storage"
 )
 
+// A panic while processing untrusted input must fail that job, not kill the
+// process or the claim loop. Without the recover in processSafely this test
+// crashes the whole test binary, which is exactly what used to happen to the
+// server on a crafted Markdown table.
+func TestWorkerFailsJobAndKeepsClaimingWhenProcessorPanics(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeDocumentStore()
+	for i := 0; i < 2; i++ {
+		store.jobs = append(store.jobs, &model.DocumentJob{
+			ID:         uuid.New(),
+			DocumentID: uuid.New(),
+			Status:     "pending",
+		})
+	}
+	worker := NewWorkerWithOptions(store, &panicOnceProcessor{}, zap.NewNop(), Options{
+		Concurrency: 1,
+		MaxRetries:  3,
+		RetryDelay:  time.Minute,
+	})
+
+	worker.runOnce(ctx)
+
+	if store.failedJobs != 1 {
+		t.Fatalf("expected the panicking job to fail once, got %d", store.failedJobs)
+	}
+	if store.lastErrorCode != processor.ErrorCodeInternal {
+		t.Fatalf("expected %q, got %q", processor.ErrorCodeInternal, store.lastErrorCode)
+	}
+	if store.completedJobs != 1 {
+		t.Fatalf("expected the claim loop to continue and complete the next job, got %d completions", store.completedJobs)
+	}
+	if store.retryCalls != 0 {
+		t.Fatalf("expected a panic to be terminal, got %d retries", store.retryCalls)
+	}
+}
+
 func TestWorkerRetriesFailedJobBeforeMarkingDocumentFailed(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeDocumentStore()
@@ -205,6 +241,41 @@ func TestWorkerRecoversInterruptedJobsBeforeClaiming(t *testing.T) {
 	}
 }
 
+// A transient recovery failure used to end Start: HTTP kept answering and uploads
+// kept returning 201, but no goroutine ever claimed a job again, so every document
+// stayed pending with one ERROR line to explain it.
+func TestWorkerRetriesRecoveryInsteadOfStopping(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := newFakeDocumentStore()
+	store.recoverFailures = 2
+	store.jobs = append(store.jobs, &model.DocumentJob{
+		ID:         uuid.New(),
+		DocumentID: uuid.New(),
+		Status:     "pending",
+	})
+	worker := NewWorkerWithOptions(store, &fakeProcessor{}, zap.NewNop(), Options{
+		Interval:    time.Millisecond,
+		Concurrency: 1,
+		MaxRetries:  1,
+		RetryDelay:  5 * time.Millisecond,
+	})
+
+	go worker.Start(ctx)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		store.mu.Lock()
+		recovered, completed := store.recoverCalls, store.completedJobs
+		store.mu.Unlock()
+		if recovered >= 3 && completed == 1 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("worker never recovered and claimed a job after transient recovery failures")
+}
+
 type fakeDocumentStore struct {
 	mu sync.Mutex
 
@@ -216,6 +287,8 @@ type fakeDocumentStore struct {
 	recoverCalls    int
 	claimCalls      int
 	updatedStatuses int
+	// recoverFailures makes the next N recovery attempts fail, for the retry path.
+	recoverFailures int
 	lastRetryCount  int
 	lastRetryAt     time.Time
 	lastStatus      string
@@ -248,11 +321,18 @@ func (s *fakeDocumentStore) ClaimPendingJob(ctx context.Context) (*model.Documen
 func (s *fakeDocumentStore) RecoverRunningJobs(context.Context) error {
 	s.mu.Lock()
 	s.recoverCalls++
+	failing := s.recoverFailures > 0
+	if failing {
+		s.recoverFailures--
+	}
 	onRecover := s.onRecover
 	s.mu.Unlock()
 
 	if onRecover != nil {
 		onRecover()
+	}
+	if failing {
+		return errors.New("database is starting up")
 	}
 	return nil
 }
@@ -311,6 +391,25 @@ type fakeProcessor struct {
 
 func (p *fakeProcessor) Process(context.Context, *model.DocumentJob) error {
 	return p.err
+}
+
+// panicOnceProcessor panics on its first call and succeeds afterwards, so one
+// runOnce proves both that the panic is contained and that the claim loop
+// continues with the next job.
+type panicOnceProcessor struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (p *panicOnceProcessor) Process(context.Context, *model.DocumentJob) error {
+	p.mu.Lock()
+	p.calls++
+	call := p.calls
+	p.mu.Unlock()
+	if call == 1 {
+		panic("slice bounds out of range [1:0]")
+	}
+	return nil
 }
 
 type concurrentProcessor struct {

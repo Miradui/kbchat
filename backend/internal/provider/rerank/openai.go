@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go.opentelemetry.io/otel/attribute"
+	"kbchat/backend/internal/observability"
 	"net/http"
 	"strings"
 	"time"
 
 	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/provider/httpclient"
 	corererank "kbchat/backend/internal/rerank"
 )
 
@@ -22,12 +25,10 @@ type OpenAICompatibleProvider struct {
 
 func NewOpenAICompatibleProvider(cfg config.Config) *OpenAICompatibleProvider {
 	return &OpenAICompatibleProvider{
-		baseURL: strings.TrimRight(cfg.RerankBaseURL, "/"),
-		apiKey:  cfg.RerankAPIKey,
-		model:   cfg.RerankModel,
-		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
-		},
+		baseURL:    strings.TrimRight(cfg.RerankBaseURL, "/"),
+		apiKey:     cfg.RerankAPIKey,
+		model:      cfg.RerankModel,
+		httpClient: httpclient.NewJSONClient(60 * time.Second),
 	}
 }
 
@@ -50,7 +51,9 @@ type rerankResponseResult struct {
 	Score          *float64 `json:"score,omitempty"`
 }
 
-func (p *OpenAICompatibleProvider) Rerank(ctx context.Context, query string, documents []corererank.Document) ([]corererank.Result, error) {
+func (p *OpenAICompatibleProvider) Rerank(ctx context.Context, query string, documents []corererank.Document) (ranked []corererank.Result, retErr error) {
+	ctx, span := observability.Start(ctx, "model.rerank", attribute.String("gen_ai.request.model", p.model), attribute.Int("rerank.input_count", len(documents)))
+	defer func() { observability.Finish(span, retErr) }()
 	if len(documents) == 0 {
 		return []corererank.Result{}, nil
 	}

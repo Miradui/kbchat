@@ -9,6 +9,7 @@ type State = {
   feedbackTarget: ChatMessage | null;
   editingMessageId: string | null;
   editingDraft: string;
+  editConfirm: { messageId: string; content: string } | null;
 };
 function initialState(): State {
   return {
@@ -18,6 +19,7 @@ function initialState(): State {
     feedbackTarget: null,
     editingMessageId: null,
     editingDraft: '',
+    editConfirm: null,
   };
 }
 type Action = { type: 'sessionChanged' } | { type: 'update'; update: (state: State) => State };
@@ -50,6 +52,7 @@ export function useChatInteractionState(sessionId?: string) {
       setFeedbackTarget: setter('feedbackTarget'),
       setEditingMessageId: setter('editingMessageId'),
       setEditingDraft: setter('editingDraft'),
+      setEditConfirm: setter('editConfirm'),
     };
   }, []);
   return { ...state, ...setters };

@@ -16,6 +16,10 @@ type Usage struct {
 	CompletionTokens int
 	TotalTokens      int
 	Model            string
+	// Reported is true only when the upstream accounted for tokens; the zero
+	// value means "not reported" and is persisted as NULL rather than as a real
+	// zero. See chat.Usage.Reported.
+	Reported bool
 }
 type UsageProvider interface {
 	SummarizeTitleWithUsage(context.Context, []Message) (string, Usage, error)

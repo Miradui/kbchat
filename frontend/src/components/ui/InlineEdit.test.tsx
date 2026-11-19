@@ -87,3 +87,33 @@ describe('InlineEdit focus', () => {
     expect(screen.getByRole('textbox', { name: '重命名' })).toHaveValue('原标题');
   });
 });
+
+describe('InlineEdit failed saves', () => {
+  it('keeps the field open with the typed value when the save is refused', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(false);
+    render(<InlineEdit label="重命名" value="原标题" onSubmit={onSubmit} />);
+
+    await user.click(screen.getByRole('button', { name: '重命名' }));
+    await user.clear(screen.getByRole('textbox', { name: '重命名' }));
+    await user.type(screen.getByRole('textbox', { name: '重命名' }), '重复的标题');
+    await user.click(screen.getByRole('button', { name: '保存' }));
+
+    // The save failed, so the user must not have to open the field and retype.
+    expect(onSubmit).toHaveBeenCalledWith('重复的标题');
+    expect(screen.getByRole('textbox', { name: '重命名' })).toHaveValue('重复的标题');
+  });
+
+  it('keeps the field open with the typed value when the save throws', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockRejectedValue(new Error('offline'));
+    render(<InlineEdit label="重命名" value="原标题" onSubmit={onSubmit} />);
+
+    await user.click(screen.getByRole('button', { name: '重命名' }));
+    await user.clear(screen.getByRole('textbox', { name: '重命名' }));
+    await user.type(screen.getByRole('textbox', { name: '重命名' }), '网络失败时保留');
+    await user.click(screen.getByRole('button', { name: '保存' }));
+
+    expect(screen.getByRole('textbox', { name: '重命名' })).toHaveValue('网络失败时保留');
+  });
+});

@@ -1,4 +1,55 @@
 services:
+  jaeger:
+    image: jaegertracing/jaeger:2.23.0
+    profiles: [observability]
+    command: ["--config=/etc/jaeger/config.yaml"]
+    ports:
+      - "127.0.0.1:16686:16686"
+    volumes:
+      - ./jaeger.yaml:/etc/jaeger/config.yaml:ro
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.165.0
+    profiles: [observability]
+    command: ["--config=/etc/otelcol/config.yaml"]
+    ports:
+      - "127.0.0.1:4318:4318"
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      - jaeger
+
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    profiles: [observability]
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus", "--storage.tsdb.retention.time=7d", "--enable-feature=exemplar-storage"]
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+      - rag_prometheus_data:/prometheus
+    depends_on:
+      - otel-collector
+
+  grafana:
+    image: grafana/grafana:13.3.0
+    profiles: [observability]
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - rag_grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
   postgres:
     image: pgvector/pgvector:pg16
     container_name: rag-postgres
@@ -31,5 +82,7 @@ services:
       retries: 5
 
 volumes:
+  rag_prometheus_data:
+  rag_grafana_data:
   rag_postgres_data:
   rag_redis_data:

@@ -45,7 +45,13 @@ func (r *UserRepository) BootstrapSystemAdmin(ctx context.Context, username stri
 			return nil
 		}
 		var admins int64
-		if err := tx.Model(&model.User{}).Where("role = ?", model.SystemRoleAdmin).Count(&admins).Error; err != nil {
+		// Only an enabled administrator can operate the system. Counting disabled
+		// ones too would refuse recovery in exactly the state that needs it: the
+		// last-admin race (or a manual disable) leaves role='admin' rows that
+		// cannot log in, and bootstrap would then be the only way back.
+		if err := tx.Model(&model.User{}).
+			Where("role = ? AND (status = ? OR status = '' OR status IS NULL)", model.SystemRoleAdmin, "active").
+			Count(&admins).Error; err != nil {
 			return err
 		}
 		if admins != 0 {

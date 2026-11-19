@@ -60,7 +60,8 @@ const METRIC_LABELS: Record<string, string> = {
   retrieval: '检索总耗时',
   embedding: '向量化耗时',
   rerank: '重排耗时',
-  chat_first_token: '首 token 延迟',
+  chat_first_token: '模型首 token 延迟',
+  chat_first_visible_text: '请求至首段正文耗时',
   chat_generation: '完整生成耗时',
 };
 

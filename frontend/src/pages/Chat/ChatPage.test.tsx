@@ -839,6 +839,124 @@ describe('ChatPage', () => {
     await waitFor(() => expect(composer).toBeEnabled());
   });
 
+  it('asks before an edit deletes the questions that follow', async () => {
+    const thread = [
+      { id: 'user-1', sessionId: session.id, role: 'user', content: '第一个问题', citations: [], createdAt: '2026-07-01T00:00:00Z' },
+      { id: 'assistant-1', sessionId: session.id, role: 'assistant', content: '第一个回答', citations: [], createdAt: '2026-07-01T00:01:00Z' },
+      { id: 'user-2', sessionId: session.id, role: 'user', content: '第二个问题', citations: [], createdAt: '2026-07-01T00:02:00Z' },
+      { id: 'assistant-2', sessionId: session.id, role: 'assistant', content: '第二个回答', citations: [], createdAt: '2026-07-01T00:03:00Z' },
+    ] satisfies ChatMessage[];
+    vi.mocked(listChatMessages).mockResolvedValue({ items: thread });
+    vi.mocked(editChatMessage).mockResolvedValue({
+      clientRequestId: 'edit-request',
+      userMessage: { ...thread[0], content: '改过的第一个问题', clientRequestId: 'edit-request' },
+      assistantMessage: { ...thread[1], id: 'assistant-edited', clientRequestId: 'edit-request' },
+      answer: '第一个回答',
+      citations: [],
+      rerankFallback: null,
+    });
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>,
+      ['/chat/s1'],
+    );
+
+    await screen.findByText('第二个回答');
+    await user.click((await screen.findAllByRole('button', { name: '编辑消息' }))[0]);
+    const editInput = screen.getByRole('textbox', { name: '编辑消息' });
+    await user.clear(editInput);
+    await user.type(editInput, '改过的第一个问题');
+    await user.click(screen.getByRole('button', { name: '保存并重新生成' }));
+
+    // The server deletes everything after the edited turn and regenerates. The user
+    // may only have meant to fix one sentence, so the deletion is confirmed first.
+    expect(editChatMessage).not.toHaveBeenCalled();
+    const confirm = await screen.findByRole('dialog', { name: '编辑这条提问会删除后续消息' });
+    expect(confirm).toHaveTextContent('全部消息');
+
+    await user.click(screen.getByRole('button', { name: '删除并重新生成' }));
+    await waitFor(() => expect(editChatMessage).toHaveBeenCalledOnce());
+  });
+
+  it('clears a pending edit confirmation before a different session finishes loading', async () => {
+    const nextSession = deferred<ChatSession>();
+    const messages = [
+      { id: 'first-question', sessionId: session.id, role: 'user', content: '第一个问题', citations: [], createdAt: '2026-07-01T00:00:00Z' },
+      { id: 'first-answer', sessionId: session.id, role: 'assistant', content: '第一个回答', citations: [], createdAt: '2026-07-01T00:01:00Z' },
+      { id: 'later-question', sessionId: session.id, role: 'user', content: '后续问题', citations: [], createdAt: '2026-07-01T00:02:00Z' },
+      { id: 'later-answer', sessionId: session.id, role: 'assistant', content: '后续回答', citations: [], createdAt: '2026-07-01T00:03:00Z' },
+    ] satisfies ChatMessage[];
+    vi.mocked(listChatSessions).mockResolvedValue({ items: [session, secondSession], total: 2, page: 1, pageSize: 20 });
+    vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
+    vi.mocked(getChatSession).mockImplementation((id) => id === secondSession.id ? nextSession.promise : Promise.resolve(session));
+    vi.mocked(listChatMessages).mockImplementation(async (id) => ({ items: id === secondSession.id ? [secondSessionMessage] : messages }));
+    const user = userEvent.setup();
+    renderWithRouter(
+      <><Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes><ChatRouteControls /><LocationProbe /></>,
+      ['/chat/s1'],
+    );
+
+    await screen.findByText('后续回答');
+    await user.click(screen.getAllByRole('button', { name: '编辑消息' })[0]);
+    const input = screen.getByRole('textbox', { name: '编辑消息' });
+    await user.clear(input);
+    await user.type(input, '改写第一个问题');
+    await user.click(screen.getByRole('button', { name: '保存并重新生成' }));
+    const confirmation = await screen.findByRole('dialog', { name: '编辑这条提问会删除后续消息' });
+    expect(editChatMessage).not.toHaveBeenCalled();
+
+    // Router navigation can happen while a modal is open, such as browser history.
+    fireEvent.click(screen.getByText('强制切换产品会话'));
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/chat/s2');
+    expect(confirmation).not.toBeInTheDocument();
+    expect(editChatMessage).not.toHaveBeenCalled();
+
+    await act(async () => nextSession.resolve(secondSession));
+    await screen.findByText(secondSessionMessage.content);
+    expect(screen.queryByRole('dialog', { name: '编辑这条提问会删除后续消息' })).not.toBeInTheDocument();
+    expect(editChatMessage).not.toHaveBeenCalled();
+  });
+
+  it('confirms editing the last visible question when newer history is not loaded', async () => {
+    const question = { id: 'historical-question', sessionId: session.id, role: 'user', content: '历史窗口末尾的问题', citations: [], createdAt: '2026-07-01T00:00:00Z' } satisfies ChatMessage;
+    const answer = { id: 'historical-answer', sessionId: session.id, role: 'assistant', content: '历史窗口末尾的回答', citations: [], createdAt: '2026-07-01T00:01:00Z' } satisfies ChatMessage;
+    vi.mocked(listChatMessages).mockResolvedValue({
+      items: [question, answer], hasMore: true, nextCursor: 'older', hasNewer: true, newerCursor: 'later', revision: 'latest',
+    });
+    vi.mocked(editChatMessage).mockImplementation(async (_sessionId, _messageId, input) => ({
+      clientRequestId: input.clientRequestId,
+      userMessage: { ...question, content: input.content, clientRequestId: input.clientRequestId },
+      assistantMessage: { ...answer, id: 'edited-answer', content: '修改后的回答', clientRequestId: input.clientRequestId },
+      answer: '修改后的回答',
+      citations: [],
+      rerankFallback: null,
+    }));
+    const user = userEvent.setup();
+    renderWithRouter(
+      <Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>,
+      ['/chat/s1?messageId=historical-question'],
+    );
+
+    await screen.findByText(answer.content);
+    expect(screen.getByRole('button', { name: '回到最新消息' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '编辑消息' }));
+    const input = screen.getByRole('textbox', { name: '编辑消息' });
+    await user.clear(input);
+    await user.type(input, '修改后的问题');
+    await user.click(screen.getByRole('button', { name: '保存并重新生成' }));
+
+    const confirmation = await screen.findByRole('dialog', { name: '编辑这条提问会删除后续消息' });
+    expect(confirmation).toHaveTextContent('全部消息');
+    expect(editChatMessage).not.toHaveBeenCalled();
+    await user.click(within(confirmation).getByRole('button', { name: '删除并重新生成' }));
+    await screen.findByText('修改后的回答');
+    expect(editChatMessage).toHaveBeenCalledOnce();
+    expect(editChatMessage).toHaveBeenCalledWith(session.id, question.id, {
+      content: '修改后的问题', clientRequestId: expect.any(String),
+    });
+    expect(screen.queryByRole('button', { name: '回到最新消息' })).not.toBeInTheDocument();
+  });
+
   it('does not load knowledge-base category workspace data', async () => {
     renderWithRouter(
       <Routes>

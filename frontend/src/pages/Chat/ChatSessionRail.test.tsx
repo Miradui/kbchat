@@ -62,6 +62,37 @@ it('closes only the top dialog and cleans isolation when returning to desktop', 
   expect(screen.getByLabelText('主区输入')).not.toHaveAttribute('inert');
 });
 
+it('keeps the session rows visible when a background refresh fails', () => {
+  renderWithRouter(
+    <ChatSessionRail
+      sessions={[{
+        id: 's1', knowledgeBaseId: 'kb1', title: '制度问答', archivedAt: null,
+        createdAt: '2026-10-19T00:00:00Z', updatedAt: '2026-10-19T00:00:00Z', messageCount: 2,
+      }]}
+      sessionTotal={1}
+      hasMore={false}
+      loadingMore={false}
+      knowledgeBases={[]}
+      knowledgeBaseId=""
+      scope="active"
+      getSessionActions={() => []}
+      loading={false}
+      error=""
+      refetchError="会话列表刷新失败"
+      onKnowledgeBaseChange={() => undefined}
+      onScopeChange={() => undefined}
+      onNewChat={() => undefined}
+      onRetry={() => undefined}
+      onLoadMore={() => undefined}
+      onNavigate={() => undefined}
+    />,
+  );
+
+  // A failed refresh reports itself without replacing rows the user can still use.
+  expect(screen.getByText('制度问答')).toBeInTheDocument();
+  expect(screen.getByRole('status')).toHaveTextContent('会话列表刷新失败');
+});
+
 it('keeps its backdrop clickable without adding it to the focus cycle', async () => {
   const user = userEvent.setup();
   renderWithRouter(<Fixture />);

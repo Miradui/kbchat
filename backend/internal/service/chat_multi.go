@@ -67,7 +67,7 @@ func (s *ChatService) searchAutomaticSession(ctx context.Context, userID uuid.UU
 	}
 	if session.ID != uuid.Nil {
 		if err := s.chats.AddSessionKnowledgeBases(ctx, session, links); err != nil {
-			return nil, apperror.Internal(err)
+			return nil, chatWriteError(err)
 		}
 	}
 	session.KnowledgeBaseLinks = append(session.KnowledgeBaseLinks, links...)

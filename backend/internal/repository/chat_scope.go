@@ -36,9 +36,12 @@ func (r *ChatRepository) AddSessionKnowledgeBases(ctx context.Context, session *
 		return nil
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var current model.ChatSession
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND user_id = ? AND deleted_at IS NULL AND archived_at IS NULL", session.ID, session.UserID).First(&current).Error; err != nil {
+		current, err := lockWritableChatSession(tx, session.ID)
+		if err != nil {
 			return err
+		}
+		if current.UserID != session.UserID {
+			return gorm.ErrRecordNotFound
 		}
 		for i := range links {
 			links[i].SessionID = session.ID

@@ -6,6 +6,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
@@ -43,8 +45,8 @@ type Dependencies struct {
 	// Metrics is shared with the retrieval and chat services, which is the whole
 	// point: the diagnostics page reads what request handling recorded.
 	Metrics *observability.Recorder
-	// Only the server supplies this; router tests never spawn background workers.
-	WorkerContext context.Context
+	// The server owns launching, cancellation and waiting for every worker.
+	StartWorker func(func(context.Context))
 }
 
 type redisPinger interface {
@@ -131,8 +133,8 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	metrics = metrics.WithLogger(logger)
 	retrievalService.SetRecorder(metrics)
 	chatService.SetRecorder(metrics)
-	if deps.WorkerContext != nil {
-		go evaluationService.RunWorker(deps.WorkerContext, logger)
+	if deps.StartWorker != nil {
+		deps.StartWorker(func(ctx context.Context) { evaluationService.RunWorker(ctx, logger) })
 	}
 
 	systemService := service.NewSystemService(cfg)
@@ -154,6 +156,9 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 		diagnosticsDeps.Storage = &storageProbe{fileStorage: fileStorage}
 	}
 	systemService.SetDiagnosticsDeps(diagnosticsDeps)
+	if err := systemService.RegisterMetrics(); err != nil {
+		panic(err)
+	}
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userService)
 	knowledgeBaseHandler := handler.NewKnowledgeBaseHandler(knowledgeBaseService)
@@ -175,8 +180,9 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	adminUserHandler := handler.NewAdminUserHandler(adminUserService)
 
 	r := gin.New()
+	r.Use(otelgin.Middleware("rag-backend", otelgin.WithMeterProvider(metricnoop.NewMeterProvider())))
+	r.Use(middleware.RequestLogger(logger, metrics))
 	r.Use(gin.Recovery())
-	r.Use(middleware.RequestLogger(logger))
 	r.Use(middleware.CORS(cfg.CORSAllowedOrigins))
 
 	r.GET("/healthz", systemHandler.Health)

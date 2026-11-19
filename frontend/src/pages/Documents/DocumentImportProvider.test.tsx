@@ -68,6 +68,31 @@ async function submitWithTimers(files: File[] = [file]) {
 }
 
 describe('DocumentImportProvider', () => {
+  it('keeps a minimized text draft when reopened through another page and releases it only after discard', async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await user.click(screen.getByRole('button', { name: '导入文档' }));
+    await user.click(screen.getByRole('button', { name: '粘贴文本' }));
+    await user.type(screen.getByRole('textbox', { name: '文档标题' }), '尚未入队的标题');
+    await user.type(screen.getByRole('textbox', { name: '正文' }), '尚未入队的正文');
+    await user.click(screen.getByRole('button', { name: '收起窗口' }));
+    await user.click(screen.getByRole('link', { name: '切换页面' }));
+    await user.click(screen.getByRole('button', { name: '导入文档' }));
+
+    expect(screen.getByRole('textbox', { name: '文档标题' })).toHaveValue('尚未入队的标题');
+    expect(screen.getByRole('textbox', { name: '正文' })).toHaveValue('尚未入队的正文');
+    expect(screen.getByRole('combobox', { name: '目标知识库' })).toHaveValue('kb1');
+
+    await user.click(screen.getByRole('button', { name: '取消' }));
+    await user.click(screen.getByRole('button', { name: '放弃文件' }));
+    await user.click(screen.getByRole('button', { name: '导入文档' }));
+    expect(screen.getByRole('combobox', { name: '目标知识库' })).toHaveValue('kb2');
+    await user.click(screen.getByRole('button', { name: '粘贴文本' }));
+    expect(screen.getByRole('textbox', { name: '文档标题' })).toHaveValue('');
+    expect(screen.getByRole('textbox', { name: '正文' })).toHaveValue('');
+    expect(uploadGlobalDocument).not.toHaveBeenCalled();
+  });
+
   it('keeps the same transfer alive across route changes and restores its live progress', async () => {
     const upload = deferred<DocumentItem>();
     let signal: AbortSignal | undefined;

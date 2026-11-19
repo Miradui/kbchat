@@ -90,6 +90,11 @@ func (r *ModelUsageRepository) scoped(ctx context.Context, scope UsageScope, fro
 	db := r.db.WithContext(ctx)
 	query := db.Model(&model.ModelUsageRecord{}).
 		Joins("JOIN knowledge_bases ON knowledge_bases.id = model_usage_records.knowledge_base_id").
+		// A deleted knowledge base keeps its usage rows for the audit trail but
+		// must not appear in totals or in the knowledgeBase grouping: its name
+		// would still be listed and its historical tokens still billed. The
+		// quality views filter the same way.
+		Where("knowledge_bases.deleted_at IS NULL").
 		Where("model_usage_records.created_at >= ? AND model_usage_records.created_at < ?", from, to)
 	if !scope.AllKnowledgeBases {
 		query = query.Where(reachableKnowledgeBaseCondition(db, scope.ActorID, scope.MemberRoles))

@@ -47,14 +47,14 @@ function DocumentImportSession({ children }: { children: ReactNode }) {
   const [changeVersion, setChangeVersion] = useState(0);
   const [lastBatch, setLastBatch] = useState<{ documents: DocumentItem[] } | null>(null);
   const tasksRef = useRef(tasks);
-  const snapshotRef = useRef(snapshot);
   const batchCounter = useRef(0);
   tasksRef.current = tasks;
-  snapshotRef.current = snapshot;
 
   const openImport = useCallback((next: ImportOptions) => {
     if (!tokenStore.getToken()) return;
-    if (!options || !snapshotRef.current?.items.length) {
+    // A minimized session may hold text or files not yet reflected in its queue.
+    // Only explicit close/completion ends it; reopening preserves its target.
+    if (!options) {
       setOptions({ ...next, batchId: ++batchCounter.current });
       setSnapshot(null);
     }

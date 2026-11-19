@@ -144,7 +144,10 @@ func parseDOCXZip(packageReader *zip.Reader) (ParsedDocument, error) {
 	if err != nil {
 		return ParsedDocument{}, err
 	}
-	content := renderDOCXBlocks(blocks, styles, numbering)
+	content, err := renderDOCXBlocks(blocks, styles, numbering)
+	if err != nil {
+		return ParsedDocument{}, err
+	}
 	if !utf8.ValidString(content) {
 		return ParsedDocument{}, fmt.Errorf("parse docx: %w", ErrEncodingInvalid)
 	}
@@ -203,7 +206,7 @@ func parseDOCXStyles(file *zip.File) (map[string]docxStyle, error) {
 	defer reader.Close()
 
 	styles := map[string]docxStyle{}
-	decoder := xml.NewDecoder(reader)
+	decoder := newDOCXDecoder(reader)
 	for {
 		token, err := decoder.Token()
 		if errors.Is(err, io.EOF) {
@@ -235,17 +238,27 @@ func parseDOCXStyles(file *zip.File) (map[string]docxStyle, error) {
 
 // resolveStyleLevels propagates heading levels down w:basedOn chains so a
 // custom style derived from Heading 2 without its own outlineLvl still renders
-// as a level-2 heading. Cycles and chains deeper than the style count stop.
+// as a level-2 heading. Cache every visited node, including non-headings: a
+// node visited in the current walk denotes a cycle, while completed walks reuse
+// their result. Each edge is followed at most once, without recursive calls.
 func resolveStyleLevels(styles map[string]docxStyle) map[string]docxStyle {
 	resolved := make(map[string]docxStyle, len(styles))
+	path := make([]string, 0)
 	for id := range styles {
 		current := id
 		level := 0
-		for hops := 0; hops <= len(styles); hops++ {
+		path = path[:0]
+		for {
+			if result, seen := resolved[current]; seen {
+				level = result.level
+				break
+			}
 			style, ok := styles[current]
 			if !ok {
 				break
 			}
+			resolved[current] = docxStyle{}
+			path = append(path, current)
 			if style.level > 0 {
 				level = style.level
 				break
@@ -255,14 +268,14 @@ func resolveStyleLevels(styles map[string]docxStyle) map[string]docxStyle {
 			}
 			current = style.basedOn
 		}
-		if level > 0 {
-			resolved[id] = docxStyle{level: level}
+		for _, visited := range path {
+			resolved[visited] = docxStyle{level: level}
 		}
 	}
 	return resolved
 }
 
-func readStyleElement(decoder *xml.Decoder, start xml.StartElement, style *docxStyle) error {
+func readStyleElement(decoder *docxDecoder, start xml.StartElement, style *docxStyle) error {
 	styleID := xmlAttr(start, "styleId")
 	levelFromID := headingLevel(styleID)
 	for {
@@ -312,7 +325,7 @@ func parseDOCXNumbering(file *zip.File) (docxNumbering, error) {
 		formats:   map[string]map[string]string{},
 		overrides: map[string]map[string]string{},
 	}
-	decoder := xml.NewDecoder(reader)
+	decoder := newDOCXDecoder(reader)
 	var abstractID string
 	var numID string
 	var currentLevel string
@@ -378,7 +391,7 @@ func parseDOCXDocument(file *zip.File) ([]docxBlock, error) {
 	}
 	defer reader.Close()
 
-	decoder := xml.NewDecoder(reader)
+	decoder := newDOCXDecoder(reader)
 	blocks := make([]docxBlock, 0)
 	foundBody := false
 	for {
@@ -405,7 +418,7 @@ func parseDOCXDocument(file *zip.File) ([]docxBlock, error) {
 	}
 }
 
-func parseDOCXBody(decoder *xml.Decoder, start xml.StartElement) ([]docxBlock, error) {
+func parseDOCXBody(decoder *docxDecoder, start xml.StartElement) ([]docxBlock, error) {
 	blocks := make([]docxBlock, 0)
 	for {
 		token, err := decoder.Token()
@@ -460,7 +473,7 @@ var docxInlineContainers = map[string]bool{
 	"sdt": true, "sdtContent": true, "fldSimple": true, "customXml": true, "dir": true, "bdo": true,
 }
 
-func parseDOCXParagraph(decoder *xml.Decoder, start xml.StartElement) (docxParagraph, error) {
+func parseDOCXParagraph(decoder *docxDecoder, start xml.StartElement) (docxParagraph, error) {
 	paragraph := docxParagraph{}
 	var text strings.Builder
 	for {
@@ -495,7 +508,7 @@ func parseDOCXParagraph(decoder *xml.Decoder, start xml.StartElement) (docxParag
 	}
 }
 
-func parseDOCXParagraphProperties(decoder *xml.Decoder, start xml.StartElement, paragraph *docxParagraph) error {
+func parseDOCXParagraphProperties(decoder *docxDecoder, start xml.StartElement, paragraph *docxParagraph) error {
 	for {
 		token, err := decoder.Token()
 		if err != nil {
@@ -530,7 +543,7 @@ func parseDOCXParagraphProperties(decoder *xml.Decoder, start xml.StartElement, 
 	}
 }
 
-func parseDOCXNumberingProperties(decoder *xml.Decoder, start xml.StartElement, paragraph *docxParagraph) error {
+func parseDOCXNumberingProperties(decoder *docxDecoder, start xml.StartElement, paragraph *docxParagraph) error {
 	for {
 		token, err := decoder.Token()
 		if err != nil {
@@ -540,7 +553,11 @@ func parseDOCXNumberingProperties(decoder *xml.Decoder, start xml.StartElement, 
 		case xml.StartElement:
 			switch value.Name.Local {
 			case "ilvl":
-				paragraph.level, _ = strconv.Atoi(xmlAttr(value, "val"))
+				level, parseErr := strconv.Atoi(xmlAttr(value, "val"))
+				if parseErr != nil || level < 0 || level > 8 {
+					return docxLimitError()
+				}
+				paragraph.level = level
 			case "numId":
 				paragraph.numID = xmlAttr(value, "val")
 			default:
@@ -556,7 +573,7 @@ func parseDOCXNumberingProperties(decoder *xml.Decoder, start xml.StartElement, 
 	}
 }
 
-func appendDOCXInline(decoder *xml.Decoder, start xml.StartElement, text *strings.Builder) error {
+func appendDOCXInline(decoder *docxDecoder, start xml.StartElement, text *strings.Builder) error {
 	for {
 		token, err := decoder.Token()
 		if err != nil {
@@ -609,7 +626,7 @@ func appendDOCXInline(decoder *xml.Decoder, start xml.StartElement, text *string
 	}
 }
 
-func readElementText(decoder *xml.Decoder, start xml.StartElement) (string, error) {
+func readElementText(decoder *docxDecoder, start xml.StartElement) (string, error) {
 	var text strings.Builder
 	for {
 		token, err := decoder.Token()
@@ -627,7 +644,7 @@ func readElementText(decoder *xml.Decoder, start xml.StartElement) (string, erro
 	}
 }
 
-func parseDOCXTable(decoder *xml.Decoder, start xml.StartElement) (docxTable, error) {
+func parseDOCXTable(decoder *docxDecoder, start xml.StartElement) (docxTable, error) {
 	table := docxTable{}
 	for {
 		token, err := decoder.Token()
@@ -653,7 +670,7 @@ func parseDOCXTable(decoder *xml.Decoder, start xml.StartElement) (docxTable, er
 	}
 }
 
-func parseDOCXTableRow(decoder *xml.Decoder, start xml.StartElement) ([]docxCell, error) {
+func parseDOCXTableRow(decoder *docxDecoder, start xml.StartElement) ([]docxCell, error) {
 	row := make([]docxCell, 0)
 	for {
 		token, err := decoder.Token()
@@ -679,7 +696,7 @@ func parseDOCXTableRow(decoder *xml.Decoder, start xml.StartElement) ([]docxCell
 	}
 }
 
-func parseDOCXTableCell(decoder *xml.Decoder, start xml.StartElement) (docxCell, error) {
+func parseDOCXTableCell(decoder *docxDecoder, start xml.StartElement) (docxCell, error) {
 	cell := docxCell{gridSpan: 1}
 	var paragraphs []string
 	for {
@@ -750,7 +767,7 @@ func parseDOCXTableCell(decoder *xml.Decoder, start xml.StartElement) (docxCell,
 	}
 }
 
-func parseDOCXCellProperties(decoder *xml.Decoder, start xml.StartElement, cell *docxCell) error {
+func parseDOCXCellProperties(decoder *docxDecoder, start xml.StartElement, cell *docxCell) error {
 	for {
 		token, err := decoder.Token()
 		if err != nil {
@@ -760,9 +777,11 @@ func parseDOCXCellProperties(decoder *xml.Decoder, start xml.StartElement, cell 
 		case xml.StartElement:
 			switch value.Name.Local {
 			case "gridSpan":
-				if parsed, parseErr := strconv.Atoi(xmlAttr(value, "val")); parseErr == nil && parsed > 0 {
-					cell.gridSpan = parsed
+				span, parseErr := strconv.Atoi(xmlAttr(value, "val"))
+				if parseErr != nil || span < 1 || span > MaxTableColumns {
+					return docxLimitError()
 				}
+				cell.gridSpan = span
 				if err := skipXML(decoder, value.Name); err != nil {
 					return err
 				}
@@ -790,10 +809,12 @@ func parseDOCXCellProperties(decoder *xml.Decoder, start xml.StartElement, cell 
 	}
 }
 
-func renderDOCXBlocks(blocks []docxBlock, styles map[string]docxStyle, numbering docxNumbering) string {
-	parts := make([]string, 0, len(blocks))
+func renderDOCXBlocks(blocks []docxBlock, styles map[string]docxStyle, numbering docxNumbering) (string, error) {
+	var out strings.Builder
 	previousList := false
 	for _, block := range blocks {
+		var prefix, text string
+		list := false
 		if block.paragraph != nil {
 			paragraph := block.paragraph
 			if strings.TrimSpace(paragraph.text) == "" {
@@ -809,40 +830,40 @@ func renderDOCXBlocks(blocks []docxBlock, styles map[string]docxStyle, numbering
 			// still a heading: the numbering is presentation, the style is
 			// structure.
 			if level > 0 && level <= 6 {
-				parts = append(parts, strings.Repeat("#", level)+" "+paragraph.text)
-				previousList = false
-				continue
-			}
-			// numId 0 means "numbering removed" in OOXML, not list item 0.
-			if paragraph.numID != "" && paragraph.numID != "0" {
+				prefix = strings.Repeat("#", level) + " "
+			} else if paragraph.numID != "" && paragraph.numID != "0" {
+				// numId 0 means numbering removed. List depth was validated on input.
 				marker := "1."
 				if format := numbering.format(paragraph.numID, paragraph.level); format == "bullet" || format == "picture" {
 					marker = "-"
 				}
-				line := strings.Repeat("  ", maxInt(paragraph.level, 0)) + marker + " " + paragraph.text
-				// Consecutive items stay in one Markdown list block so the
-				// splitter keeps nested items together instead of treating an
-				// indented item after a blank line as a paragraph.
-				if previousList && len(parts) > 0 {
-					parts[len(parts)-1] += "\n" + line
-				} else {
-					parts = append(parts, line)
-				}
-				previousList = true
-				continue
+				prefix = strings.Repeat("  ", paragraph.level) + marker + " "
+				list = true
 			}
-			parts = append(parts, paragraph.text)
-			previousList = false
+			text = paragraph.text
+		} else if block.table != nil {
+			var err error
+			text, err = renderDOCXTable(block.table)
+			if err != nil {
+				return "", err
+			}
+		}
+		if text == "" {
 			continue
 		}
-		if block.table != nil {
-			if table := renderDOCXTable(block.table); table != "" {
-				parts = append(parts, table)
+		separator := ""
+		if out.Len() > 0 {
+			separator = "\n\n"
+			if list && previousList {
+				separator = "\n"
 			}
-			previousList = false
 		}
+		if err := writeDOCXText(&out, separator, prefix, text); err != nil {
+			return "", err
+		}
+		previousList = list
 	}
-	return strings.TrimSpace(strings.Join(parts, "\n\n"))
+	return strings.TrimSpace(out.String()), nil
 }
 
 func (n docxNumbering) format(numID string, level int) string {
@@ -862,58 +883,59 @@ func (n docxNumbering) format(numID string, level int) string {
 	return levels["0"]
 }
 
-func renderDOCXTable(table *docxTable) string {
+func renderDOCXTable(table *docxTable) (string, error) {
 	if table == nil || len(table.rows) == 0 {
-		return ""
+		return "", nil
 	}
+	// Measure before expanding spans or padding ragged rows to a rectangle.
 	width := 0
-	rows := make([][]string, 0, len(table.rows))
 	for _, sourceRow := range table.rows {
-		row := make([]string, 0)
+		columns := 0
 		for _, cell := range sourceRow {
-			span := cell.gridSpan
-			if span < 1 {
-				span = 1
-			}
-			value := cell.text
-			// A vertically merged region keeps only its top-left value; every
-			// continuation cell renders empty even if Word stored text in it.
-			merged := cell.vMerge == "continue"
-			if merged {
-				value = ""
-			}
-			row = append(row, escapeDOCXTableCell(value))
-			for offset := 1; offset < span; offset++ {
-				row = append(row, "")
+			columns += cell.gridSpan
+			if columns > MaxTableColumns {
+				return "", docxLimitError()
 			}
 		}
-		for len(row) < width {
-			row = append(row, "")
+		if columns > width {
+			width = columns
 		}
-		if len(row) > width {
-			width = len(row)
-		}
-		rows = append(rows, row)
 	}
 	if width == 0 {
-		return ""
+		return "", nil
 	}
-	for index := range rows {
-		for len(rows[index]) < width {
-			rows[index] = append(rows[index], "")
+	if len(table.rows) > docxMaxTableCells/width {
+		return "", docxLimitError()
+	}
+	var out strings.Builder
+	row := make([]string, width)
+	for index, sourceRow := range table.rows {
+		clear(row)
+		column := 0
+		for _, cell := range sourceRow {
+			// A vertically merged region keeps only its top-left value.
+			if cell.vMerge != "continue" {
+				row[column] = escapeDOCXTableCell(cell.text)
+			}
+			column += cell.gridSpan
+		}
+		separator := ""
+		if index > 0 {
+			separator = "\n"
+		}
+		if err := writeDOCXText(&out, separator, markdownTableRow(row)); err != nil {
+			return "", err
+		}
+		if index == 0 {
+			for i := range row {
+				row[i] = "---"
+			}
+			if err := writeDOCXText(&out, "\n", markdownTableRow(row)); err != nil {
+				return "", err
+			}
 		}
 	}
-	lines := make([]string, 0, len(rows)+1)
-	lines = append(lines, markdownTableRow(rows[0]))
-	header := make([]string, width)
-	for index := range header {
-		header[index] = "---"
-	}
-	lines = append(lines, markdownTableRow(header))
-	for _, row := range rows[1:] {
-		lines = append(lines, markdownTableRow(row))
-	}
-	return strings.Join(lines, "\n")
+	return out.String(), nil
 }
 
 func markdownTableRow(cells []string) string {
@@ -944,7 +966,7 @@ func xmlAttr(element xml.StartElement, local string) string {
 	return ""
 }
 
-func skipXML(decoder *xml.Decoder, name xml.Name) error {
+func skipXML(decoder *docxDecoder, name xml.Name) error {
 	depth := 1
 	for depth > 0 {
 		token, err := decoder.Token()
@@ -959,11 +981,4 @@ func skipXML(decoder *xml.Decoder, name xml.Name) error {
 		}
 	}
 	return nil
-}
-
-func maxInt(left, right int) int {
-	if left > right {
-		return left
-	}
-	return right
 }

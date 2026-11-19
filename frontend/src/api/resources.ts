@@ -926,8 +926,9 @@ export async function sendChatMessageStream(
       done = isCompletedChatResponse(payload, sessionId, input.clientRequestId) ? payload : null;
       break;
     } else if (event.event === 'error') {
-      const payload = parseStreamPayload<{ status?: number; code?: string; message?: string; details?: Record<string, unknown> }>(event.data);
+      const payload = parseStreamPayload<{ status?: number; code?: string; message?: string; traceId?: string; details?: Record<string, unknown> }>(event.data);
       throw new ApiError(payload?.status ?? 500, {
+        traceId: payload?.traceId,
         code: payload?.code ?? 'INTERNAL_ERROR',
         message: payload?.message ?? '回答生成失败，请稍后重试。',
         details: payload?.details,

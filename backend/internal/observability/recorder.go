@@ -10,22 +10,27 @@
 package observability
 
 import (
+	"context"
+	"errors"
 	"sort"
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	metricapi "go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 )
 
 // Metric names recorded by the chat and retrieval paths. They are exported so
 // the call sites and the diagnostics service cannot drift on spelling.
 const (
-	MetricRetrieval      = "retrieval"
-	MetricEmbedding      = "embedding"
-	MetricRerank         = "rerank"
-	MetricKeyword        = "keyword"
-	MetricChatFirstToken = "chat_first_token"
-	MetricChatGeneration = "chat_generation"
+	MetricRetrieval            = "retrieval"
+	MetricEmbedding            = "embedding"
+	MetricRerank               = "rerank"
+	MetricKeyword              = "keyword"
+	MetricChatFirstToken       = "chat_first_token"
+	MetricChatGeneration       = "chat_generation"
+	MetricChatFirstVisibleText = "chat_first_visible_text"
 )
 
 // Provider names used with RecordProviderResult.
@@ -100,6 +105,7 @@ type providerHealth struct {
 // concurrent use and is a no-op on a nil receiver, so instrumentation can be
 // added to call paths whose existing tests construct services without one.
 type Recorder struct {
+	instruments          instruments
 	mu                   sync.Mutex
 	durations            map[string]*durationRing
 	providers            map[string]*providerHealth
@@ -113,6 +119,7 @@ type Recorder struct {
 
 func NewRecorder() *Recorder {
 	return &Recorder{
+		instruments:       newInstruments(),
 		durations:         map[string]*durationRing{},
 		providers:         map[string]*providerHealth{},
 		fallbacks:         map[string]uint64{},
@@ -144,7 +151,7 @@ func (r *Recorder) log() *zap.Logger {
 
 // ObserveDuration records one timing sample. Negative values are dropped: a
 // clock that stepped backwards should not skew a percentile.
-func (r *Recorder) ObserveDuration(metric string, value time.Duration) {
+func (r *Recorder) ObserveDuration(ctx context.Context, metric string, value time.Duration) {
 	if r == nil || metric == "" || value < 0 {
 		return
 	}
@@ -156,24 +163,43 @@ func (r *Recorder) ObserveDuration(metric string, value time.Duration) {
 		r.durations[metric] = ring
 	}
 	ring.add(value)
+	switch metric {
+	case MetricRetrieval, MetricEmbedding, MetricRerank, MetricKeyword, MetricChatFirstToken, MetricChatGeneration, MetricChatFirstVisibleText:
+		r.instruments.stageDuration.Record(ctx, value.Seconds(), metricapi.WithAttributes(attribute.String("stage", metric)))
+	}
 }
 
 // ObserveSince is the common case of ObserveDuration at a call site that has a
 // start time.
-func (r *Recorder) ObserveSince(metric string, start time.Time) {
+func (r *Recorder) ObserveSince(ctx context.Context, metric string, start time.Time) {
 	if r == nil {
 		return
 	}
-	r.ObserveDuration(metric, r.clock().Sub(start))
+	r.ObserveDuration(ctx, metric, r.clock().Sub(start))
 }
 
 // RecordProviderResult records one provider call outcome. A nil error is a
 // success; anything else is classified into a reason class, and the error
 // itself is never retained — see Classify.
-func (r *Recorder) RecordProviderResult(provider string, err error) {
+func (r *Recorder) RecordProviderResult(ctx context.Context, provider string, err error) {
 	if r == nil || provider == "" {
 		return
 	}
+	// A caller stopping a stream is not a dependency outage.
+	if errors.Is(err, context.Canceled) {
+		return
+	}
+	outcome, reason := "success", "none"
+	if err != nil {
+		outcome, reason = "failure", string(Classify(err))
+	}
+	label := provider
+	switch provider {
+	case ProviderChat, ProviderEmbedding, ProviderRerank, ProviderKeyword, ProviderTitle:
+	default:
+		label = "other"
+	}
+	r.instruments.providers.Add(ctx, 1, metricapi.WithAttributes(attribute.String("provider", label), attribute.String("outcome", outcome), attribute.String("reason", reason)))
 	now := r.clock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -187,9 +213,9 @@ func (r *Recorder) RecordProviderResult(provider string, err error) {
 		health.successCount++
 		return
 	}
-	reason := Classify(err)
+	failureReason := Classify(err)
 	health.lastFailureAt = now
-	health.lastReason = reason
+	health.lastReason = failureReason
 	health.failureCount++
 	health.failures = appendWithinWindow(health.failures, now, recentFailureWindow)
 
@@ -197,9 +223,9 @@ func (r *Recorder) RecordProviderResult(provider string, err error) {
 	// the API response, not to the operator's own server log, which is where a
 	// provider outage actually gets diagnosed.
 	if r.logger != nil {
-		r.logger.Warn("provider call failed",
+		Log(ctx, r.logger).Warn("provider call failed",
 			zap.String("provider", provider),
-			zap.String("reason", string(reason)),
+			zap.String("reason", string(failureReason)),
 			zap.Error(err),
 		)
 	}
@@ -219,7 +245,7 @@ type ChatTiming struct {
 // RecordChatTiming writes the durable summary line for one chat request. The
 // samples themselves are recorded at their own call sites; this exists so the
 // per-request picture survives a restart.
-func (r *Recorder) RecordChatTiming(timing ChatTiming) {
+func (r *Recorder) RecordChatTiming(ctx context.Context, timing ChatTiming) {
 	if r == nil {
 		return
 	}
@@ -238,7 +264,7 @@ func (r *Recorder) RecordChatTiming(timing ChatTiming) {
 	if timing.FirstToken > 0 {
 		fields = append(fields, zap.Duration("firstTokenLatency", timing.FirstToken))
 	}
-	logger.Info("chat answer timing", fields...)
+	Log(ctx, logger).Info("chat answer timing", fields...)
 }
 
 // RecordRerankFallback counts a degraded retrieval. The reason is one of the
@@ -253,6 +279,11 @@ func (r *Recorder) RecordRerankFallback(reason string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.fallbacks[reason]++
+	label := reason
+	if label != "provider_unavailable" {
+		label = "unknown"
+	}
+	r.instruments.fallbacks.Add(context.Background(), 1, metricapi.WithAttributes(attribute.String("reason", label)))
 }
 
 // RecordRateLimitTrigger counts a request rejected because its fixed-window
@@ -270,6 +301,7 @@ func (r *Recorder) RecordRateLimitTrigger(scope string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.rateLimitTriggers[scope]++
+	r.instruments.rateLimits.Add(context.Background(), 1, metricapi.WithAttributes(attribute.String("scope", scope)))
 }
 
 // RecordEmbeddingCacheResult counts query-embedding cache activity. Hit and
@@ -289,7 +321,10 @@ func (r *Recorder) RecordEmbeddingCacheResult(result string) {
 		r.embeddingCacheResult.Misses++
 	case EmbeddingCacheResultError:
 		r.embeddingCacheResult.Errors++
+	default:
+		return
 	}
+	r.instruments.cache.Add(context.Background(), 1, metricapi.WithAttributes(attribute.String("result", result)))
 }
 
 // RecordVectorExactFallback counts a vector search that had to be rerun
@@ -303,6 +338,7 @@ func (r *Recorder) RecordVectorExactFallback() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.vectorExactFallbacks++
+	r.instruments.exactFallbacks.Add(context.Background(), 1)
 }
 
 func (r *Recorder) clock() time.Time {
@@ -448,9 +484,9 @@ func percentile(sorted []time.Duration, p int) time.Duration {
 // Logger exposes the logger wired by WithLogger so services that already hold a
 // Recorder can report non-metric failures without a second dependency. It is
 // nil-safe and returns nil when no logger was configured.
-func (r *Recorder) Logger() *zap.Logger {
+func (r *Recorder) Logger(ctx context.Context) *zap.Logger {
 	if r == nil {
 		return nil
 	}
-	return r.log()
+	return Log(ctx, r.log())
 }

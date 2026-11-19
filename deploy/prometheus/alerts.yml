@@ -1,0 +1,86 @@
+groups:
+  - name: rag
+    rules:
+      - alert: RAGCollectorUnavailable
+        expr: up{job="otel-collector"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: 遥测采集器不可访问
+          description: Prometheus 已持续一分钟无法抓取 Collector，请检查采集进程与网络。
+
+      - alert: RAGTelemetryMissing
+        expr: absent(rag_telemetry_heartbeat_unixtime) or (time() - max by (service_name) (rag_telemetry_heartbeat_unixtime) > 60)
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: 后端遥测中断
+          description: 后端未持续上报心跳；Collector 可访问也不能代表应用仍在运行。
+
+      - alert: RAGHighRequestFailureRate
+        expr: |
+          (
+            sum by (service_name) (rate(rag_http_requests_total{outcome="failed",status_class=~"2xx|5xx",route!~"/(api/v1/)?healthz"}[5m]))
+            / sum by (service_name) (rate(rag_http_requests_total{outcome!="cancelled",status_class=~"2xx|5xx",route!~"/(api/v1/)?healthz"}[5m])) > 0.05
+          )
+          and sum by (service_name) (increase(rag_http_requests_total{outcome!="cancelled",status_class=~"2xx|5xx",route!~"/(api/v1/)?healthz"}[5m])) >= 20
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: 请求失败率持续超过 5%
+          description: 包含 HTTP 200 后的 SSE 失败；排除取消、普通 4xx 与健康检查，且最近五分钟至少有 20 次请求。
+
+      - alert: RAGSlowFirstVisibleText
+        expr: |
+          histogram_quantile(0.95, sum by (service_name,le) (rate(rag_stage_duration_seconds_bucket{stage="chat_first_visible_text"}[5m]))) > 10
+          and sum by (service_name) (increase(rag_stage_duration_seconds_count{stage="chat_first_visible_text"}[5m])) >= 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 首段正文 P95 持续超过十秒
+          description: 服务端从请求入口至首段正文成功发送的耗时偏高，请按 Trace 排查意图、检索与模型调用。
+
+      - alert: RAGProviderFailureRate
+        expr: |
+          (
+            sum by (service_name,provider) (rate(rag_provider_calls_total{outcome="failure"}[5m]))
+            / sum by (service_name,provider) (rate(rag_provider_calls_total[5m])) > 0.1
+          )
+          and sum by (service_name,provider) (increase(rag_provider_calls_total[5m])) >= 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Provider 调用失败率持续超过 10%
+          description: 按 Provider 类型统计真实调用，客户端取消不进入故障计数；最近五分钟至少十次调用。
+
+      - alert: RAGDocumentQueueWaiting
+        expr: max by (service_name) (rag_document_oldest_job_age_seconds{state="pending"}) > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 文档处理队列持续等待过久
+          description: 最早待处理任务等待超过五分钟，请检查 worker、重试和模型服务。
+
+      - alert: RAGCleanupQueueWaiting
+        expr: max by (service_name) (rag_cleanup_oldest_pending_age_seconds) > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 对象清理任务持续积压
+          description: 最早对象清理任务已等待超过十五分钟，请检查存储服务和清理 worker。
+
+      - alert: RAGQueueCollectionFailed
+        expr: min by (service_name,queue) (rag_queue_collection_success) == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: 队列指标采集失败
+          description: 队列状态读取持续失败，缺失的队列值不能解释为空队列，请检查数据库。

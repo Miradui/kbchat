@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 
 	"kbchat/backend/internal/config"
@@ -30,6 +31,8 @@ func Open(cfg config.Config) *redis.Client {
 		ContextTimeoutEnabled: true,
 	})
 	client.AddHook(&redisGuard{timeout: timeout, cooldown: cooldown, now: time.Now})
+	// The concrete client is supported by redisotel; command values stay private.
+	_ = redisotel.InstrumentTracing(client, redisotel.WithDBStatement(false))
 	return client
 }
 

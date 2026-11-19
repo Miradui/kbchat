@@ -39,6 +39,25 @@ import { DocumentOCRCorrection } from './DocumentOCRCorrection';
 
 const CHUNK_PAGE_SIZE = 20;
 
+/**
+ * Whether a poll answer carries anything new.
+ *
+ * The detail endpoint returns a fresh object every 2s even when nothing moved,
+ * and replacing the state with it restarted the effects that depended on the
+ * document. Comparing the fields the progress UI renders keeps that churn away.
+ */
+function documentProgressChanged(current: DocumentItem, next: DocumentItem): boolean {
+  return current.status !== next.status
+    || current.jobStatus !== next.jobStatus
+    || current.stage !== next.stage
+    || current.progress !== next.progress
+    || current.retryCount !== next.retryCount
+    || current.errorCode !== next.errorCode
+    || current.errorMessage !== next.errorMessage
+    || current.nextRetryAt !== next.nextRetryAt
+    || current.updatedAt !== next.updatedAt;
+}
+
 type DocumentDetailDrawerProps = {
   chunkId?: string;
   documentId: string;
@@ -180,14 +199,28 @@ export function DocumentDetailDrawer({
     return () => { active = false; };
   }, [previewReady, documentId, knowledgeBaseId, canDownload, previewAttempt]);
 
+  // A processing document is polled by its own timer instead of by re-running
+  // this effect. The effect used to depend on the document object, so every poll
+  // answer restarted it and re-triggered every effect that depended on the
+  // document -- including the chunk list, which flashed a skeleton and dropped
+  // scroll position, focus and the retry state every 2 seconds.
+  const documentPolling = Boolean(document
+    && document.id === documentId
+    && documentScope === (knowledgeBaseId ?? '')
+    && !isTerminalDocumentStatus(document.status)
+    && document.jobStatus !== 'cancelled');
+
   useEffect(() => {
-    if (!document || document.id !== documentId || documentScope !== (knowledgeBaseId ?? '')
-      || isTerminalDocumentStatus(document.status) || document.jobStatus === 'cancelled') return;
+    if (!documentPolling) return;
     let active = true;
     let timer: number;
     const poll = () => {
       getDocument(documentId).then((next) => {
-        if (active) setDocument(next);
+        if (!active) return;
+        // Keep the previous object when nothing moved: a new object would
+        // re-render the progress UI and re-run effects for no reason.
+        setDocument((current) => (current && !documentProgressChanged(current, next) ? current : next));
+        timer = window.setTimeout(poll, 2000);
       }).catch((caught) => {
         if (!active) return;
         if (caught instanceof ApiError && (caught.status === 403 || caught.status === 404)) {
@@ -205,10 +238,17 @@ export function DocumentDetailDrawer({
     };
     timer = window.setTimeout(poll, 2000);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [document, documentId, documentScope, knowledgeBaseId]);
+  }, [documentPolling, documentId, documentScope, knowledgeBaseId]);
+
+  const documentReady = Boolean(document && document.id === documentId && documentScope === (knowledgeBaseId ?? ''));
+  // The chunk list follows the document's processing stage, not the detail
+  // object: it is refetched when indexing moves on, not on every progress tick.
+  const chunkSourceKey = document && document.id === documentId
+    ? [document.id, document.status, document.stage ?? '', document.retryCount ?? ''].join(':')
+    : '';
 
   useEffect(() => {
-    if (!document || document.id !== documentId || documentScope !== (knowledgeBaseId ?? '')) {
+    if (!documentReady) {
       setChunks([]);
       setChunkTotal(0);
       setChunksLoading(false);
@@ -243,7 +283,7 @@ export function DocumentDetailDrawer({
     return () => {
       mounted = false;
     };
-  }, [chunkId, chunkPage, chunkQuery, document, documentId, documentScope, knowledgeBaseId, chunkAttempt]);
+  }, [chunkId, chunkPage, chunkQuery, chunkSourceKey, documentReady, documentId, chunkAttempt]);
 
   /**
    * Bring the cited chunk into view and put focus on it.

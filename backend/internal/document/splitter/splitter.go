@@ -1212,6 +1212,12 @@ func runeTextSpans(text string) []textSpan {
 
 func splitMarkdownTableCellToBudgetSpans(text string, budget int) []textSpan {
 	spans := splitTextToBudgetSpans(text, budget)
+	// Whitespace-only text yields no spans. Every caller then has nothing to
+	// split, so return instead of slicing spans[1:] on an empty slice: that
+	// panicked inside the document worker and killed the process.
+	if len(spans) < 2 {
+		return spans
+	}
 	for _, span := range spans[1:] {
 		if span.start < len(text) && text[span.start] == '|' && isEscapedMarkdownDelimiter(text, span.start) {
 			return packTextSpans(text, markdownTableCellTextUnits(text), budget)

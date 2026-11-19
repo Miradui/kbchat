@@ -3,13 +3,15 @@ package title
 import (
 	"context"
 	"fmt"
-	"net/http"
+	"go.opentelemetry.io/otel/attribute"
+	"kbchat/backend/internal/observability"
 	"strings"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 
 	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/provider/httpclient"
 	titlecore "kbchat/backend/internal/title"
 )
 
@@ -22,7 +24,7 @@ type OpenAICompatibleProvider struct {
 func NewOpenAICompatibleProvider(cfg config.Config) *OpenAICompatibleProvider {
 	clientConfig := openai.DefaultConfig(cfg.TitleAPIKey)
 	clientConfig.BaseURL = strings.TrimRight(cfg.TitleBaseURL, "/")
-	clientConfig.HTTPClient = &http.Client{Timeout: 30 * time.Second}
+	clientConfig.HTTPClient = httpclient.NewJSONClient(30 * time.Second)
 	return &OpenAICompatibleProvider{
 		apiKey: cfg.TitleAPIKey,
 		model:  cfg.TitleModel,
@@ -35,7 +37,9 @@ func (p *OpenAICompatibleProvider) SummarizeTitle(ctx context.Context, messages 
 	return title, err
 }
 
-func (p *OpenAICompatibleProvider) SummarizeTitleWithUsage(ctx context.Context, messages []titlecore.Message) (string, titlecore.Usage, error) {
+func (p *OpenAICompatibleProvider) SummarizeTitleWithUsage(ctx context.Context, messages []titlecore.Message) (title string, spent titlecore.Usage, retErr error) {
+	ctx, span := observability.Start(ctx, "model.title", attribute.String("gen_ai.request.model", p.model))
+	defer func() { observability.Finish(span, retErr) }()
 	if p.apiKey == "" {
 		return "", titlecore.Usage{}, fmt.Errorf("TITLE_API_KEY is required")
 	}
@@ -58,5 +62,14 @@ func (p *OpenAICompatibleProvider) SummarizeTitleWithUsage(ctx context.Context, 
 	if len(response.Choices) == 0 {
 		return "", titlecore.Usage{}, fmt.Errorf("title response has no choices")
 	}
-	return response.Choices[0].Message.Content, titlecore.Usage{PromptTokens: response.Usage.PromptTokens, CompletionTokens: response.Usage.CompletionTokens, TotalTokens: response.Usage.TotalTokens, Model: p.model}, nil
+	usage := titlecore.Usage{
+		PromptTokens:     response.Usage.PromptTokens,
+		CompletionTokens: response.Usage.CompletionTokens,
+		TotalTokens:      response.Usage.TotalTokens,
+		Model:            p.model,
+	}
+	// The SDK exposes usage as a value type, so presence cannot be checked
+	// directly; a call that really ran accounts for at least one token.
+	usage.Reported = usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.TotalTokens > 0
+	return response.Choices[0].Message.Content, usage, nil
 }

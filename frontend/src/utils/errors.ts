@@ -14,14 +14,10 @@ export function getErrorMessage(error: unknown, fallback: string): string {
     DOCUMENT_PROCESS_FAILED: '文档处理失败，请检查文件内容或稍后重处理。',
     INTERNAL_ERROR: fallback,
   };
-  if (messages[error.code]) {
-    return messages[error.code];
-  }
-
-  if (isTechnicalError(error.message)) {
-    return fallback;
-  }
-  return error.message;
+  const message = messages[error.code] ?? (isTechnicalError(error.message) ? fallback : error.message);
+  return error.status >= 500 && error.traceId
+    ? `${message}（追踪编号：${error.traceId}）`
+    : message;
 }
 
 function isTechnicalError(message: string): boolean {

@@ -128,6 +128,9 @@ func (r *UserRepository) CreateAdminUser(ctx context.Context, user *model.User) 
 func (r *UserRepository) UpdateAdminProfile(ctx context.Context, id uuid.UUID, displayName, status string) (*model.User, error) {
 	var user model.User
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockAdminMutations(tx); err != nil {
+			return err
+		}
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&user, "id = ?", id).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrAdminUserNotFound
@@ -180,6 +183,9 @@ func (r *UserRepository) UpdateAdminRole(ctx context.Context, actorID, targetID 
 		if actorID == targetID {
 			return ErrAdminSelfMutation
 		}
+		if err := lockAdminMutations(tx); err != nil {
+			return err
+		}
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&user, "id = ?", targetID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrAdminUserNotFound
@@ -201,6 +207,26 @@ func (r *UserRepository) UpdateAdminRole(ctx context.Context, actorID, targetID 
 		return tx.First(&user, "id = ?", targetID).Error
 	})
 	return &user, err
+}
+
+// adminMutationLockKey is the transaction-scoped advisory lock that serializes
+// every operation able to remove the last active administrator.
+const adminMutationLockKey int64 = 0x52414741444C4153
+
+// lockAdminMutations serializes the last-admin decision across transactions.
+//
+// Locking only the target row leaves a write-skew window: two administrators
+// disabling or demoting each other lock different rows, both read the other as
+// still active, and both commit, leaving role='admin' AND status='active' empty.
+// That locks every operator endpoint out and the CLI cannot recover it either.
+// PostgreSQL has no predicate lock for the count, so the decision itself is
+// serialized. SQLite tests are single-writer and skip it, matching
+// BootstrapSystemAdmin.
+func lockAdminMutations(tx *gorm.DB) error {
+	if tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	return tx.Exec("SELECT pg_advisory_xact_lock(?)", adminMutationLockKey).Error
 }
 
 // userIsActive treats the legacy empty status as active, matching IsActive.

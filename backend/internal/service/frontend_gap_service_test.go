@@ -916,6 +916,43 @@ func TestSystemCapabilitiesReportAccountLimits(t *testing.T) {
 
 // G13: per knowledge base stats stay scoped to that knowledge base and to the
 // caller, and never leak into the detail payload.
+// kb.read is enough to see a knowledge base's own statistics, so a manager or
+// viewer must not be shown zero documents. The document count comes from the
+// knowledge base; views and questions stay the caller's own.
+func TestKnowledgeBaseDetailStatsCountForMembersNotOnlyTheOwner(t *testing.T) {
+	ctx := context.Background()
+	services := newWorkspaceTestServices(t)
+	owner := createWorkspaceUser(t, services.db, "owner")
+	member := createWorkspaceUser(t, services.db, "member")
+	base := time.Now().Add(-time.Hour)
+
+	target := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "target", "private", base)
+	if err := services.db.Create(&model.KnowledgeBaseMember{KnowledgeBaseID: target.ID, UserID: member.ID, Role: "manager"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	createWorkspaceDocument(t, services.db, target.ID, owner.ID, "a.pdf", "completed")
+	createWorkspaceDocument(t, services.db, target.ID, owner.ID, "b.pdf", "completed")
+	createWorkspaceQuestion(t, services.db, target.ID, member.ID, "成员提问")
+
+	if err := services.kbs.RecordView(ctx, member.ID, target.ID); err != nil {
+		t.Fatalf("record view: %v", err)
+	}
+
+	res, err := services.kbs.DetailStats(ctx, member.ID, target.ID, "month")
+	if err != nil {
+		t.Fatalf("detail stats: %v", err)
+	}
+	if res.Documents.Value != 2 {
+		t.Fatalf("expected the knowledge base documents for a member, got %#v", res.Documents)
+	}
+	if res.Questions.Value != 1 {
+		t.Fatalf("expected the member's own questions, got %#v", res.Questions)
+	}
+	if res.Views.Value != 1 {
+		t.Fatalf("expected the member's own views, got %#v", res.Views)
+	}
+}
+
 func TestKnowledgeBaseDetailStatsAreScopedToOneKnowledgeBase(t *testing.T) {
 	ctx := context.Background()
 	services := newWorkspaceTestServices(t)

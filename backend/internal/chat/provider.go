@@ -16,6 +16,13 @@ type Usage struct {
 	CompletionTokens int
 	TotalTokens      int
 	Model            string
+	// Reported is true only when the upstream actually accounted for tokens.
+	//
+	// The zero value means "not reported": an OpenAI-compatible gateway that
+	// ignores stream_options.include_usage still answers 200, and storing its
+	// zeroes as real counts would understate cost and drag token and latency
+	// statistics toward zero. Unreported calls are persisted as NULL.
+	Reported bool
 }
 
 type Options struct {

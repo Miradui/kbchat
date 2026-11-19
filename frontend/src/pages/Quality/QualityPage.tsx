@@ -274,21 +274,40 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
     [knowledgeBaseId, qualityKnowledgeBases],
   );
 
+  /**
+   * Drop the previous range's data so the new range loads into an empty panel.
+   *
+   * Each panel renders its skeleton only when `loading && !data`, so keeping the
+   * old rows hid the loading state and showed the previous knowledge base, period
+   * or filter's numbers under the new one -- with pagination already back at page
+   * 1, which made the stale data look current.
+   */
+  function resetRangeData(targets: Array<'overview' | 'feedback' | 'gaps'>) {
+    if (targets.includes('overview')) setOverview(null);
+    if (targets.includes('feedback')) setFeedback(null);
+    if (targets.includes('gaps')) setGaps(null);
+    setIssueTarget(null);
+    setCaseDraft(null);
+  }
+
   function updatePeriod(value: ChatQualityPeriod) {
     setPeriod(value);
     setPage(1);
     setGapPage(1);
+    resetRangeData(['overview', 'feedback', 'gaps']);
   }
 
   function updateKnowledgeBase(value: string) {
     setSearchParams((current) => { const next = new URLSearchParams(current); if (value) next.set('knowledgeBaseId', value); else next.delete('knowledgeBaseId'); return next; });
     setPage(1);
     setGapPage(1);
+    resetRangeData(['overview', 'feedback', 'gaps']);
   }
 
   function updateCitationFilter(value: string) {
     setHasCitations(value);
     setPage(1);
+    resetRangeData(['feedback']);
   }
 
   function updateGapCategory(value: string) {
@@ -296,6 +315,7 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
     // The two categories have independent lengths, so a page number from the
     // previous filter would usually land past the end of the new one.
     setGapPage(1);
+    resetRangeData(['gaps']);
   }
 
   return (
@@ -327,7 +347,7 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
             value={period}
           />}
           {activeTab === 'feedback' && <Field label="统计范围"><Select aria-label="统计范围" value={qualityScope ?? ''} onChange={(event) => {
-            setPage(1); setGapPage(1); setOverview(null); setFeedback(null); setGaps(null); setIssueTarget(null); setCaseDraft(null);
+            setPage(1); setGapPage(1); resetRangeData(['overview', 'feedback', 'gaps']);
             setSearchParams((current) => { const next = new URLSearchParams(current); if (event.target.value) next.set('scope', event.target.value); else next.delete('scope'); next.delete('knowledgeBaseId'); return next; });
           }}><option value="">单库运营视图</option><option value="personal">我的全部问答</option><option value="auto">我的自动跨库问答</option><option value="multi">我的固定多库问答</option><option value="documents">我的指定文档问答</option></Select></Field>}
           <Field label="知识库">
