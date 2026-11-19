@@ -30,8 +30,6 @@ const (
 	defaultModelProvider           = "openai_compatible"
 	defaultChatBaseURL             = "https://api.openai.com/v1"
 	defaultChatModel               = "gpt-4.1-mini"
-	defaultTitleBaseURL            = "https://api.openai.com/v1"
-	defaultTitleModel              = "gpt-4.1-mini"
 	defaultEmbeddingBaseURL        = "https://api.openai.com/v1"
 	defaultEmbeddingModel          = "text-embedding-3-small"
 	defaultEmbeddingDimension      = 1536
@@ -85,9 +83,6 @@ type Config struct {
 	ChatModel               string
 	ChatAllowedModels       []string
 	ModelPricing            string
-	TitleBaseURL            string
-	TitleAPIKey             string
-	TitleModel              string
 	EmbeddingBaseURL        string
 	EmbeddingAPIKey         string
 	EmbeddingModel          string
@@ -153,9 +148,6 @@ func Load() Config {
 		ChatModel:               getEnv("CHAT_MODEL", defaultChatModel),
 		ChatAllowedModels:       splitCommaSeparated(getEnv("CHAT_ALLOWED_MODELS", "")),
 		ModelPricing:            getEnv("MODEL_PRICING", "{}"),
-		TitleBaseURL:            normalizedBaseURL(getEnv("TITLE_BASE_URL", defaultTitleBaseURL)),
-		TitleAPIKey:             getEnv("TITLE_API_KEY", ""),
-		TitleModel:              getEnv("TITLE_MODEL", defaultTitleModel),
 		EmbeddingBaseURL:        normalizedBaseURL(getEnv("EMBEDDING_BASE_URL", getEnv("OPENAI_BASE_URL", defaultEmbeddingBaseURL))),
 		EmbeddingAPIKey:         getEnv("EMBEDDING_API_KEY", getEnv("OPENAI_API_KEY", "")),
 		EmbeddingModel:          getEnv("EMBEDDING_MODEL", defaultEmbeddingModel),

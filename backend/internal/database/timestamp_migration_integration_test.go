@@ -64,6 +64,12 @@ func TestPostgresTimestampMigration(t *testing.T) {
 	}
 
 	want := time.Date(2026, 9, 13, 16, 14, 15, 123456000, time.UTC)
+	// These tables were introduced after 023 with TIMESTAMPTZ columns. They
+	// are current-schema coverage, not synthetic pre-023 upgrade inputs.
+	zonedTables := map[string]bool{
+		"model_usage_records": true, "document_upload_receipts": true,
+		"chat_bookmarks": true, "question_templates": true, "chat_quality_issues": true,
+	}
 	var fixtures []timestampMigrationFixture
 	for _, item := range timestampSchemaModels() {
 		statement := &gorm.Statement{DB: tx}
@@ -80,7 +86,7 @@ func TestPostgresTimestampMigration(t *testing.T) {
 			fixture.columns = append(fixture.columns, field.DBName)
 			columnType := "TIMESTAMP"
 			value := "TIMESTAMP '2026-09-13 16:14:15.123456'"
-			if strings.HasPrefix(fixture.table, "evaluation_") || fixture.table == "activities" ||
+			if zonedTables[fixture.table] || strings.HasPrefix(fixture.table, "evaluation_") || fixture.table == "activities" ||
 				(fixture.table == "users" && field.DBName == "updated_at") || field.DBName == "superseded_at" {
 				columnType = "TIMESTAMPTZ"
 				value = "TIMESTAMPTZ '2026-09-14 00:14:15.123456+08'"
@@ -95,7 +101,7 @@ func TestPostgresTimestampMigration(t *testing.T) {
 			secondValues = append(secondValues, nullableValue)
 		}
 		if len(fixture.columns) == 0 {
-			t.Fatalf("fixture %s has no time columns", fixture.table)
+			continue
 		}
 		table := pgx.Identifier{"pg_temp", fixture.table}.Sanitize()
 		if err := tx.Exec("CREATE TEMP TABLE " + table + " (" + strings.Join(definitions, ", ") + ") ON COMMIT DROP").Error; err != nil {
@@ -105,6 +111,9 @@ func TestPostgresTimestampMigration(t *testing.T) {
 			t.Fatal(err)
 		}
 		fixtures = append(fixtures, fixture)
+	}
+	if len(fixtures) == 0 {
+		t.Fatal("timestamp migration fixture must cover application time columns")
 	}
 	for _, query := range []string{
 		"CREATE INDEX rag_time_created_idx ON pg_temp.users (created_at DESC)",

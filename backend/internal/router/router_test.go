@@ -347,21 +347,6 @@ func TestFeedbackAndExportEndpointsReturnHTTPContracts(t *testing.T) {
 		}
 	})
 
-	t.Run("search csv export", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/search/export?q=export-contract&type=chunk", nil)
-		req.Header.Set("Authorization", "Bearer "+token)
-		rec := httptest.NewRecorder()
-		r.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected search export status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
-		}
-		if got := rec.Header().Get("Content-Type"); got != "text/csv; charset=utf-8" {
-			t.Fatalf("unexpected search export content type %q", got)
-		}
-		if got := rec.Header().Get("Content-Disposition"); got != `attachment; filename="search-results.csv"` {
-			t.Fatalf("unexpected search export disposition %q", got)
-		}
-	})
 }
 
 func archiveSessionRequest(t *testing.T, handler http.Handler, token, sessionID string) dto.ChatSessionResponse {

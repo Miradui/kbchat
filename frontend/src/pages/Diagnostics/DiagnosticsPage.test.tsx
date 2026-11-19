@@ -44,7 +44,6 @@ function diagnostics(overrides: Partial<SystemDiagnostics> = {}): SystemDiagnost
       { name: 'chat', configured: true, model: 'gpt-test', status: 'ok', lastSuccessAt: new Date().toISOString(), lastFailureAt: null, successCount: 12, failureCount: 0, recentFailures: 0 },
       { name: 'embedding', configured: true, model: 'embed-test', status: 'ok', lastSuccessAt: null, lastFailureAt: null, successCount: 0, failureCount: 0, recentFailures: 0 },
       { name: 'rerank', configured: false, status: 'not_configured', lastSuccessAt: null, lastFailureAt: null, successCount: 0, failureCount: 0, recentFailures: 0 },
-      { name: 'title', configured: true, model: 'gpt-title', status: 'ok', lastSuccessAt: null, lastFailureAt: null, successCount: 3, failureCount: 0, recentFailures: 0 },
     ],
     latency: [
       { metric: 'retrieval', count: 40, sampleCount: 40, p50Ms: 120, p95Ms: 300, maxMs: 800 },

@@ -95,7 +95,6 @@ func newStreamingChatService(t *testing.T, db *gorm.DB, provider chatcore.Provid
 		repository.NewKnowledgeBaseRepository(db),
 		retrieval,
 		provider,
-		nil,
 	)
 }
 

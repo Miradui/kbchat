@@ -12,8 +12,9 @@ type HomeSummaryResponse struct {
 	KnowledgeBases     []KnowledgeBaseResponse `json:"knowledgeBases"`
 	KnowledgeBaseTotal int64                   `json:"knowledgeBaseTotal"`
 
-	Documents     []GlobalDocumentResponse `json:"documents"`
-	DocumentTotal int64                    `json:"documentTotal"`
+	Documents               []GlobalDocumentResponse `json:"documents"`
+	DocumentTotal           int64                    `json:"documentTotal"`
+	ProcessingDocumentTotal int64                    `json:"processingDocumentTotal"`
 
 	FailedDocuments     []GlobalDocumentResponse `json:"failedDocuments"`
 	FailedDocumentTotal int64                    `json:"failedDocumentTotal"`

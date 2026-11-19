@@ -157,7 +157,7 @@ export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanel
           <h2>成员与可见性</h2>
           <span className="ui-panel__head-note">管理谁能看到这个知识库</span>
         </div>
-        <div className="ui-panel__body" style={{ display: 'grid', gap: 'var(--s-4)' }}>
+        <div className="ui-panel__body ui-panel__stack">
           {loading && !permissions ? (
             <LoadingSkeleton announce compact columns={2} rows={4} />
           ) : error ? (

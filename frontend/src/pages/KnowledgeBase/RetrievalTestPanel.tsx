@@ -135,7 +135,7 @@ export function RetrievalTestPanel({ knowledgeBase }: { knowledgeBase: Knowledge
               title={searched ? '没有召回结果' : '还没有检索'}
             />
           ) : (
-            <div style={{ display: 'grid', gap: 'var(--s-2)' }}>
+            <div className="retrieval-results">
               {results.map((result) => (
                 <article className="retrieval-result" key={result.chunkId}>
                   <header>

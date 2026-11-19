@@ -234,7 +234,6 @@ type ChatSession struct {
 	DocumentScope       datatypes.JSON             `gorm:"type:jsonb;not null;default:'[]'" json:"-"`
 	BranchFromSessionID *uuid.UUID                 `gorm:"type:uuid;index" json:"-"`
 	BranchFromMessageID *uuid.UUID                 `gorm:"type:uuid" json:"-"`
-	BranchRequestID     *uuid.UUID                 `gorm:"type:uuid;uniqueIndex:idx_chat_branch_request,where:branch_request_id IS NOT NULL" json:"-"`
 	ScopeMode           string                     `gorm:"size:16;not null;default:manual" json:"scopeMode"`
 	KnowledgeBaseLinks  []ChatSessionKnowledgeBase `gorm:"foreignKey:SessionID;constraint:OnDelete:CASCADE" json:"-"`
 	ID                  uuid.UUID                  `gorm:"type:uuid;primaryKey" json:"id"`

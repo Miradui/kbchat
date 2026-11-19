@@ -37,7 +37,6 @@ const (
 	// provider, but its failures need the same visibility because keyword
 	// recall silently falls back to vector recall when it breaks.
 	ProviderKeyword = "keyword"
-	ProviderTitle   = "title"
 )
 
 // Rate-limit scopes are deliberately a closed set. Keeping the recorder's

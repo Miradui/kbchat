@@ -1,5 +1,6 @@
 import { useId } from 'react';
 import type { ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 import { useModalFocus } from './useModalFocus';
 
@@ -21,7 +22,7 @@ export function Dialog({ className = '', open, title, description, onClose, chil
 
   if (!open) return null;
 
-  return (
+  return createPortal(
     <div
       className="ui-dialog-backdrop"
       data-testid="dialog-backdrop"
@@ -42,6 +43,7 @@ export function Dialog({ className = '', open, title, description, onClose, chil
         {description && <p id={descriptionId}>{description}</p>}
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

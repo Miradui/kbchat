@@ -10,7 +10,7 @@
 | 知识管理 | [知识库](#knowledge-bases)、[标签](#知识库标签)、[所有权](#管理员操作记录与知识库转移) |
 | 文档 | [上传与读取](#documents)、[范围与编辑](#文档范围正文编辑ocr校对与问题跟进)、[文本创建](#粘贴文本创建文档)、[版本对比](#文档版本文本对比)、[表格](#表格来源与相对路径) |
 | 删除与恢复 | [回收站](#回收站) |
-| 检索与会话 | [搜索](#search)、[多库](#多知识库语义检索)、[Chat](#chat)、[收藏](#回答收藏与个人备注)、[分支](#对话分支)、[模板](#个人提问模板) |
+| 检索与会话 | [搜索](#search)、[多库](#多知识库语义检索)、[Chat](#chat)、[收藏](#回答收藏与个人备注)、[历史分支](#历史分支会话) |
 | 质量 | [运营](#chat-质量运营)、[评测](#回答质量回归评测) |
 
 ## 时间格式
@@ -44,9 +44,9 @@ Redis 故障且 `RATE_LIMIT_FAILURE_MODE=closed` 时返回 `503 RATE_LIMIT_UNAVA
 
 ## 请求追踪
 
-后端初始化 OTel 后，HTTP 响应通过 `X-Trace-ID` 返回当前 W3C Trace ID；统一 JSON 错误和聊天 SSE `error` 事件增加 `traceId` 字符串，其他错误字段不变。CORS 允许 `traceparent` / `tracestate`，公开 `X-Trace-ID`；上传/聊天幂等编号保持各自语义。SSE 的 HTTP 200 不代表生成成功，Trace 另记录 `completed/failed/cancelled` 及公开错误码。诊断 `latency` 新增 `chat_first_visible_text`：HTTP 入口到首个非空正文 delta 成功发送的耗时；现有 `chat_first_token` 仍表示模型调用阶段首 delta 耗时。取消不增加 Provider 故障计数。详见 [可观测性](38-observability.md)。
+当前dev使用zap请求/问答时延日志及进程内诊断，尚未实现 `X-Trace-ID`、错误 `traceId`、W3C请求头传播或 `chat_first_visible_text`。上传/聊天幂等编号保持各自语义；SSE的HTTP 200仍不代表生成成功，必须检查 `done`/`error` 与实际写入结果。
 
-阶段耗时统计现在包含实际发生的失败尝试：Embedding、Rerank、关键词及检索总耗时不再仅保留成功路径。取消继续独立于 Provider 故障计数；没有候选而未发生外部调用时，不增加 Rerank Provider 成功计数。查询 Embedding 与文档入库批次共享耗时/Provider 口径。HTTP/DTO 结构未新增字段，历史指标经独立 OTLP 端点导出，详见 [可观测性](38-observability.md#历史指标看板与告警)。
+上述Trace扩展、失败尝试指标与独立OTLP历史指标保留在 [历史OTel方案](38-observability.md#历史-otel-方案)，不属于当前响应或采集承诺。后续实施时同步HTTP/DTO、前端、配置、任务模型与验收；当前指标以本页系统诊断及实际Recorder为准。
 
 ## 权限与能力矩阵
 
@@ -408,7 +408,7 @@ pageSize=20         最大 100
 
 ### GET /chat/quality/usage
 
-范围与质量页其他接口一致：不传 `knowledgeBaseId` 时汇总调用者拥有或以 manager 身份可读质量数据的全部知识库；传入时须对该知识库具备 `quality.read`，否则 403 / 404；系统管理员（`users.role=admin`）看到全部知识库。`from` / `to` 使用 RFC3339，默认最近 7 天（滚动 168 小时）；`groupBy` 为 `day`、`knowledgeBase`、`user`、`model` 或 `purpose`，其他值返回 `VALIDATION_ERROR`。
+不传 `knowledgeBaseId` 时，普通用户汇总本人拥有或具备 `quality.read` 的知识库，系统管理员（`users.role=admin`）可汇总全部知识库的用量，这是系统级聚合的显式例外。传入库ID时，包括系统管理员在内都先检查该库的 `quality.read`，否则403/404；这不授予知识库正文或他人会话访问权。`from` / `to` 使用 RFC3339，默认最近 7 天（滚动 168 小时）；`groupBy` 为 `day`、`knowledgeBase`、`user`、`model` 或 `purpose`，其他值返回 `VALIDATION_ERROR`。
 
 ```json
 {
@@ -625,6 +625,7 @@ OpenAI 兼容接口里没有免费的 ping。为了检查而发一次 completion
   "knowledgeBaseTotal": 42,
   "documents": [],
   "documentTotal": 128,
+  "processingDocumentTotal": 4,
   "failedDocuments": [],
   "failedDocumentTotal": 3,
   "sessions": [],
@@ -633,7 +634,10 @@ OpenAI 兼容接口里没有免费的 ping。为了检查而发一次 completion
 ```
 
 - 每个列表的条数由**服务端**决定（`service.HomeSummaryItemLimit`，当前为 5），前端不再靠 `pageSize` 猜
-- 每个列表都配一个未截断的 `*Total`，因此「最近 5 条 / 共 42 条」不需要第二次请求
+- 每个列表都配一个未截断的 `*Total`，对应同一筛选范围，最近样例的长度不能代替总数
+- `processingDocumentTotal` 统计全部可读、未删除文档中的 uploaded/parsing/chunking/embedding，不受最近列表长度限制
+- `failedDocuments` 和 `failedDocumentTotal` 在分页前排除 `errorCode=cancelled` 或最新任务状态 cancelled 的失败文档；空错误码且最新任务未取消的旧失败仍计入，取消后更新的失败重试重新计入。文档台账 `/documents/counts` 的 failed 桶继续包含取消任务
+- `documents` 保留最近文档，供提醒下方展示状态；全量统计与列表均排除已删除知识库、已删除文档和无权资料
 - 各列表元素结构分别与 `GET /knowledge-bases`、`GET /documents`、`GET /chat/sessions` 的列表项一致
 - 该接口只做聚合，复用上述各资源的 service：归属校验和软删除过滤规则仍然只有一份
 
@@ -914,11 +918,11 @@ period=month|day
 
 ### POST /knowledge-bases/:id/favorite
 
-收藏当前用户拥有的知识库，幂等。
+收藏调用者具有 `kb.read` 的知识库，记录归调用者本人，幂等。
 
 ### DELETE /knowledge-bases/:id/favorite
 
-取消收藏当前用户拥有的知识库，幂等。
+取消收藏调用者具有 `kb.read` 的知识库，幂等。
 
 ### POST /knowledge-bases/:id/view
 
@@ -926,7 +930,7 @@ period=month|day
 
 ### POST /knowledge-bases/batch-favorite
 
-批量收藏或取消收藏当前用户拥有的知识库。当前阶段采用 all-or-nothing 语义，只要有任一知识库不属于当前用户，整个请求失败且不产生部分变更。
+批量收藏或取消收藏调用者具有 `kb.read` 的知识库。保留 all-or-nothing 契约：任一库不可访问时在写入前拒绝整批；数据库故障下的整批原子性有实现差异，见下文实现边界及待办CHK-002。
 
 ```json
 {
@@ -943,7 +947,7 @@ period=month|day
 
 ### POST /knowledge-bases/batch-move-category
 
-批量移动知识库分类。`categoryId` 可为 `null`，表示移出分类。目标分类必须属于当前用户。
+批量移动调用者具有 `kb.write` 的知识库分类。`categoryId` 可为 `null`，表示移出分类；目标分类仍必须属于调用者。写入前检查整批权限，数据库故障下的原子性见下文实现边界。
 
 ```json
 {
@@ -954,7 +958,7 @@ period=month|day
 
 ### POST /knowledge-bases/batch-tag
 
-批量给知识库打标签，与其他批量接口一样是 all-or-nothing：知识库和标签都必须属于当前用户，混入任何一个不属于自己的资源则整批失败且不产生部分变更。
+批量给知识库打标签，采用 all-or-nothing：调用者须对全部知识库具有 `kb.write`，提交的标签须归调用者所有；任一不满足则整批失败，不产生部分变更。
 
 ```json
 {
@@ -972,6 +976,8 @@ period=month|day
 - 绑定变更与这些知识库的 `updatedAt` / `updatedBy` 在同一个事务内完成
 
 响应与其他批量接口一致：`{ "processedCount": 2 }`。
+
+**批量收藏/分类移动的实现边界（CHK-002）**：当前service先检查整批权限，再逐项写入，没有包围整批的数据库事务；权限拒绝可在首次写入前结束，但中途数据库失败的原子性尚未验证。本次保留既有all-or-nothing要求，不把它改成允许部分完成。继续工作应按 [有效待办](15-backlog.md) 注入中途故障核实；标签批量写入已有repository事务，不混作同一缺口。
 
 ### POST /knowledge-bases/batch-delete
 
@@ -1204,7 +1210,7 @@ manager
 该值仅用于查询，响应的 `status` 仍为文档的具体阶段；具体阶段筛选继续可用。
 知识库内的 `GET /knowledge-bases/:kbId/documents` 同样支持此查询别名。
 
-跨当前用户拥有的知识库列出文档。支持：
+跨调用者具有 `document.read` 的知识库（owner或具备该能力的成员）列出文档。支持：
 
 ```text
 q
@@ -1287,7 +1293,7 @@ pageSize
 
 ### POST /documents/batch-delete
 
-批量软删除当前用户拥有的文档，采用 all-or-nothing 语义。
+批量软删除调用者在所属知识库具有 `content.write` 的文档，采用 all-or-nothing 语义。
 
 ```json
 {
@@ -1303,7 +1309,7 @@ pageSize
 
 ### POST /documents/batch-restore
 
-批量恢复当前用户已删除的文档，采用 all-or-nothing 语义。
+批量恢复调用者在所属知识库具有 `content.write` 的已删除文档，采用 all-or-nothing 语义。
 
 ```json
 {
@@ -1313,7 +1319,7 @@ pageSize
 
 ### POST /documents/batch-reprocess
 
-批量重处理当前用户拥有的文档，采用 all-or-nothing 语义。旧 chunks 会保留到全部新 Embedding 成功并在事务中完成替换；排队或处理失败不得提前删除旧索引。
+批量重处理调用者在所属知识库具有 `content.write` 的文档，采用 all-or-nothing 语义。旧 chunks 会保留到全部新 Embedding 成功并在事务中完成替换；排队或处理失败不得提前删除旧索引。
 
 同一文档仍处于 `uploaded|parsing|chunking|embedding` 且已有 `pending|running` 的 `process_document` 任务时复用现有任务。若文档已进入 `completed|failed`、但旧 running job 尚在收尾，则创建一个 pending 后继任务；worker 必须等待同文档 running 前驱结束后再领取后继任务。
 
@@ -1446,7 +1452,7 @@ field: allowDuplicate=true
 }
 ```
 
-不属于当前用户的知识库返回 `KNOWLEDGE_BASE_NOT_FOUND`，不会返回空列表。
+调用者在知识库没有访问立场时返回 `KNOWLEDGE_BASE_NOT_FOUND`，不会返回空列表；已有访问立场的成员按 `document.read` 能力处理。
 
 **兼容性变更**：该接口此前不接受任何查询参数，一次返回该知识库的全部文档且响应只有 `items`。现在它默认分页，并返回 `total` / `page` / `pageSize` 以及 `knowledgeBaseName` 和任务进度字段。需要全部文档的调用方必须显式翻页。
 
@@ -1526,7 +1532,7 @@ DOCX 包损坏或加密导致解析失败时返回 `DOCUMENT_PREVIEW_FAILED`；�
 
 **移动**
 
-- 目标知识库必须属于当前用户，否则返回 `KNOWLEDGE_BASE_NOT_FOUND`
+- 源文档和目标知识库都要求调用者具有 `content.write`；无访问立场返回404，已有立场但能力不足返回403，具体错误码遵循权限矩阵
 - 文档的 chunks 会**在同一个事务里**一起迁移 `knowledge_base_id`。`document_chunks` 上的复合外键 `(document_id, knowledge_base_id)` 让两侧不可分割：单独改任何一侧都会违反约束，因此 `011_document_chunk_kb_move.sql` 把该约束改为 `DEFERRABLE INITIALLY IMMEDIATE`，只有移动事务会 `SET CONSTRAINTS ... DEFERRED`
 - **文档存在 pending 或 running 的处理任务时拒绝移动**，返回 `DOCUMENT_JOB_ACTIVE`（409）。已领取的 processor 会按它启动时读到的知识库写入 chunks，中途移动会让它把 chunks 写进旧知识库
 - 重命名不受此限制：processor 不读文件名
@@ -1692,7 +1698,7 @@ XLSX 使用工作表名和原始行号；CSV 的工作表名为空，行范围�
 
 外层 `textPages` 为原生与 OCR 文字页总数；`ocr.totalPages` 为原本无原生文字、需要尝试识别的页数，`completedPages` 包含成功尝试但没有文字的空白页，`pages` 仅包含确实提取出 OCR 文字的物理页。`status` 为 `disabled/running/completed/unavailable/timeout/failed/limit_exceeded`。摘要在识别期间更新，失败时保留诊断，重处理立即清空；片段与文本快照只在完整处理成功时原子替换。任务取消或失败后，最后一次仍为 `running` 的摘要在文档响应中以 `failed` 返回，具体终止原因由 `jobStatus/errorCode` 表示，不能继续当作运行中。
 
-OCR chunk 的 `metadata.textSource`、检索结果和聊天 citation 增加可选 `textSource: "ocr"`，原生文字省略该字段。JSON/SSE、历史和分支保留该字段；权限矩阵保持，OCR 不能授予原文件下载权限。`pageNumber` 仍为原 PDF 物理页码；OCR 偏移只对应识别文本，不对应原图坐标。PDF 来源显示识别摘录并定位到页，不宣称原生文字高亮。版本对比优先读取已发布 PDF 文本快照，不在 HTTP 请求中执行 OCR；旧文档没有快照时沿用原生解析。
+OCR chunk 的 `metadata.textSource`、检索结果和聊天 citation 增加可选 `textSource: "ocr"`，原生文字省略该字段。JSON/SSE 与已保存历史保留该字段；权限矩阵保持，OCR 不能授予原文件下载权限。`pageNumber` 仍为原 PDF 物理页码；OCR 偏移只对应识别文本，不对应原图坐标。PDF 来源显示识别摘录并定位到页，不宣称原生文字高亮。版本对比优先读取已发布 PDF 文本快照，不在 HTTP 请求中执行 OCR；旧文档没有快照时沿用原生解析。
 
 ## 回收站
 
@@ -1738,7 +1744,7 @@ OCR chunk 的 `metadata.textSource`、检索结果和聊天 citation 增加可�
 
 ### GET /search
 
-关键词搜索当前用户拥有的知识库、文档和 chunk 内容。
+关键词搜索调用者可达的知识库、文档和chunk内容，分别按 `kb.read`、`document.read`、`kb.search` 限定范围，不以owner-only代替成员能力。
 
 查询参数：
 
@@ -1788,32 +1794,6 @@ pageSize=20
 - 同一字段内的多次命中都会返回，互不重叠；单字段最多返回 50 个区间，避免单字符关键词在长 chunk 上产生上千个区间
 
 前端因此不再需要自己做子串匹配（原 `SearchPage.tsx` 的 `highlight()` 已删除）。
-
-### GET /search/export
-
-按当前用户权限导出关键词搜索结果，只使用与 `GET /search` 相同的 `q` 和
-`type`：
-
-```text
-GET /search/export?q=退货&type=document
-```
-
-`type` 缺省为 `all`；空白 `q` 或非法 `type` 返回 `VALIDATION_ERROR`。导出全部
-匹配项，不接收分页参数。结果总数不超过 5000 条（含 5000）时允许导出；从
-5001 条起返回 `400 EXPORT_TOO_LARGE`。
-
-成功响应为带 UTF-8 BOM 的 CSV：
-
-```text
-Content-Type: text/csv; charset=utf-8
-Content-Disposition: attachment; filename="search-results.csv"
-```
-
-表头固定为：
-
-```text
-类型,知识库,标题,摘要,知识库ID,文档ID,结果ID
-```
 
 ### GET /search/suggest
 
@@ -2023,7 +2003,7 @@ limit=10
 
 自动模式（即使当前仅一个库）和手动跨库问答使用系统检索参数、默认 Chat 模型和严格依据规则（自动语言、禁止常识补充），不合并单库提示词、模型或阈值。手动单库问答继续沿用该库配置。统一精排后的片段是唯一引用来源；citations 增加 `knowledgeBaseId`、`knowledgeBaseName`，旧历史引用可缺失。导出列出全部库和引用所属库；同名文档按库、文档 ID、片段 ID 区分。
 
-跨库 intent/answer/title 用量只计入首选库一次，用户/模型/用途统计不重复；不是每库成本分摊。单库质量概览、负反馈列表、知识缺口和从缺口保存评测的入口排除跨库会话，避免向单库管理者暴露其他库资料。评测运行仍以单库为单位。跨库会话活动使用通用名称“跨库会话”，不把问题生成的标题复制到活动记录。
+跨库 intent/answer 用量只计入首选库一次，历史 title 用量保留原归属，用户/模型/用途统计不重复；不是每库成本分摊。单库质量概览、负反馈列表、知识缺口和从缺口保存评测的入口排除跨库会话，避免向单库管理者暴露其他库资料。评测运行仍以单库为单位。跨库会话活动使用通用名称“跨库会话”，不把问题生成的标题复制到活动记录。
 
 
 ### POST /chat/sessions
@@ -2037,9 +2017,9 @@ limit=10
 }
 ```
 
-`title` 可为空，初始显示“新会话”。首次问题通过普通或流式接口保存后，先以问题正文的简短摘要命名，再由独立 `TITLE_*` AI API 仅根据首次提问提炼标题，不使用助手回答、不复用 Chat Provider。摘要合并空白，超长内容截取前 29 个字符并附省略号；标题模型最多等待 5 秒，失败或取消保留摘要。已保存的检索失败记录遵循相同规则，未保存的请求不命名。
+`title` 可为空，初始显示“新会话”。首次问题通过普通或流式接口保存后，只以问题正文的简短摘要命名：合并空白，超过 29 个 Unicode 字符时截取前 29 个并附省略号。不调用标题模型，也不使用助手回答。已保存的检索失败记录遵循相同规则，未保存的请求不命名。
 
-已有自定义名称、后续提问、重试已完成的请求、重新生成和编辑消息均不触发命名。自动写入会检查名称和更新时间，模型运行期间的手动重命名优先。发送完成后，客户端重新读取会话列表以获得 `title` 和 `updatedAt`。
+已有自定义名称、后续提问、重试已完成的请求、重新生成和编辑消息均不触发命名。自动写入会检查会话归属、名称和更新时间，回答生成或名称提交期间的手动重命名优先。发送完成后，客户端重新读取会话列表以获得 `title` 和 `updatedAt`。
 
 ### GET /chat/sessions
 
@@ -2101,7 +2081,7 @@ GET /chat/sessions?knowledgeBaseId=&archived=false&q=&page=1&pageSize=20
 ### GET /chat/sessions/:id/export
 
 导出当前用户可见的单个会话。必须校验 session 属于当前用户，且关联知识库仍
-存在、未删除并属于当前用户；软删除会话返回 `RESOURCE_NOT_FOUND`，归档会话
+存在、未删除且调用者具有 `chat.export`；软删除会话返回 `RESOURCE_NOT_FOUND`，归档会话
 仍可导出。
 
 ```text
@@ -2151,7 +2131,7 @@ Markdown 按消息创建时间升序包含会话标题、`知识库：<名称>`�
 }
 ```
 
-与另外两个回收站一样，会话所属知识库必须仍存在且属于当前用户；知识库本身被删除时，其会话不在这里单独提供恢复（恢复知识库即可）。
+会话必须属于调用者本人，全部关联知识库仍存在、未删除且调用者具有 `chat.use`；知识库本身被删除时，其会话不在这里单独提供恢复（恢复知识库即可）。知识库回收站的owner-only规则不套用到本人聊天回收站。
 
 ### POST /chat/sessions/:id/restore
 
@@ -2166,14 +2146,13 @@ Markdown 按消息创建时间升序包含会话标题、`知识库：<名称>`�
 ### POST /chat/sessions/recycle-bin/empty
 
 清空当前用户**当前可见的**聊天回收站，采用 all-or-nothing 语义。范围与
-`GET /chat/sessions/recycle-bin` 完全一致：session 属于当前用户、关联知识库仍未删除，且
-`knowledge_bases.owner_id` 仍是当前用户。位于已删除知识库下的隐藏会话不会被提前永久删除；恢复知识库后它们会重新出现在聊天回收站。
+`GET /chat/sessions/recycle-bin` 完全一致：session属于调用者本人，全部关联知识库仍未删除且调用者具有 `chat.use`。位于已删除知识库下的隐藏会话不会被提前永久删除；恢复知识库后它们会重新出现在聊天回收站。
 
 ### POST /chat/sessions/:id/archive
 
 归档当前用户会话。必须校验 session 属于当前用户，且对每个关联知识库均具有 `chat.use`。归档后默认 `GET /chat/sessions` 不再返回该会话，但 `GET /chat/sessions/:id` 仍可查看详情并返回 `archivedAt`。该接口幂等。
 
-已归档会话的发送（JSON/SSE）、编辑和重新生成返回 `409 CHAT_SESSION_ARCHIVED`；模型生成期间被归档时，最终提交事务重新检查归档状态并拒绝写入或删除后续消息。流式已开始时通过同名错误事件告知，不能发送成功 `done`。取消归档后方可继续；读取及从归档会话创建分支保留原有权限约定。
+已归档会话的发送（JSON/SSE）、编辑和重新生成返回 `409 CHAT_SESSION_ARCHIVED`；模型生成期间被归档时，最终提交事务重新检查归档状态并拒绝写入或删除后续消息。流式已开始时通过同名错误事件告知，不能发送成功 `done`。取消归档后方可继续；归档会话及历史分支的读取保留原有权限约定。
 
 成功响应为 `200 OK`，返回归档后的会话；重复归档返回同一个 `archivedAt`：
 
@@ -2258,7 +2237,7 @@ assistant 消息为 `{ "messageId", "rating", "reason", "comment", "updatedAt" }
 ```
 
 `rating` 只接受 `positive` 或 `negative`。user 消息返回 `VALIDATION_ERROR`；消息、
-会话或知识库不属于当前用户，或者会话/知识库已软删除时返回
+会话不属于当前用户、任一关联知识库不可达，或者会话/知识库已软删除时返回
 `RESOURCE_NOT_FOUND`。重复提交会覆盖原评价并刷新时间。
 
 ```json
@@ -2434,7 +2413,7 @@ data: {"status":500,"code":"CHAT_COMPLETION_FAILED","message":"回答生成失�
 
 **中断语义（必须理解这一条）**
 
-**未完成的生成正文不保存为半条assistant消息。** 检索基础设施失败可另存标记为`retrieval_failed`的完整失败回合；已报告模型用量及日志/Trace也可能已记录。因此：
+**未完成的生成正文不保存为半条assistant消息。** 检索基础设施失败可另存标记为`retrieval_failed`的完整失败回合；已报告模型用量及zap日志也可能已记录。因此：
 
 - 生成流在中途断开时不保存被截断的assistant正文；不能据此推断没有任何用量、日志或失败记录
 - 客户端按同一 `clientRequestId` 到消息列表里对账：查不到就说明没落库，可以安全地用**同一个 ID** 重发
@@ -2514,36 +2493,19 @@ MVP 语义：
 
 仅收藏本人可访问会话中的 assistant 回答，精确绑定回答版本；提问返回 400 `VALIDATION_ERROR`。没有访问立场、会话已删除或任一依赖撤权返回 404 `RESOURCE_NOT_FOUND`。归档会话包括在结果中；计数与条目共用全部依赖权限条件。`q` 对回答、备注和会话标题做字面关键词搜索，不把 `%/_` 当通配符。
 
-列表条目包含消息搜索字段 `{messageId,sessionId,sessionTitle,archivedAt,role,createdAt,excerpt}` 和 `bookmark`；摘录沿用会话搜索的纯文本及高亮区间格式。消息历史 DTO 额外带可选 `bookmark`，由批量查询加载；无收藏时省略。普通消息查询、个人模板及收藏不跨账号缓存。
+列表条目包含消息搜索字段 `{messageId,sessionId,sessionTitle,archivedAt,role,createdAt,excerpt}` 和 `bookmark`；摘录沿用会话搜索的纯文本及高亮区间格式。消息历史 DTO 额外带可选 `bookmark`，由批量查询加载；无收藏时省略。普通消息查询和收藏不跨账号缓存。
 
-## 对话分支
+## 历史分支会话
 
-`POST /chat/sessions/:id/branches`，请求体最多 16 KiB：
+已保存的分支继续作为独立会话读取、改名和导出；可选 `branchFromSessionId` / `branchFromMessageId` 提供来源定位。消息、引用、自动/手动模式、固定文档范围与完整知识库依赖保持。来源软删除不删除独立会话；来源永久删除后链接置空，历史分支仍按本人及全部依赖知识库权限访问。
 
-```json
-{"messageId":"assistant-message-uuid","clientRequestId":"new-request-uuid","title":"可选标题"}
-```
-
-201 返回新会话详情，含可选 `branchFromSessionId` / `branchFromMessageId`。标题 trim 后最多 100 字；不填则由来源标题附加“ · 分支”。来源须属于调用者且全部依赖可访问，允许从归档会话创建。只接受 assistant 消息，复制按时间/ID 排序的历史前缀，恰好结束于选中的回答版本；最多 10000 条消息 / 16 MiB 正文、引用和回退元数据。
-
-复制保留内容、引用、意图、检索式和回答状态，继承自动/手动模式及完整依赖；副本使用新 ID，不复制收藏、评价、未确认写入、请求编号或模型用量。来源会话不变。创建、依赖和消息复制在同一事务中，来源行锁使相同请求并发重试返回同一个分支；已存在请求编号用于不同目标或已软删除分支时报 409 `CHAT_BRANCH_REQUEST_CONFLICT`。来源永久删除后分支保留，链接置空；分支始终独立检查自己的知识库依赖。
-
-## 个人提问模板
-
-| 方法 / 路径 | 请求与响应 |
-| --- | --- |
-| `GET /chat/templates` | 与收藏相同的 `q/page/pageSize`，搜索标题和正文；返回 `{items,total,page,pageSize}`。 |
-| `POST /chat/templates` | `{title,body}`，201 返回模板。 |
-| `PUT /chat/templates/:templateId` | `{title,body}`，200 返回更新模板。 |
-| `DELETE /chat/templates/:templateId` | 204；不存在或非本人模板返回 404。 |
-
-模板响应 `{id,title,body,variables,createdAt,updatedAt}`。标题 trim 后 1–100 字，正文 1–12000 字，请求体最多 100 KiB。变量语法为 `{{变量名}}`，变量名最多 40 个 Unicode 字符，只含字母、数字、下划线或连字符；最多 20 个不同变量，按第一次出现排序，重复变量只列一次，畸形括号返回 400 `VALIDATION_ERROR`。权限仅个人归属，不依附特定知识库；不调用模型或自动发送聊天。前端填值和插入草稿，不新增服务端模板执行接口。
+分支创建、个人提问模板和搜索 CSV 导出接口已退役，旧路径返回 404。迁移049清理模板表及分支请求编号；会话导出、回答收藏/备注和知识库回答模板继续提供。
 
 ## Chat 质量运营
 
 三个接口共用同一套范围规则：按知识库可达性统计，而不是只统计调用者自己的会话——运营视图要能回答
 「这个库里别人问了什么、哪里没答好」，只看自己的提问等于没有运营价值。传 `scope`
-（`personal` / `auto` / `multi` / `documents`）时才改为调用者自己的会话，规则见本文开头第 18 行。
+（`personal` / `auto` / `multi` / `documents`）时才改为调用者自己的会话，规则见 [文档范围与私人评测](#文档范围正文编辑ocr校对与问题跟进)。
 会话和知识库都必须未软删除，且只统计 `role = 'assistant'` 的消息。`period` 只接受 `day` 或 `month`
 （默认 `month`），`day` 指今天零点至现在，`month` 指本月一号零点至现在。可选
 `knowledgeBaseId` 必须属于当前用户可达范围，否则返回 `KNOWLEDGE_BASE_NOT_FOUND`。

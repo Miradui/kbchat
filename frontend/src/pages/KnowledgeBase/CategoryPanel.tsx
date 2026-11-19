@@ -53,7 +53,7 @@ export function CategoryPanel({
   const [deleteTarget, setDeleteTarget] = useState<KnowledgeBaseCategory | null>(null);
   const [deleteError, setDeleteError] = useState('');
   const [deleting, setDeleting] = useState(false);
-  const isCompact = useMediaQuery('(max-width: 900px)');
+  const isCompact = useMediaQuery('(max-width: 1080px)');
   const [expanded, setExpanded] = useState(false);
   const bodyId = useId();
 

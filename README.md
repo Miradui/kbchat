@@ -4,7 +4,7 @@
 
 知汇是一个支持自行部署的中文知识库与 AI 问答工作台，适合整理团队文档、制度流程、技术资料和常见问题。上传资料后，系统自动解析内容并建立检索索引，用户可以用自然语言提问，通过回答中的引用回到原文核对依据。
 
-项目采用 RAG（检索增强生成）：先从知识库中检索相关内容并精排，再将选中的片段交给模型生成回答。对话、Embedding、Rerank 和标题生成通过独立的 Provider 接口接入模型服务。
+项目采用 RAG（检索增强生成）：先从知识库中检索相关内容并精排，再将选中的片段交给模型生成回答。对话、Embedding 和 Rerank 通过独立的 Provider 接口接入模型服务。会话采用首问摘要命名，并支持手动改名。
 
 ## 核心功能
 
@@ -84,7 +84,6 @@ docker compose -f deploy/docker-compose.yml ps
 | `EMBEDDING_BASE_URL`、`EMBEDDING_API_KEY`、`EMBEDDING_MODEL` | 文档和问题的向量化服务 |
 | `EMBEDDING_DIMENSION` | 默认 `1536`，必须与模型输出和数据库向量列维度一致 |
 | `RERANK_ENABLED`、`RERANK_BASE_URL`、`RERANK_API_KEY`、`RERANK_MODEL` | 保持 Rerank 启用，填写精排服务配置 |
-| `TITLE_BASE_URL`、`TITLE_API_KEY`、`TITLE_MODEL` | 可选的对话标题生成服务；不可用时保留首问摘要 |
 | `STORAGE_PROVIDER`、`UPLOAD_DIR` | 默认使用本地文件存储；切换 MinIO 时另配 `MINIO_*` |
 
 示例中的模型地址、密钥和模型名称需要替换为实际服务配置。Rerank 是标准问答链路的一部分，服务须支持 `POST {RERANK_BASE_URL}/rerank`，普通对话 API 地址不一定提供该接口。
@@ -170,7 +169,7 @@ npm run build
 
 生产部署建议通过 Nginx 提供前端静态文件并代理后端 API，当前后台任务按单个后端实例运行。数据库和上传文件需配置持久化与备份，使用 MinIO 时 bucket 应保持私有。
 
-数据库变更使用显式 SQL 迁移。当前源码要求迁移至 `049`，缺少所需结构时后端会拒绝启动；已有环境应按版本执行迁移并同步更新前后端。详细步骤、管理员初始化、OCR 安装和模型维护见[部署运维指南](docs/13-deployment.md)。
+数据库变更使用显式 SQL 迁移，缺少启动所需结构时后端会拒绝启动；迁移要求见[数据库设计](docs/03-database-design.md)，并与当前 SQL 和启动检查核对。已有环境按部署记录执行缺失迁移并同步前后端；详细步骤、管理员初始化、OCR 安装和模型维护见[部署运维指南](docs/13-deployment.md)。
 
 ## 项目结构与文档
 
@@ -179,24 +178,12 @@ npm run build
 ```text
 backend/    API、业务服务、数据库访问、模型 Provider、后台任务与 SQL 迁移
 frontend/   React 页面、组件、API 客户端与前端测试
-deploy/     本地 PostgreSQL / Redis 与可选 OTel / Prometheus / Grafana / Jaeger 配置
+deploy/     本地 PostgreSQL / Redis Compose 配置
 docs/       产品、架构、接口、配置与部署文档
 .github/    GitHub Actions 工作流
 ```
 
-| 文档 | 内容 |
-| --- | --- |
-| [产品说明](docs/01-prd.md) | 使用场景与功能范围 |
-| [系统架构](docs/02-architecture.md) | 模块划分与服务边界 |
-| [数据库设计](docs/03-database-design.md) / [API 设计](docs/04-api-design.md) | 数据模型与接口约定 |
-| [RAG 链路](docs/05-rag-pipeline.md) | 解析、检索、回答配置、引用与质量评测 |
-| [环境配置](docs/08-env-config.md) | 配置项及默认值 |
-| [前端功能说明](docs/10-frontend-spec.md) | 页面与交互行为 |
-| [部署运维](docs/13-deployment.md) | 部署、升级、备份与维护 |
-| [可观测性](docs/38-observability.md) | 调用链、历史指标、Grafana 看板、告警规则与日志关联 |
-| [开发交接](docs/12-handoff.md) | 当前状态与验证边界 |
-| [验证与发布验收](docs/14-verification.md) | 检查命令、真实服务边界、证据索引与发布清单 |
-| [有效待办](docs/15-backlog.md) | 未关闭问题与明确暂缓项 |
+产品、技术规范与专项操作统一从 [文档导航](docs/README.md) 查阅。开发任务从 [AGENTS.md](AGENTS.md) 与 [开发约定](docs/00-ai-development-guide.md) 开始；继续工作查 [当前交接](docs/12-handoff.md)，未完成事项查 [有效待办](docs/15-backlog.md)，检查与历史证据查 [验证与发布验收](docs/14-verification.md)，经验复用查 [LESSONS](docs/17-lessons.md)。
 
 ## 许可证
 

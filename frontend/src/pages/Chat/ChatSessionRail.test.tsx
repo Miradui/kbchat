@@ -50,12 +50,12 @@ it('closes only the top dialog and cleans isolation when returning to desktop', 
   await user.click(screen.getByRole('button', { name: '打开会话' }));
   await user.click(screen.getByRole('button', { name: '新建对话' }));
   expect(screen.getByRole('dialog', { name: '新对话确认' })).toBeInTheDocument();
-  expect(screen.getByTestId('scrim')).toHaveAttribute('inert');
+  expect(screen.getByTestId('scrim').closest('[inert]')).not.toBeNull();
   await user.keyboard('{Escape}');
   expect(screen.queryByRole('dialog', { name: '新对话确认' })).toBeNull();
   expect(screen.getByRole('dialog', { name: '会话列表' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '新建对话' })).toHaveFocus();
-  expect(screen.getByTestId('scrim')).not.toHaveAttribute('inert');
+  expect(screen.getByTestId('scrim').closest('[inert]')).toBeNull();
   // Model a breakpoint transition even while the background is inert.
   fireEvent.click(screen.getByText('桌面布局'));
   expect(screen.getByRole('complementary', { name: '会话列表' })).not.toHaveAttribute('inert');

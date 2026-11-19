@@ -83,8 +83,8 @@ export function CreateUserDialog({ open, onClose, onCreated }: CreateUserDialogP
   return (
     <Dialog description="用户名创建后不能修改。留空密码会生成一次性初始密码。" onClose={() => { if (!busy) onClose(); }} open={open} title="创建用户">
       <form
+        className="ui-dialog__form"
         onSubmit={(event) => { event.preventDefault(); void submit(); }}
-        style={{ display: 'grid', gap: 'var(--s-3)' }}
       >
         <Field error={errors.username} htmlFor="admin-user-username" label="用户名">
           <Input
@@ -182,8 +182,8 @@ export function EditUserDialog({ user, isSelf, onClose, onSaved }: EditUserDialo
       title="编辑用户"
     >
       <form
+        className="ui-dialog__form"
         onSubmit={(event) => { event.preventDefault(); void submit(); }}
-        style={{ display: 'grid', gap: 'var(--s-3)' }}
       >
         <Field error={error} htmlFor="admin-user-edit-display-name" label="显示名">
           <Input
@@ -241,9 +241,9 @@ export function PasswordResultDialog({ result, onClose }: PasswordResultDialogPr
   return (
     <Dialog description="请立即复制并安全交付该密码；关闭后不会再次显示。" onClose={onClose} open={Boolean(result)} title="一次性密码">
       {result && (
-        <div style={{ display: 'grid', gap: 'var(--s-3)' }}>
+        <div className="ui-dialog__form">
           <p>{result.username} 的新密码：</p>
-          <code aria-label="一次性密码" style={{ fontSize: 'var(--t-lead)', userSelect: 'all' }}>{result.password}</code>
+          <code aria-label="一次性密码" className="ui-secret-code">{result.password}</code>
           {copied && <p className="ui-muted" role="status">已复制到剪贴板</p>}
           <div className="ui-dialog__actions">
             <Button leadingIcon={<Copy aria-hidden="true" />} onClick={() => void copy()}>复制密码</Button>

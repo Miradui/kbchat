@@ -151,13 +151,14 @@ func (r *DocumentRepository) ListForActor(ctx context.Context, actorID uuid.UUID
 }
 
 type GlobalDocumentQuery struct {
-	Q               string
-	KnowledgeBaseID uuid.UUID
-	Status          string
-	FileType        string
-	Sort            string
-	Page            int
-	PageSize        int
+	ExcludeCancelled bool
+	Q                string
+	KnowledgeBaseID  uuid.UUID
+	Status           string
+	FileType         string
+	Sort             string
+	Page             int
+	PageSize         int
 }
 
 type DocumentCounts struct {
@@ -203,6 +204,14 @@ func (r *DocumentRepository) documentQueryForActor(ctx context.Context, actorID 
 	}
 	if query.FileType != "" {
 		base = base.Where("documents.file_type = ?", query.FileType)
+	}
+	if query.ExcludeCancelled {
+		// Older cancelled documents can lack error_code. Only the latest job
+		// counts, so a later failed retry remains actionable.
+		base = base.Where("COALESCE(documents.error_code, '') <> ?", DocumentErrorCodeCancelled).
+			Where(`COALESCE((SELECT document_jobs.status FROM document_jobs
+				WHERE document_jobs.document_id = documents.id
+				ORDER BY document_jobs.created_at DESC, document_jobs.id DESC LIMIT 1), '') <> ?`, "cancelled")
 	}
 	return base
 }
@@ -460,7 +469,7 @@ func (r *DocumentRepository) LatestJobsByDocumentIDs(ctx context.Context, docume
 	var jobs []model.DocumentJob
 	err := r.db.WithContext(ctx).
 		Where("document_id IN ?", documentIDs).
-		Order("document_id asc, created_at desc").
+		Order("document_id asc, created_at desc, id desc").
 		Find(&jobs).Error
 	if err != nil {
 		return nil, err

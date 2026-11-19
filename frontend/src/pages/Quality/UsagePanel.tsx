@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import type { PointerEvent } from 'react';
+import type { KeyboardEvent, PointerEvent } from 'react';
 
 import { getChatUsage } from '../../api/resources';
 import type { ChatUsageParams } from '../../api/resources';
@@ -32,8 +32,8 @@ const GROUP_COLUMN_LABEL: Record<ChatUsageGroupBy, string> = {
   day: '日期', knowledgeBase: '知识库', user: '用户', model: '模型', purpose: '用途',
 };
 
-// Purposes are a closed set written by the backend; an unknown one falls back
-// to its raw key so a newer server never renders an empty cell.
+// Include historical title calls after automatic model naming was retired.
+// Unknown purposes fall back to their raw key rather than an empty cell.
 const PURPOSE_LABELS: Record<string, string> = {
   intent: '意图分类', answer: '回答生成', title: '会话标题', evaluation: '回归评测',
 };
@@ -105,6 +105,7 @@ type UsagePanelProps = {
 export function UsagePanel({ knowledgeBaseId = '', loadUsage = getChatUsage, now = Date.now }: UsagePanelProps) {
   const [range, setRange] = useState<UsageRangePreset>('7d');
   const [groupBy, setGroupBy] = useState<ChatUsageGroupBy>('day');
+  const [reloadToken, setReloadToken] = useState(0);
   const [usage, setUsage] = useState<ChatUsageResponse | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -126,7 +127,7 @@ export function UsagePanel({ knowledgeBaseId = '', loadUsage = getChatUsage, now
         setError(getErrorMessage(cause, '用量统计加载失败'));
         setLoading(false);
       });
-  }, [groupBy, knowledgeBaseId, loadUsage, now, range]);
+  }, [groupBy, knowledgeBaseId, loadUsage, now, range, reloadToken]);
 
   const rows = useMemo(() => {
     if (!usage) return [];
@@ -148,7 +149,7 @@ export function UsagePanel({ knowledgeBaseId = '', loadUsage = getChatUsage, now
       <SegmentedControl label="统计范围" onChange={setRange} options={RANGE_OPTIONS.map(({ value, label }) => ({ value, label }))} value={range} />
       <SegmentedControl label="分组" onChange={setGroupBy} options={GROUP_OPTIONS} value={groupBy} />
     </div>
-    {error ? <ErrorState description={error} title="用量统计加载失败" />
+    {error ? <ErrorState description={error} onRetry={() => setReloadToken((value) => value + 1)} title="用量统计加载失败" />
       : !usage ? <LoadingSkeleton announce columns={4} rows={2} />
         : <div aria-busy={loading || undefined} className={loading ? 'quality-usage__body is-refreshing' : 'quality-usage__body'}>
           <UsageTotals showCost={showCost} usage={usage} />
@@ -190,12 +191,12 @@ function UsageTable({ rows, groupBy, showCost }: { rows: ChatUsageItem[]; groupB
         {showCost && <th scope="col">估算成本</th>}
       </tr></thead>
       <tbody>{rows.map((item) => <tr key={item.groupKey}>
-        <td title={groupBy === 'day' ? undefined : item.groupKey}>{rowLabel(groupBy, item)}</td>
-        <td>{formatNumber(item.promptTokens)}</td>
-        <td>{formatNumber(item.completionTokens)}</td>
-        <td>{formatNumber(item.totalTokens)}</td>
-        <td>{formatNumber(item.calls)}</td>
-        {showCost && <td>{formatCost(item.estimatedCost)}</td>}
+        <td data-label={groupBy === 'day' ? GROUP_COLUMN_LABEL.day : '名称'} title={groupBy === 'day' ? undefined : item.groupKey}>{rowLabel(groupBy, item)}</td>
+        <td data-label="Prompt">{formatNumber(item.promptTokens)}</td>
+        <td data-label="Completion">{formatNumber(item.completionTokens)}</td>
+        <td data-label="Total">{formatNumber(item.totalTokens)}</td>
+        <td data-label="调用次数">{formatNumber(item.calls)}</td>
+        {showCost && <td data-label="估算成本">{formatCost(item.estimatedCost)}</td>}
       </tr>)}</tbody>
     </table>
   </div>;
@@ -255,14 +256,39 @@ function UsageLineChart({ rows }: { rows: ChatUsageItem[] }) {
     setHover(nearest);
   }
 
+  function onKeyDown(event: KeyboardEvent<SVGSVGElement>) {
+    if (points.length === 0) return;
+    if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      setHover((current) => (current === null ? 0 : Math.min(points.length - 1, current + 1)));
+    } else if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      setHover((current) => (current === null ? points.length - 1 : Math.max(0, current - 1)));
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      setHover(0);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      setHover(points.length - 1);
+    } else if (event.key === 'Escape' && hover !== null) {
+      event.preventDefault();
+      setHover(null);
+    }
+  }
+
+  const tooltipLeftPercent = active ? Math.min(86, Math.max(14, (active.x / CHART.width) * 100)) : 50;
+
   return <figure className="quality-usage__chart">
     <svg
       aria-labelledby={titleId}
       className="quality-usage__svg"
+      onBlur={() => setHover(null)}
+      onKeyDown={onKeyDown}
       onPointerLeave={() => setHover(null)}
       onPointerMove={onPointerMove}
       preserveAspectRatio="xMidYMid meet"
       role="img"
+      tabIndex={0}
       viewBox={`0 0 ${CHART.width} ${CHART.height}`}
     >
       <title id={titleId}>{label}</title>
@@ -284,7 +310,7 @@ function UsageLineChart({ rows }: { rows: ChatUsageItem[] }) {
         {formatNumber(rows[peakIndex].totalTokens)}
       </text>
     </svg>
-    {active && <figcaption aria-live="polite" className="quality-usage__tooltip" style={{ left: `${(active.x / CHART.width) * 100}%` }}>
+    {active && <figcaption aria-live="polite" className="quality-usage__tooltip" style={{ left: `${tooltipLeftPercent}%` }}>
       <strong>{formatNumber(active.item.totalTokens)} tokens</strong>
       <span>{active.item.groupKey} · {formatNumber(active.item.calls)} 次调用</span>
     </figcaption>}

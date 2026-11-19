@@ -9,9 +9,21 @@ import type {
 
 import { classNames } from '../../utils/classNames';
 
-export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
-  function Input({ className, ...props }, ref) {
-    return <input {...props} className={classNames('ui-input', className)} ref={ref} />;
+type InputProps = InputHTMLAttributes<HTMLInputElement> & {
+  trailing?: ReactNode;
+};
+
+export const Input = forwardRef<HTMLInputElement, InputProps>(
+  function Input({ className, trailing, ...props }, ref) {
+    if (!trailing) {
+      return <input {...props} className={classNames('ui-input', className)} ref={ref} />;
+    }
+    return (
+      <div className={classNames('ui-input-group', 'has-trailing', className)}>
+        <input {...props} className="ui-input" ref={ref} />
+        <span className="ui-input-group__trailing">{trailing}</span>
+      </div>
+    );
   },
 );
 
@@ -100,7 +112,7 @@ type SearchInputProps = InputHTMLAttributes<HTMLInputElement> & {
  */
 export function SearchInput({ icon, trailing, className, ...props }: SearchInputProps) {
   return (
-    <div className={classNames('ui-input-group', className)}>
+    <div className={classNames('ui-input-group', Boolean(icon) && 'has-leading', Boolean(trailing) && 'has-trailing', className)}>
       {icon}
       <input
         autoCapitalize="off"

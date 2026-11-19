@@ -56,11 +56,17 @@ func (s *HomeService) Summary(ctx context.Context, userID uuid.UUID, period stri
 		return nil, err
 	}
 
+	counts, err := s.documents.CountsGlobal(ctx, userID, dto.DocumentCountsQuery{})
+	if err != nil {
+		return nil, err
+	}
+
 	failedDocuments, err := s.documents.ListGlobal(ctx, userID, dto.GlobalDocumentListQuery{
-		Status:   "failed",
-		Sort:     "updatedAt_desc",
-		Page:     1,
-		PageSize: HomeSummaryItemLimit,
+		ExcludeCancelled: true,
+		Status:           "failed",
+		Sort:             "updatedAt_desc",
+		Page:             1,
+		PageSize:         HomeSummaryItemLimit,
 	})
 	if err != nil {
 		return nil, err
@@ -75,15 +81,16 @@ func (s *HomeService) Summary(ctx context.Context, userID uuid.UUID, period stri
 	}
 
 	return &dto.HomeSummaryResponse{
-		Period:              period,
-		Stats:               *stats,
-		KnowledgeBases:      knowledgeBases.Items,
-		KnowledgeBaseTotal:  knowledgeBases.Total,
-		Documents:           documents.Items,
-		DocumentTotal:       documents.Total,
-		FailedDocuments:     failedDocuments.Items,
-		FailedDocumentTotal: failedDocuments.Total,
-		Sessions:            sessions.Items,
-		SessionTotal:        sessions.Total,
+		Period:                  period,
+		Stats:                   *stats,
+		KnowledgeBases:          knowledgeBases.Items,
+		KnowledgeBaseTotal:      knowledgeBases.Total,
+		Documents:               documents.Items,
+		DocumentTotal:           documents.Total,
+		ProcessingDocumentTotal: counts.Processing,
+		FailedDocuments:         failedDocuments.Items,
+		FailedDocumentTotal:     failedDocuments.Total,
+		Sessions:                sessions.Items,
+		SessionTotal:            sessions.Total,
 	}, nil
 }

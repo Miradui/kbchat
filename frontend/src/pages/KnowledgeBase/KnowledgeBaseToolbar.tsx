@@ -1,9 +1,10 @@
-import { LayoutGrid, List, Search, Tags, Trash2 } from 'lucide-react';
+import { LayoutGrid, List, Search, Tags, Trash2, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { SearchInput, Select } from '../../components/ui/Field';
+import { IconButton } from '../../components/ui/IconButton';
 import { OverflowMenu } from '../../components/ui/OverflowMenu';
 import { SegmentedControl } from '../../components/ui/SegmentedControl';
 import type {
@@ -78,6 +79,17 @@ export function KnowledgeBaseToolbar({
             icon={<Search aria-hidden="true" />}
             onChange={(event) => setDraft(event.target.value)}
             placeholder="搜索知识库"
+            trailing={draft ? (
+              <IconButton
+                label="清空搜索"
+                onClick={() => {
+                  setDraft('');
+                  if (filters.q) onFilter({ q: '' });
+                }}
+              >
+                <X aria-hidden="true" />
+              </IconButton>
+            ) : undefined}
             value={draft}
           />
         </form>

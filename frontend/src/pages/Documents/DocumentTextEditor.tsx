@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { getEditableDocumentText, saveDocumentTextRevision } from '../../api/resources';
 import { Dialog } from '../../components/ui/Dialog';
 import { Button } from '../../components/ui/Button';
+import { Textarea } from '../../components/ui/Field';
 import { useUnsavedChangesWarning } from '../../components/feedback/useUnsavedChangesWarning';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { getErrorMessage } from '../../utils/errors';
@@ -46,7 +46,7 @@ export function DocumentTextEditor({ document, onClose, onSaved }: { document: D
     finally { pending.current = false; if (mounted.current) setBusy(false); }
   }
   const bytes = new TextEncoder().encode(content).length;
-  return createPortal(<>
+  return <>
     <Dialog open title={`编辑 ${document.filename}`} description="保存为新版本，原文和旧回答依据保持可读。" className="document-version-dialog" onClose={close}>
       {loading ? <p role="status">正在读取完整正文…</p> : result ? <>
         <p role="status">新版本已保存，正在进入文档处理流程。</p>
@@ -54,7 +54,7 @@ export function DocumentTextEditor({ document, onClose, onSaved }: { document: D
       </> : <>
         {original !== null && <>
           <Button variant="ghost" onClick={() => setPreview((value) => !value)}>{preview ? '继续编辑' : '预览正文'}</Button>
-          {preview ? <DocumentReadingPreview content={content} fileType={document.fileType} /> : <textarea aria-label="文档正文编辑" className="ui-input" rows={18} disabled={busy} value={content} onChange={(event) => setContent(event.target.value)} />}
+          {preview ? <DocumentReadingPreview content={content} fileType={document.fileType} /> : <Textarea aria-label="文档正文编辑" rows={18} disabled={busy} value={content} onChange={(event) => setContent(event.target.value)} />}
           <p>{bytes.toLocaleString()} / 1,048,576 字节</p>
         </>}
         {error && <p role="alert" className="ui-inline-error">{error}{original === null && <Button variant="link" onClick={() => setAttempt((value) => value + 1)}>重新读取</Button>}</p>}
@@ -62,5 +62,5 @@ export function DocumentTextEditor({ document, onClose, onSaved }: { document: D
       </>}
     </Dialog>
     {discard && <ConfirmDialog title="放弃未保存的修改？" description="关闭后，这次正文修改将丢失。" confirmLabel="放弃修改" onCancel={() => setDiscard(false)} onConfirm={onClose} />}
-  </>, window.document.body);
+  </>;
 }

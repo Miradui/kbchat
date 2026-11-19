@@ -14,7 +14,6 @@ import (
 	"kbchat/backend/internal/dto"
 	"kbchat/backend/internal/model"
 	"kbchat/backend/internal/repository"
-	titlecore "kbchat/backend/internal/title"
 )
 
 // usageProvider reports token usage and records the options it was called
@@ -72,37 +71,52 @@ func listUsageRecords(t *testing.T, w workspaceTestServices) []model.ModelUsageR
 	return records
 }
 
-type usageTitleProvider struct{}
-
-func (usageTitleProvider) SummarizeTitle(context.Context, []titlecore.Message) (string, error) {
-	return "退货规则", nil
-}
-func (usageTitleProvider) SummarizeTitleWithUsage(context.Context, []titlecore.Message) (string, titlecore.Usage, error) {
-	return "退货规则", titlecore.Usage{Model: "title-model", PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12}, nil
-}
-
-func TestTitleUsageLinksToPersistedFirstAnswer(t *testing.T) {
-	w, _, _ := usageTestServices(t)
-	w.chats.titleProvider = usageTitleProvider{}
+func TestFirstQuestionTitleDoesNotAddUsageAndPreservesHistoricalTitleCosts(t *testing.T) {
+	w, _, usage := usageTestServices(t)
+	ctx := context.Background()
 	owner := createWorkspaceUser(t, w.db, "owner")
 	kb := createWorkspaceKB(t, w.db, owner.ID, uuid.Nil, "库", "private", time.Now())
 	session := model.ChatSession{UserID: owner.ID, KnowledgeBaseID: kb.ID, Title: defaultChatSessionTitle}
 	if err := w.db.Create(&session).Error; err != nil {
 		t.Fatal(err)
 	}
-	res, err := w.chats.SendMessage(context.Background(), owner.ID, session.ID, dto.SendChatMessageRequest{Content: "退货规则是什么", ClientRequestID: uuid.NewString()})
+	old := model.ModelUsageRecord{ID: uuid.New(), UserID: owner.ID, KnowledgeBaseID: kb.ID,
+		Purpose: "title", Provider: "openai_compatible", Model: "retired-title-model",
+		PromptTokens: intPointer(10), CompletionTokens: intPointer(2), TotalTokens: intPointer(12)}
+	if err := usage.Create(ctx, &old); err != nil {
+		t.Fatal(err)
+	}
+	res, err := w.chats.SendMessage(ctx, owner.ID, session.ID, dto.SendChatMessageRequest{
+		Content: "退货规则是什么", ClientRequestID: uuid.NewString(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, row := range listUsageRecords(t, w) {
-		if row.Purpose == "title" {
-			if row.MessageID == nil || row.MessageID.String() != res.AssistantMessage.ID || row.Model != "title-model" {
-				t.Fatalf("title usage not linked: %+v", row)
-			}
+	records := listUsageRecords(t, w)
+	if len(records) != 3 {
+		t.Fatalf("want one historical title plus intent and answer, got %#v", records)
+	}
+	for _, row := range records {
+		if row.Purpose == "title" && (row.ID != old.ID || row.MessageID != nil) {
+			t.Fatalf("title naming changed historical usage or added a call: %#v", row)
+		}
+		if row.Purpose != "title" && (row.MessageID == nil || row.MessageID.String() != res.AssistantMessage.ID) {
+			t.Fatalf("new usage not linked to answer: %#v", row)
+		}
+	}
+	assertSessionTitle(t, w.chats, owner.ID, session.ID, "退货规则是什么")
+	// The SQLite fixture stores local timestamps; explicitly cover its records.
+	now := time.Now()
+	report, err := w.chats.GetChatUsage(ctx, owner.ID, dto.ChatUsageQuery{GroupBy: "purpose", From: now.Add(-time.Hour), To: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range report.Items {
+		if item.GroupKey == "title" && item.Calls == 1 && item.TotalTokens == 12 {
 			return
 		}
 	}
-	t.Fatal("title usage missing")
+	t.Fatalf("historical title costs missing from report: %#v", report.Items)
 }
 
 func TestChatUsageRecordsIntentAndAnswerLinkedToTheMessage(t *testing.T) {

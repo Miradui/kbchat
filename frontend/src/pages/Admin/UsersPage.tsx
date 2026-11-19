@@ -1,4 +1,4 @@
-import { Pencil, Plus, RefreshCw, RotateCcw, Search } from 'lucide-react';
+import { ArrowRightLeft, Pencil, Plus, RefreshCw, RotateCcw, Search, Shield, ShieldOff } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 
@@ -9,11 +9,14 @@ import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Select } from '../../components/ui/Field';
 import { DebouncedSearchInput } from '../../components/ui/DebouncedSearchInput';
+import { OverflowMenu } from '../../components/ui/OverflowMenu';
+import { PageHeading } from '../../components/ui/PageHeading';
 import { Pagination } from '../../components/ui/Pagination';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { AppShell } from '../../layouts/AppShell';
 import type { AdminUser } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
+import { formatDateTime } from '../../utils/format';
 import { CreateUserDialog, EditUserDialog, PasswordResultDialog } from './UserDialogs';
 import type { PasswordResult } from './UserDialogs';
 import { AdminActivities } from './AdminActivities';
@@ -171,82 +174,105 @@ function AdminUsersContent({ currentUserId }: { currentUserId: string }) {
 
   return (
     <AppShell active="admin-users" breadcrumbs={[{ label: '系统', to: '/diagnostics' }, { label: '用户管理' }]}>
-      <div className="ui-page-heading">
-        <div><h1>用户管理</h1><p>创建账号、管理状态和系统管理员角色。密码只在创建或重置后显示一次。</p></div>
-        <Button leadingIcon={<Plus aria-hidden="true" />} onClick={() => setCreateOpen(true)}>创建用户</Button>
-      </div>
-      <section className="ui-panel">
-        <div className="ui-panel__head" style={{ gap: 'var(--s-2)', flexWrap: 'wrap' }}>
-          <DebouncedSearchInput aria-label="搜索用户" icon={<Search aria-hidden="true" />} onCommit={updateFilter(setQuery)} placeholder="搜索用户名或显示名" value={query} />
-          <Select aria-label="状态筛选" onChange={(event) => updateFilter(setStatus)(event.target.value)} value={status}>
-            <option value="">全部状态</option>
-            <option value="active">启用</option>
-            <option value="disabled">已禁用</option>
-          </Select>
-          <Select aria-label="角色筛选" onChange={(event) => updateFilter(setRole)(event.target.value)} value={role}>
-            <option value="">全部角色</option>
-            <option value="admin">管理员</option>
-            <option value="user">普通用户</option>
-          </Select>
-          <Button leadingIcon={<RefreshCw aria-hidden="true" />} onClick={() => void load()} variant="secondary">刷新</Button>
-        </div>
-        {error && <p className="ui-inline-error" role="alert">{error}</p>}
-        {loading ? <LoadingSkeleton announce columns={5} rows={5} /> : (
-          <div className="ui-table-wrap">
-            <table className="ui-table">
-              <caption className="ui-visually-hidden">用户列表，共 {total} 个用户</caption>
-              <thead>
-                <tr><th>用户名</th><th>显示名</th><th>角色</th><th>状态</th><th>最后登录</th><th>操作</th></tr>
-              </thead>
-              <tbody>
-                {items.map((item) => {
-                  const isSelf = item.id === currentUserId;
-                  return (
-                    <tr key={item.id}>
-                      <td data-label="用户名">{item.username}{isSelf && <span className="ui-muted"> （我）</span>}</td>
-                      <td data-label="显示名">{item.displayName}</td>
-                      <td data-label="角色"><Badge tone={item.role === 'admin' ? 'accent' : 'neutral'}>{item.role === 'admin' ? '管理员' : '普通用户'}</Badge></td>
-                      <td data-label="状态"><Badge tone={item.status === 'active' ? 'ok' : 'warn'}>{item.status === 'active' ? '启用' : '已禁用'}</Badge></td>
-                      <td data-label="最后登录">{item.lastLoginAt ? new Date(item.lastLoginAt).toLocaleString() : '从未登录'}</td>
-                      <td data-label="操作">
-                        <div style={{ display: 'flex', gap: 'var(--s-1)', flexWrap: 'wrap' }}>
-                          <Button aria-label={`编辑 ${item.username}`} leadingIcon={<Pencil aria-hidden="true" />} onClick={() => setEditing(item)} variant="ghost">编辑</Button>
-                          <Button aria-label={`转移 ${item.username} 的知识库`} disabled={!item.ownedKnowledgeBaseCount} onClick={() => setTransferring(item)} variant="ghost">转移知识库（{item.ownedKnowledgeBaseCount ?? 0}）</Button>
-                          {/* The signed-in administrator cannot disable, demote or
-                              reset themselves; the server refuses these with
-                              ADMIN_SELF_MUTATION, so the buttons are not offered. */}
-                          {!isSelf && (
-                            <>
-                              {item.status === 'active'
-                                ? <Button aria-label={`禁用 ${item.username}`} onClick={() => setPending({ kind: 'disable', user: item })} variant="ghost">禁用</Button>
-                                : <Button aria-label={`启用 ${item.username}`} onClick={() => void enable(item)} variant="ghost">启用</Button>}
-                              {item.role === 'admin'
-                                ? <Button aria-label={`撤销 ${item.username} 的管理员`} onClick={() => setPending({ kind: 'revokeAdmin', user: item })} variant="ghost">撤销管理员</Button>
-                                : <Button aria-label={`授予 ${item.username} 管理员`} onClick={() => void grantAdmin(item)} variant="ghost">授予管理员</Button>}
-                              <Button aria-label={`重置 ${item.username} 的密码`} leadingIcon={<RotateCcw aria-hidden="true" />} onClick={() => setPending({ kind: 'resetPassword', user: item })} variant="ghost">重置密码</Button>
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            {items.length === 0 && <p className="ui-muted" style={{ padding: 'var(--s-4)' }}>没有匹配的用户。</p>}
-            <Pagination
-              onPageChange={setPage}
-              onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
-              page={page}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 20, 50, 100]}
-              total={total}
-            />
+      <div className="ui-page">
+        <PageHeading
+          actions={<Button leadingIcon={<Plus aria-hidden="true" />} onClick={() => setCreateOpen(true)}>创建用户</Button>}
+          description="创建账号、管理状态和系统管理员角色。密码只在创建或重置后显示一次。"
+          title="用户管理"
+        />
+        <section className="ui-panel">
+          <div className="ui-toolbar ui-panel__toolbar">
+            <DebouncedSearchInput aria-label="搜索用户" icon={<Search aria-hidden="true" />} onCommit={updateFilter(setQuery)} placeholder="搜索用户名或显示名" value={query} />
+            <Select aria-label="状态筛选" onChange={(event) => updateFilter(setStatus)(event.target.value)} value={status}>
+              <option value="">全部状态</option>
+              <option value="active">启用</option>
+              <option value="disabled">已禁用</option>
+            </Select>
+            <Select aria-label="角色筛选" onChange={(event) => updateFilter(setRole)(event.target.value)} value={role}>
+              <option value="">全部角色</option>
+              <option value="admin">管理员</option>
+              <option value="user">普通用户</option>
+            </Select>
+            <span className="ui-toolbar__spacer" />
+            <Button leadingIcon={<RefreshCw aria-hidden="true" />} onClick={() => void load()} variant="secondary">刷新</Button>
           </div>
-        )}
-      </section>
+          {error && <p className="ui-inline-error" role="alert">{error}</p>}
+          {loading ? <LoadingSkeleton announce columns={5} rows={5} /> : (
+            <div className="ui-table-wrap">
+              <table className="ui-table">
+                <caption className="sr-only">用户列表，共 {total} 个用户</caption>
+                <thead>
+                  <tr><th>用户名</th><th>显示名</th><th>角色</th><th>状态</th><th>最后登录</th><th className="ui-table__actions">操作</th></tr>
+                </thead>
+                <tbody>
+                  {items.map((item) => {
+                    const isSelf = item.id === currentUserId;
+                    const overflowItems = [
+                      {
+                        label: `转移知识库（${item.ownedKnowledgeBaseCount ?? 0}）`,
+                        disabled: !item.ownedKnowledgeBaseCount,
+                        icon: <ArrowRightLeft aria-hidden="true" />,
+                        onSelect: () => setTransferring(item),
+                      },
+                      ...(!isSelf ? [
+                        item.role === 'admin'
+                          ? {
+                              label: '撤销管理员',
+                              icon: <ShieldOff aria-hidden="true" />,
+                              onSelect: () => setPending({ kind: 'revokeAdmin', user: item }),
+                            }
+                          : {
+                              label: '授予管理员',
+                              icon: <Shield aria-hidden="true" />,
+                              onSelect: () => void grantAdmin(item),
+                            },
+                        {
+                          label: '重置密码',
+                          icon: <RotateCcw aria-hidden="true" />,
+                          tone: 'danger' as const,
+                          onSelect: () => setPending({ kind: 'resetPassword', user: item }),
+                        },
+                      ] : []),
+                    ];
+                    return (
+                      <tr key={item.id}>
+                        <td data-label="用户名">{item.username}{isSelf && <span className="ui-muted"> （我）</span>}</td>
+                        <td data-label="显示名">{item.displayName}</td>
+                        <td data-label="角色"><Badge tone={item.role === 'admin' ? 'accent' : 'neutral'}>{item.role === 'admin' ? '管理员' : '普通用户'}</Badge></td>
+                        <td data-label="状态"><Badge tone={item.status === 'active' ? 'ok' : 'warn'}>{item.status === 'active' ? '启用' : '已禁用'}</Badge></td>
+                        <td data-label="最后登录">{item.lastLoginAt ? formatDateTime(item.lastLoginAt) : '从未登录'}</td>
+                        <td className="ui-table__actions" data-label="操作">
+                          <div>
+                            <Button aria-label={`编辑 ${item.username}`} leadingIcon={<Pencil aria-hidden="true" />} onClick={() => setEditing(item)} variant="ghost">编辑</Button>
+                            {/* The signed-in administrator cannot disable, demote or
+                                reset themselves; the server refuses these with
+                                ADMIN_SELF_MUTATION, so the actions are not offered. */}
+                            {!isSelf && (item.status === 'active'
+                              ? <Button aria-label={`禁用 ${item.username}`} onClick={() => setPending({ kind: 'disable', user: item })} variant="ghost">禁用</Button>
+                              : <Button aria-label={`启用 ${item.username}`} onClick={() => void enable(item)} variant="ghost">启用</Button>)}
+                            <OverflowMenu items={overflowItems} label={`更多 ${item.username} 操作`} />
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {items.length === 0 && <p className="ui-table__empty">没有匹配的用户。</p>}
+              <Pagination
+                onPageChange={setPage}
+                onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+                page={page}
+                pageSize={pageSize}
+                pageSizeOptions={[10, 20, 50, 100]}
+                total={total}
+              />
+            </div>
+          )}
+        </section>
 
-      <AdminActivities revision={activityRevision} />
+        <AdminActivities revision={activityRevision} />
+      </div>
       {transferring && <TransferOwnershipDialog ownerId={transferring.id} description={`转移 ${transferring.username} 拥有的全部 ${transferring.ownedKnowledgeBaseCount} 个知识库，包含回收站中的知识库。`} onTransfer={(input) => transferUserKnowledgeBases(transferring.id, input)} onClose={() => setTransferring(null)} onDone={() => { setTransferring(null); void reloadAfterAction(); }} />}
 
       <CreateUserDialog

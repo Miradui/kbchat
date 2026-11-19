@@ -1,3 +1,4 @@
+import { CheckCircle2, CircleAlert } from 'lucide-react';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
@@ -47,7 +48,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               key={item.id}
               role={item.tone === 'error' ? 'alert' : 'status'}
             >
-              {item.message}
+              <span aria-hidden="true" className="ui-toast__icon">
+                {item.tone === 'error' ? <CircleAlert aria-hidden="true" /> : <CheckCircle2 aria-hidden="true" />}
+              </span>
+              <span>{item.message}</span>
             </div>
           ))}
         </div>,

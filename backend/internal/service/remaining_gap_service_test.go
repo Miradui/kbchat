@@ -1,12 +1,9 @@
 package service
 
 import (
-	"bytes"
 	"context"
-	"encoding/csv"
 	"encoding/json"
 	"errors"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
-	"gorm.io/gorm"
 
 	"kbchat/backend/internal/apperror"
 	"kbchat/backend/internal/dto"
@@ -232,63 +228,6 @@ func TestChatSessionExportUsesOwnedMessagesAndCitations(t *testing.T) {
 	assertAppErrorCode(t, err, "RESOURCE_NOT_FOUND")
 }
 
-func TestGlobalSearchExportContainsAllOwnedMatchesOnly(t *testing.T) {
-	services := newWorkspaceTestServices(t)
-	ctx := context.Background()
-	owner := createWorkspaceUser(t, services.db, "search-export-owner")
-	other := createWorkspaceUser(t, services.db, "search-export-other")
-	ownerKB := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "policy owner", "private", time.Now())
-	ownerDocument := createWorkspaceDocument(t, services.db, ownerKB.ID, owner.ID, "policy-owner.pdf", "completed")
-	createWorkspaceDocumentChunk(t, services.db, ownerKB.ID, ownerDocument.ID, 0, "policy owner content")
-	otherKB := createWorkspaceKB(t, services.db, other.ID, uuid.Nil, "policy secret", "private", time.Now())
-	otherDocument := createWorkspaceDocument(t, services.db, otherKB.ID, other.ID, "policy-secret.pdf", "completed")
-	createWorkspaceDocumentChunk(t, services.db, otherKB.ID, otherDocument.ID, 0, "policy secret content")
-
-	exported, err := services.search.Export(ctx, owner.ID, dto.GlobalSearchRequest{Query: "policy", Type: "all"})
-	if err != nil {
-		t.Fatalf("export search: %v", err)
-	}
-	rows := readSearchExportCSV(t, exported)
-	if len(rows) != 4 {
-		t.Fatalf("expected header and all three owner result types, got %#v", rows)
-	}
-	content := string(exported.Content)
-	if !strings.Contains(content, "policy owner") || !strings.Contains(content, "policy-owner.pdf") || !strings.Contains(content, "policy owner content") {
-		t.Fatalf("missing owner results:\n%s", content)
-	}
-	if strings.Contains(content, "policy secret") {
-		t.Fatalf("export leaked another owner's data:\n%s", content)
-	}
-}
-
-func TestGlobalSearchExportAllows5000ItemsAndRejects5001(t *testing.T) {
-	services := newWorkspaceTestServices(t)
-	sqlDB, err := services.db.DB()
-	if err != nil {
-		t.Fatalf("get sqlite pool: %v", err)
-	}
-	sqlDB.SetMaxOpenConns(1)
-
-	ctx := context.Background()
-	owner := createWorkspaceUser(t, services.db, "search-export-boundary-owner")
-	kb := createWorkspaceKB(t, services.db, owner.ID, uuid.Nil, "export limit kb", "private", time.Now())
-	document := createWorkspaceDocument(t, services.db, kb.ID, owner.ID, "limit.pdf", "completed")
-	createWorkspaceDocumentChunksInBatches(t, services.db, kb.ID, document.ID, 0, 5000, "boundary-needle")
-
-	exported, err := services.search.Export(ctx, owner.ID, dto.GlobalSearchRequest{Query: "boundary-needle", Type: "chunk"})
-	if err != nil {
-		t.Fatalf("export 5000 search results: %v", err)
-	}
-	rows := readSearchExportCSV(t, exported)
-	if len(rows) != 5001 {
-		t.Fatalf("expected header plus 5000 rows, got %d", len(rows))
-	}
-
-	createWorkspaceDocumentChunksInBatches(t, services.db, kb.ID, document.ID, 5000, 1, "boundary-needle")
-	_, err = services.search.Export(ctx, owner.ID, dto.GlobalSearchRequest{Query: "boundary-needle", Type: "chunk"})
-	assertAppErrorCode(t, err, "EXPORT_TOO_LARGE")
-}
-
 func TestProfileAvatarLimitCountsUnicodeCodePoints(t *testing.T) {
 	services := newWorkspaceTestServices(t)
 	ctx := context.Background()
@@ -315,49 +254,6 @@ func assertAppErrorCode(t *testing.T, err error, code string) {
 	var appErr *apperror.Error
 	if !errors.As(err, &appErr) || appErr.Code != code {
 		t.Fatalf("expected app error %s, got %v", code, err)
-	}
-}
-
-func readSearchExportCSV(t *testing.T, exported *ExportFile) [][]string {
-	t.Helper()
-	if exported.ContentType != "text/csv; charset=utf-8" || exported.Filename != "search-results.csv" {
-		t.Fatalf("unexpected export metadata: %#v", exported)
-	}
-	bom := []byte{0xEF, 0xBB, 0xBF}
-	if !bytes.HasPrefix(exported.Content, bom) {
-		t.Fatalf("expected UTF-8 BOM, got prefix % x", exported.Content[:min(len(exported.Content), len(bom))])
-	}
-	content := exported.Content[len(bom):]
-	rows, err := csv.NewReader(bytes.NewReader(content)).ReadAll()
-	if err != nil {
-		t.Fatalf("parse csv: %v\n%s", err, content)
-	}
-	wantHeader := []string{"类型", "知识库", "标题", "摘要", "知识库ID", "文档ID", "结果ID"}
-	if len(rows) == 0 || !slices.Equal(rows[0], wantHeader) {
-		t.Fatalf("unexpected csv header: %#v", rows)
-	}
-	return rows
-}
-
-func createWorkspaceDocumentChunksInBatches(
-	t *testing.T,
-	db *gorm.DB,
-	kbID, documentID uuid.UUID,
-	startIndex, count int,
-	content string,
-) {
-	t.Helper()
-	chunks := make([]model.DocumentChunk, count)
-	for i := range chunks {
-		chunks[i] = model.DocumentChunk{
-			DocumentID:      documentID,
-			KnowledgeBaseID: kbID,
-			ChunkIndex:      startIndex + i,
-			Content:         content,
-		}
-	}
-	if err := db.CreateInBatches(&chunks, 50).Error; err != nil {
-		t.Fatalf("create document chunks in batches: %v", err)
 	}
 }
 

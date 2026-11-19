@@ -150,25 +150,6 @@ func (r *ChatRepository) UpdateSessionTitle(ctx context.Context, sessionID uuid.
 		}).Error
 }
 
-// UpdateSessionTitleIfUnchanged protects an automatic title from overwriting a
-// manual rename, including one that saved the same text while the model ran.
-// On success the snapshot advances so it can guard a later title refinement.
-func (r *ChatRepository) UpdateSessionTitleIfUnchanged(ctx context.Context, session *model.ChatSession, title string) (bool, error) {
-	// Keep microsecond precision so the next title refinement can match the
-	// persisted timestamptz snapshot exactly.
-	updatedAt := time.Now().UTC().Truncate(time.Microsecond)
-	result := r.db.WithContext(ctx).
-		Model(&model.ChatSession{}).
-		Where("id = ? AND user_id = ? AND title = ? AND updated_at = ?", session.ID, session.UserID, session.Title, session.UpdatedAt).
-		Updates(map[string]any{"title": title, "updated_at": updatedAt})
-	if result.Error != nil || result.RowsAffected == 0 {
-		return false, result.Error
-	}
-	session.Title = title
-	session.UpdatedAt = updatedAt
-	return true, nil
-}
-
 func (r *ChatRepository) ArchiveSession(ctx context.Context, sessionID uuid.UUID, archivedAt time.Time) error {
 	return r.db.WithContext(ctx).
 		Model(&model.ChatSession{}).
@@ -945,7 +926,7 @@ func (r *ChatRepository) CreateMessage(ctx context.Context, message *model.ChatM
 }
 
 func (r *ChatRepository) CreateMessages(ctx context.Context, messages ...*model.ChatMessage) error {
-	return r.createMessages(ctx, nil, false, messages...)
+	return r.createMessages(ctx, nil, false, nil, "", messages...)
 }
 
 func (r *ChatRepository) CreateMessagesIfUnchanged(
@@ -953,13 +934,28 @@ func (r *ChatRepository) CreateMessagesIfUnchanged(
 	expectedMessageIDs []uuid.UUID,
 	messages ...*model.ChatMessage,
 ) error {
-	return r.createMessages(ctx, expectedMessageIDs, true, messages...)
+	return r.createMessages(ctx, expectedMessageIDs, true, nil, "", messages...)
+}
+
+// CreateMessagesWithTitleIfUnchanged names an accepted first question in the
+// message transaction. The snapshot predates generation: a manual rename,
+// including saving the default title, must win without rejecting the answer.
+func (r *ChatRepository) CreateMessagesWithTitleIfUnchanged(
+	ctx context.Context,
+	expectedMessageIDs []uuid.UUID,
+	sessionSnapshot *model.ChatSession,
+	title string,
+	messages ...*model.ChatMessage,
+) error {
+	return r.createMessages(ctx, expectedMessageIDs, true, sessionSnapshot, title, messages...)
 }
 
 func (r *ChatRepository) createMessages(
 	ctx context.Context,
 	expectedMessageIDs []uuid.UUID,
 	checkSnapshot bool,
+	sessionSnapshot *model.ChatSession,
+	title string,
 	messages ...*model.ChatMessage,
 ) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -989,9 +985,18 @@ func (r *ChatRepository) createMessages(
 			}
 		}
 		if len(messages) > 0 {
+			updates := map[string]any{"updated_at": time.Now()}
+			if sessionSnapshot != nil && title != "" {
+				// SQL evaluates the condition against the old row, before advancing
+				// updated_at for these messages. Failed persistence rolls both back.
+				updates["title"] = gorm.Expr(
+					"CASE WHEN id = ? AND user_id = ? AND title = ? AND updated_at = ? THEN ? ELSE title END",
+					sessionSnapshot.ID, sessionSnapshot.UserID, sessionSnapshot.Title, sessionSnapshot.UpdatedAt, title,
+				)
+			}
 			return tx.Model(&model.ChatSession{}).
 				Where("id = ?", messages[0].SessionID).
-				Update("updated_at", time.Now()).Error
+				Updates(updates).Error
 		}
 		return nil
 	})

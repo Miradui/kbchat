@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
 import { SearchInput } from '../../components/ui/Field';
+import { Pagination } from '../../components/ui/Pagination';
 import type { ChatMessageSearchItem, ChatSearchExcerpt } from '../../types/api';
 import { formatDateTime } from '../../utils/format';
 import { CHAT_SEARCH_PAGE_SIZE, useChatSearch } from './useChatSearch';
@@ -35,11 +36,7 @@ export function ChatSearchDialog({ onClose, onSelect }: {
       </button>)}
     </div>
     <div className="chat-search-dialog__actions">
-      <div className="chat-search-dialog__pages">
-        <Button variant="ghost" disabled={search.loading || page <= 1} onClick={() => setPage((value) => value - 1)}>上一页</Button>
-        <span>{page} / {Math.max(page, Math.ceil(search.total / CHAT_SEARCH_PAGE_SIZE))}</span>
-        <Button variant="ghost" disabled={search.loading || page * CHAT_SEARCH_PAGE_SIZE >= search.total} onClick={() => setPage((value) => value + 1)}>下一页</Button>
-      </div>
+      <Pagination compact onPageChange={setPage} page={page} pageSize={CHAT_SEARCH_PAGE_SIZE} total={search.total} />
       <Button variant="secondary" onClick={onClose}>关闭搜索</Button>
     </div>
   </Dialog>;

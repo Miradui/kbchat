@@ -17,7 +17,6 @@ import (
 	"kbchat/backend/internal/dto"
 	"kbchat/backend/internal/model"
 	"kbchat/backend/internal/repository"
-	titlecore "kbchat/backend/internal/title"
 )
 
 type fakeChatProvider struct {
@@ -39,16 +38,6 @@ func (p *fakeChatProvider) Chat(_ context.Context, messages []chatcore.Message) 
 		p.responses = p.responses[1:]
 		return response, nil
 	}
-	return p.response, nil
-}
-
-type fakeTitleProvider struct {
-	response string
-	messages []titlecore.Message
-}
-
-func (p *fakeTitleProvider) SummarizeTitle(_ context.Context, messages []titlecore.Message) (string, error) {
-	p.messages = messages
 	return p.response, nil
 }
 
@@ -218,37 +207,6 @@ func TestParseChatIntentOutputFallsBackToKnowledgeBase(t *testing.T) {
 	}
 }
 
-func TestGenerateSessionTitleUsesDedicatedTitleProvider(t *testing.T) {
-	provider := &fakeTitleProvider{response: "报销制度咨询"}
-
-	title, err := generateSessionTitle(context.Background(), provider, "报销发票怎么提交？")
-	if err != nil {
-		t.Fatalf("generate session title returned error: %v", err)
-	}
-
-	if title != "报销制度咨询" {
-		t.Fatalf("expected summarized title, got %q", title)
-	}
-	if len(provider.messages) != 2 {
-		t.Fatalf("expected title provider messages, got %#v", provider.messages)
-	}
-	if provider.messages[0].Role != "system" || !strings.Contains(provider.messages[0].Content, "会话标题") {
-		t.Fatalf("expected system title prompt, got %#v", provider.messages[0])
-	}
-	if !strings.Contains(provider.messages[1].Content, "报销发票怎么提交？") {
-		t.Fatalf("expected user question in title prompt, got %#v", provider.messages[1])
-	}
-}
-
-func TestCleanSessionTitleRemovesQuotesAndFallsBack(t *testing.T) {
-	if got := cleanSessionTitle("《报销制度咨询》"); got != "报销制度咨询" {
-		t.Fatalf("expected cleaned title, got %q", got)
-	}
-	if got := cleanSessionTitle("   "); got != defaultChatSessionTitle {
-		t.Fatalf("expected default title fallback, got %q", got)
-	}
-}
-
 func TestSendMessageReturnsRerankFallbackMetadata(t *testing.T) {
 	ctx := context.Background()
 	db := newChatServiceTestDB(t)
@@ -281,7 +239,6 @@ func TestSendMessageReturnsRerankFallbackMetadata(t *testing.T) {
 		repository.NewKnowledgeBaseRepository(db),
 		retrieval,
 		chatProvider,
-		nil,
 	)
 
 	clientRequestID := uuid.New().String()
@@ -352,7 +309,6 @@ func TestSendMessageRejectsClientRequestIDReuseWithDifferentContent(t *testing.T
 		repository.NewKnowledgeBaseRepository(db),
 		&fakeChatRetrieval{},
 		chatProvider,
-		nil,
 	)
 
 	_, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{
@@ -387,7 +343,6 @@ func TestSendMessageLetsRetrievalUseKnowledgeBaseConfiguration(t *testing.T) {
 		repository.NewKnowledgeBaseRepository(db),
 		retrieval,
 		chatProvider,
-		nil,
 	)
 
 	if _, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{
@@ -444,7 +399,6 @@ func TestRegenerateMessageRerunsRetrievalAndCreatesNewAssistantMessage(t *testin
 		repository.NewKnowledgeBaseRepository(db),
 		retrieval,
 		chatProvider,
-		nil,
 	)
 
 	res, err := service.RegenerateMessage(ctx, user.ID, session.ID, oldAssistant.ID)
@@ -486,7 +440,6 @@ func TestRegenerateMessageRejectsNonAssistantMessage(t *testing.T) {
 		repository.NewKnowledgeBaseRepository(db),
 		&fakeChatRetrieval{},
 		&fakeChatProvider{},
-		nil,
 	)
 
 	if _, err := service.RegenerateMessage(ctx, user.ID, session.ID, userMessage.ID); err == nil {
@@ -518,7 +471,7 @@ func TestEditMessageAndRegenerateReplacesTail(t *testing.T) {
 		`{"intent":"knowledge_base","standaloneQuery":"rewritten edited question","reason":"needs docs"}`,
 		"new answer",
 	}}
-	service := NewChatService(config.Config{VectorTopN: 30, RerankTopK: 5, RerankEnabled: true, ChatHistoryLimit: 10}, repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), retrieval, provider, nil)
+	service := NewChatService(config.Config{VectorTopN: 30, RerankTopK: 5, RerankEnabled: true, ChatHistoryLimit: 10}, repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), retrieval, provider)
 	requestID := uuid.NewString()
 	res, err := service.EditMessageAndRegenerate(ctx, user.ID, session.ID, firstUser.ID, dto.EditChatMessageRequest{Content: " edited question ", ClientRequestID: requestID})
 	if err != nil {
@@ -553,7 +506,7 @@ func TestEditMessageAndRegenerateKeepsOldMessagesWhenGenerationFails(t *testing.
 	if err := db.Create(&assistantMessage).Error; err != nil {
 		t.Fatalf("create assistant message: %v", err)
 	}
-	service := NewChatService(config.Config{VectorTopN: 30, RerankTopK: 5, RerankEnabled: true, ChatHistoryLimit: 10}, repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), &fakeChatRetrieval{}, &fakeChatProvider{err: errors.New("provider unavailable")}, nil)
+	service := NewChatService(config.Config{VectorTopN: 30, RerankTopK: 5, RerankEnabled: true, ChatHistoryLimit: 10}, repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), &fakeChatRetrieval{}, &fakeChatProvider{err: errors.New("provider unavailable")})
 	if _, err := service.EditMessageAndRegenerate(ctx, user.ID, session.ID, userMessage.ID, dto.EditChatMessageRequest{Content: "new question", ClientRequestID: uuid.NewString()}); err == nil {
 		t.Fatal("expected generation failure")
 	}
@@ -584,7 +537,7 @@ func TestEditMessageAndRegenerateIsIdempotent(t *testing.T) {
 		`{"intent":"knowledge_base","standaloneQuery":"edited question","reason":"needs docs"}`,
 		"new answer",
 	}}
-	service := NewChatService(config.Config{VectorTopN: 30, RerankTopK: 5, RerankEnabled: true, ChatHistoryLimit: 10}, repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), &fakeChatRetrieval{response: &dto.SearchResponse{Items: []dto.SearchResultResponse{{ChunkID: uuid.NewString(), DocumentID: uuid.NewString(), Filename: "manual.md", Content: "supporting fact", VectorScore: 0.9}}}}, provider, nil)
+	service := NewChatService(config.Config{VectorTopN: 30, RerankTopK: 5, RerankEnabled: true, ChatHistoryLimit: 10}, repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), &fakeChatRetrieval{response: &dto.SearchResponse{Items: []dto.SearchResultResponse{{ChunkID: uuid.NewString(), DocumentID: uuid.NewString(), Filename: "manual.md", Content: "supporting fact", VectorScore: 0.9}}}}, provider)
 	request := dto.EditChatMessageRequest{Content: "edited question", ClientRequestID: uuid.NewString()}
 	first, err := service.EditMessageAndRegenerate(ctx, user.ID, session.ID, userMessage.ID, request)
 	if err != nil {
@@ -613,7 +566,7 @@ func TestEditMessageAndRegenerateRejectsArchivedSession(t *testing.T) {
 	if err := db.Create(&message).Error; err != nil {
 		t.Fatalf("create message: %v", err)
 	}
-	service := NewChatService(config.Config{}, repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), &fakeChatRetrieval{}, &fakeChatProvider{}, nil)
+	service := NewChatService(config.Config{}, repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), &fakeChatRetrieval{}, &fakeChatProvider{})
 	if _, err := service.EditMessageAndRegenerate(ctx, user.ID, session.ID, message.ID, dto.EditChatMessageRequest{Content: "edited", ClientRequestID: uuid.NewString()}); err == nil {
 		t.Fatal("expected archived session edit to be rejected")
 	}

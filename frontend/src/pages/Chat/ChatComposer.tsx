@@ -1,9 +1,8 @@
-import { ArrowUp, LayoutTemplate, Square } from 'lucide-react';
+import { ArrowUp, Square } from 'lucide-react';
 import { useEffect, useId, useRef } from 'react';
 import type { FormEvent, KeyboardEvent, ReactNode } from 'react';
 
 import { Button } from '../../components/ui/Button';
-import { IconButton } from '../../components/ui/IconButton';
 import { RetryCountdown } from '../../components/feedback/RetryCountdown';
 import type { RetryNotice } from '../../components/feedback/RetryCountdown';
 
@@ -22,7 +21,6 @@ type ChatComposerProps = {
   onChange: (value: string) => void;
   onSubmit: () => void;
   onCancel: () => void;
-  onTemplates?: () => void;
   tools?: ReactNode;
 };
 
@@ -41,7 +39,6 @@ export function ChatComposer({
   onChange,
   onSubmit,
   onCancel,
-  onTemplates,
   tools,
 }: ChatComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -92,7 +89,6 @@ export function ChatComposer({
         <div className="chat-composer__actions">
           {tools && <div className="chat-composer__scope">{tools}</div>}
           <span className="chat-composer__spacer" />
-          {onTemplates && <IconButton label="提问模板" disabled={disabled || sending} onClick={onTemplates}><LayoutTemplate aria-hidden="true" /></IconButton>}
           {sending ? (
             <Button
               leadingIcon={<Square aria-hidden="true" />}

@@ -71,7 +71,6 @@ func diagnosticsConfig() config.Config {
 		RerankEnabled:   true,
 		RerankAPIKey:    "sk-rerank-key",
 		RerankModel:     "rerank-test",
-		TitleModel:      "gpt-title",
 	}
 }
 
@@ -258,8 +257,8 @@ func TestDiagnosticsNeverCallsModelProviders(t *testing.T) {
 			t.Errorf("provider %s recorded traffic %d/%d, want none", provider.Name, provider.SuccessCount, provider.FailureCount)
 		}
 	}
-	if len(res.Providers) != 4 {
-		t.Fatalf("providers = %d, want chat, embedding, rerank and title", len(res.Providers))
+	if len(res.Providers) != 3 {
+		t.Fatalf("providers = %d, want chat, embedding and rerank", len(res.Providers))
 	}
 }
 

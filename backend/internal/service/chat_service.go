@@ -25,7 +25,6 @@ import (
 	"kbchat/backend/internal/model"
 	"kbchat/backend/internal/observability"
 	"kbchat/backend/internal/repository"
-	titlecore "kbchat/backend/internal/title"
 )
 
 type chatRetrievalService interface {
@@ -39,7 +38,6 @@ type ChatService struct {
 	knowledgeBases *repository.KnowledgeBaseRepository
 	retrieval      chatRetrievalService
 	chatProvider   chatcore.Provider
-	titleProvider  titlecore.Provider
 	activities     *ActivityRecorder
 	metrics        *observability.Recorder
 	usage          *repository.ModelUsageRepository
@@ -65,7 +63,6 @@ const (
 	chatIntentGeneral       = "general"
 	chatIntentKnowledgeBase = "knowledge_base"
 	defaultChatSessionTitle = "新会话"
-	sessionTitleTimeout     = 5 * time.Second
 )
 
 type chatIntentDecision struct {
@@ -80,7 +77,6 @@ func NewChatService(
 	knowledgeBases *repository.KnowledgeBaseRepository,
 	retrieval chatRetrievalService,
 	chatProvider chatcore.Provider,
-	titleProvider titlecore.Provider,
 ) *ChatService {
 	return &ChatService{
 		cfg:            cfg,
@@ -88,7 +84,6 @@ func NewChatService(
 		knowledgeBases: knowledgeBases,
 		retrieval:      retrieval,
 		chatProvider:   chatProvider,
-		titleProvider:  titleProvider,
 	}
 }
 
@@ -1089,7 +1084,7 @@ func (s *ChatService) SendMessage(ctx context.Context, userID, sessionID uuid.UU
 	if err != nil {
 		return nil, err
 	}
-	if err := s.chats.CreateMessagesIfUnchanged(ctx, chatMessageIDs(history), userMessage, assistantMessage); err != nil {
+	if err := s.chats.CreateMessagesWithTitleIfUnchanged(ctx, chatMessageIDs(history), session, firstQuestionSessionTitle(session, content, history), userMessage, assistantMessage); err != nil {
 		existing, lookupErr := s.chats.FindMessagesByClientRequestID(ctx, session.ID, clientRequestID)
 		if lookupErr == nil && len(existing) > 0 {
 			return sendMessageResponseFromPair(clientRequestID, content, existing)
@@ -1100,7 +1095,6 @@ func (s *ChatService) SendMessage(ctx context.Context, userID, sessionID uuid.UU
 		return nil, apperror.Internal(err)
 	}
 	s.attachUsageMessage(ctx, generated.usageRecordIDs, assistantMessage)
-	s.updateSessionTitleIfNeeded(ctx, session, content, history, assistantMessage)
 
 	return &dto.SendChatMessageResponse{
 		ClientRequestID:  clientRequestID.String(),
@@ -1207,7 +1201,7 @@ func (s *ChatService) SendMessageStream(
 	if err != nil {
 		return err
 	}
-	if err := s.chats.CreateMessagesIfUnchanged(ctx, chatMessageIDs(history), userMessage, assistantMessage); err != nil {
+	if err := s.chats.CreateMessagesWithTitleIfUnchanged(ctx, chatMessageIDs(history), session, firstQuestionSessionTitle(session, content, history), userMessage, assistantMessage); err != nil {
 		// A concurrent stream with the same key may have won the unique index.
 		// Adopting its pair is what keeps "no second assistant message" true
 		// under concurrency, not just under retry.
@@ -1238,7 +1232,6 @@ func (s *ChatService) SendMessageStream(
 		return apperror.Internal(err)
 	}
 	s.attachUsageMessage(ctx, generated.usageRecordIDs, assistantMessage)
-	s.updateSessionTitleIfNeeded(ctx, session, content, history, assistantMessage)
 
 	return sink.Done(&dto.SendChatMessageResponse{
 		ClientRequestID:  clientRequestID.String(),
@@ -1849,110 +1842,22 @@ func chatCompletionError(err error) error {
 	return apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "回答生成失败，请稍后重试", err)
 }
 
-func (s *ChatService) updateSessionTitleIfNeeded(ctx context.Context, session *model.ChatSession, question string, history []model.ChatMessage, assistantMessage *model.ChatMessage) {
+func firstQuestionSessionTitle(session *model.ChatSession, question string, history []model.ChatMessage) string {
 	if !shouldGenerateSessionTitle(session.Title) {
-		return
+		return ""
 	}
 	for _, message := range history {
 		if message.Role == "user" {
-			return
+			return ""
 		}
 	}
-	// Message persistence advances updatedAt. Read its current value and recheck
-	// the title so a rename made while the answer ran is also respected.
-	current, err := s.chats.FindSessionByIDAndUser(ctx, session.ID, session.UserID)
-	if err != nil || current == nil || !shouldGenerateSessionTitle(current.Title) {
-		return
-	}
-	// Save a useful title before contacting the optional model. A failed or
-	// canceled summary must not leave an accepted first question unnamed.
-	fallback := truncateRunes(strings.Join(strings.Fields(question), " "), 29)
-	updated, err := s.chats.UpdateSessionTitleIfUnchanged(ctx, current, fallback)
-	if err != nil || !updated {
-		return
-	}
-	session.Title, session.UpdatedAt = current.Title, current.UpdatedAt
-	if s.titleProvider == nil {
-		return
-	}
-	titleCtx, cancel := context.WithTimeout(ctx, sessionTitleTimeout)
-	defer cancel()
-	titleStart := time.Now()
-	title, titleUsage, err := generateSessionTitleWithUsage(titleCtx, s.titleProvider, question)
-	if err == nil {
-		titleUsageID := s.recordTitleUsage(ctx, session, titleUsage, time.Since(titleStart))
-		s.attachUsageMessage(ctx, []uuid.UUID{titleUsageID}, assistantMessage)
-	}
-	if err != nil || titleCtx.Err() != nil || shouldGenerateSessionTitle(title) || title == fallback {
-		return
-	}
-	if updated, err := s.chats.UpdateSessionTitleIfUnchanged(ctx, current, title); err == nil && updated {
-		session.Title, session.UpdatedAt = current.Title, current.UpdatedAt
-	}
+	// Name the accepted first question directly, without another model call.
+	return truncateRunes(strings.Join(strings.Fields(question), " "), 29)
 }
 
 func shouldGenerateSessionTitle(title string) bool {
 	title = strings.TrimSpace(title)
 	return title == "" || title == defaultChatSessionTitle
-}
-
-func generateSessionTitle(ctx context.Context, provider titlecore.Provider, question string) (string, error) {
-	title, _, err := generateSessionTitleWithUsage(ctx, provider, question)
-	return title, err
-}
-
-func generateSessionTitleWithUsage(ctx context.Context, provider titlecore.Provider, question string) (string, titlecore.Usage, error) {
-	var raw string
-	var usage titlecore.Usage
-	var err error
-	if reporter, ok := provider.(titlecore.UsageProvider); ok {
-		raw, usage, err = reporter.SummarizeTitleWithUsage(ctx, buildSessionTitleMessages(question))
-	} else {
-		raw, err = provider.SummarizeTitle(ctx, buildSessionTitleMessages(question))
-	}
-	if err != nil {
-		return "", usage, err
-	}
-	return cleanSessionTitle(raw), usage, nil
-}
-
-func buildSessionTitleMessages(question string) []titlecore.Message {
-	return []titlecore.Message{
-		{Role: "system", Content: strings.Join([]string{
-			"你是企业知识库问答系统的会话标题生成器。",
-			"请仅根据用户的第一次提问生成一个简短的会话标题，概括提问主题，不要回答问题。",
-			"只输出标题本身，不要输出 JSON、Markdown、引号或解释。",
-			"标题使用用户提问语言，长度控制在 3 到 20 个字符。",
-		}, "\n")},
-		{Role: "user", Content: strings.Join([]string{
-			"第一次提问：",
-			strings.TrimSpace(question),
-		}, "\n")},
-	}
-}
-
-func cleanSessionTitle(raw string) string {
-	title := strings.TrimSpace(raw)
-	title = strings.TrimPrefix(title, "```")
-	title = strings.TrimSuffix(title, "```")
-	title = strings.TrimSpace(title)
-	if strings.Contains(title, "\n") {
-		title = strings.TrimSpace(strings.Split(title, "\n")[0])
-	}
-	title = strings.TrimPrefix(title, "标题：")
-	title = strings.TrimPrefix(title, "标题:")
-	title = strings.TrimSpace(title)
-	title = strings.Trim(title, "\"'“”‘’《》<>【】[]")
-	title = strings.TrimSpace(title)
-	if title == "" {
-		return defaultChatSessionTitle
-	}
-
-	runes := []rune(title)
-	if len(runes) > 30 {
-		title = string(runes[:30])
-	}
-	return title
 }
 
 func toChatSessionResponse(session *model.ChatSession) dto.ChatSessionResponse {
@@ -2138,30 +2043,6 @@ func (s *ChatService) recordUsage(ctx context.Context, userID uuid.UUID, session
 		sessionID := session.ID
 		record.SessionID = &sessionID
 	}
-	return s.persistUsage(ctx, record)
-}
-
-func (s *ChatService) recordTitleUsage(ctx context.Context, session *model.ChatSession, usage titlecore.Usage, latency time.Duration) uuid.UUID {
-	if s.usage == nil || session == nil || session.ID == uuid.Nil {
-		return uuid.Nil
-	}
-	record := &model.ModelUsageRecord{
-		ID:               uuid.New(),
-		UserID:           session.UserID,
-		KnowledgeBaseID:  session.KnowledgeBaseID,
-		Purpose:          "title",
-		Provider:         s.usageProviderName(),
-		Model:            usage.Model,
-		PromptTokens:     usageTokenValue(usage.PromptTokens),
-		CompletionTokens: usageTokenValue(usage.CompletionTokens),
-		TotalTokens:      usageTokenValue(usage.TotalTokens),
-		LatencyMs:        durationMillis(latency),
-	}
-	if record.Model == "" {
-		record.Model = s.cfg.TitleModel
-	}
-	sessionID := session.ID
-	record.SessionID = &sessionID
 	return s.persistUsage(ctx, record)
 }
 

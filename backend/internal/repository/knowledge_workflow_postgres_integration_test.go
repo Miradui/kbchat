@@ -42,7 +42,7 @@ func TestPostgresKnowledgeWorkflowMigrationsAndDocumentScope(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	t.Logf("applied %d SQL files and replayed 044–047", len(files))
+	t.Logf("applied %d SQL files and replayed 044 through %s", len(files), filepath.Base(files[len(files)-1]))
 	ctx := context.Background()
 	user := model.User{Username: "workflow-fixture", PasswordHash: "fixture", Role: "user", Status: "active"}
 	if err = db.Create(&user).Error; err != nil {

@@ -30,7 +30,6 @@ export function LoginPage({ loginRequest = login }: LoginPageProps) {
   const location = useLocation();
   const usernameId = useId();
   const passwordId = useId();
-  const passwordMessageId = useId();
   const errorRef = useRef<HTMLParagraphElement>(null);
   const usernameRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
@@ -141,35 +140,31 @@ export function LoginPage({ loginRequest = login }: LoginPageProps) {
             error={fieldErrors.password}
             htmlFor={passwordId}
             label="密码"
-            messageId={passwordMessageId}
           >
-            <div className="auth__password">
-              <Input
-                aria-describedby={fieldErrors.password ? passwordMessageId : undefined}
-                aria-invalid={Boolean(fieldErrors.password)}
-                autoComplete="current-password"
-                className="auth__input"
-                disabled={submitting}
-                id={passwordId}
-                onChange={(event) => {
-                  setPassword(event.target.value);
-                  setFieldErrors((current) => ({ ...current, password: undefined }));
-                }}
-                ref={passwordRef}
-                placeholder="输入密码"
-                required
-                type={showPassword ? 'text' : 'password'}
-                value={password}
-              />
-              <IconButton
-                className="auth__password-toggle"
-                disabled={submitting}
-                label={showPassword ? '隐藏密码' : '显示密码'}
-                onClick={() => setShowPassword((visible) => !visible)}
-              >
-                {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
-              </IconButton>
-            </div>
+            <Input
+              autoComplete="current-password"
+              className="auth__input"
+              disabled={submitting}
+              id={passwordId}
+              onChange={(event) => {
+                setPassword(event.target.value);
+                setFieldErrors((current) => ({ ...current, password: undefined }));
+              }}
+              placeholder="输入密码"
+              ref={passwordRef}
+              required
+              trailing={(
+                <IconButton
+                  disabled={submitting}
+                  label={showPassword ? '隐藏密码' : '显示密码'}
+                  onClick={() => setShowPassword((visible) => !visible)}
+                >
+                  {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+                </IconButton>
+              )}
+              type={showPassword ? 'text' : 'password'}
+              value={password}
+            />
           </Field>
 
           {error && <p className="auth__error" ref={errorRef} role="alert" tabIndex={-1}>{retry ? <RetryCountdown notice={retry} /> : error}</p>}

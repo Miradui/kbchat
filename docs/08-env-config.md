@@ -9,7 +9,7 @@
 | `APP_ENV` | `development` | 应用环境 |
 | `SERVER_PORT` | `8080` | Gin 服务端口 |
 | `CORS_ALLOWED_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173` | 允许跨域访问 API 的前端 Origin，多个值用逗号分隔 |
-| `RAG_ALLOW_AUTOMIGRATE` | `false` | 仅本地一次性数据库使用：启动时按 GORM 模型创建缺失表。这样建出的表没有迁移中的 CHECK 约束、外键与级联规则，之后的 `CREATE TABLE IF NOT EXISTS` 会保留这个版本且无法用重跑迁移修复；`APP_ENV=production` 时该开关被忽略。正常流程始终是先执行迁移再启动 |
+| `RAG_ALLOW_AUTOMIGRATE` | 约定为 `false`，当前入口尚未分流 | 现行要求仅在明确启用的可丢弃开发库使用；当前server无条件调用AutoMigrate，须按 [CHK-003](15-backlog.md#尚未关闭的工程事项) 修正生产只读启动。GORM建表不等同于显式SQL迁移 |
 | `DATABASE_URL` | 本地 PostgreSQL | 数据库连接；应用连接的会话时区固定为 UTC，连接参数中的 `timezone` / `TimeZone` 会统一为 UTC |
 | `REDIS_ADDR` | `localhost:6379` | Redis 地址 |
 | `REDIS_PASSWORD` | 空 | Redis 密码 |
@@ -23,7 +23,7 @@
 | `TRUSTED_PROXY_CIDRS` | 空 | 逗号分隔的可信反向代理 CIDR；只有直连来源可信时才读取 `X-Forwarded-For` |
 | `EMBEDDING_CACHE_TTL` | `24h` | query embedding Redis 缓存 TTL，使用 Go duration 格式 |
 | `CHAT_ALLOWED_MODELS` | 空 | 逗号分隔的知识库回答模型白名单；留空不开放模型覆盖 |
-| `MODEL_PRICING` | `{}` | 按模型的百万 token 价格 JSON，用于质量页成本估算；键为配置中的模型名（`CHAT_MODEL`、`TITLE_MODEL` 或白名单模型），不是服务商回显的别名 |
+| `MODEL_PRICING` | `{}` | 按模型的百万 token 价格 JSON，用于质量页成本估算；键为请求时使用的模型名（`CHAT_MODEL`、白名单模型或历史标题模型），不是服务商回显的别名 |
 | `JWT_SECRET` | 无 | JWT 签名密钥；必填，须由密码学安全随机源生成至少 32 字节，并替换示例占位值 |
 | `BOOTSTRAP_ADMIN_PASSWORD` | 空 | 仅运维 CLI 显式创建首位系统管理员时使用；至少 8 个字符、最多 72 个 UTF-8 字节。提升现有用户时不读取或覆盖其密码 |
 | `BOOTSTRAP_ADMIN_DISPLAY_NAME` | 指定的用户名 | 仅首位管理员创建时使用，最多 128 个 Unicode 码点；留空使用 `-username` |
@@ -32,9 +32,6 @@
 | `CHAT_API_KEY` | 无 | Chat API Key |
 | `CHAT_MODEL` | `gpt-4.1-mini` | 聊天模型 |
 | `CHAT_HISTORY_LIMIT` | `10` | 聊天问答使用的最近历史消息条数 |
-| `TITLE_BASE_URL` | `https://api.openai.com/v1` | 会话标题摘要 OpenAI-compatible 地址 |
-| `TITLE_API_KEY` | 无 | 会话标题摘要 API Key；独立于 `CHAT_API_KEY` |
-| `TITLE_MODEL` | `gpt-4.1-mini` | 会话标题摘要模型 |
 | `EMBEDDING_BASE_URL` | `https://api.openai.com/v1` | Embedding OpenAI-compatible 地址 |
 | `EMBEDDING_API_KEY` | 无 | Embedding API Key |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding 模型 |
@@ -63,9 +60,6 @@
 | `WORKER_MAX_RETRIES` | `3` | 文档处理任务失败后的最大重试次数 |
 | `WORKER_RETRY_DELAY` | `10s` | 文档处理和对象清理任务的基础重试退避时间，使用 Go duration 格式 |
 | `VITE_API_BASE_URL` | `/api/v1` | 前端 API 地址；跨域/分离部署时设置为完整后端地址 |
-| `OTEL_SERVICE_NAME` | `rag-backend` | Trace/Metrics共同使用的服务名 |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | 空 | OTLP/HTTP Trace完整端点；空时不导出Trace |
-| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | 空 | OTLP/HTTP Metrics完整端点；空时不周期采集/导出指标 |
 
 `VECTOR_TOP_N`、`RERANK_TOP_K` 和 `SCORE_THRESHOLD` 是知识库未保存对应 `retrievalConfig` 时的默认值。运行时限制 `vectorTopN<=100`、`rerankTopK<=20`，并保证 `rerankTopK<=vectorTopN`。
 
@@ -99,7 +93,7 @@ embedding vector(1536)
 4. 清理或重新生成旧 chunks embedding。
 5. 更新本文档和 `03-database-design.md`。
 
-当前使用 Qwen3 Embedding 时，Provider 必须请求输出 `1536` 维，与 `document_chunks.embedding vector(1536)` 一致，且不超过 pgvector `vector` 类型 HNSW 索引的 2000 维上限。
+使用 Qwen3 Embedding 时，Provider 必须请求输出 `1536` 维，与 `document_chunks.embedding vector(1536)` 一致，且不超过 pgvector `vector` 类型 HNSW 索引的 2000 维上限。
 
 ## Embedding 配置变更
 
@@ -153,9 +147,9 @@ OCR 默认关闭。安装 Poppler、Tesseract 5 及所需语言包后设置 `PDF
 
 ## OpenTelemetry
 
-`OTEL_SERVICE_NAME` 默认 `rag-backend`；`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 默认空，仅生成本地关联编号，不导出 Trace。配置为完整 HTTP(S) OTLP/HTTP protobuf 地址，例如 `http://127.0.0.1:4318/v1/traces`，即可发送到 Jaeger 或 Collector。通过 OTel SDK 标准 `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` 配置采样；默认遵循父采样，根请求采样。接收端故障不阻塞请求；导出最多等待 3 秒，不重试。完整部署、采集范围及脱敏规则见 [可观测性](38-observability.md)。
+当前dev的配置加载器和 `.env.example` 没有 `OTEL_*` 配置，诊断使用进程内Recorder，不生成Trace响应编号或导出OTLP。
 
-`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` 默认空，配置为完整 OTLP/HTTP protobuf 地址（例如 `http://127.0.0.1:4318/v1/metrics`）后启用独立于 Trace 采样的历史指标，每 15 秒采集/发送一次；单次最多三秒、不重试。可观测性 profile 的 4318 端口属于 Collector，负责分发 Trace 和 Metrics；Grafana/Prometheus 的只读本地入口、数据保留与告警规则见 [可观测性](38-observability.md#历史指标看板与告警)。
+Trace/Metrics端点、采样、历史指标和观测profile参数保留在 [历史方案](38-observability.md#历史-otel-方案)，不属于当前默认值。用户要求继续实施后，先同步实际代码、模板、部署和验收，再将生效配置列入本页。
 
 ## 配置安全与约束
 
@@ -165,4 +159,4 @@ OCR 默认关闭。安装 Poppler、Tesseract 5 及所需语言包后设置 `PDF
 4. 不要在未迁移数据库的情况下修改 embedding 维度。
 5. 程序和 `.env.example` 默认开启 Rerank，标准 RAG 启动必须配置可用的 `RERANK_*`。仅在明确调试无 Rerank Provider 的向量降级路径时，才显式设置 `RERANK_ENABLED=false`。
 6. `CHAT_HISTORY_LIMIT` 不要设置过大，避免上下文成本失控；需要长记忆时应另行设计摘要机制。
-7. 会话标题摘要必须使用 `TITLE_*` 独立模型配置，不要复用 `CHAT_*`。
+7. 会话标题使用首问摘要和手动改名，不调用模型；`TITLE_*` 已退役，不再读取。历史标题用量和按模型配置的价格继续用于报表。

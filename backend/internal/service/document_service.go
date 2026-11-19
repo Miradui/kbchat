@@ -957,12 +957,13 @@ func supersededByID(id *uuid.UUID) *string {
 func toGlobalDocumentRepoQuery(query dto.GlobalDocumentListQuery) (repository.GlobalDocumentQuery, error) {
 	page, pageSize := normalizedPage(query.Page, query.PageSize)
 	res := repository.GlobalDocumentQuery{
-		Q:        strings.TrimSpace(query.Q),
-		Status:   query.Status,
-		FileType: query.FileType,
-		Sort:     query.Sort,
-		Page:     page,
-		PageSize: pageSize,
+		ExcludeCancelled: query.ExcludeCancelled,
+		Q:                strings.TrimSpace(query.Q),
+		Status:           query.Status,
+		FileType:         query.FileType,
+		Sort:             query.Sort,
+		Page:             page,
+		PageSize:         pageSize,
 	}
 	if query.KnowledgeBaseID != nil && *query.KnowledgeBaseID != "" {
 		id, err := uuid.Parse(*query.KnowledgeBaseID)

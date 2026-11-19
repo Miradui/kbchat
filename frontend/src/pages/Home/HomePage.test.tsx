@@ -28,6 +28,7 @@ function createSummary(overrides: Partial<HomeSummaryResponse> = {}): HomeSummar
     knowledgeBaseTotal: 1,
     documents: [document],
     documentTotal: 1,
+    processingDocumentTotal: 0,
     failedDocuments: [],
     failedDocumentTotal: 0,
     sessions: [],
@@ -53,7 +54,7 @@ describe('HomePage', () => {
   it('shows unavailable task status and restores it with a local retry', async () => {
     const user = userEvent.setup();
     const sources = createSources();
-    vi.mocked(sources.loadSummary).mockRejectedValueOnce(new Error('offline')).mockResolvedValue(createSummary({ documents: [{ ...document, status: 'parsing' }] }));
+    vi.mocked(sources.loadSummary).mockRejectedValueOnce(new Error('offline')).mockResolvedValue(createSummary({ documents: [{ ...document, status: 'parsing' }], processingDocumentTotal: 1 }));
     renderWithRouter(<HomePage sources={sources} />);
     await user.click(await screen.findByRole('button', { name: '重试处理中状态' }));
     expect(await screen.findByText('1 个文档正在处理')).toBeInTheDocument();
@@ -65,12 +66,69 @@ describe('HomePage', () => {
     const sources = createSources();
     vi.mocked(sources.loadSummary).mockResolvedValue(createSummary({
       failedDocuments: [{ ...document, status: 'failed', jobStatus: 'cancelled' }],
-      failedDocumentTotal: 1,
+      failedDocumentTotal: 0,
     }));
     renderWithRouter(<HomePage sources={sources} />);
 
     await screen.findByText('还没有动态');
     expect(screen.queryByRole('region', { name: '需要处理' })).not.toBeInTheDocument();
+  });
+
+  it('shows complete actionable counts when older work is absent from recent documents', async () => {
+    const sources = createSources();
+    vi.mocked(sources.loadSummary).mockResolvedValue(createSummary({
+      documents: [document],
+      documentTotal: 22,
+      processingDocumentTotal: 8,
+      failedDocuments: [{ ...document, id: 'failed', filename: 'broken.pdf', status: 'failed' }],
+      failedDocumentTotal: 9,
+    }));
+    renderWithRouter(<HomePage sources={sources} />);
+
+    const region = await screen.findByRole('region', { name: '需要处理' });
+    expect(await within(region).findByText('8 个文档正在处理')).toBeInTheDocument();
+    expect(within(region).getByText('9 个文档处理失败')).toBeInTheDocument();
+    expect(within(region).getByRole('link', { name: /8 个文档正在处理/ })).toHaveAttribute('href', '/documents?status=processing');
+    const recent = within(region).getByRole('list', { name: '最近文档' });
+    expect(within(recent).getByRole('link', { name: /handbook.pdf/ })).toHaveAttribute('href', '/knowledge-bases/kb1/documents?documentId=d1');
+    expect(recent).toHaveTextContent('已完成');
+    expect(within(recent).getAllByRole('listitem')).toHaveLength(1);
+  });
+
+  it('keeps the complete processing reminder when the recent sample is empty', async () => {
+    const sources = createSources();
+    vi.mocked(sources.loadSummary).mockResolvedValue(createSummary({ documents: [], documentTotal: 6, processingDocumentTotal: 6 }));
+    renderWithRouter(<HomePage sources={sources} />);
+
+    expect(await screen.findByText('6 个文档正在处理')).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: '最近文档' })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { status: 'uploaded' as const, jobStatus: 'pending' as const, label: '已上传' },
+    { status: 'parsing' as const, jobStatus: 'running' as const, label: '解析中' },
+  ])('shows the current retry state for $status despite an older cancellation code', async ({ status, jobStatus, label }) => {
+    const sources = createSources();
+    vi.mocked(sources.loadSummary).mockResolvedValue(createSummary({
+      documents: [{ ...document, status, jobStatus, errorCode: 'cancelled' }],
+      processingDocumentTotal: 1,
+    }));
+    renderWithRouter(<HomePage sources={sources} />);
+
+    const recent = await screen.findByRole('list', { name: '最近文档' });
+    expect(recent).toHaveTextContent(label);
+    expect(recent).not.toHaveTextContent('已取消');
+  });
+
+  it('shows cancellation for an older failed document without a current job status', async () => {
+    const sources = createSources();
+    vi.mocked(sources.loadSummary).mockResolvedValue(createSummary({
+      documents: [{ ...document, status: 'failed', errorCode: 'cancelled' }],
+      processingDocumentTotal: 1,
+    }));
+    renderWithRouter(<HomePage sources={sources} />);
+
+    expect(await screen.findByRole('list', { name: '最近文档' })).toHaveTextContent('已取消');
   });
 
   it('opens the import dialog from the home shortcut', async () => {

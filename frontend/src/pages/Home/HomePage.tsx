@@ -9,16 +9,15 @@ import { Button } from '../../components/ui/Button';
 import { AppShell } from '../../layouts/AppShell';
 import type {
   ActivityItemResponse,
-  GlobalDocumentItem,
   KnowledgeBaseStatsResponse,
 } from '../../types/api';
 import { formatCount, formatRelativeTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
-import { isTerminalDocumentStatus } from '../Documents/documentDisplay';
+import { documentDisplayStatusLabel } from '../Documents/documentDisplay';
 import { documentFailureCopy } from '../Documents/documentFailure';
 import { activityToItem } from './activityDisplay';
 import { createHomeLoaders } from './homeData';
-import type { HomeSources } from './homeData';
+import type { HomeDocuments, HomeFailures, HomeSources } from './homeData';
 
 
 
@@ -34,13 +33,12 @@ export function HomePage({ sources }: { sources?: HomeSources }) {
   const navigate = useNavigate();
   const loaders = useMemo(() => createHomeLoaders(sources), [sources]);
   const stats = useRegion(loaders.stats, null as KnowledgeBaseStatsResponse | null, '统计加载失败');
-  const documents = useRegion(loaders.documents, [] as GlobalDocumentItem[], '文档加载失败');
-  const failedDocuments = useRegion(loaders.failedDocuments, [] as GlobalDocumentItem[], '失败文档加载失败');
+  const documents = useRegion(loaders.documents, { items: [], processingTotal: 0 } as HomeDocuments, '文档加载失败');
+  const failedDocuments = useRegion(loaders.failedDocuments, { items: [], total: 0 } as HomeFailures, '失败文档加载失败');
   const activities = useRegion(loaders.activities, [] as ActivityItemResponse[], '动态加载失败');
   const [question, setQuestion] = useState('');
 
-  const processing = documents.data.filter((item) => !isTerminalDocumentStatus(item.status));
-  const actionableFailures = failedDocuments.data.filter((item) => item.jobStatus !== 'cancelled');
+  const actionableFailures = failedDocuments.data.items.filter((item) => item.jobStatus !== 'cancelled' && item.errorCode !== 'cancelled');
 
   // Real recorded events, not a merge of the three lists: deletes, restores and
   // membership changes have no row to reconstruct them from.
@@ -57,7 +55,7 @@ export function HomePage({ sources }: { sources?: HomeSources }) {
   }
 
   const activityLoading = activities.loading;
-  const needsAttention = actionableFailures.length > 0 || processing.length > 0;
+  const needsAttention = failedDocuments.data.total > 0 || documents.data.processingTotal > 0;
 
   return (
     <AppShell active="home" breadcrumbs={[{ label: '首页' }]}>
@@ -108,30 +106,47 @@ export function HomePage({ sources }: { sources?: HomeSources }) {
             {(documents.loading || failedDocuments.loading) && !needsAttention && <LoadingSkeleton announce compact columns={1} rows={1} />}
             {documents.error && <div className="home-attention__error" role="alert"><span>处理中状态暂不可用：{documents.error}</span><Button variant="secondary" onClick={documents.reload}>重试处理中状态</Button></div>}
             {failedDocuments.error && <div className="home-attention__error" role="alert"><span>失败文档状态暂不可用：{failedDocuments.error}</span><Button variant="secondary" onClick={failedDocuments.reload}>重试失败文档状态</Button></div>}
-            {actionableFailures.length > 0 && (
+            {failedDocuments.data.total > 0 && (
               <Link className="home-attention__row is-danger" to="/documents?status=failed">
                 <AlertTriangle aria-hidden="true" />
                 <span className="ui-cell-stack">
-                  <strong>{actionableFailures.length} 个文档处理失败</strong>
+                  <strong>{formatCount(failedDocuments.data.total)} 个文档处理失败</strong>
                   <small>
-                    {actionableFailures[0].filename}
-                    {actionableFailures.length > 1 ? ` 等 ${actionableFailures.length} 个` : ''}
-                    {' · '}
-                    {documentFailureCopy(actionableFailures[0]).reason}
+                    {actionableFailures[0]
+                      ? `${actionableFailures[0].filename} · ${documentFailureCopy(actionableFailures[0]).reason}`
+                      : '打开文档列表查看失败原因。'}
                   </small>
                 </span>
                 <ArrowRight aria-hidden="true" />
               </Link>
             )}
-            {processing.length > 0 && (
+            {documents.data.processingTotal > 0 && (
               <Link className="home-attention__row is-warn" to="/documents?status=processing">
                 <Loader aria-hidden="true" />
                 <span className="ui-cell-stack">
-                  <strong>{processing.length} 个文档正在处理</strong>
+                  <strong>{formatCount(documents.data.processingTotal)} 个文档正在处理</strong>
                   <small>处理完成后即可用于问答。</small>
                 </span>
                 <ArrowRight aria-hidden="true" />
               </Link>
+            )}
+            {needsAttention && !documents.error && documents.data.items.length > 0 && (
+              <div className="home-attention__recent">
+                <h2>最近文档</h2>
+                <ul aria-label="最近文档" className="home-attention__documents" role="list">
+                  {documents.data.items.map((item) => (
+                    <li key={item.id}>
+                      <Link className="home-attention__document" to={`/knowledge-bases/${encodeURIComponent(item.knowledgeBaseId)}/documents?documentId=${encodeURIComponent(item.id)}`}>
+                        <FileText aria-hidden="true" />
+                        <span className="ui-cell-stack">
+                          <strong>{item.filename}</strong>
+                          <small>{item.knowledgeBaseName} · {documentDisplayStatusLabel(item.status, item.jobStatus ?? (item.status === 'failed' && item.errorCode === 'cancelled' ? 'cancelled' : undefined))}</small>
+                        </span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
           </section>
         )}

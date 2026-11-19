@@ -1,4 +1,4 @@
-import { FileText, Library, Search, TextQuote } from 'lucide-react';
+import { BarChart2, FileText, Library, Loader2, Search, Tags, TextQuote, Upload } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
@@ -27,6 +27,12 @@ const navigationRows: PaletteRow[] = [
   { key: 'nav-kb', icon: Library, title: '知识库', subtitle: '管理知识资产', to: '/knowledge-bases' },
   { key: 'nav-kb-create', icon: Library, title: '新建知识库', subtitle: '创建一个新的知识空间', to: '/knowledge-bases?intent=create' },
   { key: 'nav-docs', icon: FileText, title: '文档', subtitle: '跨知识库查看全部文档', to: '/documents' },
+  { key: 'nav-docs-upload', icon: Upload, title: '上传文档', subtitle: '导入新文档到知识库', to: '/documents?intent=upload' },
+  { key: 'nav-tags', icon: Tags, title: '标签管理', subtitle: '管理文档标签与分类', to: '/tags' },
+];
+
+const adminNavigationRows: PaletteRow[] = [
+  { key: 'nav-quality', icon: BarChart2, title: '质量反馈', subtitle: '查看问答质量与评测', to: '/quality' },
 ];
 
 function suggestionHref(item: SearchSuggestItem): string {
@@ -37,7 +43,7 @@ function suggestionHref(item: SearchSuggestItem): string {
   return documentId ? `${base}?documentId=${encodeURIComponent(documentId)}` : base;
 }
 
-export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function CommandPalette({ open, isAdmin = false, onClose }: { open: boolean; isAdmin?: boolean; onClose: () => void }) {
   const navigate = useNavigate();
   const panelRef = useModalFocus<HTMLDivElement>(open, onClose);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -87,13 +93,18 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     return () => controller.abort();
   }, [debouncedQuery, open]);
 
+  const availableNavigation = useMemo(
+    () => (isAdmin ? [...navigationRows, ...adminNavigationRows] : navigationRows),
+    [isAdmin],
+  );
+
   const groups = useMemo<PaletteGroup[]>(() => {
     const keyword = query.trim();
     if (!keyword) {
-      return [{ label: '快捷操作', rows: navigationRows }];
+      return [{ label: '快捷操作', rows: availableNavigation }];
     }
 
-    const matchedNavigation = navigationRows.filter(
+    const matchedNavigation = availableNavigation.filter(
       (row) => row.title.includes(keyword) || row.subtitle.includes(keyword),
     );
 
@@ -134,13 +145,18 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       ...searchGroups,
       ...tail,
     ];
-  }, [query, results]);
+  }, [availableNavigation, query, results]);
 
   const flatRows = useMemo(() => groups.flatMap((group) => group.rows), [groups]);
 
   useEffect(() => {
     setCursor((current) => (current < flatRows.length ? current : 0));
   }, [flatRows.length]);
+
+  useEffect(() => {
+    if (!open) return;
+    panelRef.current?.querySelector<HTMLElement>('.palette__item.is-active')?.scrollIntoView?.({ block: 'nearest' });
+  }, [cursor, open, flatRows.length, panelRef]);
 
   function go(row: PaletteRow | undefined) {
     if (!row) return;
@@ -149,6 +165,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.nativeEvent.isComposing || event.key === 'Process' || event.keyCode === 229) return;
     if (event.key === 'ArrowDown') {
       event.preventDefault();
       setCursor((current) => (flatRows.length === 0 ? 0 : (current + 1) % flatRows.length));
@@ -199,6 +216,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
             ref={inputRef}
             value={query}
           />
+          {loading && <Loader2 aria-hidden="true" className="ui-spin" data-testid="palette-loading-spinner" />}
         </div>
 
         <div className="palette__results">

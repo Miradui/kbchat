@@ -215,8 +215,18 @@ describe('ChatSourcePreview', () => {
     const user = userEvent.setup();
     render(<ChatSourcePreview citation={citation} index={1} knowledgeBaseId="kb1" onClose={onClose} />);
     await screen.findByTitle('原文：手册.pdf');
+    expect(useMediaQuery).toHaveBeenCalledWith('(max-width: 1279px)');
     expect(screen.getByRole('dialog', { name: '原文预览' })).toHaveAttribute('aria-modal', 'true');
     await user.keyboard('{Escape}');
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('uses the non-modal split panel at 1280px and wider', async () => {
+    vi.mocked(useMediaQuery).mockReturnValue(false);
+    render(<ChatSourcePreview citation={citation} index={1} knowledgeBaseId="kb1" onClose={vi.fn()} />);
+    await screen.findByTitle('原文：手册.pdf');
+    expect(useMediaQuery).toHaveBeenCalledWith('(max-width: 1279px)');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: '原文预览' })).toBeInTheDocument();
   });
 });

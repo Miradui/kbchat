@@ -1,6 +1,6 @@
-import { Download, FileText, FileType, RotateCw, Search, Trash2 } from 'lucide-react';
+import { Download, FileEdit, FileText, FileType, GitCompareArrows, Library, RotateCw, ScanText, Search, Trash2 } from 'lucide-react';
 import { FormEvent, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 import { ApiError } from '../../api/client';
 import {
@@ -21,6 +21,7 @@ import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Drawer } from '../../components/ui/Drawer';
 import { SearchInput } from '../../components/ui/Field';
+import { OverflowMenu } from '../../components/ui/OverflowMenu';
 import { Pagination } from '../../components/ui/Pagination';
 import type { DocumentChunk, DocumentItem, DocumentPreviewResponse, KnowledgeBase } from '../../types/api';
 import { hasCapability } from '../../utils/access';
@@ -59,6 +60,7 @@ export function DocumentDetailDrawer({
   onClose,
 }: DocumentDetailDrawerProps) {
   const toast = useToast();
+  const navigate = useNavigate();
   const activeDocumentIdRef = useRef(documentId);
   const mountedRef = useRef(false);
   const mutationRef = useRef<symbol | null>(null);
@@ -442,7 +444,6 @@ export function DocumentDetailDrawer({
                 </dl>
 
                 <div className="doc-detail__actions">
-                  <Button disabled={submitting} variant="secondary" onClick={() => setComparing(true)}>版本对比</Button>
                   {canDownload && <Button
                     disabled={submitting}
                     leadingIcon={<Download aria-hidden="true" />}
@@ -463,16 +464,8 @@ export function DocumentDetailDrawer({
                   >
                     重新处理
                   </Button>}
-                  <span className="ui-toolbar__spacer" />
-                  {canWrite && canDownload && document.fileType === 'pdf' && document.pdfTextSummary?.ocr?.completedPages && !document.supersededById ? <Button variant="secondary" disabled={submitting} onClick={() => setCorrectingOCR(true)}>校对 OCR 文本</Button> : null}
-                  {canWrite && ['txt', 'md', 'markdown'].includes(document.fileType) && !document.supersededById && <Button variant="secondary" disabled={submitting} onClick={() => setEditingText(true)}>编辑正文</Button>}
                   {document.status === 'completed' && hasCapability(knowledgeBase, 'chat.use') && <Link className="ui-button ui-button--secondary" to={documentChatUrl([document])} onClick={onClose}>针对这份资料提问</Link>}
-                  <Link
-                    className="ui-button ui-button--ghost"
-                    to={`/knowledge-bases/${document.knowledgeBaseId}/documents`}
-                  >
-                    <span>在知识库中打开</span>
-                  </Link>
+                  <span className="ui-toolbar__spacer" />
                   {canWrite && <Button
                     disabled={submitting}
                     leadingIcon={<Trash2 aria-hidden="true" />}
@@ -485,6 +478,41 @@ export function DocumentDetailDrawer({
                   >
                     删除
                   </Button>}
+                  <OverflowMenu
+                    label="更多文档操作"
+                    items={[
+                      {
+                        label: '版本对比',
+                        disabled: submitting,
+                        icon: <GitCompareArrows aria-hidden="true" />,
+                        onSelect: () => setComparing(true),
+                      },
+                      ...(canWrite && canDownload && document.fileType === 'pdf' && document.pdfTextSummary?.ocr?.completedPages && !document.supersededById
+                        ? [{
+                            label: '校对 OCR 文本',
+                            disabled: submitting,
+                            icon: <ScanText aria-hidden="true" />,
+                            onSelect: () => setCorrectingOCR(true),
+                          }]
+                        : []),
+                      ...(canWrite && ['txt', 'md', 'markdown'].includes(document.fileType) && !document.supersededById
+                        ? [{
+                            label: '编辑正文',
+                            disabled: submitting,
+                            icon: <FileEdit aria-hidden="true" />,
+                            onSelect: () => setEditingText(true),
+                          }]
+                        : []),
+                      {
+                        label: '在知识库中打开',
+                        icon: <Library aria-hidden="true" />,
+                        onSelect: () => {
+                          onClose();
+                          navigate(`/knowledge-bases/${document.knowledgeBaseId}/documents`);
+                        },
+                      },
+                    ]}
+                  />
                 </div>
                 {accessError && <p className="ui-inline-error" role="alert">{accessError}</p>}
 
@@ -524,7 +552,7 @@ export function DocumentDetailDrawer({
                     {chunkId ? (
                       <span className="ui-panel__head-note">回答实际使用的片段</span>
                     ) : (
-                      <form onSubmit={handleChunkSearch} role="search" style={{ flex: '0 1 220px' }}>
+                      <form className="doc-detail__chunk-search" onSubmit={handleChunkSearch} role="search">
                         <SearchInput
                           aria-label="搜索内容片段"
                           onChange={(event) => setChunkQueryDraft(event.target.value)}

@@ -17,7 +17,6 @@ import (
 	chatprovider "kbchat/backend/internal/provider/chat"
 	embeddingprovider "kbchat/backend/internal/provider/embedding"
 	rerankprovider "kbchat/backend/internal/provider/rerank"
-	titleprovider "kbchat/backend/internal/provider/title"
 	"kbchat/backend/internal/repository"
 	"kbchat/backend/internal/rerank"
 	"kbchat/backend/internal/retrieval"
@@ -95,7 +94,6 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	embedder := embeddingprovider.NewOpenAICompatibleProvider(cfg)
 	reranker := newRerankProvider(cfg)
 	chatProvider := chatprovider.NewOpenAICompatibleProvider(cfg)
-	titleProvider := titleprovider.NewOpenAICompatibleProvider(cfg)
 	authService := service.NewAuthService(cfg, userRepo)
 	userService := service.NewUserService(userRepo)
 	knowledgeBaseService := service.NewKnowledgeBaseService(knowledgeBaseRepo, knowledgeBaseCategoryRepo, knowledgeBaseFavoriteRepo, knowledgeBaseViewRepo, knowledgeBaseWorkspacePreferenceRepo, knowledgeBaseTagRepo, knowledgeBaseTagBindingRepo, knowledgeBaseMemberRepo, userRepo)
@@ -107,7 +105,7 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	if deps.EmbeddingCache != nil {
 		retrievalService.SetEmbeddingCache(deps.EmbeddingCache)
 	}
-	chatService := service.NewChatService(cfg, chatRepo, knowledgeBaseRepo, retrievalService, chatProvider, titleProvider)
+	chatService := service.NewChatService(cfg, chatRepo, knowledgeBaseRepo, retrievalService, chatProvider)
 	chatService.SetUsageRepository(repository.NewModelUsageRepository(db))
 	chatService.SetUserRepository(userRepo)
 	evaluationService := service.NewEvaluationService(repository.NewEvaluationRepository(db), knowledgeBaseRepo, chatService)
@@ -309,10 +307,6 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	protected.GET("/chat/sessions", chatHandler.ListSessions)
 	protected.GET("/chat/messages/search", chatHandler.SearchMessages)
 	protected.GET("/chat/bookmarks", chatHandler.ListBookmarks)
-	protected.GET("/chat/templates", chatHandler.ListQuestionTemplates)
-	protected.POST("/chat/templates", chatHandler.SaveQuestionTemplate)
-	protected.PUT("/chat/templates/:templateId", chatHandler.SaveQuestionTemplate)
-	protected.DELETE("/chat/templates/:templateId", chatHandler.DeleteQuestionTemplate)
 	protected.PUT("/chat/messages/:messageId/bookmark", chatHandler.SaveBookmark)
 	protected.DELETE("/chat/messages/:messageId/bookmark", chatHandler.DeleteBookmark)
 	protected.GET("/chat/sessions/recycle-bin", chatHandler.ListRecycleBin)
@@ -321,7 +315,6 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	protected.GET("/chat/sessions/:id", chatHandler.GetSession)
 	protected.GET("/chat/sessions/:id/quality-issue", chatHandler.QualityIssue)
 	protected.PUT("/chat/sessions/:id/quality-issue", chatHandler.SaveQualityIssue)
-	protected.POST("/chat/sessions/:id/branches", chatHandler.CreateBranch)
 	protected.PUT("/chat/sessions/:id", chatHandler.UpdateSession)
 	protected.DELETE("/chat/sessions/:id", chatHandler.DeleteSession)
 	protected.POST("/chat/sessions/:id/archive", chatHandler.ArchiveSession)
@@ -350,7 +343,6 @@ func NewWithStorageAndDependencies(cfg config.Config, db *gorm.DB, logger *zap.L
 	protected.POST("/knowledge-bases/:id/evaluation-runs/:runId/cancel", evaluationHandler.CancelRun)
 	protected.GET("/search", globalSearchHandler.Search)
 	protected.GET("/search/suggest", globalSearchHandler.Suggest)
-	protected.GET("/search/export", globalSearchHandler.Export)
 
 	return r
 }

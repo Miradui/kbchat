@@ -65,13 +65,15 @@ type PDFOCRSummary struct {
 }
 
 type GlobalDocumentListQuery struct {
-	Q               string
-	KnowledgeBaseID *string
-	Status          string
-	FileType        string
-	Sort            string
-	Page            int
-	PageSize        int
+	// Internal home-summary filter; public document lists include cancelled work.
+	ExcludeCancelled bool
+	Q                string
+	KnowledgeBaseID  *string
+	Status           string
+	FileType         string
+	Sort             string
+	Page             int
+	PageSize         int
 }
 
 type DocumentCountsQuery struct {

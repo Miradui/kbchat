@@ -12,7 +12,7 @@ Gin Backend
     |-- PostgreSQL + pgvector
     |-- Redis
     |-- Document Storage (Local / MinIO S3)
-    |-- Embedding / Rerank / Chat / Title Providers
+    |-- Embedding / Rerank / Chat Providers
 ```
 
 ## 后端目录与职责
@@ -31,12 +31,12 @@ Gin Backend
 | `backend/internal/auth` | 密码与 JWT |
 | `backend/internal/access`、`backend/internal/authz` | 角色能力矩阵与共享知识库授权 |
 | `backend/internal/document` | parser、splitter、lexer、processor：解析、切片、关键词分词与文档处理 |
-| `backend/internal/embedding`、`backend/internal/rerank`、`backend/internal/chat`、`backend/internal/title` | 模型能力接口及相关值类型 |
-| `backend/internal/provider` | Chat、Embedding、Rerank、Title 的 HTTP 实现 |
+| `backend/internal/embedding`、`backend/internal/rerank`、`backend/internal/chat` | 模型能力接口及相关值类型 |
+| `backend/internal/provider` | Chat、Embedding、Rerank 的 HTTP 实现 |
 | `backend/internal/retrieval` | 向量召回、关键词召回、RRF 融合、Rerank、阈值过滤和检索管线 |
 | `backend/internal/storage` | 本地 / MinIO 文件保存、读取、物化和删除 |
 | `backend/internal/job` | 后台任务领取、执行与重试 |
-| `backend/internal/logger`、`backend/internal/observability` | zap 日志、OTel Trace/OTLP 导出、进程内指标和可公开的失败分类 |
+| `backend/internal/logger`、`backend/internal/observability` | zap 日志、有界进程内 Recorder 指标和可公开的失败分类 |
 | `backend/internal/apperror` | 统一业务错误 |
 | `backend/migrations` | PostgreSQL 结构与数据迁移 |
 
@@ -105,9 +105,8 @@ React -> Chat API -> 会话归属与知识库能力校验 -> 最近历史
 | Embedding | `backend/internal/embedding/provider.go` | `backend/internal/provider/embedding/openai.go` |
 | Rerank | `backend/internal/rerank/provider.go` | `backend/internal/provider/rerank/openai.go` |
 | Chat | `backend/internal/chat/provider.go` | `backend/internal/provider/chat/openai.go` |
-| Title | `backend/internal/title/title.go` | `backend/internal/provider/title/openai.go` |
 
-Chat、Embedding 和 Title 使用 `github.com/sashabaranov/go-openai` 调用兼容 API；供应商扩展 `/rerank` 由独立 Provider 实现。Provider 不依赖 handler 或 Gin。
+Chat 和 Embedding 使用 `github.com/sashabaranov/go-openai` 调用兼容 API；供应商扩展 `/rerank` 由独立 Provider 实现。Provider 不依赖 handler 或 Gin。首问标题由消息正文截取并条件更新，不调用模型。
 
 ## 异步任务
 
@@ -132,6 +131,6 @@ Chat、Embedding 和 Title 使用 `github.com/sashabaranov/go-openai` 调用兼�
 
 ## 可观测性边界
 
-HTTP、Provider HTTP、GORM与Redis复用OTel集成，业务阶段在service/retrieval/document埋点；数据访问仍经repository。任务保存W3C traceparent以关联重启后的worker。Recorder同时服务即时诊断与独立于Trace采样的Metrics，SystemService经queue repository注册有界采集。
+当前dev将同一个Recorder注入检索、聊天和管理员诊断；保存受控计数、每项最多512个耗时样本及近期Provider失败，服务重启归零。请求/问答时延经zap记录，诊断队列数据经repository读取，业务数据库访问仍保持现有分层。
 
-Collector分发Trace到Jaeger、Metrics到Prometheus，Grafana读取历史指标并通过exemplar链接Jaeger；zap保留Trace关联。遥测异步导出，不写业务明细表、不作为业务成功前置条件。配置与数据边界见 [可观测性](38-observability.md)。
+本分支没有OTel导出器、Trace响应字段、任务traceparent或观测Compose profile。Collector/Jaeger/Prometheus/Grafana及独立历史Metrics保留为 [历史方案](38-observability.md#历史-otel-方案)，不作为当前可执行依赖；需要继续实施时先明确用户范围，再同步代码、配置、迁移和验收。

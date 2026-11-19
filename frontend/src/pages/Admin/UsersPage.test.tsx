@@ -114,7 +114,8 @@ describe('UsersPage', () => {
     const confirmation = screen.getByRole('dialog', { name: '禁用用户' });
     expect(confirmation).toHaveTextContent('拥有 2 个知识库（含回收站）');
     await actor.click(within(confirmation).getByRole('button', { name: '取消' }));
-    await actor.click(screen.getByRole('button', { name: '转移 alice 的知识库' }));
+    await actor.click(screen.getByRole('button', { name: '更多 alice 操作' }));
+    await actor.click(screen.getByRole('menuitem', { name: '转移知识库（2）' }));
     expect(screen.getByRole('dialog', { name: '转移所有权' })).toHaveTextContent('全部 2 个知识库');
     await screen.findByRole('option', { name: '新所有者（new）' });
     await actor.selectOptions(screen.getByLabelText('新所有者'), 'new');
@@ -224,6 +225,7 @@ describe('UsersPage', () => {
   });
 
   it('hides disable, role and reset actions on the current administrator row', async () => {
+    const actor = userEvent.setup();
     renderUsersPage();
     const table = await screen.findByRole('table', { name: /用户列表/ });
     const rows = within(table).getAllByRole('row');
@@ -234,12 +236,16 @@ describe('UsersPage', () => {
 
     expect(within(selfRowElement as HTMLElement).getByRole('button', { name: '编辑 admin' })).toBeInTheDocument();
     expect(within(selfRowElement as HTMLElement).queryByRole('button', { name: /禁用 admin/ })).not.toBeInTheDocument();
-    expect(within(selfRowElement as HTMLElement).queryByRole('button', { name: /撤销 admin/ })).not.toBeInTheDocument();
-    expect(within(selfRowElement as HTMLElement).queryByRole('button', { name: /重置 admin/ })).not.toBeInTheDocument();
+
+    await actor.click(within(selfRowElement as HTMLElement).getByRole('button', { name: '更多 admin 操作' }));
+    expect(screen.queryByRole('menuitem', { name: '撤销管理员' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: '重置密码' })).not.toBeInTheDocument();
+    await actor.keyboard('{Escape}');
 
     expect(within(otherRow as HTMLElement).getByRole('button', { name: '禁用 alice' })).toBeInTheDocument();
-    expect(within(otherRow as HTMLElement).getByRole('button', { name: '授予 alice 管理员' })).toBeInTheDocument();
-    expect(within(otherRow as HTMLElement).getByRole('button', { name: '重置 alice 的密码' })).toBeInTheDocument();
+    await actor.click(within(otherRow as HTMLElement).getByRole('button', { name: '更多 alice 操作' }));
+    expect(screen.getByRole('menuitem', { name: '授予管理员' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '重置密码' })).toBeInTheDocument();
   });
 
   describe('create dialog', () => {
@@ -316,14 +322,16 @@ describe('UsersPage', () => {
     vi.mocked(resetAdminUserPassword).mockResolvedValue({ user: user(), password: 'Reset#Pass9' });
     renderUsersPage();
     await screen.findByRole('table', { name: /用户列表/ });
-    await clicking.click(screen.getByRole('button', { name: '重置 alice 的密码' }));
+    await clicking.click(screen.getByRole('button', { name: '更多 alice 操作' }));
+    await clicking.click(screen.getByRole('menuitem', { name: '重置密码' }));
 
     const confirm = await screen.findByRole('dialog', { name: '重置密码' });
     expect(resetAdminUserPassword).not.toHaveBeenCalled();
     await clicking.click(within(confirm).getByRole('button', { name: '取消' }));
     expect(resetAdminUserPassword).not.toHaveBeenCalled();
 
-    await clicking.click(screen.getByRole('button', { name: '重置 alice 的密码' }));
+    await clicking.click(screen.getByRole('button', { name: '更多 alice 操作' }));
+    await clicking.click(screen.getByRole('menuitem', { name: '重置密码' }));
     await clicking.click(within(await screen.findByRole('dialog', { name: '重置密码' })).getByRole('button', { name: '重置密码' }));
     expect(resetAdminUserPassword).toHaveBeenCalledWith('user-1');
     const result = await screen.findByRole('dialog', { name: '一次性密码' });
@@ -347,7 +355,8 @@ describe('UsersPage', () => {
       expect(updateAdminUser).toHaveBeenCalledWith('user-1', { displayName: 'Alice', status: 'disabled' });
     });
 
-    await clicking.click(await screen.findByRole('button', { name: '撤销 alice 的管理员' }));
+    await clicking.click(await screen.findByRole('button', { name: '更多 alice 操作' }));
+    await clicking.click(screen.getByRole('menuitem', { name: '撤销管理员' }));
     const revoke = await screen.findByRole('dialog', { name: '撤销管理员' });
     expect(updateAdminUserRole).not.toHaveBeenCalled();
     await clicking.click(within(revoke).getByRole('button', { name: '撤销管理员' }));
@@ -362,7 +371,8 @@ describe('UsersPage', () => {
     vi.mocked(updateAdminUserRole).mockRejectedValue(new ApiError(409, { code: 'LAST_ADMIN_REQUIRED', message: '不能撤销最后一位系统管理员' }));
     renderUsersPage();
     await screen.findByRole('table', { name: /用户列表/ });
-    await clicking.click(screen.getByRole('button', { name: '撤销 alice 的管理员' }));
+    await clicking.click(screen.getByRole('button', { name: '更多 alice 操作' }));
+    await clicking.click(screen.getByRole('menuitem', { name: '撤销管理员' }));
     const revoke = await screen.findByRole('dialog', { name: '撤销管理员' });
     await clicking.click(within(revoke).getByRole('button', { name: '撤销管理员' }));
     expect(await within(revoke).findByRole('alert')).toHaveTextContent('不能撤销最后一位系统管理员');

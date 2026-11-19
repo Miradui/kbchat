@@ -142,7 +142,7 @@ function KnowledgeBaseOverview() {
   return (
     <KnowledgeBaseLayout active="overview" knowledgeBase={knowledgeBase} onUpdated={setKnowledgeBase}>
       <div className="kb-detail__grid">
-        <div style={{ display: 'grid', gap: 'var(--s-4)' }}>
+        <div className="ui-panel__stack">
           <section className="ui-panel">
             <div className="ui-panel__head">
               <h2>文档处理</h2>
@@ -221,7 +221,7 @@ function KnowledgeBaseOverview() {
 
         <section className="ui-panel">
           <div className="ui-panel__head"><h2>基础信息</h2></div>
-          <div className="ui-panel__body" style={{ display: 'grid', gap: 'var(--s-4)' }}>
+          <div className="ui-panel__body ui-panel__stack">
             <div className="kb-info-grid">
               <InfoItem label="分类" value={categoryName} />
               <InfoItem label="更新时间" value={formatDateTime(knowledgeBase.updatedAt)} />
@@ -239,7 +239,7 @@ function KnowledgeBaseOverview() {
             */}
             <p className="sr-only" role="status">{statsLoading ? '正在加载统计…' : ''}</p>
             <div aria-busy={statsLoading}>
-              <div className="ui-panel__head" style={{ padding: 0 }}>
+              <div className="kb-trend-head">
                 <p className="ui-field__label">本{statsPeriod === 'day' ? '日' : '月'}趋势</p>
                 <SegmentedControl<'day' | 'month'>
                   label="统计周期"
@@ -275,7 +275,7 @@ function KnowledgeBaseOverview() {
             </div>
 
             <div>
-              <p className="ui-field__label" style={{ marginBottom: 'var(--s-2)' }}>标签</p>
+              <p className="ui-field__label kb-detail__tag-label">标签</p>
               {knowledgeBase.tags && knowledgeBase.tags.length > 0 ? (
                 <div className="kb-card__tags">
                   {knowledgeBase.tags.map((tag) => <span className="ui-tag" key={tag.id}>{tag.name}</span>)}

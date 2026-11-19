@@ -8,7 +8,9 @@ import { useToast } from '../../components/feedback/ToastProvider';
 import { useUnsavedChangesWarning } from '../../components/feedback/useUnsavedChangesWarning';
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
+import { Field, Input, Select, Textarea } from '../../components/ui/Field';
 import { IconButton } from '../../components/ui/IconButton';
+import { SegmentedControl } from '../../components/ui/SegmentedControl';
 import { useSystemCapabilities } from '../../hooks/useSystemCapabilities';
 import type { DocumentDuplicateDetails, DocumentItem, SystemCapabilities, TextDocumentInput } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
@@ -578,11 +580,9 @@ export function DocumentImportDialog({
             <strong>{fixedKnowledgeBaseName || '当前知识库'}</strong>
           </div>
         ) : (
-          <label className="doc-import__target">
-            <span>目标知识库</span>
-            <select
+          <Field label="目标知识库">
+            <Select
               aria-label="目标知识库"
-              className="ui-select"
               data-autofocus
               disabled={uploading || targetLocked || knowledgeBases.length === 0}
               onChange={(event) => {
@@ -595,18 +595,24 @@ export function DocumentImportDialog({
               {knowledgeBases.map((item) => (
                 <option key={item.id} value={item.id}>{item.name}</option>
               ))}
-            </select>
-          </label>
+            </Select>
+          </Field>
         )}
 
-        <div role="group" aria-label="导入方式">
-          <Button aria-pressed={mode === 'file'} disabled={uploading || preparing} onClick={() => setMode('file')} variant="secondary">上传文件</Button>
-          <Button aria-pressed={mode === 'text'} disabled={uploading || preparing} onClick={() => setMode('text')} variant="secondary">粘贴文本</Button>
-        </div>
-        {mode === 'text' && <div style={{ display: 'grid', gap: 'var(--s-3)' }}>
-          <label>文档标题<input className="ui-input" aria-label="文档标题" value={textTitle} disabled={uploading} onChange={(event) => setTextTitle(event.target.value)} /></label>
-          <label>文本格式<select className="ui-select" aria-label="文本格式" value={textFormat} disabled={uploading} onChange={(event) => setTextFormat(event.target.value as 'md' | 'txt')}><option value="md">Markdown</option><option value="txt">纯文本</option></select></label>
-          <label>正文<textarea className="ui-textarea" aria-label="正文" rows={8} value={textContent} disabled={uploading} onChange={(event) => setTextContent(event.target.value)} /></label>
+        <SegmentedControl
+          disabled={uploading || preparing}
+          label="导入方式"
+          onChange={setMode}
+          options={[
+            { value: 'file', label: '上传文件' },
+            { value: 'text', label: '粘贴文本' },
+          ]}
+          value={mode}
+        />
+        {mode === 'text' && <div className="ui-dialog__form">
+          <Field label="文档标题"><Input aria-label="文档标题" disabled={uploading} onChange={(event) => setTextTitle(event.target.value)} value={textTitle} /></Field>
+          <Field label="文本格式"><Select aria-label="文本格式" disabled={uploading} onChange={(event) => setTextFormat(event.target.value as 'md' | 'txt')} value={textFormat}><option value="md">Markdown</option><option value="txt">纯文本</option></Select></Field>
+          <Field label="正文"><Textarea aria-label="正文" disabled={uploading} onChange={(event) => setTextContent(event.target.value)} rows={8} value={textContent} /></Field>
           <p className="ui-muted">{formatDocumentBytes(textBytes)} / {formatDocumentBytes(upload.maxFileBytes)}。加入清单后点击“开始导入”。</p>
           <Button disabled={uploading} onClick={addText} variant="secondary">加入导入清单</Button>
         </div>}

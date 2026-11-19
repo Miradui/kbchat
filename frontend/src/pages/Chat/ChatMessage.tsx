@@ -1,4 +1,4 @@
-import { Bookmark, Check, ChevronDown, Copy, FileText, FileType, GitBranch, Pencil, RotateCw, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react';
+import { Bookmark, Check, ChevronDown, Copy, FileText, FileType, Pencil, RotateCw, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 import { memo, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
@@ -34,8 +34,6 @@ type MessageBubbleProps = {
   feedbackSaving: boolean;
   onFeedback: (messageId: string, rating: ChatFeedbackRating) => void;
   onBookmark?: (message: ChatMessageType) => void;
-  onBranch?: (message: ChatMessageType) => void;
-  branchingDisabled?: boolean;
   versionNavigation?: ReactNode;
   versionIndex?: number;
   versionCount?: number;
@@ -71,7 +69,6 @@ export const MessageBubble = memo(function MessageBubble({
   feedbackSaving,
   onFeedback,
   onBookmark,
-  onBranch, branchingDisabled = false,
   versionNavigation,
   versionIndex = 0, versionCount = 1, versionGroupId = '', versionsDisabled = false, onVersionChange,
   recovery,
@@ -229,7 +226,6 @@ export const MessageBubble = memo(function MessageBubble({
             {onBookmark && <IconButton label={message.bookmark ? '编辑收藏备注' : '收藏回答'} aria-pressed={Boolean(message.bookmark)} onClick={() => onBookmark(message)}>
               <Bookmark aria-hidden="true" fill={message.bookmark ? 'currentColor' : 'none'} />
             </IconButton>}
-            {onBranch && <IconButton label="从此回答创建分支" disabled={branchingDisabled} onClick={() => onBranch(message)}><GitBranch aria-hidden="true" /></IconButton>}
 
             {versionNavigation ?? (versionCount > 1 && onVersionChange ? <ChatAnswerVersionNavigation
               index={versionIndex} count={versionCount} disabled={versionsDisabled}

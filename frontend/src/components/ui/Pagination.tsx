@@ -5,6 +5,7 @@ type PaginationProps = {
   pageSize: number;
   total: number;
   pageSizeOptions?: number[];
+  compact?: boolean;
   onPageChange: (page: number) => void;
   onPageSizeChange?: (pageSize: number) => void;
 };
@@ -35,6 +36,7 @@ export function Pagination({
   pageSize,
   total,
   pageSizeOptions = [10, 20, 50],
+  compact = false,
   onPageChange,
   onPageSizeChange,
 }: PaginationProps) {
@@ -42,7 +44,7 @@ export function Pagination({
   if (total === 0) return null;
 
   return (
-    <nav aria-label="分页" className="ui-pagination">
+    <nav aria-label="分页" className={compact ? 'ui-pagination ui-pagination--compact' : 'ui-pagination'}>
       <span className="ui-pagination__total">共 {total} 条</span>
       <div className="ui-pagination__pages">
         <button
@@ -82,7 +84,7 @@ export function Pagination({
         {onPageSizeChange && (
           <select
             aria-label="每页数量"
-            className="ui-select"
+            className="ui-select ui-pagination__size"
             onChange={(event) => onPageSizeChange(Number(event.target.value))}
             value={pageSize}
           >

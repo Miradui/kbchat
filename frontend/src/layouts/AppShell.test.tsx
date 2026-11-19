@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getCurrentUser, listChatSessions, logout } from '../api/resources';
 import { currentUserStore } from '../store/currentUserStore';
+import { themeStore } from '../store/themeStore';
 import { tokenStore } from '../store/tokenStore';
 import { renderWithRouter } from '../test/render';
 import { AppShell, completeLogout, finishLocalLogout } from './AppShell';
@@ -62,6 +63,9 @@ function deferred<T>() {
 
 beforeEach(() => {
   currentUserStore.clear();
+  document.documentElement.removeAttribute('data-theme');
+  document.documentElement.removeAttribute('data-accent');
+  themeStore.init();
   mockedGetCurrentUser.mockReset().mockResolvedValue({
     id: 'user-1',
     username: 'admin',
@@ -72,6 +76,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   document.body.style.overflow = '';
+  document.documentElement.removeAttribute('data-theme');
+  document.documentElement.removeAttribute('data-accent');
   vi.unstubAllGlobals();
 });
 
@@ -361,5 +367,34 @@ describe('AppShell', () => {
     expect(request).toHaveBeenCalledOnce();
     expect(screen.queryByRole('menuitem', { name: '退出登录' })).not.toBeInTheDocument();
     result.resolve();
+  });
+
+  it('switches theme color presets from the account menu and keeps the menu open for live preview', async () => {
+    stubMatchMedia(false);
+    const user = userEvent.setup();
+    renderWithRouter(<AppShell active="home"><p>内容</p></AppShell>);
+
+    await user.click(await screen.findByRole('button', { name: '管理员' }));
+
+    const slateBlue = screen.getByRole('menuitemradio', { name: '岩板蓝' });
+    const sageGreen = screen.getByRole('menuitemradio', { name: '静谧灰绿' });
+    const terracotta = screen.getByRole('menuitemradio', { name: '暖陶土' });
+    const indigo = screen.getByRole('menuitemradio', { name: '深邃靛蓝' });
+
+    expect(slateBlue).toHaveAttribute('aria-checked', 'true');
+    expect(sageGreen).toHaveAttribute('aria-checked', 'false');
+    expect(document.documentElement).not.toHaveAttribute('data-accent');
+
+    await user.click(terracotta);
+    expect(terracotta).toHaveAttribute('aria-checked', 'true');
+    expect(slateBlue).toHaveAttribute('aria-checked', 'false');
+    expect(document.documentElement).toHaveAttribute('data-accent', 'terracotta');
+    expect(window.localStorage.getItem('rag.theme.accent')).toBe('terracotta');
+    expect(indigo).toBeVisible();
+
+    await user.click(slateBlue);
+    expect(slateBlue).toHaveAttribute('aria-checked', 'true');
+    expect(document.documentElement).not.toHaveAttribute('data-accent');
+    expect(window.localStorage.getItem('rag.theme.accent')).toBe('slate-blue');
   });
 });

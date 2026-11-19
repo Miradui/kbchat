@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { SearchInput } from './Field';
+import { Field, Input, SearchInput } from './Field';
 
 /**
  * `SearchInput` carries the mobile keyboard hints for every search box in the app, so
@@ -37,5 +37,28 @@ describe('SearchInput mobile keyboard hints', () => {
     render(<SearchInput aria-label="搜索" icon={<span aria-hidden="true" />} />);
 
     expect(screen.getByRole('searchbox', { name: '搜索' })).toHaveAttribute('type', 'search');
+  });
+
+  it('adds leading and trailing classes only when those slots are occupied', () => {
+    const { container } = render(<SearchInput aria-label="纯搜索框" icon={null} />);
+    const group = container.querySelector('.ui-input-group');
+    expect(group).not.toHaveClass('has-leading');
+    expect(group).not.toHaveClass('has-trailing');
+  });
+});
+
+describe('Input trailing slot inside Field', () => {
+  it('forwards aria-invalid and aria-describedby directly to the input when trailing is provided', () => {
+    render(
+      <Field error="请输入有效密码" htmlFor="pw-input" label="密码">
+        <Input id="pw-input" trailing={<button type="button">显示密码</button>} type="password" />
+      </Field>,
+    );
+
+    const input = screen.getByLabelText('密码');
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(input).toHaveAccessibleDescription('请输入有效密码');
+    expect(input.closest('.ui-input-group')).toHaveClass('has-trailing');
+    expect(input.closest('.ui-input-group')).not.toHaveClass('has-leading');
   });
 });

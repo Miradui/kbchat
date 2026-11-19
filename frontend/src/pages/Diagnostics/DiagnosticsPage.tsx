@@ -53,7 +53,6 @@ const PROVIDER_LABELS: Record<string, string> = {
   chat: '对话模型',
   embedding: '向量模型',
   rerank: '重排模型',
-  title: '标题模型',
 };
 
 const METRIC_LABELS: Record<string, string> = {
@@ -158,13 +157,22 @@ export function DiagnosticsPage({ sources = defaultSources }: { sources?: Diagno
   if (loading || error || user?.role !== 'admin') {
     return (
       <AppShell active="diagnostics" breadcrumbs={[{ label: '系统诊断' }]}>
-        <h1>系统诊断</h1>
-        {loading ? <LoadingSkeleton announce columns={3} rows={4} />
-          : error ? <ErrorState title="无法确认访问权限" description={error} onRetry={reload} />
-            : <>
-              <ErrorState title="需要系统管理员权限" description="当前账号无法查看系统诊断。请联系系统管理员处理服务问题。" />
-              <Link className="ui-button ui-button--secondary" to="/home">返回首页</Link>
-            </>}
+        <div className="diagnostics-page">
+          <header className="ui-page-heading diagnostics-page__header">
+            <div className="ui-page-heading__copy"><h1>系统诊断</h1></div>
+          </header>
+          <section className="ui-panel diagnostics-runtime">
+            {loading ? <LoadingSkeleton announce columns={3} rows={4} />
+              : error ? <ErrorState title="无法确认访问权限" description={error} onRetry={reload} />
+                : (
+                  <ErrorState
+                    action={<Link className="ui-button ui-button--secondary" to="/home">返回首页</Link>}
+                    description="当前账号无法查看系统诊断。请联系系统管理员处理服务问题。"
+                    title="需要系统管理员权限"
+                  />
+                )}
+          </section>
+        </div>
       </AppShell>
     );
   }
@@ -385,7 +393,7 @@ function DiagnosticsContent({ sources, onForbidden }: { sources: DiagnosticsSour
                     ? <EmptyState description="服务重启后还没有检索或生成请求。" title="暂无耗时样本" />
                     : (
                       <table className="ui-table diagnostics-latency__table">
-                        <caption className="ui-visually-hidden">各阶段调用耗时分位数</caption>
+                        <caption className="sr-only">各阶段调用耗时分位数</caption>
                         <thead>
                           <tr>
                             <th scope="col">阶段</th>

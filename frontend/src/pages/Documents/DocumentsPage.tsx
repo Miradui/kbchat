@@ -30,6 +30,7 @@ import { MetricStrip } from '../../components/ui/MetricStrip';
 import { OverflowMenu } from '../../components/ui/OverflowMenu';
 import { Pagination } from '../../components/ui/Pagination';
 import { useEntityMutation } from '../../hooks/useEntityMutation';
+import { useSystemCapabilities } from '../../hooks/useSystemCapabilities';
 import { AppShell } from '../../layouts/AppShell';
 import type { Capability, DocumentItem, DocumentSort, DocumentStatus, KnowledgeBase } from '../../types/api';
 import { canUnlessUnknown, hasCapability } from '../../utils/access';
@@ -113,6 +114,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
   const mutation = useEntityMutation();
   const list = useDocumentList(scopeKnowledgeBaseId);
   const { items, total, counts, loading, error, filters, activeFilterCount, refresh, setFilter } = list;
+  const { upload } = useSystemCapabilities();
 
   const knowledgeBaseOptions = useKnowledgeBaseOptions();
   const knowledgeBases = knowledgeBaseOptions.items;
@@ -208,10 +210,11 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
   );
 
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
-  const fileTypes = useMemo(
-    () => Array.from(new Set(items.map((item) => item.fileType).filter(Boolean))).sort(),
-    [items],
-  );
+  const fileTypes = useMemo(() => {
+    const supported = upload.allowedExtensions.map((ext) => ext.replace(/^\./, '').toLowerCase());
+    const fromItems = items.map((item) => item.fileType).filter(Boolean);
+    return Array.from(new Set([...supported, ...fromItems])).sort();
+  }, [items, upload.allowedExtensions]);
 
   function mutationKey(key: string) {
     return `${scopeKnowledgeBaseId ?? 'workspace'}:${key}`;
@@ -335,18 +338,28 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
     setImportOpen(false);
   }, [imports, importOpen, knowledgeBasesLoaded, scopeKnowledgeBaseId, uploadTargets]);
 
+  const importButton = (
+    <Button
+      disabled={uploadTargets.length === 0}
+      leadingIcon={<Upload aria-hidden="true" />}
+      onClick={openImport}
+    >
+      导入文档
+    </Button>
+  );
+
   return (
     <div className="doc-page">
-      <PageHeading className="doc-page__heading" title="文档资料" level={scopeKnowledgeBaseId ? 2 : 1}
-        description="管理原始资料，查看处理进度与可用于问答的内容。"
-        actions={<Button
-          disabled={uploadTargets.length === 0}
-          leadingIcon={<Upload aria-hidden="true" />}
-          onClick={openImport}
-        >
-          导入文档
-        </Button>}
-      />
+      {!scopeKnowledgeBaseId ? (
+        <PageHeading
+          actions={importButton}
+          className="doc-page__heading"
+          description="管理原始资料，查看处理进度与可用于问答的内容。"
+          title="文档资料"
+        />
+      ) : (
+        <h2 className="sr-only">文档资料</h2>
+      )}
       <div className="doc-toolbar">
         {knowledgeBaseOptions.error && <p className="ui-inline-error" role="alert">{knowledgeBaseOptions.error}<Button variant="link" onClick={() => void knowledgeBaseOptions.reload()}>重试知识库列表</Button></p>}
         <div className="ui-toolbar">
@@ -392,6 +405,8 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
           </Select>
 
           <span className="ui-toolbar__spacer" />
+
+          {scopeKnowledgeBaseId && importButton}
 
           <OverflowMenu
             label="更多文档操作"

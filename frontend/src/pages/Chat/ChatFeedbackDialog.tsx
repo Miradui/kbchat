@@ -4,7 +4,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { useUnsavedChangesWarning } from '../../components/feedback/useUnsavedChangesWarning';
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
-import { Field, Select } from '../../components/ui/Field';
+import { Field, Select, Textarea } from '../../components/ui/Field';
 import type { ChatFeedbackDetails, ChatFeedbackReason } from '../../types/api';
 import { chatFeedbackReasons } from '../../utils/chatFeedback';
 
@@ -36,7 +36,7 @@ export function ChatFeedbackDialog({ initial, onClose, onSubmit }: {
           {Object.entries(chatFeedbackReasons).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </Select></Field>
         <Field label="补充说明（可选）" hint="最多 1000 字，可说明哪里不准确或缺少哪些内容。">
-          <textarea aria-label="反馈补充说明" className="ui-input" disabled={busy} maxLength={1000} rows={4} value={comment} onChange={(event) => setComment(event.target.value)} />
+          <Textarea aria-label="反馈补充说明" disabled={busy} maxLength={1000} rows={4} value={comment} onChange={(event) => setComment(event.target.value)} />
         </Field>
         {error && <p className="ui-inline-error" role="alert">{error}</p>}
         <div className="ui-dialog__actions"><Button disabled={busy} onClick={close} variant="secondary">取消</Button><Button loading={busy} type="submit" variant="primary">保存反馈</Button></div>

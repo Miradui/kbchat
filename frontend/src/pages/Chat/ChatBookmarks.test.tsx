@@ -43,3 +43,23 @@ it('removes a bookmark and protects an unsaved note on cancel', async () => {
   await waitFor(() => expect(updated).toHaveBeenCalledWith('old-version', null));
   expect(deleteChatBookmark).toHaveBeenCalledWith('old-version');
 });
+
+it('switches to an inline note editor inside ChatBookmarksDialog without stacking dialogs', async () => {
+  vi.mocked(saveChatBookmark).mockResolvedValue({ ...bookmark, note: '更新备注' });
+  const updated = vi.fn();
+  const user = userEvent.setup();
+  renderWithRouter(<ChatBookmarksDialog onClose={vi.fn()} onSelect={vi.fn()} onUpdated={updated} />);
+  await screen.findByText('采购备注');
+
+  await user.click(screen.getByRole('button', { name: '编辑备注 / 取消收藏' }));
+
+  expect(screen.getAllByRole('dialog')).toHaveLength(1);
+  expect(screen.getByRole('dialog', { name: '编辑收藏备注' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '返回收藏列表' })).toBeInTheDocument();
+
+  fireEvent.change(screen.getByLabelText('个人备注'), { target: { value: '更新备注' } });
+  await user.click(screen.getByRole('button', { name: '保存收藏' }));
+
+  await waitFor(() => expect(updated).toHaveBeenCalledWith('old-version', expect.objectContaining({ note: '更新备注' })));
+  expect(screen.getByRole('dialog', { name: '收藏与笔记' })).toBeInTheDocument();
+});

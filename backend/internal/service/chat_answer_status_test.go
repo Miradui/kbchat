@@ -41,7 +41,7 @@ func TestSendMessagePersistsAnsweredStatus(t *testing.T) {
 		config.Config{VectorTopN: 30, RerankTopK: 5, ChatHistoryLimit: 10},
 		repository.NewChatRepository(db),
 		repository.NewKnowledgeBaseRepository(db),
-		retrieval, chatProvider, nil,
+		retrieval, chatProvider,
 	)
 
 	res, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{
@@ -72,7 +72,7 @@ func TestSendMessagePersistsNoBasisWhenRetrievalReturnsNothing(t *testing.T) {
 		config.Config{VectorTopN: 30, RerankTopK: 5, ChatHistoryLimit: 10},
 		repository.NewChatRepository(db),
 		repository.NewKnowledgeBaseRepository(db),
-		retrieval, chatProvider, nil,
+		retrieval, chatProvider,
 	)
 
 	res, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{
@@ -104,7 +104,7 @@ func TestSendMessagePersistsAnsweredForConversationIntent(t *testing.T) {
 		config.Config{ChatHistoryLimit: 10},
 		repository.NewChatRepository(db),
 		repository.NewKnowledgeBaseRepository(db),
-		retrieval, chatProvider, nil,
+		retrieval, chatProvider,
 	)
 
 	res, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{
@@ -138,7 +138,7 @@ func TestSendMessagePersistsModelRefusedAndHidesTheMarker(t *testing.T) {
 		config.Config{VectorTopN: 30, RerankTopK: 5, ChatHistoryLimit: 10},
 		repository.NewChatRepository(db),
 		repository.NewKnowledgeBaseRepository(db),
-		retrieval, chatProvider, nil,
+		retrieval, chatProvider,
 	)
 
 	res, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{
@@ -178,7 +178,7 @@ func TestSendMessageDoesNotReportRefusalForRefusalSoundingAnswer(t *testing.T) {
 		config.Config{VectorTopN: 30, RerankTopK: 5, ChatHistoryLimit: 10},
 		repository.NewChatRepository(db),
 		repository.NewKnowledgeBaseRepository(db),
-		retrieval, chatProvider, nil,
+		retrieval, chatProvider,
 	)
 
 	res, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{
@@ -213,7 +213,7 @@ func TestSendMessageRecordsRetrievalFailureTurn(t *testing.T) {
 		config.Config{VectorTopN: 30, RerankTopK: 5, ChatHistoryLimit: 10},
 		repository.NewChatRepository(db),
 		repository.NewKnowledgeBaseRepository(db),
-		retrieval, chatProvider, nil,
+		retrieval, chatProvider,
 	)
 
 	// The error still reaches the caller: recording the turn is about not losing the
@@ -261,7 +261,7 @@ func TestSendMessageDoesNotRecordTurnForClientErrors(t *testing.T) {
 		config.Config{VectorTopN: 30, RerankTopK: 5, ChatHistoryLimit: 10},
 		repository.NewChatRepository(db),
 		repository.NewKnowledgeBaseRepository(db),
-		retrieval, chatProvider, nil,
+		retrieval, chatProvider,
 	)
 
 	if _, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{

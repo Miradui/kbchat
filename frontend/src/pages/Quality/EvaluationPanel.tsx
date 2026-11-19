@@ -7,6 +7,7 @@ import { cancelEvaluationRun, createEvaluationRun, deleteEvaluationCase, getEval
 import { getCurrentUser } from '../../api/resources';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { EmptyState } from '../../components/feedback/EmptyState';
+import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { useToast } from '../../components/feedback/ToastProvider';
 import { Button } from '../../components/ui/Button';
 import { Checkbox, Field, Input, Select } from '../../components/ui/Field';
@@ -221,14 +222,14 @@ export function EvaluationPanel({ knowledgeBase }: { knowledgeBase: KnowledgeBas
         <Button data-modal-focus-fallback disabled={formLocked} leadingIcon={<Plus aria-hidden="true" />} ref={addButton} onClick={() => setEditing({})}>新增测试问题</Button></div>
       <div className="ui-panel__body evaluation-cases">
         {caseError && <p className="ui-inline-error" role="alert">{caseError} <Button onClick={() => void loadCases()} variant="link">重试</Button></p>}
-        {caseLoading ? <p>正在加载测试问题…</p> : !cases.length ? <EmptyState title="还没有测试问题" description="从差评保存问题，或手工添加常见问题与预期答案。" /> : <>
+        {caseLoading ? <LoadingSkeleton announce columns={2} rows={3} /> : !cases.length ? <EmptyState title="还没有测试问题" description="从差评保存问题，或手工添加常见问题与预期答案。" /> : <>
           <p className="ui-muted">同一次评测使用相同来源范围；切换范围请先取消选择。</p>
           <div className="evaluation-case-actions"><Button disabled={formLocked} onClick={() => setSelected(firstScopeCases(cases, selectedAnchor))} variant="ghost">选择前 20 题</Button><Button disabled={formLocked} onClick={() => setSelected([])} variant="ghost">取消选择</Button></div>
           {cases.map((item) => <article className="evaluation-case" key={item.id}>
             <label><Checkbox id={`evaluation-case-${item.id}`} aria-label={`选择测试问题：${item.question}`} checked={selected.includes(item.id)} disabled={formLocked || (!selected.includes(item.id) && (selected.length >= 20 || Boolean(selectedAnchor && evaluationScopeKey(selectedAnchor) !== evaluationScopeKey(item))))} onChange={(event) => setSelected((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /><strong>{item.question}</strong></label>
             <p>{evaluationScopeLabel(item)} {item.sourceSessionId && <Link to={`/chat/${item.sourceSessionId}`}>查看来源会话</Link>}</p>
             <p>{item.requireCitation ? '要求引用' : '不要求引用'} · {item.requiredKeywords.length ? `关键词：${item.requiredKeywords.join('、')}` : '未设置关键词'}</p>
-            <div><Button disabled={formLocked} variant="ghost" onClick={() => setEditing(item)}>编辑</Button><Button disabled={formLocked} variant="ghost" onClick={() => { setDeleting(item); setDeleteError(''); }}>删除</Button></div>
+            <div className="evaluation-case__actions"><Button disabled={formLocked} variant="ghost" onClick={() => setEditing(item)}>编辑</Button><Button disabled={formLocked} variant="ghost" onClick={() => { setDeleting(item); setDeleteError(''); }}>删除</Button></div>
           </article>)}
         </>}
       </div>
@@ -257,7 +258,7 @@ export function EvaluationPanel({ knowledgeBase }: { knowledgeBase: KnowledgeBas
       <div className="ui-panel__head"><div><h2>运行记录与对比</h2><span className="ui-panel__head-note">保留最近 50 次运行入口；执行中的任务在后台继续。</span></div><Button leadingIcon={<RefreshCw aria-hidden="true" />} onClick={() => void loadRuns()} variant="ghost">刷新运行记录</Button></div>
       <div className="ui-panel__body ui-form">
         {runError && <p className="ui-inline-error" role="alert">{runError}</p>}
-        {runLoading ? <p>正在加载运行记录…</p> : !runs.length ? <p className="ui-muted">选择测试问题，提交第一次评测后即可查看回答和来源。</p> : <>
+        {runLoading ? <LoadingSkeleton announce columns={2} rows={2} /> : !runs.length ? <p className="ui-muted">选择测试问题，提交第一次评测后即可查看回答和来源。</p> : <>
           <div className="evaluation-run-selectors">
             <Field label="查看运行"><Select aria-label="查看评测运行" value={candidateId} onChange={(event) => { setCandidateId(event.target.value); if (event.target.value === baselineId) setBaselineId(''); }}>
               {runs.map((run) => <option key={run.id} value={run.id}>{run.name} · {formatDateTime(run.createdAt)} · {evaluationStatusLabels[run.status]} {run.completedCount}/{run.total}</option>)}
@@ -269,7 +270,7 @@ export function EvaluationPanel({ knowledgeBase }: { knowledgeBase: KnowledgeBas
           {activeRun && isEvaluationActive(activeRun) && <div className="evaluation-running"><span role="status">{evaluationStatusLabels[activeRun.status]} · 已完成 {activeRun.completedCount} / {activeRun.total} 题</span>
             <Button loading={cancelBusy} variant="secondary" onClick={() => void cancelRun(activeRun)}>取消运行</Button></div>}
           {detailsError && <p className="ui-inline-error" role="alert">{detailsError} <Button variant="link" onClick={() => setDetailsVersion((value) => value + 1)}>重试详情</Button></p>}
-          {activeRun && (!baselineId || baseRun) ? <EvaluationComparison run={activeRun} baseline={baseRun} /> : <p>正在加载评测详情…</p>}
+          {activeRun && (!baselineId || baseRun) ? <EvaluationComparison run={activeRun} baseline={baseRun} /> : <LoadingSkeleton announce columns={2} rows={3} />}
         </>}
       </div>
     </section>

@@ -31,7 +31,7 @@ func TestCitationsKeepSourceOffsetsThroughPersistence(t *testing.T) {
 		"answer",
 	}}
 	service := NewChatService(config.Config{VectorTopN: 30, RerankTopK: 5, ChatHistoryLimit: 10},
-		repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), retrieval, chatProvider, nil)
+		repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), retrieval, chatProvider)
 
 	res, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{Content: "怎么安装", ClientRequestID: uuid.New().String()})
 	if err != nil {

@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-  <style>svg{color:#356f6d}@media(prefers-color-scheme:dark){svg{color:#b4d0c2}}</style>
+  <style>svg{color:#2b5b8c}@media(prefers-color-scheme:dark){svg{color:#9ac2e8}}</style>
   <g transform="translate(6 4) scale(1.125)" fill="currentColor">
     <path d="M14 5h10a4 4 0 0 1 4 4v10a4 4 0 0 1-4 4h-1v-9a5 5 0 0 0-5-5h-8a4 4 0 0 1 4-4Z" opacity=".35"/>
     <path d="M8 10h10a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4h-5l-5 4v-4a4 4 0 0 1-4-4v-8a4 4 0 0 1 4-4ZM9 15v2h8v-2H9Zm0 5v2h5v-2H9Z" fill-rule="evenodd"/>

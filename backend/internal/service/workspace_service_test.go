@@ -52,7 +52,6 @@ func newWorkspaceTestServices(t *testing.T) workspaceTestServices {
 	}
 	if err := db.AutoMigrate(
 		&model.ChatBookmark{},
-		&model.QuestionTemplate{},
 		&model.User{},
 		&model.UserAvatar{},
 		&model.KnowledgeBase{},
@@ -118,7 +117,7 @@ func newWorkspaceTestServices(t *testing.T) workspaceTestServices {
 		auth:       NewAuthService(config.Config{JWTSecret: strings.Repeat("test-secret-", 4), JWTExpiresIn: "24h"}, userRepo),
 		users:      NewUserService(userRepo),
 		kbs:        kbService,
-		chats:      NewChatService(config.Config{ChatHistoryLimit: 10}, chatRepo, kbRepo, nil, nil, nil),
+		chats:      NewChatService(config.Config{ChatHistoryLimit: 10}, chatRepo, kbRepo, nil, nil),
 		categories: NewKnowledgeBaseCategoryService(categoryRepo, kbRepo),
 		tags:       NewKnowledgeBaseTagService(tagRepo, tagBindingRepo),
 		documents:  NewDocumentService(config.Config{MaxUploadSizeMB: 50}, documentRepo, chunkRepo, kbRepo, storageCleanupRepo, storage.NewLocalStorage(uploadRoot)),

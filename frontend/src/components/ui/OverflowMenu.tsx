@@ -12,6 +12,7 @@ import {
 } from 'react';
 
 import { IconButton } from './IconButton';
+import { moveMenuFocus } from './menuFocus';
 
 export type OverflowMenuItem = {
   label: string;
@@ -142,22 +143,7 @@ export function OverflowMenu({ label, items, disabled = false, contextTargetRef 
       triggerRef.current?.focus();
       return;
     }
-    const controls = Array.from(
-      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)'),
-    );
-    if (controls.length === 0) return;
-    const currentIndex = controls.indexOf(document.activeElement as HTMLButtonElement);
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    if (event.key === 'Home') {
-      controls[0]?.focus();
-    } else if (event.key === 'End') {
-      controls.at(-1)?.focus();
-    } else {
-      const direction = event.key === 'ArrowDown' ? 1 : -1;
-      const nextIndex = (currentIndex + direction + controls.length) % controls.length;
-      controls[nextIndex]?.focus();
-    }
+    moveMenuFocus(event, '[role="menuitem"]:not(:disabled)');
   }
 
   return (

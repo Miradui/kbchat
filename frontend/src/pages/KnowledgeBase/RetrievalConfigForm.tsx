@@ -4,6 +4,7 @@ import type { FormEvent } from 'react';
 
 import { updateKnowledgeBase } from '../../api/resources';
 import { useToast } from '../../components/feedback/ToastProvider';
+import { useUnsavedChangesWarning } from '../../components/feedback/useUnsavedChangesWarning';
 import { Button } from '../../components/ui/Button';
 import { Checkbox, Field, Input } from '../../components/ui/Field';
 import { useSystemCapabilities } from '../../hooks/useSystemCapabilities';
@@ -46,6 +47,7 @@ export function RetrievalConfigForm({ knowledgeBase, onUpdated }: RetrievalConfi
 
   const dirty = (['vectorTopN', 'rerankTopK', 'scoreThreshold', 'enableRerank', 'enableKeyword'] as const)
     .some((key) => config[key] !== knowledgeBase.retrievalConfig[key]);
+  useUnsavedChangesWarning(editable && dirty);
 
   // Bounds published by GET /system/capabilities, applied here so the user sees
   // the clamp before submitting. See docs/04-api-design.md (GET /system/capabilities).

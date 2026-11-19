@@ -1,4 +1,4 @@
-.quality-page { display: grid; gap: var(--s-5); margin: 0 auto; max-width: var(--home-max); }
+.quality-page { display: grid; gap: var(--s-5); margin: 0 auto; max-width: var(--content-max); }
 .evaluation-panel, .evaluation-cases, .evaluation-comparison { display: grid; gap: var(--s-5); min-width: 0; }
 .evaluation-case-dialog { max-height: calc(100dvh - var(--s-10)); overflow-y: auto; }
 .evaluation-checkbox, .evaluation-case-actions, .evaluation-running { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-3); }
@@ -7,7 +7,7 @@
 .evaluation-case > label { align-items: flex-start; display: flex; gap: var(--s-3); min-width: 0; }
 .evaluation-case strong { font-size: var(--t-body); overflow-wrap: anywhere; }
 .evaluation-case > p { color: var(--text-muted); font-size: var(--t-small); grid-column: 1; overflow-wrap: anywhere; padding-left: var(--s-8); }
-.evaluation-case > div { grid-column: 2; grid-row: 1 / 3; }
+.evaluation-case__actions { align-self: start; display: flex; gap: var(--s-1); grid-column: 2; grid-row: 1; }
 .evaluation-config { display: grid; gap: var(--s-4); grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .evaluation-run-selectors, .evaluation-comparison__grid.has-baseline { display: grid; gap: var(--s-4); grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .evaluation-comparison__grid { display: grid; min-width: 0; }
@@ -74,7 +74,10 @@
 .quality-gaps__content dd { color: var(--text-secondary); line-height: 1.6; margin: 0; word-break: break-word; }
 .quality-gaps__advice { font-size: var(--t-small); line-height: 1.6; margin: 0; }
 .quality-gaps__meta { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-2); }
-.quality-gaps__meta .ui-button { align-items: center; display: inline-flex; gap: var(--s-1); margin-left: auto; }
+.quality-feedback__actions,
+.quality-gaps__actions { align-items: center; display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.quality-gaps__actions { margin-left: auto; }
+.quality-gaps__meta .ui-button { align-items: center; display: inline-flex; gap: var(--s-1); }
 .quality-gaps__meta .ui-button svg { height: 14px; width: 14px; }
 
 @media (max-width: 680px) {
@@ -89,7 +92,9 @@
   .quality-gaps .ui-panel__head .ui-field, .quality-gaps .ui-panel__head .ui-select { width: 100%; }
   .quality-gaps__item-head { align-items: flex-start; flex-wrap: wrap; }
   .quality-gaps__item-head .ui-button { margin-left: 42px; }
-  .quality-gaps__meta .ui-button { margin-left: 0; }
+  .quality-gaps__actions { margin-left: 0; }
+  .evaluation-case { grid-template-columns: minmax(0, 1fr); }
+  .evaluation-case__actions { grid-column: 1; grid-row: auto; padding-left: var(--s-8); }
 }
 
 /* Usage panel: controls row above everything it scopes, then totals, chart, table. */
@@ -105,11 +110,12 @@
   --usage-axis: var(--line-strong);
   margin: 0; position: relative; width: 100%;
 }
-.quality-usage__svg { display: block; font-family: var(--font); height: auto; max-height: 280px; touch-action: none; width: 100%; }
+.quality-usage__svg { border-radius: var(--r-sm); display: block; font-family: var(--font); height: auto; max-height: 280px; touch-action: none; width: 100%; }
+.quality-usage__svg:focus-visible { box-shadow: var(--ring); outline: none; }
 .quality-usage__grid { stroke: var(--usage-grid); stroke-width: 1; }
 .quality-usage__axis { stroke: var(--usage-axis); stroke-width: 1; }
-.quality-usage__tick { fill: var(--text-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
-.quality-usage__label { fill: var(--text); font-size: 12px; font-weight: 600; }
+.quality-usage__tick { fill: var(--text-faint); font-size: var(--t-micro); font-variant-numeric: tabular-nums; }
+.quality-usage__label { fill: var(--text); font-size: var(--t-micro); font-weight: var(--fw-semibold); }
 .quality-usage__line { fill: none; stroke: var(--usage-series); stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
 .quality-usage__area { fill: var(--usage-series); opacity: 0.1; }
 .quality-usage__dot { fill: var(--usage-series); stroke: var(--surface); stroke-width: 2; }

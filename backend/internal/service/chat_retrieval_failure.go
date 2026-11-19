@@ -86,7 +86,5 @@ func (s *ChatService) recordRetrievalFailure(
 	}
 	// Best effort: the caller is already returning an error, so a failure to
 	// record it must not replace that error with a different one.
-	if err := s.chats.CreateMessagesIfUnchanged(ctx, chatMessageIDs(history), userMessage, assistantMessage); err == nil {
-		s.updateSessionTitleIfNeeded(ctx, session, content, history, assistantMessage)
-	}
+	_ = s.chats.CreateMessagesWithTitleIfUnchanged(ctx, chatMessageIDs(history), session, firstQuestionSessionTitle(session, content, history), userMessage, assistantMessage)
 }

@@ -5,7 +5,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { useUnsavedChangesWarning } from '../../components/feedback/useUnsavedChangesWarning';
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
-import { Checkbox, Field } from '../../components/ui/Field';
+import { Checkbox, Field, Textarea } from '../../components/ui/Field';
 import type { EvaluationCase, EvaluationCaseInput } from '../../types/evaluation';
 import { getErrorMessage } from '../../utils/errors';
 
@@ -43,10 +43,10 @@ export function EvaluationCaseDialog({ knowledgeBaseId, initial, onClose, onSave
     <Dialog open className="evaluation-case-dialog" title={initial?.id ? '编辑测试问题' : '保存测试问题'} description="使用可以独立理解的问题；参考答案供人工核对，关键词和引用要求用于自动检查。" onClose={close}>
       <form className="ui-form" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
         {initial?.sourceSessionId && <p>复测沿用来源会话的自动、跨库或指定文档范围。该测试及运行结果仅本人在仍有全部来源权限时可见。</p>}
-        <Field label="测试问题"><textarea aria-label="测试问题" className="ui-input" required disabled={busy} rows={3} maxLength={4000} value={question} onChange={(event) => setQuestion(event.target.value)} /></Field>
-        <Field label="参考答案（可选）"><textarea aria-label="参考答案" className="ui-input" disabled={busy} rows={3} maxLength={8000} value={expected} onChange={(event) => setExpected(event.target.value)} /></Field>
+        <Field label="测试问题"><Textarea aria-label="测试问题" required disabled={busy} rows={3} maxLength={4000} value={question} onChange={(event) => setQuestion(event.target.value)} /></Field>
+        <Field label="参考答案（可选）"><Textarea aria-label="参考答案" disabled={busy} rows={3} maxLength={8000} value={expected} onChange={(event) => setExpected(event.target.value)} /></Field>
         <Field label="必须包含的关键词（可选）" hint="每行一个，最多 20 个。不区分大小写，按字面文本匹配。">
-          <textarea aria-label="必须包含的关键词" className="ui-input" disabled={busy} rows={3} value={keywords} onChange={(event) => setKeywords(event.target.value)} />
+          <Textarea aria-label="必须包含的关键词" disabled={busy} rows={3} value={keywords} onChange={(event) => setKeywords(event.target.value)} />
         </Field>
         <label className="evaluation-checkbox"><Checkbox checked={citation} disabled={busy} onChange={(event) => setCitation(event.target.checked)} />回答必须包含引用</label>
         {error && <p className="ui-inline-error" role="alert">{error}</p>}

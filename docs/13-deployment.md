@@ -1,8 +1,8 @@
 # 部署运维
 
-当前源码要求数据库迁移至 **049**。本页面向Linux单机部署：Nginx提供静态前端并代理Go后端，后端连接PostgreSQL/pgvector、Redis、本地/MinIO存储及模型服务。文档worker保持单实例。
+当前源码的迁移要求见 [数据库设计](03-database-design.md)，并与实际SQL和启动检查核对。本页面向Linux单机部署：Nginx提供静态前端并代理Go后端，后端连接PostgreSQL/pgvector、Redis、本地/MinIO存储及模型服务。文档worker保持单实例。
 
-`deploy/docker-compose.yml` 默认提供PostgreSQL/Redis，可选观测profile提供Collector、Jaeger、Prometheus和Grafana；它不包含业务前后端镜像、Nginx或TLS。当前环境是否已升级须现场核实，不能使用历史PID或旧迁移记录判断。
+当前 `deploy/docker-compose.yml` 只提供PostgreSQL/Redis，不含观测profile、业务前后端镜像、Nginx或TLS。OTel/看板部署保留为历史方案，不能按它启动本分支缺失的组件；当前环境是否已升级须现场核实，不能用旧PID或迁移记录判断。
 
 | 任务 | 入口 |
 | --- | --- |
@@ -42,7 +42,7 @@
 | Redis | Redis 7 |
 | Web Server | Nginx 1.24+ |
 
-服务器还需要能够通过 HTTPS 访问配置的 Chat、Title、Embedding 和 Rerank Provider。
+服务器还需要能够通过 HTTPS 访问配置的 Chat、Embedding 和 Rerank Provider。
 
 建议至少准备：
 
@@ -84,11 +84,9 @@ sudo install -d -o rag -g rag -m 0750 /var/lib/rag/uploads
 | `REDIS_ADDR` / `REDIS_PASSWORD` | 实际地址与密码；固定窗口限流和Embedding缓存共用客户端 |
 | `TRUSTED_PROXY_CIDRS` | 同机Nginx通常为`127.0.0.1/32,::1/128`；按真实代理链配置，不能信任全部网段 |
 | `CHAT_*` / `EMBEDDING_*` / `RERANK_*` | 实际模型端点、凭据与模型；标准RAG启用Rerank，默认strict失败策略 |
-| `TITLE_*` | 可选独立标题模型；未配置密钥时使用首问摘要兜底 |
 | `STORAGE_PROVIDER` | `local`或`minio`；MinIO保持私有，历史本地文件仍需保留 |
 | `UPLOAD_DIR` | 例如`/var/lib/rag/uploads`，独立持久目录 |
 | `RAG_ALLOW_AUTOMIGRATE` | 保持false；生产禁止GORM自动建表 |
-| `OTEL_EXPORTER_OTLP_*_ENDPOINT` | 按需设置Trace/Metrics两个端点；观测组件不作为业务成功前置条件 |
 
 环境文件权限：
 
@@ -227,11 +225,11 @@ cd /opt/rag/app/backend
 
 该命令会按文件名顺序执行 `backend/migrations/*.sql`。
 
-`cmd/server` 启动时不再创建表：它只做只读结构断言，缺列、缺表或缺少 001/020/039/041/043/048 的 CHECK 约束都会直接拒绝启动并提示对应迁移。生产数据库账号因此不需要 DDL 权限。仅当显式设置 `RAG_ALLOW_AUTOMIGRATE=true` 且 `APP_ENV` 不是 `production` 时，启动才会退回 GORM 建表；这条路径只适合可丢弃的本地库，建出的表与迁移不等价，见环境配置文档。
+现行要求是生产启动只做只读结构断言，缺失结构由显式SQL迁移补齐；AutoMigrate仅允许明确启用的可丢弃开发库。2026-11-19核查发现当前 `cmd/server` 仍无条件调用 `database.AutoMigrate`，会尝试创建缺表后验证，未按 `RAG_ALLOW_AUTOMIGRATE` / `APP_ENV` 分流。这是未满足的生产入口约定，见 [CHK-003](15-backlog.md#尚未关闭的工程事项)，须修正并验证后再作为生产发布依据；不能用当前启动行为替代SQL迁移。
 
 ### 7.3 已有数据库
 
-当前源码要求迁移至 **049**。根据目标库的实际记录逐文件补齐，不根据旧交接猜测当前版本；同编号文件以完整文件名为准。
+根据 [当前迁移要求](03-database-design.md) 与目标库的实际记录逐文件补齐，不根据旧交接猜测当前版本；同编号文件以完整文件名为准。
 
 | 迁移范围 | 关键内容与额外操作 |
 | --- | --- |
@@ -244,15 +242,18 @@ cd /opt/rag/app/backend
 | 040–043 | 上传凭据、表格设置、版本策略、PDF快照与OCR错误码；不自动重处理旧PDF |
 | 044–047 | 指定文档范围、OCR校对基线、私人评测与问题跟进 |
 | 048 | `general`意图约束；缺少时启动拒绝 |
-| 049 | 文档任务traceparent；缺列时启动拒绝 |
+| 049 | 退役个人模板表与分支请求编号，保留历史会话、来源、收藏和模型费用 |
 
-已完成048的环境可单独应用最新迁移：
+当前dev最高迁移为049。历史任务traceparent方案不在源码中，049目前用于功能退役。按目标库的实际记录选择缺失文件：只应用到047时先执行048；已应用048时仅执行049。备份并停止旧写入者后执行：
 
 ```bash
-./bin/rag-migrate -migration 049_document_job_traceparent.sql
+./bin/rag-migrate -migration 048_chat_message_general_intent.sql
+./bin/rag-migrate -migration 049_retire_personal_chat_features.sql
 ```
 
-先备份并停止旧写入者，再迁移并启动匹配的前后端。迁移不会自动重建向量或回填OCR/旧来源，确需重处理时单独执行。不要用AutoMigrate补迁移：它可能创建缺少CHECK/外键的表，使后续`CREATE TABLE IF NOT EXISTS`跳过真实结构。当前发布要求检查以迁移与`database.EnsureSchema`为准。
+049会删除个人提问模板正文，回退须恢复对应备份及原结构；它不删除历史分支消息、来源链接、收藏备注或标题费用记录。
+
+先备份并停止旧写入者，再迁移并启动匹配的前后端。迁移不会自动重建向量或回填OCR/旧来源，确需重处理时单独执行。不要用AutoMigrate补迁移：它可能创建缺少CHECK/外键的表，使后续`CREATE TABLE IF NOT EXISTS`跳过真实结构。当前发布要求检查以迁移与实际启动入口为准。
 
 `-migration`只接受`migrations/`中的完整文件名，不接受路径；单文件在一个事务中执行，但不会检查前置迁移，必须保留部署台账。
 
@@ -264,7 +265,7 @@ cd /opt/rag/app/backend
 
 023 仅处理连接 `current_schema()` 下已知业务表的无时区时间列，按表合并 `ALTER COLUMN`，使用 `AT TIME ZONE 'UTC'` 保持现有时间含义；已是 `timestamptz` 的列跳过，可重复执行。这是类型升级，不自动修正历史时间偏差。迁移需要表锁，宜安排维护窗口；单文件事务失败会回滚，命令当前总超时为 30 秒，大库应提前评估耗时。
 
-核对记录数、时间值、默认值和索引后启动新版 backend。新版启动检查发现旧时间列会报错并提示 023；启动不再自动建表，也不会代替这次类型迁移。其他 schema 或环境须按自己的连接配置与迁移记录分别升级。
+核对记录数、时间值、默认值和索引后启动匹配的backend。时间字段校验发现旧时间列会报错并提示023，不会代替这次类型迁移；当前server仍会在校验前调用AutoMigrate创建缺表，生产入口须按[CHK-003](15-backlog.md#尚未关闭的工程事项)修正并验证。其他schema或环境须按自己的连接配置与迁移记录分别升级。
 
 尚未完成混合检索迁移024时，确认001–023已执行，在维护窗口内执行：
 
@@ -448,7 +449,7 @@ HTTP 200表示进程仍能响应；依赖异常时仍返回200，必须查看`st
 
 推荐顺序：
 
-1. 在独立构建目录完成候选版本的后端 test/vet/build，以及前端 `npm ci`、lint、`typecheck:test`、test、build；CI 使用一次性 PostgreSQL 验证完整迁移和启动约束。
+1. 在独立构建目录完成同一候选的后端test/vet/build、前端npm ci/lint/typecheck:test/test/build，并确认适用CI在该目标提交结束且通过。当前CI不提供PostgreSQL，完整迁移与生产启动须在已授权隔离PostgreSQL单独验证，入口和证据边界见 [验证文档](14-verification.md#postgresql-与-minio)。
 2. 安排单实例维护窗口，按下一节停止后端并完成数据库、对象文件、历史本地文件的一致性备份。
 3. 保持后端停止，发布匹配的前后端构建，并审查、执行本次新增 migration。
 4. 运行 doctor，启动 `rag-backend`，执行健康检查与完整业务冒烟，再恢复用户访问。
@@ -572,6 +573,6 @@ OCR 工具不随 Go 可执行文件或当前容器镜像内置；需要在自定
 
 ## 可观测性部署
 
-Trace、Metrics、Collector、Jaeger、Prometheus与Grafana的配置/端口/保留期以 [可观测性](38-observability.md) 为准。
+当前dev提供进程内Recorder诊断，Compose没有Collector/Jaeger/Prometheus/Grafana服务或观测profile。现有诊断与源码测试入口见 [可观测性](38-observability.md#当前实现与验证)。
 
-本地启动：`docker compose -f deploy/docker-compose.yml --profile observability up -d grafana`。该profile不启动业务应用；观测数据持久化与业务数据备份分别管理。
+历史Trace/Metrics方案、配置、端口和保留期见 [历史OTel方案](38-observability.md#历史-otel-方案)。恢复这些实现与部署文件属于条件性工作，先按 [有效待办](15-backlog.md) 明确范围，再执行对应验收；本分支不执行缺失profile的启动命令。

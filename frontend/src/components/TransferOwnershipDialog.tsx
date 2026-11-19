@@ -43,7 +43,7 @@ export function TransferOwnershipDialog({ ownerId, description, onTransfer, onCl
   }
   return (
     <Dialog open title="转移所有权" description={description} onClose={() => { if (!busy) onClose(); }}>
-      <form onSubmit={(event) => { event.preventDefault(); void submit(); }} style={{ display: 'grid', gap: 'var(--s-3)' }}>
+      <form className="ui-dialog__form" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
         <Field label="搜索新所有者" htmlFor="transfer-query"><Input id="transfer-query" disabled={busy} value={query} onChange={(event) => setQuery(event.target.value)} /></Field>
         <Field label="新所有者" htmlFor="transfer-owner">
           <Select id="transfer-owner" disabled={busy || searching} value={newOwnerId} onChange={(event) => setNewOwnerId(event.target.value)}>

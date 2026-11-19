@@ -11,30 +11,39 @@ afterEach(() => {
 
 describe('Dialog', () => {
   it('isolates the application background for the first modal and restores its attributes', () => {
-    const { rerender } = render(
-      <>
-        <section aria-hidden="false" data-testid="application-background">
-          <button type="button">背景操作</button>
-        </section>
-        <Dialog open title="说明" onClose={() => undefined}><button type="button">确认</button></Dialog>
-      </>,
-    );
-    const background = screen.getByTestId('application-background');
+    const appRoot = document.createElement('div');
+    appRoot.setAttribute('aria-hidden', 'false');
+    document.body.append(appRoot);
+    try {
+      const { rerender } = render(
+        <>
+          <section data-testid="application-background">
+            <button type="button">背景操作</button>
+          </section>
+          <Dialog open title="说明" onClose={() => undefined}><button type="button">确认</button></Dialog>
+        </>,
+        { container: appRoot },
+      );
+      const background = screen.getByTestId('application-background');
 
-    expect(background).toHaveAttribute('inert');
-    expect(background).toHaveAttribute('aria-hidden', 'true');
+      expect(appRoot).toHaveAttribute('inert');
+      expect(appRoot).toHaveAttribute('aria-hidden', 'true');
+      expect(background.closest('[inert]')).toBe(appRoot);
 
-    rerender(
-      <>
-        <section aria-hidden="false" data-testid="application-background">
-          <button type="button">背景操作</button>
-        </section>
-        <Dialog open={false} title="说明" onClose={() => undefined}><button type="button">确认</button></Dialog>
-      </>,
-    );
+      rerender(
+        <>
+          <section data-testid="application-background">
+            <button type="button">背景操作</button>
+          </section>
+          <Dialog open={false} title="说明" onClose={() => undefined}><button type="button">确认</button></Dialog>
+        </>,
+      );
 
-    expect(background).not.toHaveAttribute('inert');
-    expect(background).toHaveAttribute('aria-hidden', 'false');
+      expect(appRoot).not.toHaveAttribute('inert');
+      expect(appRoot).toHaveAttribute('aria-hidden', 'false');
+    } finally {
+      appRoot.remove();
+    }
   });
 
   it('traps focus in both directions, closes on Escape, and restores state', async () => {
@@ -270,6 +279,20 @@ describe('Dialog', () => {
     expect(innerDialog.parentElement?.closest('[inert]')).toBeNull();
     expect(innerDialog.parentElement?.closest('[aria-hidden="true"]')).toBeNull();
     expect(screen.getByRole('button', { name: '确认内层', hidden: true })).toHaveFocus();
+  });
+
+  it('portals to document.body so ancestor overflow or stacking contexts never clip it', () => {
+    render(
+      <div data-testid="clipped-ancestor" style={{ overflow: 'hidden', position: 'relative' }}>
+        <Dialog open title="传送弹窗" onClose={() => undefined}>
+          <button type="button">关闭</button>
+        </Dialog>
+      </div>,
+    );
+
+    const dialog = screen.getByRole('dialog', { name: '传送弹窗' });
+    expect(dialog.closest('.ui-dialog-backdrop')?.parentElement).toBe(document.body);
+    expect(screen.getByTestId('clipped-ancestor').contains(dialog)).toBe(false);
   });
 });
 

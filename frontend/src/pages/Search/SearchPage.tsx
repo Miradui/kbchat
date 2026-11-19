@@ -1,9 +1,9 @@
-import { Download, FileText, Library, TextQuote } from 'lucide-react';
+import { FileText, Library, TextQuote } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
-import { exportGlobalSearch, globalSearch } from '../../api/resources';
+import { globalSearch } from '../../api/resources';
 import { EmptyState } from '../../components/feedback/EmptyState';
 import { ErrorState } from '../../components/feedback/ErrorState';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
@@ -15,7 +15,6 @@ import { SearchCombobox, suggestionHref } from './SearchCombobox';
 import { searchGuidance } from './searchGuidance';
 import type { SearchGuidance } from './searchGuidance';
 import type { GlobalSearchResult, GlobalSearchResultType, SearchHighlight } from '../../types/api';
-import { downloadBlob } from '../../utils/download';
 import { getErrorMessage } from '../../utils/errors';
 import { documentStatuses, documentStatusLabel } from '../Documents/documentDisplay';
 
@@ -64,13 +63,9 @@ export function SearchPage() {
   const [settled, setSettled] = useState<{ query: string; type: SearchType; total: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [exportError, setExportError] = useState('');
-  const [exporting, setExporting] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => setDraft(submittedQuery), [submittedQuery]);
-
-  useEffect(() => setExportError(''), [selectedType, submittedQuery]);
 
   // Normalise the URL so defaults never linger as explicit parameters.
   useEffect(() => {
@@ -225,20 +220,6 @@ export function SearchPage() {
     writeParams(draft.trim(), selectedType, 1);
   }
 
-  async function handleExport() {
-    if (!submittedQuery || exporting) return;
-    setExportError('');
-    setExporting(true);
-    try {
-      const blob = await exportGlobalSearch({ query: submittedQuery, type: selectedType });
-      downloadBlob(blob, '搜索结果.csv');
-    } catch (caught) {
-      setExportError(getErrorMessage(caught, '搜索结果导出失败'));
-    } finally {
-      setExporting(false);
-    }
-  }
-
   return (
     <AppShell active="search" breadcrumbs={[{ label: '搜索' }]}>
       <div className="search-page">
@@ -251,19 +232,7 @@ export function SearchPage() {
             value={draft}
           />
           <Button type="submit">搜索</Button>
-          <Button
-            disabled={!submittedQuery || loading}
-            leadingIcon={<Download aria-hidden="true" />}
-            loading={exporting}
-            loadingLabel="正在导出"
-            onClick={() => void handleExport()}
-            variant="secondary"
-          >
-            导出 CSV
-          </Button>
         </form>
-
-        {exportError && <p className="ui-inline-error" role="alert">{exportError}</p>}
 
         <div className="ui-segmented search-page__types" role="group" aria-label="结果类型">
           {typeOptions.map((option) => (

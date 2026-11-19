@@ -28,8 +28,6 @@ import { ChatFeedbackDialog } from './ChatFeedbackDialog';
 import { ChatMessageSearch, useChatMessageSearch } from './ChatMessageSearch';
 import { ChatSearchDialog } from './ChatSearchDialog';
 import { ChatBookmarkDialog, ChatBookmarksDialog } from './ChatBookmarks';
-import { ChatBranchDialog } from './ChatBranchDialog';
-import { QuestionTemplatesDialog } from './QuestionTemplatesDialog';
 import { ChatMarkdown } from './ChatMarkdown';
 import { ChatAssistantLabel, CitationCard, MessageBubble } from './ChatMessage';
 import { ChatSessionRail } from './ChatSessionRail';
@@ -61,16 +59,13 @@ export function ChatPage() {
   const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const isNarrow = useMediaQuery('(max-width: 1080px)');
+  const isMediumDesktop = useMediaQuery('(min-width: 1280px) and (max-width: 1599px)');
   const [railOpen, setRailOpen] = useState(false);
   const railToggleRef = useRef<HTMLButtonElement>(null);
   const [searchDialogOpen, setSearchDialogOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [bookmarkTarget, setBookmarkTarget] = useState<ChatMessage | null>(null);
-  const [branchTarget, setBranchTarget] = useState<ChatMessage | null>(null);
-  const [templatesOpen, setTemplatesOpen] = useState(false);
   const [documentPickerOpen, setDocumentPickerOpen] = useState(false);
-  useEffect(() => { setTemplatesOpen(false); }, [sessionId]);
-  useEffect(() => { setBranchTarget(null); }, [sessionId]);
   useEffect(() => { setBookmarkTarget(null); }, [sessionId]);
   const railBackdropRef = useRef<HTMLButtonElement>(null);
   const {
@@ -97,7 +92,6 @@ export function ChatPage() {
   const { draft, setDraft, moveToSession, acknowledge } = useChatDraft(user?.id, chatDraftScope(sessionId, draftKnowledgeBaseIds, draftDocumentIds));
   const targetMessageId = searchParams.get('messageId') ?? '';
   const [railPreferences, setRailPreferences] = useSessionRailPreferences();
-  const historyVisible = isNarrow ? railOpen : !railPreferences.collapsed;
   const [railScope, setRailScope] = useState<ChatSessionScope>(railPreferences.scope);
   useLayoutEffect(() => {
     setRailPreferences({ ...railPreferences, knowledgeBaseId: urlKnowledgeBaseId, scope: railScope });
@@ -136,7 +130,6 @@ export function ChatPage() {
     onQuestionSaved: acknowledge,
     onAccessLost: (targetSessionId) => {
       setBookmarkTarget(null);
-      setBranchTarget(null);
       setBookmarksOpen(false);
       setSourcePreview(null);
       setFocusedCitation(null);
@@ -189,6 +182,8 @@ export function ChatPage() {
   const automaticScope = currentSession ? currentSession.scopeMode === 'auto' : !sessionId && draftKnowledgeBaseIds.length === 0;
   const sourceScope = `${sessionId ?? ''}:${automaticScope ? 'auto' : activeKnowledgeBaseIds.join(',')}`;
   const visibleSource = sourcePreview?.scope === sourceScope ? sourcePreview : null;
+  const railSuppressedForPreview = isMediumDesktop && Boolean(visibleSource);
+  const historyVisible = isNarrow ? railOpen : (!railPreferences.collapsed && !railSuppressedForPreview);
 
   const locateMessage = useCallback((messageId: string, focus: boolean) => {
     const container = messagesRef.current;
@@ -515,7 +510,6 @@ export function ChatPage() {
         {!sessionId && <Button className="chat-composer__scope-button" disabled={interactionLocked} leadingIcon={<FileText aria-hidden="true" />}
           onClick={() => setDocumentPickerOpen(true)} variant="ghost">指定文档提问</Button>}
       </>}
-      onTemplates={() => setTemplatesOpen(true)}
       disabled={!user || !canSend || thread.sending || sessionBusy}
       error={thread.rateLimitError}
       retryNotice={thread.rateLimitNotice}
@@ -554,7 +548,10 @@ export function ChatPage() {
       topbarLeading={(!historyVisible || isNarrow) && <IconButton label="打开会话列表" aria-expanded={historyVisible} ref={railToggleRef}
         onClick={() => {
           if (isNarrow) setRailOpen(true);
-          else setRailPreferences({ ...railPreferences, collapsed: false });
+          else {
+            if (railSuppressedForPreview) setSourcePreview(null);
+            setRailPreferences({ ...railPreferences, collapsed: false });
+          }
         }}><PanelLeft aria-hidden="true" /></IconButton>}
       onNewChat={startNewChat}
       newChatDisabled={interactionLocked}
@@ -690,8 +687,6 @@ export function ChatPage() {
                     versionIndex={index} versionCount={versions.length} versionGroupId={id} versionsDisabled={interactionLocked} onVersionChange={selectAnswerVersion}
                     onFeedback={onMessageFeedback}
                     onBookmark={setBookmarkTarget}
-                    onBranch={setBranchTarget}
-                    branchingDisabled={historyLocked}
                     onEditDraftChange={setEditingDraft}
                     onStartEdit={startEditing}
                     onCancelEdit={cancelEditing}
@@ -854,9 +849,7 @@ export function ChatPage() {
         )}
       </div>
 
-      {templatesOpen && <QuestionTemplatesDialog draft={draft} onClose={() => setTemplatesOpen(false)} onInsert={(text) => setDraft((current) => current ? `${current}\n\n${text}` : text)} />}
-      {documentPickerOpen && <ChatDocumentPicker onClose={() => setDocumentPickerOpen(false)} onSelect={(documents) => { setDocumentPickerOpen(false); navigate(documentChatUrl(documents)); }} />}
-      {branchTarget && <ChatBranchDialog key={branchTarget.id} message={branchTarget} onClose={() => setBranchTarget(null)} onCreated={mergeSession} onInaccessible={thread.handleAccessLost} />}
+      {documentPickerOpen && <ChatDocumentPicker knowledgeBases={knowledgeBases} onClose={() => setDocumentPickerOpen(false)} onSelect={(documents) => { setDocumentPickerOpen(false); navigate(documentChatUrl(documents)); }} />}
       {bookmarkTarget && <ChatBookmarkDialog key={bookmarkTarget.id} target={{ messageId: bookmarkTarget.id, sessionId: bookmarkTarget.sessionId, bookmark: bookmarkTarget.bookmark }}
         onClose={() => setBookmarkTarget(null)} onUpdated={thread.updateMessageBookmark} onInaccessible={thread.handleAccessLost} />}
       {bookmarksOpen && <ChatBookmarksDialog onClose={() => setBookmarksOpen(false)} onUpdated={thread.updateMessageBookmark} onInaccessible={thread.handleAccessLost} onSelect={(item) => {

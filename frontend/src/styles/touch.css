@@ -32,7 +32,8 @@
   }
 
   /* Square, so the tap area matches the visual circle rather than being wider. */
-  .ui-icon-button {
+  .ui-icon-button,
+  .topbar__search {
     height: var(--touch);
     min-width: var(--touch);
     width: var(--touch);

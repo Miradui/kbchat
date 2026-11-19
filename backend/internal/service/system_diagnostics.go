@@ -355,9 +355,6 @@ func (s *SystemService) providerStatuses(snapshot observability.Snapshot) []dto.
 		{name: "chat", metric: observability.ProviderChat, apiKey: s.cfg.ChatAPIKey, model: s.cfg.ChatModel},
 		{name: "embedding", metric: observability.ProviderEmbedding, apiKey: s.cfg.EmbeddingAPIKey, model: s.cfg.EmbeddingModel},
 		{name: "rerank", metric: observability.ProviderRerank, apiKey: s.cfg.RerankAPIKey, model: s.cfg.RerankModel, disabled: !s.cfg.RerankEnabled},
-		// Title generation falls back to the chat credentials, matching how the
-		// provider is actually built.
-		{name: "title", metric: observability.ProviderTitle, apiKey: firstNonEmpty(s.cfg.TitleAPIKey, s.cfg.ChatAPIKey), model: s.cfg.TitleModel},
 	}
 
 	statuses := make([]dto.SystemProviderStatus, 0, len(configs))
@@ -404,13 +401,4 @@ func (s *SystemService) providerStatuses(snapshot observability.Snapshot) []dto.
 	}
 
 	return statuses
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }

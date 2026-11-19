@@ -21,7 +21,8 @@ HTTP状态、业务码和异步文档处理分类分别定义；资源范围见 
 | `code` | 稳定错误码，前端用于判断错误类型 |
 | `message` | 用户可读错误信息 |
 | `details` | 可公开的错误分类或字段错误，不含密钥、原始SQL、连接串或文件绝对路径 |
-| `traceId` | 可选请求追踪编号；JSON错误与SSE error事件支持，响应头同时提供X-Trace-ID |
+
+当前dev不返回 `traceId` 或 `X-Trace-ID`；对应扩展保留在 [历史OTel方案](38-observability.md#历史-otel-方案)，未作为当前错误合同实现。
 
 ## 基础错误码
 
@@ -88,7 +89,6 @@ HTTP状态、业务码和异步文档处理分类分别定义；资源范围见 
 | 409 | `IDEMPOTENCY_KEY_REUSED` | 同一幂等键已用于不同的聊天内容 |
 | 409 | `CHAT_MESSAGE_CHANGED` | 编辑生成期间会话被修改，或历史分页 revision 已变化 / since、after 锚点已删除；重新加载会话后重试 |
 | 404 | `CHAT_MESSAGE_NOT_FOUND` | 定位目标已不存在或不属于当前会话；会话仍可访问时局部提示 |
-| 400 | `EXPORT_TOO_LARGE` | 搜索结果过多，请缩小范围后再导出 |
 | 501 | `USAGE_NOT_CONFIGURED` | 用量统计尚未配置 |
 
 异步文档处理失败不在这张表里：它不经过统一错误响应，而是写进 `documents.error_code`（封闭集合，见
@@ -118,7 +118,7 @@ HTTP状态、业务码和异步文档处理分类分别定义；资源范围见 
 
 管理员入口的原用户不存在使用 `USER_NOT_FOUND`；权限仍使用现有 401 / 403 / 404 合同。
 
-## 收藏、分支、版本与表格扩展
+## 收藏、版本与表格扩展
 
 | HTTP | 错误码 | 含义 |
 | --- | --- | --- |
@@ -127,12 +127,10 @@ HTTP状态、业务码和异步文档处理分类分别定义；资源范围见 
 | 400 | `DOCUMENT_COMPARE_EMPTY` | 未提取到可比较文本 |
 | 400 | `DOCUMENT_COMPARE_PARSE_FAILED` | 原文件无法重新解析 |
 | 400 | `DOCUMENT_COMPARE_TOO_LARGE` | 超出每版 50 MiB 原文件、1 MiB 文本或 2000 行限制 |
-| 409 | `CHAT_BRANCH_REQUEST_CONFLICT` | 分支请求编号已用于不同目标或已软删除分支 |
-| 400 | `CHAT_BRANCH_TOO_LARGE` | 历史前缀超过 10000 条消息或 16 MiB |
 | 400 | `DOCUMENT_TABLE_TOO_LARGE` | 预览表格触及解析上限 |
 | 400 | `DOCUMENT_PREVIEW_FAILED` | 预览无法解析文档 |
 
-收藏、模板、来源路径、非同链对比、无效分支目标等输入问题沿用 `VALIDATION_ERROR`；不存在、非本人或依赖不可访问的会话/消息/模板沿用 404 `RESOURCE_NOT_FOUND`。知识库角色不足仍沿用能力矩阵的 403。
+收藏、来源路径、非同链对比等输入问题沿用 `VALIDATION_ERROR`；不存在、非本人或依赖不可访问的会话/消息沿用 404 `RESOURCE_NOT_FOUND`。知识库角色不足仍沿用能力矩阵的 403。
 
 异步文档错误集合由迁移 039 新增 `table_limit_exceeded`。它是确定性失败，必须拆分/修复文件，不自动重试；不是 HTTP 错误码。空表、仅表头或没有缓存结果的公式数据可能得到 `empty_content`，前端按表格类型解释，避免把修复建议误写为 OCR。表格预览仍受 `FILE_TOO_LARGE_FOR_PREVIEW` 输入/输出上限约束。
 
@@ -228,13 +226,13 @@ HTTP状态、业务码和异步文档处理分类分别定义；资源范围见 
 
 ## 文档处理错误示例
 
+以下是文档读取响应中的状态字段摘录，不是另一个 `DOCUMENT_PROCESS_FAILED` HTTP错误。完整结构见API文档。
+
 ```json
 {
-  "code": "DOCUMENT_PROCESS_FAILED",
-  "message": "文档处理失败",
-  "details": {
-    "documentId": "uuid"
-  }
+  "status": "failed",
+  "errorCode": "internal",
+  "errorMessage": "文档处理失败"
 }
 ```
 

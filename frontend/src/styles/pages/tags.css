@@ -1,6 +1,6 @@
 /* Tag management. */
 
-.tags-page { display: grid; gap: var(--s-5); margin: 0 auto; max-width: var(--reading-max); }
+.tags-page { display: grid; gap: var(--s-5); margin: 0 auto; max-width: var(--content-max); }
 .tags-page__heading { margin: 0 0 var(--s-2); width: 100%; }
 .tags-page .ui-input-group { flex: 1 1 200px; max-width: 280px; }
 

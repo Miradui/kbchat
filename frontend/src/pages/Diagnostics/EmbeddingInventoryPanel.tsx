@@ -12,7 +12,7 @@ export function EmbeddingInventoryPanel({ value }: { value: SystemEmbeddingStatu
         { key: 'mismatch', label: '模型或维度不一致', value: value.mismatchedDocuments, tone: value.mismatchedDocuments ? 'warn' : 'default' },
       ]} />
       {(value.unknownDocuments > 0 || value.mismatchedDocuments > 0) && <p className="ui-inline-notice">部分文档需要重新处理，以使用当前模型生成向量。</p>}
-      <div className="ui-table-wrap"><table className="ui-table"><caption className="ui-visually-hidden">文档向量来源分组</caption>
+      <div className="ui-table-wrap"><table className="ui-table"><caption className="sr-only">文档向量来源分组</caption>
         <thead><tr><th>模型</th><th>维度</th><th>文档数</th></tr></thead>
         <tbody>{value.groups.map((group) => <tr key={`${group.model ?? 'unknown'}:${group.dimension ?? 'unknown'}`}><td data-label="模型">{group.model || '未知'}</td><td data-label="维度">{group.dimension ?? '未知'}</td><td data-label="文档数">{group.count}</td></tr>)}</tbody>
       </table></div>

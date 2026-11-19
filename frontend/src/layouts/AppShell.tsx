@@ -1,4 +1,4 @@
-import { ChevronsUpDown, LogOut, Menu, Monitor, Moon, Search, Settings, Sun, X } from 'lucide-react';
+import { Check, ChevronRight, ChevronsUpDown, LogOut, Menu, Monitor, Moon, Search, Settings, Sun, X } from 'lucide-react';
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -15,8 +15,8 @@ import { Popover } from '../components/ui/Popover';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { useCurrentUser } from '../hooks/useCurrentUser';
 import { currentUserStore } from '../store/currentUserStore';
-import { themeStore } from '../store/themeStore';
-import type { ThemeChoice } from '../store/themeStore';
+import { THEME_ACCENTS, themeStore } from '../store/themeStore';
+import type { ThemeAccent, ThemeChoice } from '../store/themeStore';
 import { tokenStore } from '../store/tokenStore';
 import { AccountSettingsDialog } from './AccountSettingsDialog';
 import { UploadTasksButton } from '../pages/Documents/UploadTasksButton';
@@ -121,6 +121,7 @@ export function AppShellFrame({
   const [userName, setUserName] = useState(() => currentUser ? currentUser.displayName.trim() || currentUser.username : '当前用户');
   const [userAvatarUrl, setUserAvatarUrl] = useState(() => currentUser?.avatarUrl?.trim() ?? '');
   const [theme, setTheme] = useState<ThemeChoice>(() => themeStore.get());
+  const [accent, setAccent] = useState<ThemeAccent>(() => themeStore.getAccent());
   const [loggingOut, setLoggingOut] = useState(false);
   const railRef = useRef<HTMLElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -137,6 +138,7 @@ export function AppShellFrame({
   }, []);
 
   useEffect(() => themeStore.subscribe(setTheme), []);
+  useEffect(() => themeStore.subscribeAccent(setAccent), []);
 
   useEffect(() => setDrawerOpen(false), [location.pathname, location.search]);
   useEffect(() => {
@@ -278,10 +280,26 @@ export function AppShellFrame({
                   >
                     <Icon aria-hidden="true" />
                     <span>{label}</span>
-                    {theme === value && <span aria-hidden="true" style={{ marginLeft: 'auto' }}>✓</span>}
+                    {theme === value && <Check aria-hidden="true" className="ui-menu-check" />}
                   </button>
                 ))}
-                <div className="ui-menu-sep" />
+                <div className="ui-menu-sep" role="separator" />
+                <p className="ui-menu-label">主题色</p>
+                {THEME_ACCENTS.map(({ value, label }) => (
+                  <button
+                    aria-checked={accent === value}
+                    className="ui-menu-item"
+                    key={value}
+                    onClick={() => themeStore.setAccent(value)}
+                    role="menuitemradio"
+                    type="button"
+                  >
+                    <span aria-hidden="true" className={`ui-menu-swatch ui-menu-swatch--${value}`} />
+                    <span>{label}</span>
+                    {accent === value && <Check aria-hidden="true" className="ui-menu-check" />}
+                  </button>
+                ))}
+                <div className="ui-menu-sep" role="separator" />
                 <button
                   className="ui-menu-item"
                   onClick={() => {
@@ -346,7 +364,7 @@ export function AppShellFrame({
           <nav aria-label="面包屑" className="topbar__crumbs">
             {crumbs.map((crumb, index) => (
               <span key={`${crumb.label}-${index}`} style={{ display: 'contents' }}>
-                {index > 0 && <span aria-hidden="true" className="topbar__crumb-sep">›</span>}
+                {index > 0 && <ChevronRight aria-hidden="true" className="topbar__crumb-sep" />}
                 {crumb.to && index < crumbs.length - 1
                   ? <Link to={crumb.to}>{crumb.label}</Link>
                   : <span aria-current={index === crumbs.length - 1 ? 'page' : undefined}>{crumb.label}</span>}
@@ -381,7 +399,7 @@ export function AppShellFrame({
         <main className={flush ? 'app__content app__content--flush' : 'app__content'} id="main-content" tabIndex={-1}>{children}</main>
       </div>
 
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      <CommandPalette isAdmin={currentUser?.role === 'admin'} open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       {/* Mounted on demand: the dialog reads /auth/me and /system/capabilities,
           and the shell should not pay for those until it is actually opened. */}
       {accountOpen && (

@@ -1,6 +1,6 @@
 # RAG 流程规范
 
-Embedding、Rerank、Chat 和标题 Provider 的普通 JSON 响应统一在解码前限制为 4 MiB；Chat 包括流式不支持后的重试、请求流式却返回 JSON。SSE 每行最多 4 MiB，正常多个事件不按整条流套用此限制。超限返回 Provider 错误，不能把截断结果作为完整回答提交。Embedding 生产批次仍为 16 条、1536 维。DOCX 样式继承缓存已解析结果并识别循环，遍历成本随样式图大小线性增长。
+Embedding、Rerank 和 Chat Provider 的普通 JSON 响应统一在解码前限制为 4 MiB；Chat 包括流式不支持后的重试、请求流式却返回 JSON。SSE 每行最多 4 MiB，正常多个事件不按整条流套用此限制。超限返回 Provider 错误，不能把截断结果作为完整回答提交。Embedding 生产批次仍为 16 条、1536 维。DOCX 样式继承缓存已解析结果并识别循环，遍历成本随样式图大小线性增长。
 
 ## 文档入库流程
 
@@ -436,7 +436,7 @@ JSON、SSE、重新生成与质量评测共用同一组回答约束：
 
 ### 知识库回答配置
 
-知识库 `answerConfig` 只在知识型回答（`intent=knowledge_base`）的最终生成中生效，不影响意图分类、会话型/常识型回答与标题提炼。手动单库会话使用该库的完整配置；自动与多库会话无法用一份 prompt、一个模型代表多个库，因此 `systemPromptAddition`、`model`、`temperature` 保持系统默认，只有 `allowGeneralKnowledge` 继续生效，且要求本轮进入 Prompt 的每个库都允许。组装顺序固定：
+知识库 `answerConfig` 只在知识型回答（`intent=knowledge_base`）的最终生成中生效，不影响意图分类、会话型/常识型回答与首问摘要命名。手动单库会话使用该库的完整配置；自动与多库会话无法用一份 prompt、一个模型代表多个库，因此 `systemPromptAddition`、`model`、`temperature` 保持系统默认，只有 `allowGeneralKnowledge` 继续生效，且要求本轮进入 Prompt 的每个库都允许。组装顺序固定：
 
 1. 上述基础约束不可删除、不可被覆盖。`allowGeneralKnowledge=true` 时只把第二条替换为“优先基于知识片段回答，片段不足时可补充常识并明确标注。”，其余不变；`answerStatus` 口径不变，仍由 `[[NO_ANSWER]]` 标记与召回结果决定（无召回但开启该开关的例外见“无结果处理”）。
 2. `systemPromptAddition`（去首尾空白，最多 2000 个字符）以“知识库回答补充要求：”开头追加在基础与回答依据约束之后，前置说明补充要求仅在不违反依据、引用和资料不足规则时生效。
@@ -524,7 +524,7 @@ debug payload 仍然只来自当前用户拥有的知识库。知识库权限校
 
 ## 模型用量记录点
 
-每次模型调用写入一条 `model_usage_records`，`purpose` 取值：`intent`（意图分类）、`answer`（Chat 最终回答，含对话型回答）、`title`（首问命名）、`evaluation`（评测运行中的回答）。记录在调用返回后立即写入并携带该次调用自身的耗时；Chat 的记录在助手消息落库后回填 `message_id`，评测记录没有 `session_id` 与 `message_id`，只归属知识库。Provider 未返回 `model` 时记录配置的模型名；token 字段来自 Provider `usage`，不做估算。写入使用与请求脱钩的上下文，客户端断开不丢记录；写入失败只记 warning，不影响回答。
+每次模型调用写入一条 `model_usage_records`，`purpose` 取值：`intent`（意图分类）、`answer`（Chat 最终回答，含对话型回答）、`evaluation`（评测运行中的回答）。历史 `title` 记录继续保留并参与用量/成本查询，首问摘要命名不再产生模型调用。记录在调用返回后立即写入并携带该次调用自身的耗时；Chat 的记录在助手消息落库后回填 `message_id`，评测记录没有 `session_id` 与 `message_id`，只归属知识库。Provider 未返回 `model` 时记录配置的模型名；token 字段来自 Provider `usage`，不做估算。写入使用与请求脱钩的上下文，客户端断开不丢记录；写入失败只记 warning，不影响回答。
 
 ## 回答质量回归评测
 

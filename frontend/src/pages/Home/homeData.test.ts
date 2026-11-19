@@ -21,6 +21,7 @@ const summary: HomeSummaryResponse = {
   knowledgeBaseTotal: 1,
   documents: [document],
   documentTotal: 2,
+  processingDocumentTotal: 0,
   failedDocuments: [failedDocument],
   failedDocumentTotal: 1,
   sessions: [session],
@@ -37,23 +38,19 @@ describe('createHomeLoaders', () => {
     const loaders = createHomeLoaders({ loadSummary, loadActivities: vi.fn().mockResolvedValue([]) });
 
     expect(await loaders.stats()).toEqual(summary.stats);
-    expect(await loaders.knowledgeBases()).toEqual([knowledgeBase]);
-    expect(await loaders.documents()).toEqual([document]);
-    expect(await loaders.failedDocuments()).toEqual([failedDocument]);
-    expect(await loaders.sessions()).toEqual([session]);
+    expect(await loaders.documents()).toEqual({ items: [document], processingTotal: 0 });
+    expect(await loaders.failedDocuments()).toEqual({ items: [failedDocument], total: 1 });
   });
 
-  // G17: the five regions mounting together must cost one request, not five.
+  // G17: the three regions mounting together must cost one request, not three.
   it('coalesces concurrent region loads into a single request', async () => {
     const loadSummary = vi.fn().mockResolvedValue(summary);
     const loaders = createHomeLoaders({ loadSummary, loadActivities: vi.fn().mockResolvedValue([]) });
 
     await Promise.all([
       loaders.stats(),
-      loaders.knowledgeBases(),
       loaders.documents(),
       loaders.failedDocuments(),
-      loaders.sessions(),
     ]);
 
     expect(loadSummary).toHaveBeenCalledTimes(1);
@@ -77,6 +74,6 @@ describe('createHomeLoaders', () => {
     const loaders = createHomeLoaders({ loadSummary, loadActivities: vi.fn().mockResolvedValue([]) });
 
     await expect(loaders.documents()).rejects.toThrow('boom');
-    expect(await loaders.documents()).toEqual([document]);
+    expect(await loaders.documents()).toEqual({ items: [document], processingTotal: 0 });
   });
 });

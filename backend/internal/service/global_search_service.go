@@ -1,9 +1,7 @@
 package service
 
 import (
-	"bytes"
 	"context"
-	"encoding/csv"
 	"strings"
 	"unicode"
 
@@ -71,61 +69,6 @@ func (s *GlobalSearchService) Search(ctx context.Context, ownerID uuid.UUID, req
 		res.Items = append(res.Items, toGlobalSearchResponse(&items[i], query))
 	}
 	return &res, nil
-}
-
-const maxSearchExportItems = 5000
-
-func (s *GlobalSearchService) Export(ctx context.Context, ownerID uuid.UUID, req dto.GlobalSearchRequest) (*ExportFile, error) {
-	req.Page = 1
-	req.PageSize = 100
-	first, err := s.Search(ctx, ownerID, req)
-	if err != nil {
-		return nil, err
-	}
-	if first.Total > maxSearchExportItems {
-		return nil, apperror.New(400, "EXPORT_TOO_LARGE", "搜索结果过多，请缩小范围后再导出")
-	}
-	items := append([]dto.GlobalSearchResultResponse{}, first.Items...)
-	for page := 2; int64(len(items)) < first.Total; page++ {
-		req.Page = page
-		next, searchErr := s.Search(ctx, ownerID, req)
-		if searchErr != nil {
-			return nil, searchErr
-		}
-		if len(next.Items) == 0 {
-			break
-		}
-		items = append(items, next.Items...)
-	}
-
-	var buffer bytes.Buffer
-	buffer.WriteString("\ufeff")
-	writer := csv.NewWriter(&buffer)
-	if err := writer.Write([]string{"类型", "知识库", "标题", "摘要", "知识库ID", "文档ID", "结果ID"}); err != nil {
-		return nil, apperror.Internal(err)
-	}
-	for i := range items {
-		if err := writer.Write([]string{
-			items[i].Type,
-			items[i].KnowledgeBaseName,
-			items[i].Title,
-			items[i].Snippet,
-			items[i].KnowledgeBaseID,
-			items[i].DocumentID,
-			items[i].ID,
-		}); err != nil {
-			return nil, apperror.Internal(err)
-		}
-	}
-	writer.Flush()
-	if err := writer.Error(); err != nil {
-		return nil, apperror.Internal(err)
-	}
-	return &ExportFile{
-		Filename:    "search-results.csv",
-		ContentType: "text/csv; charset=utf-8",
-		Content:     buffer.Bytes(),
-	}, nil
 }
 
 // MaxSearchSuggestLimit bounds the command palette request; the default is 10.

@@ -56,16 +56,19 @@ function KnowledgeBaseSettings() {
   return (
     <KnowledgeBaseLayout active="settings" knowledgeBase={knowledgeBase} onUpdated={setKnowledgeBase}>
       <div className="kb-settings">
-        <DocumentVersionPolicyForm knowledgeBase={knowledgeBase} onUpdated={setKnowledgeBase} />
         <div className="kb-settings__grid">
           <RetrievalConfigForm knowledgeBase={knowledgeBase} onUpdated={setKnowledgeBase} />
           <AnswerConfigForm knowledgeBase={knowledgeBase} onUpdated={setKnowledgeBase} />
-          {showMembers && <MembersPanel knowledgeBase={knowledgeBase} onVisibilityChange={handleVisibility} />}
         </div>
+        <DocumentVersionPolicyForm knowledgeBase={knowledgeBase} onUpdated={setKnowledgeBase} />
+        {showMembers && <MembersPanel knowledgeBase={knowledgeBase} onVisibilityChange={handleVisibility} />}
         <RetrievalTestPanel knowledgeBase={knowledgeBase} />
-        {hasCapability(knowledgeBase, 'kb.transfer') && <section className="ui-panel" aria-label="所有权管理">
-          <h2>所有权管理</h2><p>将知识库交给其他启用状态的用户。文档和现有成员会保留。</p>
-          <Button variant="danger" onClick={() => setTransferring(true)}>转移所有权</Button>
+        {hasCapability(knowledgeBase, 'kb.transfer') && <section className="ui-panel ui-panel--danger" aria-label="所有权管理">
+          <header className="ui-panel__head"><h2>所有权管理</h2></header>
+          <div className="ui-panel__body ui-panel__stack">
+            <p className="ui-muted">将知识库交给其他启用状态的用户。文档和现有成员会保留。</p>
+            <div className="kb-config-form__actions"><Button variant="danger" onClick={() => setTransferring(true)}>转移所有权</Button></div>
+          </div>
         </section>}
         {transferring && user && <TransferOwnershipDialog ownerId={user.id} description={`将「${knowledgeBase.name}」转移给其他用户。`} onClose={() => setTransferring(false)} onTransfer={(input) => transferKnowledgeBaseOwnership(knowledgeBase.id, input)} onDone={() => navigate('/knowledge-bases')} />}
       </div>

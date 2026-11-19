@@ -2,6 +2,8 @@ import { createPortal } from 'react-dom';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 
+import { moveMenuFocus } from './menuFocus';
+
 type Align = 'start' | 'end';
 
 type PopoverProps = {
@@ -10,11 +12,12 @@ type PopoverProps = {
     ref: React.Ref<HTMLButtonElement>;
     onClick: () => void;
     'aria-expanded': boolean;
-    'aria-haspopup': 'menu';
+    'aria-haspopup': 'menu' | 'dialog';
   }) => ReactNode;
   label: string;
   align?: Align;
   width?: number;
+  role?: 'menu' | 'dialog';
   children: (close: () => void) => ReactNode;
 };
 
@@ -24,7 +27,7 @@ const INSET = 8;
  * Anchored floating panel. Unlike OverflowMenu it takes arbitrary content, so it
  * is used for the account menu and filter popovers.
  */
-export function Popover({ trigger, label, align = 'end', width = 220, children }: PopoverProps) {
+export function Popover({ trigger, label, align = 'end', width = 220, role = 'menu', children }: PopoverProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
@@ -104,6 +107,10 @@ export function Popover({ trigger, label, align = 'end', width = 220, children }
       event.preventDefault();
       setOpen(false);
       triggerRef.current?.focus();
+      return;
+    }
+    if (role === 'menu') {
+      moveMenuFocus(event);
     }
   }
 
@@ -113,7 +120,7 @@ export function Popover({ trigger, label, align = 'end', width = 220, children }
         ref: triggerRef,
         onClick: () => setOpen((value) => !value),
         'aria-expanded': open,
-        'aria-haspopup': 'menu',
+        'aria-haspopup': role,
       })}
       {open && createPortal(
         <div
@@ -121,7 +128,7 @@ export function Popover({ trigger, label, align = 'end', width = 220, children }
           className="ui-popover"
           onKeyDown={onKeyDown}
           ref={panelRef}
-          role="menu"
+          role={role}
           style={{ left: position.left, top: position.top, width }}
         >
           {children(close)}

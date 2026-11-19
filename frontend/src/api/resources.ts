@@ -667,15 +667,6 @@ export function globalSearch(params: GlobalSearchParams, signal?: AbortSignal): 
   }), { signal });
 }
 
-export function exportGlobalSearch(
-  params: Pick<GlobalSearchParams, 'query' | 'type'>,
-): Promise<Blob> {
-  return apiBlobRequest(withQuery('/search/export', {
-    q: params.query,
-    type: params.type === 'all' ? undefined : params.type,
-  }));
-}
-
 /**
  * Title-level results for the command palette. Searches knowledge base names and
  * filenames only — no chunk content, no snippets — which is what makes it
@@ -781,20 +772,6 @@ export function searchChatMessages(params: import('../types/api').ChatMessageSea
 
 export function listChatBookmarks(params: import('../types/api').PersonalListParams, signal?: AbortSignal) {
   return apiRequest<import('../types/api').ChatBookmarkListResponse>(withQuery('/chat/bookmarks', params), { signal });
-}
-
-export function createChatBranch(sessionId: string, input: { messageId: string; clientRequestId: string; title?: string }) {
-  return apiRequest<import('../types/api').ChatSession>(`/chat/sessions/${sessionId}/branches`, { method: 'POST', body: input });
-}
-
-export function listQuestionTemplates(params: import('../types/api').PersonalListParams, signal?: AbortSignal) {
-  return apiRequest<import('../types/api').QuestionTemplateListResponse>(withQuery('/chat/templates', params), { signal });
-}
-export function saveQuestionTemplate(id: string | null, input: { title: string; body: string }) {
-  return apiRequest<import('../types/api').QuestionTemplate>(id ? `/chat/templates/${id}` : '/chat/templates', { method: id ? 'PUT' : 'POST', body: input });
-}
-export function deleteQuestionTemplate(id: string) {
-  return apiRequest<void>(`/chat/templates/${id}`, { method: 'DELETE' });
 }
 
 export function listDocumentVersions(id: string, signal?: AbortSignal) {

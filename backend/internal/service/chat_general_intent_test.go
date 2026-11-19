@@ -43,7 +43,7 @@ func TestGeneralIntentAnswersWithoutRetrievalAndWithoutCitations(t *testing.T) {
 		config.Config{VectorTopN: 30, RerankTopK: 5, ChatHistoryLimit: 10},
 		repository.NewChatRepository(db),
 		repository.NewKnowledgeBaseRepository(db),
-		retrieval, chatProvider, nil,
+		retrieval, chatProvider,
 	)
 
 	res, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{
@@ -112,7 +112,7 @@ func TestKnowledgeBaseTurnWithoutEvidenceHonorsGeneralKnowledgeSetting(t *testin
 				config.Config{VectorTopN: 30, RerankTopK: 5, ChatHistoryLimit: 10},
 				repository.NewChatRepository(db),
 				repository.NewKnowledgeBaseRepository(db),
-				retrieval, chatProvider, nil,
+				retrieval, chatProvider,
 			)
 
 			res, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{

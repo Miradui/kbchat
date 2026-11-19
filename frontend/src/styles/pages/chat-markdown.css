@@ -1,7 +1,7 @@
 /* Shared by complete, streaming and stopped assistant responses. */
 .chat-markdown { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .chat-markdown > * + * { margin-top: var(--s-4); }
-.chat-markdown :is(h3, h4, h5, h6) { font-size: var(--t-lead); font-weight: 650; line-height: var(--lh-normal); margin-top: var(--s-6); }
+.chat-markdown :is(h3, h4, h5, h6) { font-size: var(--t-lead); font-weight: var(--fw-semibold); line-height: var(--lh-normal); margin-top: var(--s-6); }
 .chat-markdown > :first-child { margin-top: 0; }
 .chat-markdown p { white-space: pre-wrap; }
 .chat-markdown :is(ul, ol) { padding-left: var(--s-6); }

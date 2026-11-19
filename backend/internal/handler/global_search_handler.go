@@ -77,22 +77,3 @@ func (h *GlobalSearchHandler) Suggest(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, res)
 }
-
-func (h *GlobalSearchHandler) Export(c *gin.Context) {
-	userID, ok := currentUserIDOrError(c)
-	if !ok {
-		return
-	}
-	req := dto.GlobalSearchRequest{Query: c.Query("q"), Type: c.DefaultQuery("type", "all")}
-	if req.Query == "" {
-		RespondError(c, apperror.Validation(map[string]any{"q": "查询不能为空"}))
-		return
-	}
-	exported, err := h.search.Export(c.Request.Context(), userID, req)
-	if err != nil {
-		RespondError(c, err)
-		return
-	}
-	c.Header("Content-Disposition", "attachment; filename=\""+exported.Filename+"\"")
-	c.Data(http.StatusOK, exported.ContentType, exported.Content)
-}

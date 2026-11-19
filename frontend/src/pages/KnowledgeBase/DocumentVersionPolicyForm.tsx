@@ -1,12 +1,15 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { updateKnowledgeBase } from '../../api/resources';
 import { useToast } from '../../components/feedback/ToastProvider';
+import { useUnsavedChangesWarning } from '../../components/feedback/useUnsavedChangesWarning';
 import { Button } from '../../components/ui/Button';
+import { Field, Select } from '../../components/ui/Field';
 import type { KnowledgeBase } from '../../types/api';
 import { hasCapability } from '../../utils/access';
 import { getErrorMessage } from '../../utils/errors';
 
 export function DocumentVersionPolicyForm({ knowledgeBase, onUpdated }: { knowledgeBase: KnowledgeBase; onUpdated: (value: KnowledgeBase) => void }) {
+  const selectId = useId();
   const stored = knowledgeBase.documentVersionPolicy ?? 'all';
   const [value, setValue] = useState(stored);
   const [saving, setSaving] = useState(false);
@@ -14,6 +17,7 @@ export function DocumentVersionPolicyForm({ knowledgeBase, onUpdated }: { knowle
   const active = useRef(true); const savingRef = useRef(false);
   const toast = useToast();
   const editable = hasCapability(knowledgeBase, 'kb.write');
+  useUnsavedChangesWarning(editable && value !== stored);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   useEffect(() => { setValue(stored); setError(''); }, [stored]);
   async function submit(event: FormEvent) {
@@ -30,7 +34,12 @@ export function DocumentVersionPolicyForm({ knowledgeBase, onUpdated }: { knowle
   return <section className="ui-panel" aria-label="文档版本检索">
     <div className="ui-panel__head"><h2>文档版本检索</h2></div>
     <form className="ui-panel__body kb-config-form" onSubmit={(event) => void submit(event)}>
-      <label>参与新问答的版本<select className="ui-select" aria-label="参与新问答的版本" value={value} disabled={!editable || saving} onChange={(event) => setValue(event.target.value as typeof value)}><option value="all">全部版本</option><option value="current">当前有效版本</option></select></label>
+      <Field htmlFor={selectId} label="参与新问答的版本">
+        <Select aria-label="参与新问答的版本" disabled={!editable || saving} id={selectId} onChange={(event) => setValue(event.target.value as typeof value)} value={value}>
+          <option value="all">全部版本</option>
+          <option value="current">当前有效版本</option>
+        </Select>
+      </Field>
       <p className="ui-muted">当前有效版本使用替换链中最新已完成入库的内容。新版处理完成前、首次处理失败或取消时，继续使用旧版；重新处理期间保留已发布内容。</p>
       <p className="ui-muted">适用于本库参与的单库、多库和自动检索。历史文档、版本对比及旧回答引用继续保留；“保留两份”产生的独立文档均可检索。</p>
       {error && <p role="alert" className="ui-inline-error">{error}</p>}

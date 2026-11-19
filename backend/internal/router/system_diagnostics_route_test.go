@@ -178,8 +178,8 @@ func TestDiagnosticsRouteReturnsTheContract(t *testing.T) {
 	if len(response.Dependencies) != 3 {
 		t.Fatalf("dependencies = %d, want database, redis and storage", len(response.Dependencies))
 	}
-	if len(response.Providers) != 4 {
-		t.Fatalf("providers = %d, want four", len(response.Providers))
+	if len(response.Providers) != 3 {
+		t.Fatalf("providers = %d, want chat, embedding and rerank", len(response.Providers))
 	}
 
 	// The router wires the real repositories against the test database, so the

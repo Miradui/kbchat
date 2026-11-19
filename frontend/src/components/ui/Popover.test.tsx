@@ -102,4 +102,42 @@ describe('Popover focus', () => {
     await user.click(trigger());
     expect(trigger()).toHaveAttribute('aria-expanded', 'true');
   });
+
+  it('navigates enabled menuitem and menuitemradio controls with Arrow, Home, and End keys', async () => {
+    const user = userEvent.setup();
+    render(
+      <Popover
+        label="测试菜单"
+        trigger={(props) => <button {...props} type="button">打开菜单</button>}
+      >
+        {() => (
+          <>
+            <button role="menuitemradio" aria-checked="true" type="button">浅色</button>
+            <button role="menuitemradio" aria-checked="false" disabled type="button">禁用项</button>
+            <button role="menuitem" type="button">设置</button>
+            <button role="menuitem" type="button">退出</button>
+          </>
+        )}
+      </Popover>,
+    );
+
+    await user.click(screen.getByRole('button', { name: '打开菜单' }));
+    const radio = screen.getByRole('menuitemradio', { name: '浅色' });
+    const settings = screen.getByRole('menuitem', { name: '设置' });
+    const logout = screen.getByRole('menuitem', { name: '退出' });
+
+    expect(radio).toHaveFocus();
+    await user.keyboard('{ArrowDown}');
+    expect(settings).toHaveFocus();
+    await user.keyboard('{ArrowDown}');
+    expect(logout).toHaveFocus();
+    await user.keyboard('{ArrowDown}');
+    expect(radio).toHaveFocus();
+    await user.keyboard('{ArrowUp}');
+    expect(logout).toHaveFocus();
+    await user.keyboard('{Home}');
+    expect(radio).toHaveFocus();
+    await user.keyboard('{End}');
+    expect(logout).toHaveFocus();
+  });
 });

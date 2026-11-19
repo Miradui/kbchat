@@ -52,7 +52,7 @@ func TestTableCitationsKeepSourcesInPromptAndStoredAnswers(t *testing.T) {
 		ChunkID: uuid.NewString(), DocumentID: uuid.NewString(), Filename: "资料.xlsx", Content: "产品：设备\n金额：3", Table: table,
 	}}}}
 	p := &fakeChatProvider{responses: []string{`{"intent":"knowledge_base","standaloneQuery":"设备金额","reason":"docs"}`, "设备金额为 3。[1]"}}
-	s := NewChatService(config.Config{VectorTopN: 30, RerankTopK: 5, ChatHistoryLimit: 10}, repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), r, p, nil)
+	s := NewChatService(config.Config{VectorTopN: 30, RerankTopK: 5, ChatHistoryLimit: 10}, repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), r, p)
 	res, err := s.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{Content: "设备金额？", ClientRequestID: uuid.NewString()})
 	if err != nil || len(res.Citations) != 1 || res.Citations[0].Table == nil || *res.Citations[0].Table != *table {
 		t.Fatalf("response provenance: %#v %v", res, err)

@@ -439,10 +439,24 @@ describe('QualityPage', () => {
       expect(Date.parse(lastCall?.from ?? '')).toBeLessThan(Date.parse(firstCall?.from ?? ''));
     });
 
-    it('shows the error state when the usage request fails', async () => {
-      vi.mocked(getChatUsage).mockRejectedValue(new Error('boom'));
+    it('shows the error state when the usage request fails and supports retry', async () => {
+      vi.mocked(getChatUsage).mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce(usageByDay);
+      const user = userEvent.setup();
       renderWithRouter(<QualityPage sources={createSources()} />, ['/quality?tab=usage']);
       expect(await screen.findByRole('alert')).toHaveTextContent('用量统计加载失败');
+      await user.click(screen.getByRole('button', { name: '重试' }));
+      expect(await screen.findByRole('img', { name: /token 用量折线图/ })).toBeInTheDocument();
+    });
+
+    it('supports keyboard navigation across daily chart points', async () => {
+      const user = userEvent.setup();
+      renderWithRouter(<QualityPage sources={createSources()} />, ['/quality?tab=usage']);
+      const chart = await screen.findByRole('img', { name: /token 用量折线图/ });
+      chart.focus();
+      await user.keyboard('{ArrowRight}');
+      expect(screen.getByText(/次调用/)).toBeInTheDocument();
+      await user.keyboard('{Escape}');
+      expect(screen.queryByText(/次调用/)).not.toBeInTheDocument();
     });
 
     it('shows an empty state when no usage was recorded', async () => {

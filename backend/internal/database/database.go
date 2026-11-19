@@ -144,13 +144,9 @@ func validateSchema(ctx context.Context, db *gorm.DB) error {
 			{&model.ChatSession{}, "document_scope", "044_chat_document_scope.sql"},
 			{&model.ChatSession{}, "branch_from_session_id", "036_chat_branches.sql"},
 			{&model.ChatSession{}, "branch_from_message_id", "036_chat_branches.sql"},
-			{&model.ChatSession{}, "branch_request_id", "036_chat_branches.sql"},
 			{&model.ChatBookmark{}, "message_id", "034_chat_bookmarks.sql"},
 			{&model.ChatBookmark{}, "user_id", "034_chat_bookmarks.sql"},
 			{&model.ChatBookmark{}, "note", "034_chat_bookmarks.sql"},
-			{&model.QuestionTemplate{}, "title", "037_question_templates.sql"},
-			{&model.QuestionTemplate{}, "body", "037_question_templates.sql"},
-			{&model.QuestionTemplate{}, "user_id", "037_question_templates.sql"},
 		} {
 			if !migrator.HasColumn(required.model, required.column) {
 				return fmt.Errorf("database schema incompatible: missing %s; apply migration %s", required.column, required.migration)
@@ -216,7 +212,6 @@ func autoMigrateModels() []any {
 		&model.ChatSessionKnowledgeBase{},
 		&model.ChatMessage{},
 		&model.ChatBookmark{},
-		&model.QuestionTemplate{},
 		&model.EvaluationCase{},
 		&model.EvaluationRun{},
 		&model.Activity{},

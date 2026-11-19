@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { downloadDocument, getPDFCorrection, savePDFCorrection } from '../../api/resources';
 import type { PDFCorrection, PDFCorrectionPage } from '../../api/resources';
 import { Dialog } from '../../components/ui/Dialog';
 import { Button } from '../../components/ui/Button';
-import { Field, Select } from '../../components/ui/Field';
+import { Field, Select, Textarea } from '../../components/ui/Field';
 import { PdfPreview } from '../../components/pdf/PdfPreview';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { useUnsavedChangesWarning } from '../../components/feedback/useUnsavedChangesWarning';
@@ -53,16 +52,18 @@ export function DocumentOCRCorrection({ document, onClose, onSaved }: { document
   }
   const page = pages[selected];
   const invalid = changed.some((value) => !value.content.trim() || new TextEncoder().encode(value.content).length > 1048576);
-  return createPortal(<>
+  return <>
     <Dialog open title="OCR 原图对照与校对" description="选择 OCR 页，核对原图后修改文字。保存为新版本，原始 PDF 图像保持不变。" className="document-version-dialog" onClose={close}>
       {loading ? <p role="status">正在读取已发布识别文本和原图…</p> : result ? <>
         <p role="status">校对版已保存，处理完成后可用于问答。</p><Link className="ui-button ui-button--primary" to={`/documents?documentId=${result.id}`} onClick={onClose}>查看校对版本</Link>
       </> : <>
         {page && <>
           <Field label="校对页面"><Select aria-label="校对页面" value={selected} disabled={busy} onChange={(event) => setSelected(Number(event.target.value))}>{pages.map((value, index) => <option key={value.pageNumber} value={index}>第 {value.pageNumber} 页 · {value.textSource === 'ocr_corrected' ? '人工校对' : '机器识别'}</option>)}</Select></Field>
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '16px' }}>
+          <div className="doc-ocr-split">
             <PdfPreview url={url} filename={document.filename} initialPage={page.pageNumber} lockPage />
-            <div><label htmlFor="ocr-page-content">第 {page.pageNumber} 页识别文本</label><textarea id="ocr-page-content" className="ui-input" rows={22} disabled={busy} value={page.content} onChange={(event) => setPages((current) => current.map((value, index) => index === selected ? { ...value, content: event.target.value } : value))} /></div>
+            <Field htmlFor="ocr-page-content" label={`第 ${page.pageNumber} 页识别文本`}>
+              <Textarea id="ocr-page-content" rows={22} disabled={busy} value={page.content} onChange={(event) => setPages((current) => current.map((value, index) => index === selected ? { ...value, content: event.target.value } : value))} />
+            </Field>
           </div>
           <p>已修改 {changed.length} 页；每页最多 1 MiB，全部文本最多 8 MiB。</p>
         </>}
@@ -71,5 +72,5 @@ export function DocumentOCRCorrection({ document, onClose, onSaved }: { document
       </>}
     </Dialog>
     {discard && <ConfirmDialog title="放弃未保存的校对？" description="关闭后，这次校对内容将丢失。" confirmLabel="放弃校对" onCancel={() => setDiscard(false)} onConfirm={onClose} />}
-  </>, window.document.body);
+  </>;
 }

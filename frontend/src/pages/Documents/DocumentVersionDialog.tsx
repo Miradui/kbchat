@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { compareDocumentVersions, listDocumentVersions } from '../../api/resources';
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
@@ -34,9 +33,7 @@ export function DocumentVersionDialog({ documentId, initialBaseId, onClose }: { 
     catch (caught) { if (!controller.signal.aborted) setError(getErrorMessage(caught, '版本对比失败，请重试。')); }
     finally { if (!controller.signal.aborted) setBusy(false); }
   }
-  // The detail drawer is portaled to body. Mount beside it so the later modal
-  // paints above its backdrop as well as owning the top modal's keyboard focus.
-  return createPortal(<Dialog open title="文档版本对比" description="比较解析后的文本，标记新增和删除行；不比较 PDF／Word 版式。" className="document-version-dialog" onClose={onClose}>
+  return <Dialog open title="文档版本对比" description="比较解析后的文本，标记新增和删除行；不比较 PDF／Word 版式。" className="document-version-dialog" onClose={onClose}>
     {loading ? <p role="status">正在加载版本…</p> : <>
       {items.length < 2 && !error && <p>当前文档尚无可比较的历史版本。通过“替换文档”上传新版本后可在这里对比。</p>}
       <div className="document-version-selectors">
@@ -61,5 +58,5 @@ export function DocumentVersionDialog({ documentId, initialBaseId, onClose }: { 
     </>}
     <div className="ui-dialog__actions"><Button variant="secondary" onClick={onClose}>关闭对比</Button>
       <Button disabled={loading || !base || !head || base === head} loading={busy} onClick={() => void compare()}>比较文本</Button></div>
-  </Dialog>, document.body);
+  </Dialog>;
 }

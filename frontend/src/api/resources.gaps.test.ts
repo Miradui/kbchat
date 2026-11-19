@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { apiBlobRequest, apiRequest, apiUploadRequest } from './client';
 import {
   exportChatSession,
-  exportGlobalSearch,
   getChatQualityOverview,
   getSystemCapabilities,
   getSystemDiagnostics,
@@ -79,20 +78,18 @@ describe('frontend gap resources', () => {
     expect(apiRequest).toHaveBeenCalledWith('/system/diagnostics');
   });
 
-  it('posts assistant feedback and exports chat/search downloads', () => {
+  it('posts assistant feedback and exports the conversation', () => {
     vi.mocked(apiRequest).mockResolvedValue({});
     vi.mocked(apiBlobRequest).mockResolvedValue(new Blob());
 
     void setChatMessageFeedback('message-1', 'positive');
     void exportChatSession('session-1');
-    void exportGlobalSearch({ query: '退货', type: 'document' });
 
     expect(apiRequest).toHaveBeenCalledWith('/chat/messages/message-1/feedback', {
       method: 'POST',
       body: { rating: 'positive' },
     });
     expect(apiBlobRequest).toHaveBeenCalledWith('/chat/sessions/session-1/export');
-    expect(apiBlobRequest).toHaveBeenCalledWith('/search/export?q=%E9%80%80%E8%B4%A7&type=document');
   });
 
   it('loads quality overview and filtered negative feedback with encoded params', () => {

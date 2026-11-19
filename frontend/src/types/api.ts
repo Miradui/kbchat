@@ -237,6 +237,7 @@ export type HomeSummaryResponse = {
   knowledgeBaseTotal: number;
   documents: GlobalDocumentItem[];
   documentTotal: number;
+  processingDocumentTotal: number;
   failedDocuments: GlobalDocumentItem[];
   failedDocumentTotal: number;
   sessions: ChatSession[];
@@ -940,8 +941,6 @@ export type ChatMessageSearchParams = { q: string; sessionId?: string; page?: nu
 export type ChatMessageSearchResponse = { items: ChatMessageSearchItem[]; total: number; page: number; pageSize: number };
 
 export type PersonalListParams = { q?: string; page?: number; pageSize?: number };
-export type QuestionTemplate = { id: string; title: string; body: string; variables: string[]; createdAt: string; updatedAt: string };
-export type QuestionTemplateListResponse = { items: QuestionTemplate[]; total: number; page: number; pageSize: number };
 export type DocumentVersion = { id: string; filename: string; status: string; createdAt: string; supersededById: string | null };
 export type DocumentDiffLine = { kind: 'equal' | 'add' | 'remove'; content: string; baseLine: number | null; headLine: number | null };
 export type DocumentCompareResponse = { base: DocumentVersion; head: DocumentVersion; addedLines: number; removedLines: number; lines: DocumentDiffLine[] };

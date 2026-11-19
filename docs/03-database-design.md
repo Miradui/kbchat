@@ -1,6 +1,6 @@
 # 数据库设计
 
-数据库为PostgreSQL + pgvector，需启用 `CREATE EXTENSION IF NOT EXISTS vector`，当前源码要求迁移至 **049**。本页SQL是字段/关系摘录，不替代 [SQL迁移](../backend/migrations)；初始化、升级和备份见 [部署运维](13-deployment.md#7-数据库初始化和升级)。权限以 [API能力矩阵](04-api-design.md#权限与能力矩阵) 为准。
+数据库为PostgreSQL + pgvector，需启用 `CREATE EXTENSION IF NOT EXISTS vector`。当前dev的迁移最高为 **049**，以 [SQL迁移](../backend/migrations) 和 [启动检查](../backend/internal/database/database.go) 核对实际要求。本页SQL是字段/关系摘录，不替代迁移；初始化、升级和备份见 [部署运维](13-deployment.md#7-数据库初始化和升级)。权限以 [API能力矩阵](04-api-design.md#权限与能力矩阵) 为准。
 
 表按账户、知识管理、文档、任务、会话和评测分组，迁移补充集中在文末。不得把文件二进制写入数据库。
 
@@ -11,7 +11,7 @@
 - Go 模型继续使用 `time.Time`、`*time.Time` 和 `gorm.DeletedAt`，由 GORM 的 PostgreSQL 方言映射为 `timestamptz`；原生 pgx 驱动处理带不同时区的参数，无需自定义时间编码。
 - API 时间携带 `Z` 或明确的时区偏移，前端按浏览器时区显示；数据库中的 UTC 数值不等于用户本地钟面时间。
 - 旧库先执行 `023_timestamps_with_time_zone.sql`：使用 `USING 列名 AT TIME ZONE 'UTC'` 将无时区字段转为 `TIMESTAMPTZ`，保持旧值当前按 UTC 读取时的含义，不额外校正历史偏差。已有 `TIMESTAMPTZ` 字段跳过，重复执行不会再次换算时间。
-- 启动检查会拒绝仍有无时区业务时间字段的 PostgreSQL schema，并提示执行 023；启动期只做只读结构断言，不会修改已有列类型。全新数据库按顺序执行全部迁移，001–022 保留历史定义，以下示例展示 023 后的结构。升级与备份步骤见 [部署指南](13-deployment.md#73-已有数据库)。
+- 时间字段校验会拒绝仍有无时区业务时间字段的 PostgreSQL schema，并提示执行023；校验本身只读，不会修改已有列类型。生产启动也应只读，但当前server在校验前无条件调用AutoMigrate，会执行扩展和缺表DDL，这一未满足约定见[CHK-003](15-backlog.md#尚未关闭的工程事项)。全新数据库按顺序执行全部迁移，001–022保留历史定义，以下示例展示023后的结构。升级与备份步骤见[部署指南](13-deployment.md#73-已有数据库)。
 
 ## users
 
@@ -86,7 +86,7 @@ CREATE TABLE knowledge_bases (
 );
 ```
 
-`visibility` 当前只用于前端展示公开/私有类型，不改变主数据访问控制；文档、检索、聊天等知识库数据仍按 `knowledge_bases.owner_id` 校验。成员表只用于权限工作台的成员管理能力。
+`visibility` 只用于展示和筛选，不授予访问权；文档、检索、聊天等资料访问同时按 `knowledge_bases.owner_id` 与成员角色能力校验，具体范围以API矩阵为准。系统级统计/转移的显式例外不授予知识库内容或他人会话权限。
 
 ## knowledge_base_categories
 
@@ -115,7 +115,7 @@ CREATE TABLE knowledge_base_favorites (
 );
 ```
 
-收藏只允许作用于当前用户拥有的知识库。
+收藏允许作用于调用者有 `kb.read` 的知识库，收藏记录归调用者本人。
 
 ## knowledge_base_view_events
 
@@ -245,7 +245,7 @@ CREATE TABLE document_chunks (
 );
 ```
 
-`embedding vector(1536)` 是当前 MVP 默认值，必须与 `EMBEDDING_DIMENSION=1536` 保持一致。当前 Qwen3 Embedding 模型需要在 Provider 调用时显式请求输出 1536 维。更换 embedding 模型维度时，必须新增数据库 migration 修改向量维度并重建索引。
+`embedding vector(1536)` 是当前默认值，必须与 `EMBEDDING_DIMENSION=1536` 保持一致。使用 Qwen3 Embedding 时需要在 Provider 调用中显式请求输出 1536 维。更换 embedding 模型维度时，必须新增数据库 migration 修改向量维度并重建索引。
 
 `search_vector` 是关键词召回使用的词元索引（迁移 024 引入）。它由后端 `internal/document/lexer` 生成 tsvector 字面量并以 `::tsvector` 写入，不是 `to_tsvector()` 对 `content` 的解析结果，因此不依赖任何 PostgreSQL 中文分词扩展；索引与查询必须使用同一分词器。该列在 chunk 发布事务中与 `embedding` 一起写入；迁移 024 之前发布的 chunk 该列为 `NULL`，需运行 `go run ./cmd/reindex-keywords` 回填，回填前这些 chunk 只参与向量召回。分词规则变更后同样需要重跑回填。
 
@@ -265,7 +265,6 @@ CREATE TABLE document_jobs (
     status VARCHAR(32) DEFAULT 'pending',
     retry_count INT DEFAULT 0,
     error_message TEXT,
-    traceparent VARCHAR(55) NOT NULL DEFAULT '',
     locked_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
@@ -306,8 +305,8 @@ CREATE TABLE storage_cleanup_jobs (
 永久删除文档或知识库时，清理任务与业务数据删除在同一数据库事务内写入。对象删除成功后才移除任务；MinIO 或本地存储临时失败时保留 `storage_path` 并持续重试，避免业务行已删除后形成无法定位的孤儿对象。每次领取生成新的 `lease_token`，完成和重试必须匹配当前 token，过期 worker 的迟到结果不能覆盖新领取者。
 
 真实 PostgreSQL 行锁集成测试只读取显式的 `RAG_TEST_POSTGRES_DSN`；未设置时
-测试跳过。设置后测试会创建独立的 `rag_it_<uuid>` schema，并在结束时删除，
-因此该 DSN 应指向允许创建和删除 schema 的专用测试数据库。
+测试跳过。设置后测试会创建独立的随机 schema，并在结束时删除，
+因此该 DSN 应指向允许创建和删除 schema 的专用测试数据库；命名、回收与库级扩展边界见 [验证文档](14-verification.md#postgresql-与-minio)。
 
 ## chat_sessions
 
@@ -320,7 +319,6 @@ CREATE TABLE chat_sessions (
     title VARCHAR(255),
     branch_from_session_id UUID REFERENCES chat_sessions(id) ON DELETE SET NULL,
     branch_from_message_id UUID REFERENCES chat_messages(id) ON DELETE SET NULL,
-    branch_request_id UUID,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now(),
     archived_at TIMESTAMPTZ NULL,
@@ -467,7 +465,7 @@ CREATE INDEX idx_model_usage_kb_created ON model_usage_records (knowledge_base_i
 CREATE INDEX idx_model_usage_user_created ON model_usage_records (user_id, created_at);
 ```
 
-每次模型调用一行：`purpose` 为 `intent` / `answer` / `title` / `evaluation`；`provider` 为 `MODEL_PROVIDER`；`model` 为请求时使用的模型名（全局配置或知识库覆盖），不采用服务商响应中回显的别名，以便与 `MODEL_PRICING` 和 `CHAT_ALLOWED_MODELS` 对应；2026-09-26 之前写入的行可能是回显名。token 列在 Provider 未返回 usage 时为 NULL，不估算。Chat 的 intent / answer / title 调用在助手消息落库后关联 `message_id`（2026-09-28 之前的标题记录可能为空，不回填）；评测调用 `session_id` 与 `message_id` 为 NULL，只归属知识库。`latency_ms` 是该次模型调用自身的耗时。
+每次模型调用一行：`purpose` 为 `intent` / `answer` / `title` / `evaluation`；`provider` 为 `MODEL_PROVIDER`；`model` 为请求时使用的模型名（全局配置或知识库覆盖），不采用服务商响应中回显的别名，以便与 `MODEL_PRICING` 和 `CHAT_ALLOWED_MODELS` 对应；2026-09-26 之前写入的行可能是回显名。token 列在 Provider 未返回 usage 时为 NULL，不估算。Chat 的 intent / answer 调用在助手消息落库后关联 `message_id`；历史 title 记录继续保留并参与成本查询，不再产生新的标题模型调用（2026-09-28 之前的标题记录可能为空，不回填）；评测调用 `session_id` 与 `message_id` 为 NULL，只归属知识库。`latency_ms` 是该次模型调用自身的耗时。
 
 ## 已发布 PDF 文本快照（043）
 
@@ -539,7 +537,7 @@ USING gin (search_vector);
 
 收藏绑定确切回答 ID，重生成不转移到新版本。归档保持可读，软删会话或任一知识库依赖撤权后隐藏，恢复可见；永久删消息/会话级联清除收藏。所有读取仍要求会话归属和全部依赖知识库权限。
 
-创建分支通过 GORM 事务锁定来源会话，复制到指定回答为止的消息、引用和完整依赖集合。副本使用新消息 ID 和严格递增的时间，来源链接、依赖和副本原子提交；不复制收藏、评价、请求编号或模型用量。来源软删/永久删不删除独立分支，分支仍按自己的完整依赖鉴权。
+历史分支保留已保存的消息、引用、来源链接和完整依赖集合；来源软删/永久删不删除独立会话，永久删除来源后外键置空，分支仍按自己的完整依赖鉴权。新建分支已退役，迁移049只删除创建幂等所用的 branch_request_id，不删除历史会话或来源字段。
 
 表格不新增表或向量列。`document_chunks.metadata.table` 保存 `{sheetName,rowStart,rowEnd,headerRow}`，CSV 工作表名为空，XLSX 行起止相同。对应 `structureType=table_row`；无通用文本偏移和物理页码。该来源随实际检索片段保存到 `chat_messages.citations`，历史 JSON 缺少 `table` 时兼容原有格式。
 
@@ -547,14 +545,14 @@ USING gin (search_vector);
 
 | 迁移 | 数据与约束 |
 | --- | --- |
-| 044 | `chat_sessions.document_scope JSONB NOT NULL DEFAULT '[]'`，数组最多 20 项；保存文档 id/knowledgeBaseId/filename，固定到选定文档 ID，分支复制范围。 |
+| 044 | `chat_sessions.document_scope JSONB NOT NULL DEFAULT '[]'`，数组最多 20 项；保存文档 id/knowledgeBaseId/filename，固定到选定文档 ID，历史分支保留当时的范围。 |
 | 045 | `document_pdf_corrections(document_id UUID PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, content JSONB NOT NULL)`；完整不可变页文本基线，格式同 PDF 快照，人工修改页为 `textSource=ocr_corrected`。 |
 | 046 | `evaluation_cases.scope JSONB NOT NULL DEFAULT '{}'` 保存来源会话范围；`evaluation_runs.is_private BOOLEAN NOT NULL DEFAULT false`；既有 cases/results JSON 保存范围及实际来源库。 |
 | 047 | `chat_quality_issues` 主键 `(user_id,session_id,question_key)`，问题键为原问题 SHA-256；保存 question/status/note/document_ids/evaluation_case_id/evaluation_run_id/updated_at。状态为 open/retest/resolved；用户和会话外键 CASCADE，用例和运行外键 SET NULL。 |
 
 校对副本、处理任务、替换链接、上传凭据和校对基线在一次事务提交；提交时锁定源文档并检查已发布快照指纹，与 processor 发布锁串行化。重新处理校对版复用基线，不重新 OCR。已发布快照只在新切片全部成功时替换。
 
-新迁移可重复执行，不回填旧会话范围或推断旧 PDF 的校对内容。已有环境根据实际迁移记录补齐至049；048意图约束与049任务上下文都是当前启动要求。浏览器草稿不入数据库。
+新迁移可重复执行，不回填旧会话范围或推断旧 PDF 的校对内容。已有环境根据实际部署记录执行缺失迁移；当前dev包含048意图约束及049功能退役迁移，历史任务上下文方案尚未纳入本分支。浏览器草稿不入数据库。
 
 迁移 040 新增 `document_upload_receipts`：`user_id`、`knowledge_base_id`、`request_id` 联合主键，`fingerprint varchar(64)`、可空 `document_id`、`created_at timestamptz`。凭据与文档/任务/版本链接一起提交，只记录成功请求；文档永久删除将 `document_id` 置空以保留幂等墓碑，用户或知识库永久删除级联清除。按 `document_id` 建索引。未传请求 ID 的旧客户端不创建凭据。
 
@@ -568,6 +566,12 @@ USING gin (search_vector);
 
 `048_chat_message_general_intent.sql` 重建 `chat_messages_intent_check`，把 `general` 加入允许值（`conversation` / `general` / `knowledge_base`）。约束按名字先 DROP 再 ADD，可重复执行，不回填历史行。启动时校验约束定义包含 `general`，缺失即报错提示执行 048：否则第一条常识型回答会在生成完成后写库失败。
 
-## 文档任务追踪上下文（049）
+## 功能退役（049）
 
-迁移 `049_document_job_traceparent.sql` 为 `document_jobs` 增加 `traceparent VARCHAR(55) NOT NULL DEFAULT ''`。GORM 创建任务时从当前请求上下文自动填写；历史任务为空，不回填。worker 每次执行从此字段恢复父上下文，重试不覆盖它。该字段不通过公开 DTO 返回，不存储 baggage 或业务内容；启动检查拒绝缺少该列的 PostgreSQL schema。迁移可重复执行，无新增索引，操作方法见 [可观测性](38-observability.md)。
+`049_retire_personal_chat_features.sql` 删除 `question_templates` 表以及 `chat_sessions.branch_request_id`（对应唯一索引随列移除）。分支会话、消息、引用、固定范围、来源外键、收藏备注和历史模型用量保持；历史 `title` 用量仍可按原模型配置价格。
+
+升级前停止旧后端并备份需要保留的模板数据；仅回退程序或重跑037建表不能恢复被删除的正文，回退须恢复对应备份。新库仍按完整文件名执行全部历史迁移，最终由049清理退役结构；049可重复执行。
+
+## 文档任务追踪上下文（历史049草案）
+
+这是 [历史OTel方案](38-observability.md#历史-otel-方案) 里的迁移设计：增加 `document_jobs.traceparent VARCHAR(55) NOT NULL DEFAULT ''`，用于恢复worker父上下文，历史任务不回填，也不公开到DTO。本分支没有 `049_document_job_traceparent.sql`、模型字段或对应启动断言；历史草案编号与当前049功能退役迁移用途不同，恢复追踪方案时应分配新的迁移编号；上面的现行表摘录不包含该列。后续继续该方案时须同步实际SQL、模型、worker、启动检查和验证，不执行不存在的迁移或把旧验收当作本分支完成。

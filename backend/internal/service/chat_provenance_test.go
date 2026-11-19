@@ -88,7 +88,6 @@ func TestSendMessagePersistsKnowledgeIntentAndRetrievalQuery(t *testing.T) {
 		repository.NewKnowledgeBaseRepository(db),
 		retrieval,
 		chatProvider,
-		nil,
 	)
 
 	res, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{
@@ -129,7 +128,6 @@ func TestSendMessagePersistsConversationIntentWithoutRetrievalQuery(t *testing.T
 		repository.NewKnowledgeBaseRepository(db),
 		retrieval,
 		chatProvider,
-		nil,
 	)
 
 	res, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{
@@ -181,7 +179,6 @@ func TestRegenerateMessagePersistsProvenanceWithoutClientRequestID(t *testing.T)
 		repository.NewKnowledgeBaseRepository(db),
 		retrieval,
 		chatProvider,
-		nil,
 	)
 
 	sent, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{

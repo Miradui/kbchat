@@ -6,7 +6,7 @@ import { createEvaluationRun, getEvaluationRun, listEvaluationCases } from '../.
 import type { EvaluationCase, EvaluationRun, EvaluationRunInput } from '../../types/evaluation';
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
-import { Field, Select } from '../../components/ui/Field';
+import { Field, Select, Textarea } from '../../components/ui/Field';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { useUnsavedChangesWarning } from '../../components/feedback/useUnsavedChangesWarning';
 import { getErrorMessage } from '../../utils/errors';
@@ -85,7 +85,7 @@ export function QualityIssueDialog({ target, onClose, onCreateCase }: { target: 
       {!issue && !error && <p role="status">正在加载处理记录…</p>}
       {issue && <div className="ui-form">
         <Field label="处理状态"><Select aria-label="处理状态" disabled={busy} value={issue.status} onChange={(event) => setIssue({ ...issue, status: event.target.value as ChatQualityIssue['status'] })}><option value="open">待处理</option><option value="retest">待复测／待核对</option><option value="resolved">已解决（已人工核对）</option></Select></Field>
-        <Field label="处理备注"><textarea className="ui-input" aria-label="处理备注" rows={3} maxLength={4000} disabled={busy} value={issue.note} onChange={(event) => setIssue({ ...issue, note: event.target.value })} /></Field>
+        <Field label="处理备注"><Textarea aria-label="处理备注" rows={3} maxLength={4000} disabled={busy} value={issue.note} onChange={(event) => setIssue({ ...issue, note: event.target.value })} /></Field>
         <Button variant="ghost" disabled={busy} onClick={() => void save().then((saved) => { if (saved) { onClose(); navigate(`/knowledge-bases/${target.knowledgeBaseId}/documents`); } })}>去补充资料</Button>
         <Button variant="ghost" disabled={busy} onClick={() => setPicking(true)}>关联补充文档（{issue.documentIds.length}）</Button>
         <Field label="复测问题"><Select aria-label="复测问题" disabled={busy} value={issue.evaluationCaseId} onChange={(event) => setIssue({ ...issue, evaluationCaseId: event.target.value, evaluationRunId: '' })}><option value="">选择相同范围的测试问题</option>{cases.map((item) => <option value={item.id} key={item.id}>{item.question} · {item.sourceSessionId ? '来源会话范围' : '单库范围'}</option>)}</Select></Field>

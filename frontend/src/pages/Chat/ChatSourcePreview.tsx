@@ -32,7 +32,7 @@ export function ChatSourcePreview({ citation, index, knowledgeBaseId, canDownloa
   canDownload?: boolean;
   onClose: () => void;
 }) {
-  const overlay = useMediaQuery('(max-width: 1599px)');
+  const overlay = useMediaQuery('(max-width: 1279px)');
   const titleId = useId();
   const panelRef = useRef<HTMLElement>(null);
   const matchRef = useRef<HTMLElement>(null);

@@ -316,8 +316,24 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
           </Button>}
         </header>
 
-        <SegmentedControl label="质量视图" value={activeTab} options={[{ value: 'feedback', label: '反馈与缺口' }, { value: 'usage', label: '用量统计' }, { value: 'evaluation', label: '回归评测' }]}
-          onChange={(value) => setSearchParams((current) => { const next = new URLSearchParams(current); next.set('tab', value); return next; })} />
+        <div aria-label="质量视图" className="ui-tabs" role="tablist">
+          {[
+            { id: 'feedback', label: '反馈与缺口' },
+            { id: 'usage', label: '用量统计' },
+            { id: 'evaluation', label: '回归评测' },
+          ].map((tab) => (
+            <button
+              aria-selected={activeTab === tab.id}
+              className={activeTab === tab.id ? 'is-active' : undefined}
+              key={tab.id}
+              onClick={() => setSearchParams((current) => { const next = new URLSearchParams(current); next.set('tab', tab.id); return next; })}
+              role="tab"
+              type="button"
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
         <div className="quality-filters">
           {activeTab === 'feedback' && <SegmentedControl
@@ -387,7 +403,14 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
               : !feedback || feedback.items.length === 0 ? <EmptyState description="当前周期没有符合筛选条件的负反馈。" title="还没有负反馈" />
                 : <>
                   <div className="quality-feedback__list">
-                    {feedback.items.map((item) => <div key={item.messageId}><FeedbackItem item={item} onSave={() => setCaseDraft({ knowledgeBaseId: item.knowledgeBaseId, question: item.question, ...(qualityScope ? { sourceSessionId: item.sessionId } : {}) })} />{qualityScope && <Button variant="ghost" onClick={() => setIssueTarget(item)}>跟进这个问题</Button>}</div>)}
+                    {feedback.items.map((item) => (
+                      <FeedbackItem
+                        item={item}
+                        key={item.messageId}
+                        onFollowUp={qualityScope ? () => setIssueTarget(item) : undefined}
+                        onSave={() => setCaseDraft({ knowledgeBaseId: item.knowledgeBaseId, question: item.question, ...(qualityScope ? { sourceSessionId: item.sessionId } : {}) })}
+                      />
+                    ))}
                   </div>
                   <Pagination onPageChange={setPage} page={feedback.page} pageSize={feedback.pageSize} total={feedback.total} />
                 </>}
@@ -416,8 +439,16 @@ export function QualityPage({ sources = defaultSources }: { sources?: QualitySou
               : !gaps || gaps.items.length === 0 ? <EmptyState description={gapEmptyDescription(gapCategory)} title="没有发现知识缺口" />
                 : <>
                   <div className="quality-gaps__list">
-                    {gaps.items.map((item) => <div key={gapKey(item)}><KnowledgeGapItem item={item} canViewDiagnostics={user?.role === 'admin'}
-                      notice={gapNotice?.key === gapKey(item) ? gapNotice.message : ''} onSave={() => void saveGapAsCase(item)} />{qualityScope && <Button variant="ghost" onClick={() => setIssueTarget(item)}>跟进这个问题</Button>}</div>)}
+                    {gaps.items.map((item) => (
+                      <KnowledgeGapItem
+                        canViewDiagnostics={user?.role === 'admin'}
+                        item={item}
+                        key={gapKey(item)}
+                        notice={gapNotice?.key === gapKey(item) ? gapNotice.message : ''}
+                        onFollowUp={qualityScope ? () => setIssueTarget(item) : undefined}
+                        onSave={() => void saveGapAsCase(item)}
+                      />
+                    ))}
                   </div>
                   <Pagination onPageChange={setGapPage} page={gaps.page} pageSize={gaps.pageSize} total={gaps.total} />
                 </>}
@@ -461,7 +492,7 @@ function formatPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
 
-function FeedbackItem({ item, onSave }: { item: ChatQualityFeedbackItem; onSave: () => void }) {
+function FeedbackItem({ item, onSave, onFollowUp }: { item: ChatQualityFeedbackItem; onSave: () => void; onFollowUp?: () => void }) {
   return (
     <article className="quality-feedback__item">
       <div className="quality-feedback__item-head">
@@ -479,7 +510,10 @@ function FeedbackItem({ item, onSave }: { item: ChatQualityFeedbackItem; onSave:
         <div><dt>问题</dt><dd>{item.question || '未找到对应问题'}</dd></div>
         <div><dt>回答</dt><dd>{item.answer}</dd></div>
       </dl>
-      <div><Button disabled={!item.question} onClick={onSave} variant="secondary">保存为测试问题</Button></div>
+      <div className="quality-feedback__actions">
+        <Button disabled={!item.question} onClick={onSave} variant="secondary">保存为测试问题</Button>
+        {onFollowUp && <Button onClick={onFollowUp} variant="ghost">跟进这个问题</Button>}
+      </div>
       <div className="quality-feedback__evidence">
         <div className="quality-feedback__evidence-head">
           <strong>来源证据</strong>
@@ -504,11 +538,12 @@ function FeedbackItem({ item, onSave }: { item: ChatQualityFeedbackItem; onSave:
   );
 }
 
-function KnowledgeGapItem({ item, canViewDiagnostics, notice, onSave }: {
+function KnowledgeGapItem({ item, canViewDiagnostics, notice, onSave, onFollowUp }: {
   item: ChatKnowledgeGapItem;
   canViewDiagnostics: boolean;
   notice: string;
   onSave: () => void;
+  onFollowUp?: () => void;
 }) {
   const isCluster = item.category === 'repeated_rewrite';
   const presentation = gapPresentation(item.category);
@@ -538,12 +573,10 @@ function KnowledgeGapItem({ item, canViewDiagnostics, notice, onSave }: {
         ? '检索服务当时不可用，请联系系统管理员检查服务状态，恢复后重试。'
         : presentation.advice}</p>
       <div className="quality-gaps__meta">
-        {isCluster
-          ? <>
-            <Badge tone="info">改写 {item.occurrenceCount} 次</Badge>
-            {item.ungroundedCount > 0 && <Badge tone="warn">其中 {item.ungroundedCount} 次无引用</Badge>}
-          </>
-          : <Badge tone={presentation.tone}>{presentation.label}</Badge>}
+        {isCluster && <>
+          <Badge tone="info">改写 {item.occurrenceCount} 次</Badge>
+          {item.ungroundedCount > 0 && <Badge tone="warn">其中 {item.ungroundedCount} 次无引用</Badge>}
+        </>}
         <span className="ui-muted">
           首次 {formatRelativeTime(item.firstSeenAt)}
         </span>
@@ -552,7 +585,10 @@ function KnowledgeGapItem({ item, canViewDiagnostics, notice, onSave }: {
             {presentation.action.label} <ExternalLink aria-hidden="true" />
           </Link>
         )}
-        <Button disabled={!item.question} onClick={onSave} variant="secondary">保存为测试问题</Button>
+        <div className="quality-gaps__actions">
+          <Button disabled={!item.question} onClick={onSave} variant="secondary">保存为测试问题</Button>
+          {onFollowUp && <Button onClick={onFollowUp} variant="ghost">跟进这个问题</Button>}
+        </div>
       </div>
       {notice && <p className="ui-muted" role="status">{notice}</p>}
     </article>
