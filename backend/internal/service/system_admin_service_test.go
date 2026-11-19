@@ -61,6 +61,28 @@ func TestBootstrapPromotesOnlyTheNamedFirstAdminAndPreservesAccount(t *testing.T
 	assertAppError(t, svc.Authorize(ctx, original.ID), "UNAUTHORIZED")
 }
 
+// A disabled administrator cannot log in, so counting them as "initialized"
+// would leave the only recovery command refusing to run in exactly the state
+// that needs it -- including the zero-active-admin state the last-admin race
+// used to produce.
+func TestBootstrapIgnoresDisabledAdministrators(t *testing.T) {
+	ctx := context.Background()
+	db := newAuthTestDB(t)
+	users := repository.NewUserRepository(db)
+	svc := NewSystemAdminService(users)
+	disabled := model.User{Username: "disabled-admin", PasswordHash: "fixture-hash", Role: model.SystemRoleAdmin, Status: "disabled"}
+	if err := users.Create(ctx, &disabled); err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.Bootstrap(ctx, SystemAdminBootstrapRequest{Username: "recovery", Create: true, Password: "fixture-admin-password"})
+	if err != nil {
+		t.Fatalf("bootstrap must recover from a disabled-only administrator set: %v", err)
+	}
+	if result.Action != "created" || result.User.Role != model.SystemRoleAdmin {
+		t.Fatalf("unexpected recovery result: action=%s role=%s", result.Action, result.User.Role)
+	}
+}
+
 func TestBootstrapCreatesAdminOnlyWhenRequestedWithValidPassword(t *testing.T) {
 	ctx := context.Background()
 	db := newAuthTestDB(t)

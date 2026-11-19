@@ -101,6 +101,13 @@ export function useChatSessions({ knowledgeBaseId = '', archived = false }: UseC
     await fetchNextPage();
   }, [fetchNextPage, query.hasNextPage, query.isFetching]);
 
+  // A failed background refetch keeps the rows already on screen and reports a
+  // stale list instead. Replacing them with an error panel threw away a usable
+  // list on every network blip, because a refetch failure still sets isError while
+  // the previous data stays in the cache.
+  const hasSessionData = query.data !== undefined;
+  const sessionLoadError = query.isError && !query.isFetchNextPageError ? getErrorMessage(query.error, '会话列表加载失败') : '';
+
   return {
     sessions,
     sessionTotal,
@@ -110,7 +117,8 @@ export function useChatSessions({ knowledgeBaseId = '', archived = false }: UseC
     knowledgeBases: options.items,
     sessionsLoading: query.isPending || query.isPlaceholderData,
     knowledgeBasesLoading: options.loading,
-    sessionsError: query.isError && !query.isFetchNextPageError ? getErrorMessage(query.error, '会话列表加载失败') : '',
+    sessionsError: hasSessionData ? '' : sessionLoadError,
+    sessionsRefetchError: hasSessionData ? sessionLoadError : '',
     knowledgeBasesError: options.error,
     reloadSessions,
     loadMoreSessions,

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/otel/attribute"
 	"net/http"
 	"reflect"
 	"sort"
@@ -1044,7 +1045,7 @@ func writeExportCitations(builder *strings.Builder, raw datatypes.JSON) {
 }
 
 func (s *ChatService) SendMessage(ctx context.Context, userID, sessionID uuid.UUID, req dto.SendChatMessageRequest) (*dto.SendChatMessageResponse, error) {
-	session, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
+	session, err := s.authorizeWritableSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
 		return nil, err
 	}
@@ -1075,7 +1076,9 @@ func (s *ChatService) SendMessage(ctx context.Context, userID, sessionID uuid.UU
 		// The turn is recorded before the error is returned, so a refresh still shows
 		// the question. The error is unchanged: the request did fail.
 		if isRetrievalInfrastructureFailure(err) {
-			s.recordRetrievalFailure(ctx, session, clientRequestID, content, history)
+			if writeErr := s.recordRetrievalFailure(ctx, session, clientRequestID, content, history); writeErr != nil {
+				return nil, writeErr
+			}
 		}
 		return nil, err
 	}
@@ -1092,7 +1095,7 @@ func (s *ChatService) SendMessage(ctx context.Context, userID, sessionID uuid.UU
 		if errors.Is(err, repository.ErrChatMessageChanged) {
 			return nil, apperror.New(http.StatusConflict, "CHAT_MESSAGE_CHANGED", "conversation changed while the answer was being generated")
 		}
-		return nil, apperror.Internal(err)
+		return nil, chatWriteError(err)
 	}
 	s.attachUsageMessage(ctx, generated.usageRecordIDs, assistantMessage)
 
@@ -1141,7 +1144,7 @@ func (s *ChatService) SendMessageStream(
 	req dto.SendChatMessageRequest,
 	sink ChatStreamSink,
 ) error {
-	session, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
+	session, err := s.authorizeWritableSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
 		return err
 	}
@@ -1186,7 +1189,9 @@ func (s *ChatService) SendMessageStream(
 		// went away, matching this path's existing rule of persisting nothing on
 		// interruption.
 		if isRetrievalInfrastructureFailure(err) {
-			s.recordRetrievalFailure(ctx, session, clientRequestID, content, history)
+			if writeErr := s.recordRetrievalFailure(ctx, session, clientRequestID, content, history); writeErr != nil {
+				return writeErr
+			}
 		}
 		return err
 	}
@@ -1229,7 +1234,7 @@ func (s *ChatService) SendMessageStream(
 		if errors.Is(err, repository.ErrChatMessageChanged) {
 			return apperror.New(http.StatusConflict, "CHAT_MESSAGE_CHANGED", "conversation changed while the answer was being generated")
 		}
-		return apperror.Internal(err)
+		return chatWriteError(err)
 	}
 	s.attachUsageMessage(ctx, generated.usageRecordIDs, assistantMessage)
 
@@ -1256,9 +1261,29 @@ func buildChatMessagePair(
 		Role:            "user",
 		Content:         content,
 	}
+	assistantMessage, err := newAssistantMessage(sessionID, &clientRequestID, generated)
+	if err != nil {
+		return nil, nil, err
+	}
+	return userMessage, assistantMessage, nil
+}
+
+// newAssistantMessage builds the stored row for a generated answer.
+//
+// Every path that persists an answer goes through it -- send, edit, regenerate
+// and the failure recorder -- so no path can drop a recorded field. Regenerate
+// used to build the row by hand and silently omitted rerank_fallback: the
+// response said the fallback was used while the stored message and every later
+// read of it said null. clientRequestID stays nil for a regeneration, which is
+// what keeps regenerations out of repeated-rewrite clustering.
+func newAssistantMessage(
+	sessionID uuid.UUID,
+	clientRequestID *uuid.UUID,
+	generated generatedChatAnswer,
+) (*model.ChatMessage, error) {
 	assistantMessage := &model.ChatMessage{
 		SessionID:       sessionID,
-		ClientRequestID: &clientRequestID,
+		ClientRequestID: clientRequestID,
 		Role:            "assistant",
 		Content:         generated.answer,
 		Citations:       generated.citationJSON,
@@ -1266,12 +1291,12 @@ func buildChatMessagePair(
 	if generated.rerankFallback != nil {
 		fallbackJSON, err := json.Marshal(generated.rerankFallback)
 		if err != nil {
-			return nil, nil, apperror.Internal(err)
+			return nil, apperror.Internal(err)
 		}
 		assistantMessage.RerankFallback = datatypes.JSON(fallbackJSON)
 	}
 	applyGeneratedProvenance(assistantMessage, generated)
-	return userMessage, assistantMessage, nil
+	return assistantMessage, nil
 }
 
 // applyGeneratedProvenance records which intent produced an answer, whether the
@@ -1339,7 +1364,7 @@ func sendMessageResponseFromPair(clientRequestID uuid.UUID, content string, mess
 }
 
 func (s *ChatService) RegenerateMessage(ctx context.Context, userID, sessionID, messageID uuid.UUID) (*dto.RegenerateChatMessageResponse, error) {
-	session, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
+	session, err := s.authorizeWritableSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
 		return nil, err
 	}
@@ -1362,6 +1387,14 @@ func (s *ChatService) RegenerateMessage(ctx context.Context, userID, sessionID, 
 	if messages[targetIndex].Role != "assistant" {
 		return nil, apperror.Validation(map[string]any{"messageId": "only assistant messages can be regenerated"})
 	}
+	// Answers are grouped by the preceding user turn. Appending a version of an
+	// earlier turn would attach it to a different question. Older versions of
+	// the final turn remain valid targets.
+	for _, message := range messages[targetIndex+1:] {
+		if message.Role == "user" {
+			return nil, apperror.New(http.StatusConflict, "CHAT_MESSAGE_CHANGED", "a newer question exists; reload the conversation before regenerating")
+		}
+	}
 
 	userIndex := -1
 	for i := targetIndex - 1; i >= 0; i-- {
@@ -1381,23 +1414,15 @@ func (s *ChatService) RegenerateMessage(ctx context.Context, userID, sessionID, 
 		return nil, err
 	}
 
-	assistantMessage := &model.ChatMessage{
-		SessionID: session.ID,
-		Role:      "assistant",
-		Content:   generated.answer,
-		Citations: generated.citationJSON,
+	assistantMessage, err := newAssistantMessage(session.ID, nil, generated)
+	if err != nil {
+		return nil, err
 	}
-	// Intent is recorded here too, or every regenerated answer would be missing
-	// from the intent-scoped metrics. ClientRequestID stays nil, which is what
-	// keeps regenerations out of repeated-rewrite clustering: that signal is about
-	// a user rephrasing a question, not about asking for another attempt at the
-	// same one.
-	applyGeneratedProvenance(assistantMessage, generated)
 	if err := s.chats.CreateMessagesIfUnchanged(ctx, chatMessageIDs(messages), assistantMessage); err != nil {
 		if errors.Is(err, repository.ErrChatMessageChanged) {
 			return nil, apperror.New(http.StatusConflict, "CHAT_MESSAGE_CHANGED", "conversation changed while the answer was being regenerated")
 		}
-		return nil, apperror.Internal(err)
+		return nil, chatWriteError(err)
 	}
 	s.attachUsageMessage(ctx, generated.usageRecordIDs, assistantMessage)
 
@@ -1415,12 +1440,9 @@ func (s *ChatService) EditMessageAndRegenerate(
 	userID, sessionID, messageID uuid.UUID,
 	req dto.EditChatMessageRequest,
 ) (*dto.SendChatMessageResponse, error) {
-	session, err := s.authorizeSession(ctx, userID, sessionID, access.CapChatUse)
+	session, err := s.authorizeWritableSession(ctx, userID, sessionID, access.CapChatUse)
 	if err != nil {
 		return nil, err
-	}
-	if session.ArchivedAt != nil {
-		return nil, apperror.Validation(map[string]any{"sessionId": "archived sessions are read-only"})
 	}
 	content := strings.TrimSpace(req.Content)
 	if content == "" {
@@ -1485,7 +1507,7 @@ func (s *ChatService) EditMessageAndRegenerate(
 		if errors.Is(err, repository.ErrChatMessageChanged) {
 			return nil, apperror.New(http.StatusConflict, "CHAT_MESSAGE_CHANGED", "conversation changed while the message was being edited")
 		}
-		return nil, apperror.Internal(err)
+		return nil, chatWriteError(err)
 	}
 	s.attachUsageMessage(ctx, generated.usageRecordIDs, assistantMessage)
 	return &dto.SendChatMessageResponse{
@@ -1572,11 +1594,11 @@ func (s *ChatService) completeWithOptions(ctx context.Context, messages []chatco
 				if !started {
 					started = true
 					firstToken = time.Since(start)
-					s.metrics.ObserveDuration(observability.MetricChatFirstToken, firstToken)
+					s.metrics.ObserveDuration(ctx, observability.MetricChatFirstToken, firstToken)
 				}
 				return onDelta(delta)
 			}, options)
-			s.metrics.RecordProviderResult(observability.ProviderChat, err)
+			s.metrics.RecordProviderResult(ctx, observability.ProviderChat, err)
 			return answer, firstToken, usage, err
 		}
 		if reporter, ok := s.chatProvider.(chatcore.StreamingUsageProvider); ok {
@@ -1586,11 +1608,11 @@ func (s *ChatService) completeWithOptions(ctx context.Context, messages []chatco
 				if !started {
 					started = true
 					firstToken = time.Since(start)
-					s.metrics.ObserveDuration(observability.MetricChatFirstToken, firstToken)
+					s.metrics.ObserveDuration(ctx, observability.MetricChatFirstToken, firstToken)
 				}
 				return onDelta(delta)
 			})
-			s.metrics.RecordProviderResult(observability.ProviderChat, err)
+			s.metrics.RecordProviderResult(ctx, observability.ProviderChat, err)
 			return answer, firstToken, usage, err
 		}
 		if streamer, ok := s.chatProvider.(chatcore.StreamingProvider); ok {
@@ -1602,11 +1624,11 @@ func (s *ChatService) completeWithOptions(ctx context.Context, messages []chatco
 				if !observedFirstToken {
 					observedFirstToken = true
 					firstToken = time.Since(start)
-					s.metrics.ObserveDuration(observability.MetricChatFirstToken, firstToken)
+					s.metrics.ObserveDuration(ctx, observability.MetricChatFirstToken, firstToken)
 				}
 				return onDelta(delta)
 			})
-			s.metrics.RecordProviderResult(observability.ProviderChat, err)
+			s.metrics.RecordProviderResult(ctx, observability.ProviderChat, err)
 			return answer, firstToken, chatcore.Usage{}, err
 		}
 	}
@@ -1620,7 +1642,7 @@ func (s *ChatService) completeWithOptions(ctx context.Context, messages []chatco
 	} else {
 		answer, err = s.chatProvider.Chat(ctx, messages)
 	}
-	s.metrics.RecordProviderResult(observability.ProviderChat, err)
+	s.metrics.RecordProviderResult(ctx, observability.ProviderChat, err)
 	if err != nil {
 		return "", 0, usage, err
 	}
@@ -1641,7 +1663,12 @@ func (s *ChatService) generateAnswerWithHooks(
 	question string,
 	history []model.ChatMessage,
 	hooks answerHooks,
-) (generatedChatAnswer, error) {
+) (generated generatedChatAnswer, retErr error) {
+	ctx, span := observability.Start(ctx, "rag.answer", attribute.String("chat.session_id", session.ID.String()))
+	defer func() {
+		span.SetAttributes(attribute.String("rag.answer_status", generated.answerStatus), attribute.String("rag.intent", generated.intent), attribute.Int("rag.citation_count", len(generated.citations)))
+		observability.Finish(span, retErr)
+	}()
 	if _, err := s.validateSessionDocuments(ctx, session); err != nil {
 		return generatedChatAnswer{}, err
 	}
@@ -1651,8 +1678,12 @@ func (s *ChatService) generateAnswerWithHooks(
 	// takes to fail is exactly what an operator needs during an incident.
 	defer func() {
 		timing.Generation = time.Since(generationStart)
-		s.metrics.ObserveDuration(observability.MetricChatGeneration, timing.Generation)
-		s.metrics.RecordChatTiming(timing)
+		if timing.FirstToken > 0 {
+			span.SetAttributes(attribute.Float64("chat.model_first_token_ms", float64(timing.FirstToken)/float64(time.Millisecond)))
+		}
+		span.SetAttributes(attribute.Bool("rag.rerank_fallback", timing.RerankFallback))
+		s.metrics.ObserveDuration(ctx, observability.MetricChatGeneration, timing.Generation)
+		s.metrics.RecordChatTiming(ctx, timing)
 	}()
 
 	// Classification is itself a chat provider call, and it is the first one to
@@ -1661,7 +1692,7 @@ func (s *ChatService) generateAnswerWithHooks(
 	// outage that fails every question before generation is even reached.
 	intentStart := time.Now()
 	intent, intentUsage, err := classifyChatIntentWithUsage(ctx, s.chatProvider, question, history, s.cfg.ChatHistoryLimit)
-	s.metrics.RecordProviderResult(observability.ProviderChat, err)
+	s.metrics.RecordProviderResult(ctx, observability.ProviderChat, err)
 	var usageRecords []uuid.UUID
 	if err != nil {
 		return generatedChatAnswer{}, apperror.Wrap(500, "CHAT_COMPLETION_FAILED", "回答生成失败，请稍后重试", err)
@@ -1686,6 +1717,7 @@ func (s *ChatService) generateAnswerWithHooks(
 		answer, firstToken, usage, err := s.complete(ctx, messages, hooks.onDelta)
 		timing.FirstToken = firstToken
 		if err != nil {
+			s.recordSpentUsage(ctx, userID, session, "answer", usage, time.Since(answerStart))
 			return generatedChatAnswer{}, chatCompletionError(err)
 		}
 		usageRecords = appendUsageRecord(usageRecords, s.recordUsage(ctx, userID, session, "answer", usage, time.Since(answerStart)))
@@ -1771,9 +1803,13 @@ func (s *ChatService) generateAnswerWithHooks(
 		}
 		var usage chatcore.Usage
 		answerStart := time.Now()
-		answer, firstToken, usage, err = s.completeWithOptions(ctx, buildAnswerMessagesWithConfig(question, searchRes.Items, history, s.cfg.ChatHistoryLimit, answerConfig), streamHook, chatcore.Options{Model: answerConfig.Model, Temperature: answerConfig.Temperature})
+		_, promptSpan := observability.Start(ctx, "rag.prompt", attribute.Int("rag.context_chunk_count", len(searchRes.Items)))
+		messages := buildAnswerMessagesWithConfig(question, searchRes.Items, history, s.cfg.ChatHistoryLimit, answerConfig)
+		promptSpan.End()
+		answer, firstToken, usage, err = s.completeWithOptions(ctx, messages, streamHook, chatcore.Options{Model: answerConfig.Model, Temperature: answerConfig.Temperature})
 		timing.FirstToken = firstToken
 		if err != nil {
+			s.recordSpentUsage(ctx, userID, session, "answer", usage, time.Since(answerStart))
 			return generatedChatAnswer{}, chatCompletionError(err)
 		}
 		usageRecords = appendUsageRecord(usageRecords, s.recordUsage(ctx, userID, session, "answer", usage, time.Since(answerStart)))
@@ -1983,7 +2019,9 @@ func classifyChatIntent(ctx context.Context, provider chatcore.Provider, questio
 	return decision, err
 }
 
-func classifyChatIntentWithUsage(ctx context.Context, provider chatcore.Provider, question string, history []model.ChatMessage, historyLimit int) (chatIntentDecision, chatcore.Usage, error) {
+func classifyChatIntentWithUsage(ctx context.Context, provider chatcore.Provider, question string, history []model.ChatMessage, historyLimit int) (decisionResult chatIntentDecision, spent chatcore.Usage, retErr error) {
+	ctx, span := observability.Start(ctx, "rag.intent")
+	defer func() { observability.Finish(span, retErr) }()
 	var raw string
 	var usage chatcore.Usage
 	var err error
@@ -2029,9 +2067,9 @@ func (s *ChatService) recordUsage(ctx context.Context, userID uuid.UUID, session
 		Purpose:          purpose,
 		Provider:         s.usageProviderName(),
 		Model:            usage.Model,
-		PromptTokens:     usageTokenValue(usage.PromptTokens),
-		CompletionTokens: usageTokenValue(usage.CompletionTokens),
-		TotalTokens:      usageTokenValue(usage.TotalTokens),
+		PromptTokens:     usageTokenValue(usage.PromptTokens, usage.Reported),
+		CompletionTokens: usageTokenValue(usage.CompletionTokens, usage.Reported),
+		TotalTokens:      usageTokenValue(usage.TotalTokens, usage.Reported),
 		LatencyMs:        durationMillis(latency),
 	}
 	if record.Model == "" {
@@ -2053,7 +2091,7 @@ func (s *ChatService) persistUsage(ctx context.Context, record *model.ModelUsage
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if err := s.usage.Create(writeCtx, record); err != nil {
-		if log := s.metrics.Logger(); log != nil {
+		if log := s.metrics.Logger(ctx); log != nil {
 			log.Warn("model usage record not written", zap.String("purpose", record.Purpose), zap.Error(err))
 		}
 		return uuid.Nil
@@ -2069,7 +2107,7 @@ func (s *ChatService) attachUsageMessage(ctx context.Context, recordIDs []uuid.U
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if err := s.usage.AttachMessage(writeCtx, recordIDs, message.ID); err != nil {
-		if log := s.metrics.Logger(); log != nil {
+		if log := s.metrics.Logger(ctx); log != nil {
 			log.Warn("model usage records not linked to message", zap.Error(err))
 		}
 	}
@@ -2082,11 +2120,26 @@ func appendUsageRecord(ids []uuid.UUID, id uuid.UUID) []uuid.UUID {
 	return append(ids, id)
 }
 
-// usageTokenValue keeps 0 as a real count. Providers that report no usage at
-// all leave Model empty and every count at zero; that case is distinguished by
-// the caller, and NULL is reserved for "the provider did not say".
-func usageTokenValue(value int) *int {
-	if value < 0 {
+// recordSpentUsage bills a failed generation when the provider still reported
+// usage.
+//
+// A stream can fail after the provider already answered: a downgraded blocking
+// fallback whose onDelta failed, or a decode error after a partial response.
+// Those tokens are spent, and dropping the record because the turn failed would
+// erase the bill. Nothing is written when usage was never reported.
+func (s *ChatService) recordSpentUsage(ctx context.Context, userID uuid.UUID, session *model.ChatSession, purpose string, usage chatcore.Usage, latency time.Duration) {
+	if !usage.Reported {
+		return
+	}
+	s.recordUsage(ctx, userID, session, purpose, usage, latency)
+}
+
+// usageTokenValue keeps a reported 0 as a real count and stores NULL when the
+// provider never reported usage. An OpenAI-compatible gateway that ignores
+// stream_options.include_usage still answers 200, and writing its zeroes as real
+// counts would understate cost and pull token and latency statistics toward zero.
+func usageTokenValue(value int, reported bool) *int {
+	if !reported {
 		return nil
 	}
 	copy := value
@@ -2105,7 +2158,7 @@ func (s *ChatService) resolveAnswerConfig(ctx context.Context, knowledgeBaseID u
 		return answerConfig
 	}
 	if err := json.Unmarshal(kb.AnswerConfig, &answerConfig); err != nil {
-		if log := s.metrics.Logger(); log != nil {
+		if log := s.metrics.Logger(ctx); log != nil {
 			log.Warn("knowledge base answer_config is not valid JSON; using defaults", zap.String("knowledgeBaseId", knowledgeBaseID.String()), zap.Error(err))
 		}
 		return dto.AnswerConfig{AnswerLanguage: "auto"}

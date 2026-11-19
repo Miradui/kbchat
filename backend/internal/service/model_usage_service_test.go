@@ -40,9 +40,9 @@ func (p *usageProvider) ChatWithOptions(_ context.Context, messages []chatcore.M
 		model = options.Model
 	}
 	if strings.Contains(messages[0].Content, "意图分类器") {
-		return `{"intent":"knowledge_base","standaloneQuery":"退货"}`, chatcore.Usage{PromptTokens: 11, CompletionTokens: 3, TotalTokens: 14, Model: model}, nil
+		return `{"intent":"knowledge_base","standaloneQuery":"退货"}`, chatcore.Usage{PromptTokens: 11, CompletionTokens: 3, TotalTokens: 14, Model: model, Reported: true}, nil
 	}
-	return p.answer, chatcore.Usage{PromptTokens: 120, CompletionTokens: 40, TotalTokens: 160, Model: model}, nil
+	return p.answer, chatcore.Usage{PromptTokens: 120, CompletionTokens: 40, TotalTokens: 160, Model: model, Reported: true}, nil
 }
 
 func usageTestServices(t *testing.T) (workspaceTestServices, *usageProvider, *repository.ModelUsageRepository) {
@@ -69,6 +69,145 @@ func listUsageRecords(t *testing.T, w workspaceTestServices) []model.ModelUsageR
 		t.Fatal(err)
 	}
 	return records
+}
+
+// A gateway that ignores stream_options.include_usage still answers 200, with no
+// usage object at all. Storing its zeroes as real counts would understate cost
+// and drag token statistics toward zero; the row must say "not reported".
+func TestUnreportedUsageIsStoredAsNull(t *testing.T) {
+	w, _, _ := usageTestServices(t)
+	ctx := context.Background()
+	w.chats.chatProvider = zeroUsageProvider{}
+	owner := createWorkspaceUser(t, w.db, "owner")
+	kb := createWorkspaceKB(t, w.db, owner.ID, uuid.Nil, "库", "private", time.Now())
+	session := model.ChatSession{UserID: owner.ID, KnowledgeBaseID: kb.ID, Title: "新会话"}
+	if err := w.db.Create(&session).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.chats.SendMessage(ctx, owner.ID, session.ID, dto.SendChatMessageRequest{Content: "退货规则", ClientRequestID: uuid.NewString()}); err != nil {
+		t.Fatal(err)
+	}
+	records := listUsageRecords(t, w)
+	if len(records) == 0 {
+		t.Fatal("expected usage rows for the call")
+	}
+	for _, row := range records {
+		if row.PromptTokens != nil || row.CompletionTokens != nil || row.TotalTokens != nil {
+			t.Fatalf("unreported usage must be stored as NULL: %+v", row)
+		}
+	}
+}
+
+// A generation can fail after the upstream already answered: the streaming path
+// downgrades to a blocking call whose onDelta then fails, and that call returns
+// usage alongside its error. The err branch used to return before recordUsage,
+// so the spent tokens vanished from the bill.
+func TestFailedGenerationStillRecordsReportedUsage(t *testing.T) {
+	w, _, _ := usageTestServices(t)
+	ctx := context.Background()
+	w.chats.chatProvider = &failingUsageProvider{usage: chatcore.Usage{
+		PromptTokens: 120, CompletionTokens: 8, TotalTokens: 128, Model: "default-model", Reported: true,
+	}}
+	owner := createWorkspaceUser(t, w.db, "owner")
+	kb := createWorkspaceKB(t, w.db, owner.ID, uuid.Nil, "库", "private", time.Now())
+	session := model.ChatSession{UserID: owner.ID, KnowledgeBaseID: kb.ID, Title: "新会话"}
+	if err := w.db.Create(&session).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := w.chats.SendMessage(ctx, owner.ID, session.ID, dto.SendChatMessageRequest{Content: "退货规则", ClientRequestID: uuid.NewString()}); err == nil {
+		t.Fatal("expected the failed generation to be reported")
+	}
+
+	var answers []model.ModelUsageRecord
+	if err := w.db.Where("purpose = ?", "answer").Find(&answers).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(answers) != 1 {
+		t.Fatalf("expected the spent usage to be recorded once, got %d rows: %+v", len(answers), answers)
+	}
+	if answers[0].PromptTokens == nil || *answers[0].PromptTokens != 120 || answers[0].TotalTokens == nil || *answers[0].TotalTokens != 128 {
+		t.Fatalf("unexpected recorded usage: %+v", answers[0])
+	}
+}
+
+// A deleted knowledge base keeps its usage rows for the audit trail, but its
+// historical tokens must not stay in the totals and its name must not stay in the
+// knowledgeBase grouping.
+func TestUsageAggregateExcludesDeletedKnowledgeBases(t *testing.T) {
+	w, _, usage := usageTestServices(t)
+	ctx := context.Background()
+	owner := createWorkspaceUser(t, w.db, "owner")
+	kb := createWorkspaceKB(t, w.db, owner.ID, uuid.Nil, "库", "private", time.Now())
+	prompt, completion, total := 10, 5, 15
+	now := time.Now().UTC()
+	record := model.ModelUsageRecord{
+		ID: uuid.New(), UserID: owner.ID, KnowledgeBaseID: kb.ID, Purpose: "answer",
+		Provider: "openai_compatible", Model: "priced",
+		PromptTokens: &prompt, CompletionTokens: &completion, TotalTokens: &total, CreatedAt: now,
+	}
+	if err := w.db.Create(&record).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := w.db.Delete(&model.KnowledgeBase{}, "id = ?", kb.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	scope := repository.UsageScope{ActorID: owner.ID, AllKnowledgeBases: true}
+	rows, err := usage.Aggregate(ctx, scope, now.Add(-time.Hour), now.Add(time.Hour), "knowledgeBase")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("deleted knowledge base still aggregated: %+v", rows)
+	}
+	models, err := usage.AggregateByModel(ctx, scope, now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 0 {
+		t.Fatalf("deleted knowledge base still billed: %+v", models)
+	}
+}
+
+type failingUsageProvider struct {
+	usage chatcore.Usage
+}
+
+func (p *failingUsageProvider) Chat(_ context.Context, messages []chatcore.Message) (string, error) {
+	if isIntentClassification(messages) {
+		return `{"intent":"knowledge_base","standaloneQuery":"退货"}`, nil
+	}
+	return "", errors.New("chat completion failed")
+}
+
+func (p *failingUsageProvider) ChatWithOptions(_ context.Context, messages []chatcore.Message, _ chatcore.Options) (string, chatcore.Usage, error) {
+	if isIntentClassification(messages) {
+		return `{"intent":"knowledge_base","standaloneQuery":"退货"}`, chatcore.Usage{Model: "default-model", PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12, Reported: true}, nil
+	}
+	return "", p.usage, errors.New("chat completion failed")
+}
+
+func isIntentClassification(messages []chatcore.Message) bool {
+	return len(messages) > 0 && strings.Contains(messages[0].Content, "意图分类器")
+}
+
+type zeroUsageProvider struct{}
+
+func (zeroUsageProvider) Chat(ctx context.Context, messages []chatcore.Message) (string, error) {
+	answer, _, err := zeroUsageProvider{}.ChatWithOptions(ctx, messages, chatcore.Options{})
+	return answer, err
+}
+
+func (zeroUsageProvider) ChatWithOptions(_ context.Context, messages []chatcore.Message, options chatcore.Options) (string, chatcore.Usage, error) {
+	model := "default-model"
+	if options.Model != "" {
+		model = options.Model
+	}
+	if strings.Contains(messages[0].Content, "意图分类器") {
+		return `{"intent":"knowledge_base","standaloneQuery":"退货"}`, chatcore.Usage{Model: model}, nil
+	}
+	return "签收后 7 天内退货。[source:1]", chatcore.Usage{Model: model}, nil
 }
 
 func TestFirstQuestionTitleDoesNotAddUsageAndPreservesHistoricalTitleCosts(t *testing.T) {

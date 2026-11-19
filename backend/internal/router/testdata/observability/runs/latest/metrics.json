@@ -1,0 +1,6 @@
+{
+  "failedReadPublishesNoQueueValues": true,
+  "privateLabelsExported": false,
+  "queueReadFailureReported": true,
+  "requestsWithTracingOff": 2
+}

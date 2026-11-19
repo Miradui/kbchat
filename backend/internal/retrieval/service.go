@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"go.opentelemetry.io/otel/attribute"
 	"sort"
 	"strings"
 	"time"
@@ -125,7 +126,9 @@ func (s *Service) SearchAutomatic(ctx context.Context, ownerID uuid.UUID, kbIDs 
 	return s.searchBases(ctx, ownerID, kbIDs, req, true)
 }
 
-func (s *Service) searchBases(ctx context.Context, ownerID uuid.UUID, kbIDs []uuid.UUID, req dto.SearchRequest, automatic bool) (*dto.SearchResponse, error) {
+func (s *Service) searchBases(ctx context.Context, ownerID uuid.UUID, kbIDs []uuid.UUID, req dto.SearchRequest, automatic bool) (response *dto.SearchResponse, retErr error) {
+	ctx, span := observability.Start(ctx, "rag.retrieval", attribute.Int("rag.knowledge_base_count", len(kbIDs)))
+	defer func() { observability.Finish(span, retErr) }()
 	if req.ScoreThreshold != nil && (*req.ScoreThreshold < 0 || *req.ScoreThreshold > 1) {
 		return nil, apperror.Validation(map[string]any{"scoreThreshold": "must be between 0 and 1"})
 	}
@@ -161,7 +164,11 @@ func (s *Service) searchBases(ctx context.Context, ownerID uuid.UUID, kbIDs []uu
 			return nil, apperror.Internal(err)
 		}
 		if len(docs) != len(documentIDs) {
-			return nil, apperror.NotFound("DOCUMENT_SCOPE_UNAVAILABLE", "所选文档已删除、移动或不可访问，请重新选择提问范围")
+			// 409, not 404: the session still exists and must stay readable. The
+			// frontend clears a conversation on any 404, so returning one here
+			// made a deleted scope document look like a lost session. The chat
+			// path returns the same code and status (chat_document_scope.go).
+			return nil, apperror.New(409, "DOCUMENT_SCOPE_UNAVAILABLE", "所选文档已删除、移动或不可访问，请重新选择提问范围")
 		}
 		ctx = repository.WithDocumentSearchScope(ctx, documentIDs)
 	}
@@ -180,6 +187,7 @@ func (s *Service) searchBases(ctx context.Context, ownerID uuid.UUID, kbIDs []uu
 	// above is not retrieval work, and including it would make the metric partly a
 	// measure of how often callers pass bad IDs.
 	retrievalStart := time.Now()
+	defer s.metrics.ObserveSince(ctx, observability.MetricRetrieval, retrievalStart)
 
 	queryVector, err := s.queryEmbedding(ctx, req.Query)
 	if err != nil {
@@ -191,6 +199,7 @@ func (s *Service) searchBases(ctx context.Context, ownerID uuid.UUID, kbIDs []uu
 		return nil, err
 	}
 	rerankInput := recalled.rerankInput
+	span.SetAttributes(attribute.String("rag.keyword_stage", recalled.keywordStageStatus))
 	thresholdScore := scoreVector
 	if recalled.fusionStageStatus == "completed" {
 		thresholdScore = scoreFusion
@@ -203,9 +212,9 @@ func (s *Service) searchBases(ctx context.Context, ownerID uuid.UUID, kbIDs []uu
 	if options.enableRerank {
 		rerankStart := time.Now()
 		rerankCandidates, err = s.rerank(ctx, req.Query, rerankInput, 0)
-		s.metrics.RecordProviderResult(observability.ProviderRerank, err)
-		if err == nil {
-			s.metrics.ObserveSince(observability.MetricRerank, rerankStart)
+		if len(rerankInput) > 0 {
+			s.metrics.RecordProviderResult(ctx, observability.ProviderRerank, err)
+			s.metrics.ObserveSince(ctx, observability.MetricRerank, rerankStart)
 		}
 		if err != nil {
 			if s.cfg.RerankFailureMode == rerankFailureModeFallback {
@@ -251,8 +260,7 @@ func (s *Service) searchBases(ctx context.Context, ownerID uuid.UUID, kbIDs []uu
 		})
 	}
 
-	s.metrics.ObserveSince(observability.MetricRetrieval, retrievalStart)
-
+	span.SetAttributes(attribute.Int("rag.candidate_count", len(rerankInput)), attribute.Int("rag.context_chunk_count", len(items)), attribute.Bool("rag.rerank_fallback", rerankFallback != nil))
 	res := &dto.SearchResponse{Items: items, RerankFallback: rerankFallback}
 	if req.Debug {
 		recalled.query = req.Query
@@ -263,28 +271,31 @@ func (s *Service) searchBases(ctx context.Context, ownerID uuid.UUID, kbIDs []uu
 	return res, nil
 }
 
-func (s *Service) queryEmbedding(ctx context.Context, query string) ([]float32, error) {
+func (s *Service) queryEmbedding(ctx context.Context, query string) (result []float32, retErr error) {
+	ctx, span := observability.Start(ctx, "rag.query_embedding")
+	defer func() { observability.Finish(span, retErr) }()
 	normalizedQuery := cache.NormalizeEmbeddingQuery(query)
 	cacheModel := s.embeddingCacheModelKey()
 	if s.embeddingCache != nil {
 		vector, hit, err := s.embeddingCache.Get(ctx, cacheModel, normalizedQuery)
 		switch {
 		case err != nil:
+			span.SetAttributes(attribute.String("cache.result", "error"))
 			s.metrics.RecordEmbeddingCacheResult(observability.EmbeddingCacheResultError)
 		case hit:
+			span.SetAttributes(attribute.String("cache.result", "hit"))
 			s.metrics.RecordEmbeddingCacheResult(observability.EmbeddingCacheResultHit)
 			return vector, nil
 		default:
+			span.SetAttributes(attribute.String("cache.result", "miss"))
 			s.metrics.RecordEmbeddingCacheResult(observability.EmbeddingCacheResultMiss)
 		}
 	}
 
 	embeddingStart := time.Now()
 	embeddings, err := s.embedder.EmbedTexts(ctx, []string{normalizedQuery})
-	s.metrics.RecordProviderResult(observability.ProviderEmbedding, err)
-	if err == nil {
-		s.metrics.ObserveSince(observability.MetricEmbedding, embeddingStart)
-	}
+	s.metrics.RecordProviderResult(ctx, observability.ProviderEmbedding, err)
+	s.metrics.ObserveSince(ctx, observability.MetricEmbedding, embeddingStart)
 	if err != nil {
 		return nil, err
 	}

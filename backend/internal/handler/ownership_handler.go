@@ -13,7 +13,7 @@ func (h *KnowledgeBaseHandler) TransferOwnership(c *gin.Context) {
 		return
 	}
 	var req dto.TransferOwnershipRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请选择新所有者"}))
 		return
 	}
@@ -31,7 +31,7 @@ func (h *AdminUserHandler) TransferKnowledgeBases(c *gin.Context) {
 		return
 	}
 	var req dto.TransferOwnershipRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请选择新所有者"}))
 		return
 	}

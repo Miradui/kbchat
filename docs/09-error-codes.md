@@ -22,7 +22,7 @@ HTTP状态、业务码和异步文档处理分类分别定义；资源范围见 
 | `message` | 用户可读错误信息 |
 | `details` | 可公开的错误分类或字段错误，不含密钥、原始SQL、连接串或文件绝对路径 |
 
-当前dev不返回 `traceId` 或 `X-Trace-ID`；对应扩展保留在 [历史OTel方案](38-observability.md#历史-otel-方案)，未作为当前错误合同实现。
+JSON错误与SSE error事件可带 `traceId`，响应头提供 `X-Trace-ID`；编号用于关联服务端日志/Trace，不替代幂等编号。没有有效上下文时可为空，前端仅展示合法编号。公共错误继续脱敏，详见 [请求追踪](04-api-design.md#请求追踪)。
 
 ## 基础错误码
 

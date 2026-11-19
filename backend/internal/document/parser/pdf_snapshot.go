@@ -50,6 +50,7 @@ func DecodePDFSnapshot(content []byte) (ParsedDocument, error) {
 	document := ParsedDocument{FileType: "pdf", PDFTextSummary: &PDFTextSummary{TotalPages: snapshot.TotalPages, PagesWithoutText: []int{}}}
 	nativePages := map[int]bool{}
 	ocrPages := []int{}
+	ocrPageSet := map[int]bool{}
 	previous, textBytes := 0, 0
 	for _, page := range snapshot.Pages {
 		textBytes += len(page.Content)
@@ -62,17 +63,32 @@ func DecodePDFSnapshot(content []byte) (ParsedDocument, error) {
 			nativePages[pageNumber] = true
 		} else {
 			ocrPages = append(ocrPages, pageNumber)
+			ocrPageSet[pageNumber] = true
 		}
 		previous = pageNumber
 	}
-	document.PDFTextSummary.TextPages = len(nativePages)
+	// An OCR page carries text, so it counts toward TextPages and must not be
+	// listed as a page without text. The decode used to do neither, and the
+	// detail endpoint then rejected the summary as self-contradictory and
+	// dropped the whole OCR block -- which is what a corrected document hits on
+	// every re-process, because the correction baseline is decoded here.
+	document.PDFTextSummary.TextPages = len(nativePages) + len(ocrPages)
+	neededOCR := 0
 	for page := 1; page <= snapshot.TotalPages; page++ {
-		if !nativePages[page] {
+		if nativePages[page] {
+			continue
+		}
+		neededOCR++
+		if !ocrPageSet[page] {
 			document.PDFTextSummary.PagesWithoutText = append(document.PDFTextSummary.PagesWithoutText, page)
 		}
 	}
 	if len(ocrPages) > 0 {
-		document.PDFTextSummary.OCR = &PDFOCRSummary{Status: "completed", Pages: ocrPages, CompletedPages: len(ocrPages), TotalPages: len(document.PDFTextSummary.PagesWithoutText)}
+		// Every page that needed OCR was attempted before the document was
+		// published, so neededOCR is also the completed count; a page whose
+		// recognition returned nothing stays in PagesWithoutText above and is
+		// simply absent from Pages.
+		document.PDFTextSummary.OCR = &PDFOCRSummary{Status: "completed", Pages: ocrPages, CompletedPages: neededOCR, TotalPages: neededOCR}
 	}
 	return document, nil
 }

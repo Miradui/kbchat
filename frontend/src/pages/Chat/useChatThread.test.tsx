@@ -529,6 +529,53 @@ describe('useChatThread send reconciliation', () => {
     expect(result.current.needsResendDecision).toBe(true);
   });
 
+  it('reconciles an unconfirmed regeneration on the automatic schedule', async () => {
+    vi.useFakeTimers();
+    const original = messagesFor('old-request');
+    resourceMocks.listChatMessages.mockResolvedValue({ items: original });
+    resourceMocks.regenerateChatMessage.mockRejectedValue(
+      new ApiError(503, { code: 'INTERNAL_ERROR', message: '服务暂时不可用', details: {} }),
+    );
+    const { result } = renderThreadWithChangingSessionsCallback();
+    await settleEffects();
+
+    await act(async () => { await result.current.regenerate(original[1].id); });
+    expect(result.current.regeneration?.kind).toBe('unconfirmed');
+    expect(result.current.regeneration?.autoChecksDone).toBe(0);
+
+    // 2s and 5s, the same schedule an unconfirmed send gets. Nothing scheduled
+    // these before, and the decision state is keyed on autoChecksDone, so the panel
+    // stayed on "正在确认重新生成结果…" until the user retried by hand.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    expect(result.current.regeneration?.autoChecksDone).toBe(2);
+    expect(result.current.regeneration?.message).toBe('检查后仍未发现新的回答。');
+    expect(result.current.regeneration?.checking).toBe(false);
+  });
+
+  it('stops the automatic regeneration checks once the answer appears', async () => {
+    vi.useFakeTimers();
+    const original = messagesFor('old-request');
+    const produced = { ...messagesFor('new-request')[1], id: 'regenerated-assistant' };
+    resourceMocks.listChatMessages
+      .mockResolvedValueOnce({ items: original })
+      .mockResolvedValueOnce({ items: [...original, produced] });
+    resourceMocks.regenerateChatMessage.mockRejectedValue(
+      new ApiError(503, { code: 'INTERNAL_ERROR', message: '服务暂时不可用', details: {} }),
+    );
+    const { result } = renderThread();
+    await settleEffects();
+
+    await act(async () => { await result.current.regenerate(original[1].id); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+
+    expect(result.current.regeneration).toBeNull();
+    expect(pendingRegenerationStore.get(session.id)).toBeNull();
+  });
+
   it('keeps automatic reconciliation running when the caller callback identity changes', async () => {
     vi.useFakeTimers();
     const check = deferred<{ items: ChatMessage[] }>();

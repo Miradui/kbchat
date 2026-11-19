@@ -145,6 +145,29 @@ describe('DocumentDetailDrawer', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it('keeps the chunk list while a processing document polls without progress', async () => {
+    vi.mocked(getDocument).mockResolvedValue({ ...document, status: 'parsing', stage: 'parsing', progress: 30, jobStatus: 'running' });
+    vi.mocked(listDocumentChunks).mockResolvedValue({ items: [sourceChunk], total: 1, page: 1, pageSize: 20 });
+
+    vi.useFakeTimers();
+    try {
+      renderWithRouter(<DocumentDetailDrawer documentId="doc1" onClose={vi.fn()} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByText(sourceChunk.content)).toBeInTheDocument();
+      expect(listDocumentChunks).toHaveBeenCalledTimes(1);
+
+      // Three polls answer with the same progress. The reader keeps the chunks --
+      // and with them the scroll position, focus and retry state -- and no chunk
+      // request is repeated.
+      await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+      expect(vi.mocked(getDocument).mock.calls.length).toBeGreaterThanOrEqual(4);
+      expect(listDocumentChunks).toHaveBeenCalledTimes(1);
+      expect(screen.getByText(sourceChunk.content)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('ignores an in-flight progress response after switching documents', async () => {
     const progress = deferred<DocumentItem>();
     vi.mocked(reprocessDocument).mockResolvedValue({ ...document, status: 'parsing' });

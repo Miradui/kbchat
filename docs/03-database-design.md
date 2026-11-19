@@ -11,7 +11,7 @@
 - Go 模型继续使用 `time.Time`、`*time.Time` 和 `gorm.DeletedAt`，由 GORM 的 PostgreSQL 方言映射为 `timestamptz`；原生 pgx 驱动处理带不同时区的参数，无需自定义时间编码。
 - API 时间携带 `Z` 或明确的时区偏移，前端按浏览器时区显示；数据库中的 UTC 数值不等于用户本地钟面时间。
 - 旧库先执行 `023_timestamps_with_time_zone.sql`：使用 `USING 列名 AT TIME ZONE 'UTC'` 将无时区字段转为 `TIMESTAMPTZ`，保持旧值当前按 UTC 读取时的含义，不额外校正历史偏差。已有 `TIMESTAMPTZ` 字段跳过，重复执行不会再次换算时间。
-- 时间字段校验会拒绝仍有无时区业务时间字段的 PostgreSQL schema，并提示执行023；校验本身只读，不会修改已有列类型。生产启动也应只读，但当前server在校验前无条件调用AutoMigrate，会执行扩展和缺表DDL，这一未满足约定见[CHK-003](15-backlog.md#尚未关闭的工程事项)。全新数据库按顺序执行全部迁移，001–022保留历史定义，以下示例展示023后的结构。升级与备份步骤见[部署指南](13-deployment.md#73-已有数据库)。
+- 时间字段校验会拒绝仍有无时区业务时间字段的 PostgreSQL schema，并提示执行023；校验本身只读，不会修改已有列类型。server默认调用只读EnsureSchema；仅非production且显式设置RAG_ALLOW_AUTOMIGRATE时允许可丢弃开发库建表。全新数据库按顺序执行全部迁移，001–022保留历史定义，以下示例展示023后的结构。升级与备份步骤见[部署指南](13-deployment.md#73-已有数据库)。
 
 ## users
 
@@ -552,7 +552,7 @@ USING gin (search_vector);
 
 校对副本、处理任务、替换链接、上传凭据和校对基线在一次事务提交；提交时锁定源文档并检查已发布快照指纹，与 processor 发布锁串行化。重新处理校对版复用基线，不重新 OCR。已发布快照只在新切片全部成功时替换。
 
-新迁移可重复执行，不回填旧会话范围或推断旧 PDF 的校对内容。已有环境根据实际部署记录执行缺失迁移；当前dev包含048意图约束及049功能退役迁移，历史任务上下文方案尚未纳入本分支。浏览器草稿不入数据库。
+新迁移可重复执行，不回填旧会话范围或推断旧 PDF 的校对内容。已有环境根据实际部署记录执行缺失迁移；当前dev包含048意图约束及两份独立049迁移（任务追踪与功能退役）；必须按完整文件名逐项记录，不能只按编号判断已升级。浏览器草稿不入数据库。
 
 迁移 040 新增 `document_upload_receipts`：`user_id`、`knowledge_base_id`、`request_id` 联合主键，`fingerprint varchar(64)`、可空 `document_id`、`created_at timestamptz`。凭据与文档/任务/版本链接一起提交，只记录成功请求；文档永久删除将 `document_id` 置空以保留幂等墓碑，用户或知识库永久删除级联清除。按 `document_id` 建索引。未传请求 ID 的旧客户端不创建凭据。
 
@@ -572,6 +572,6 @@ USING gin (search_vector);
 
 升级前停止旧后端并备份需要保留的模板数据；仅回退程序或重跑037建表不能恢复被删除的正文，回退须恢复对应备份。新库仍按完整文件名执行全部历史迁移，最终由049清理退役结构；049可重复执行。
 
-## 文档任务追踪上下文（历史049草案）
+## 文档任务追踪上下文（049）
 
-这是 [历史OTel方案](38-observability.md#历史-otel-方案) 里的迁移设计：增加 `document_jobs.traceparent VARCHAR(55) NOT NULL DEFAULT ''`，用于恢复worker父上下文，历史任务不回填，也不公开到DTO。本分支没有 `049_document_job_traceparent.sql`、模型字段或对应启动断言；历史草案编号与当前049功能退役迁移用途不同，恢复追踪方案时应分配新的迁移编号；上面的现行表摘录不包含该列。后续继续该方案时须同步实际SQL、模型、worker、启动检查和验证，不执行不存在的迁移或把旧验收当作本分支完成。
+`049_document_job_traceparent.sql` 增加 `document_jobs.traceparent VARCHAR(55) NOT NULL DEFAULT ''`，用于恢复worker父上下文，历史任务不回填，也不公开到DTO。模型、worker和启动只读检查均已接入；缺列时启动明确拒绝。该迁移可重复执行，与 `049_retire_personal_chat_features.sql` 保留各自已使用的完整文件名；新库按文件名执行全部迁移，已有库分别补齐缺失文件，两者互不依赖。监控合同见 [可观测性](38-observability.md)。

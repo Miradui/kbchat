@@ -7,13 +7,18 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"kbchat/backend/internal/apperror"
 	"kbchat/backend/internal/dto"
+	"kbchat/backend/internal/observability"
 	"kbchat/backend/internal/service"
 )
 
@@ -32,7 +37,7 @@ func (h *ChatHandler) CreateSession(c *gin.Context) {
 	}
 
 	var req dto.CreateChatSessionRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "request body is invalid"}))
 		return
 	}
@@ -114,7 +119,7 @@ func (h *ChatHandler) UpdateSession(c *gin.Context) {
 		return
 	}
 	var req dto.UpdateChatSessionRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "request body is invalid"}))
 		return
 	}
@@ -256,7 +261,7 @@ func (h *ChatHandler) SetMessageFeedback(c *gin.Context) {
 		return
 	}
 	var req dto.SetChatMessageFeedbackRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "request body is invalid"}))
 		return
 	}
@@ -440,7 +445,7 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 	}
 
 	var req dto.SendChatMessageRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "request body is invalid"}))
 		return
 	}
@@ -468,13 +473,27 @@ func (h *ChatHandler) SendMessageStream(c *gin.Context) {
 	}
 
 	var req dto.SendChatMessageRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "request body is invalid"}))
 		return
 	}
 
 	sink := &sseSink{c: c}
 	err := h.chats.SendMessageStream(c.Request.Context(), userID, sessionID, req, sink)
+	outcome := "completed"
+	span := trace.SpanFromContext(c.Request.Context())
+	if err != nil {
+		outcome = "failed"
+		if sink.failed || errors.Is(err, context.Canceled) {
+			outcome = "cancelled"
+		} else {
+			_, payload := errorPayload(err)
+			span.SetAttributes(attribute.String("app.error_code", payload.Code))
+			span.SetStatus(codes.Error, payload.Code)
+		}
+	}
+	c.Set("streamOutcome", outcome)
+	span.SetAttributes(attribute.String("app.outcome", outcome))
 	if err == nil {
 		return
 	}
@@ -503,7 +522,17 @@ func (s *sseSink) Citations(citations []dto.CitationResponse) error {
 }
 
 func (s *sseSink) Delta(text string) error {
-	return s.emit("delta", gin.H{"text": text})
+	if err := s.emit("delta", gin.H{"text": text}); err != nil {
+		return err
+	}
+	if _, exists := s.c.Get("firstVisibleDuration"); !exists && strings.TrimSpace(text) != "" {
+		if started, ok := s.c.Get("requestStartedAt"); ok {
+			elapsed := time.Since(started.(time.Time))
+			s.c.Set("firstVisibleDuration", elapsed)
+			trace.SpanFromContext(s.c.Request.Context()).SetAttributes(attribute.Float64("chat.first_visible_text_ms", float64(elapsed)/float64(time.Millisecond)))
+		}
+	}
+	return nil
 }
 
 func (s *sseSink) Done(res *dto.SendChatMessageResponse) error {
@@ -513,6 +542,7 @@ func (s *sseSink) Done(res *dto.SendChatMessageResponse) error {
 func (s *sseSink) emitError(err error) {
 	status, payload := errorPayload(err)
 	_ = s.emit("error", gin.H{
+		"traceId": observability.TraceID(s.c.Request.Context()),
 		"status":  status,
 		"code":    payload.Code,
 		"message": payload.Message,
@@ -588,7 +618,7 @@ func (h *ChatHandler) EditMessage(c *gin.Context) {
 		return
 	}
 	var req dto.EditChatMessageRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "request body is invalid"}))
 		return
 	}

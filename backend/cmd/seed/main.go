@@ -27,8 +27,8 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := database.AutoMigrate(ctx, db); err != nil {
-		log.Fatal("database migration failed", zap.Error(err))
+	if err := database.EnsureSchema(ctx, db); err != nil {
+		log.Fatal("database schema incompatible; apply the migrations before seeding", zap.Error(err))
 	}
 
 	username := getEnv("SEED_USERNAME", "admin")

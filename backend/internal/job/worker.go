@@ -3,14 +3,18 @@ package job
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"go.opentelemetry.io/otel/attribute"
 	"kbchat/backend/internal/document/processor"
 	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/observability"
 	"kbchat/backend/internal/repository"
 )
 
@@ -35,6 +39,7 @@ type DocumentProcessor interface {
 }
 
 type Options struct {
+	Recorder         *observability.Recorder
 	Interval         time.Duration
 	Concurrency      int
 	MaxRetries       int
@@ -43,6 +48,7 @@ type Options struct {
 }
 
 type Worker struct {
+	metrics     *observability.Recorder
 	documents   DocumentStore
 	processor   DocumentProcessor
 	logger      *zap.Logger
@@ -79,6 +85,7 @@ func NewWorkerWithOptions(
 		options.RetryDelay = defaultRetryDelay
 	}
 	return &Worker{
+		metrics:     options.Recorder,
 		documents:   documents,
 		processor:   processor,
 		logger:      logger,
@@ -91,10 +98,7 @@ func NewWorkerWithOptions(
 
 func (w *Worker) Start(ctx context.Context) {
 	w.logger.Info("document worker started")
-	if err := w.documents.RecoverRunningJobs(ctx); err != nil {
-		w.logger.Error("recover interrupted document jobs failed", zap.Error(err))
-		return
-	}
+	w.recoverRunningJobs(ctx)
 
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
@@ -113,6 +117,35 @@ func (w *Worker) Start(ctx context.Context) {
 			w.logger.Info("document worker stopped")
 			return
 		case <-ticker.C:
+		}
+	}
+}
+
+// recoverRunningJobs retries until recovery succeeds or the worker stops.
+//
+// Giving up on the first failure left a half-dead worker: HTTP kept answering and
+// uploads kept returning 201, but no goroutine ever claimed a job, so every
+// document stayed pending with one ERROR line to explain it and nothing in the
+// diagnostics to show it. A database blip during startup is exactly what a retry
+// recovers from, and until recovery succeeds there is nothing safe to claim.
+func (w *Worker) recoverRunningJobs(ctx context.Context) {
+	for attempt := 1; ; attempt++ {
+		err := w.documents.RecoverRunningJobs(ctx)
+		if err == nil {
+			if attempt > 1 {
+				w.logger.Info("recovered interrupted document jobs", zap.Int("attempts", attempt))
+			}
+			return
+		}
+		w.logger.Error("recover interrupted document jobs failed; retrying",
+			zap.Int("attempt", attempt),
+			zap.Duration("retry_delay", w.retryDelay),
+			zap.Error(err),
+		)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(w.retryDelay):
 		}
 	}
 }
@@ -146,12 +179,65 @@ func (w *Worker) runClaimLoop(ctx context.Context) {
 			return
 		}
 
-		w.process(ctx, job)
+		w.processSafely(ctx, job)
 	}
 }
 
-func (w *Worker) process(ctx context.Context, job *model.DocumentJob) {
-	w.logger.Info("processing document job",
+// processSafely keeps one document from taking the process down. Parsing,
+// splitting and OCR all run on untrusted uploads; a panic there is a bug, but
+// it must fail the job instead of killing every in-flight request and leaving
+// the job stuck in 'running'. The job is finalized as 'internal' rather than
+// retried: a panic is not a transient condition.
+func (w *Worker) processSafely(ctx context.Context, job *model.DocumentJob) {
+	ctx = observability.WithTraceParent(ctx, job.Traceparent)
+	ctx, span := observability.Start(ctx, "document.process", attribute.String("job.id", job.ID.String()), attribute.String("document.id", job.DocumentID.String()), attribute.Int("job.attempt", job.RetryCount+1))
+	started := time.Now()
+	var jobErr error
+	defer func() {
+		if errors.Is(jobErr, repository.ErrDocumentJobCancelled) {
+			jobErr = context.Canceled
+		}
+		outcome := "completed"
+		if jobErr != nil {
+			outcome = "failed"
+		}
+		if errors.Is(jobErr, context.Canceled) {
+			outcome = "cancelled"
+		}
+		w.metrics.RecordJobAttempt(ctx, outcome, time.Since(started))
+		observability.Finish(span, jobErr)
+	}()
+	log := observability.Log(ctx, w.logger)
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+		message := fmt.Sprintf("panic while processing document: %v", recovered)
+		jobErr = fmt.Errorf("document processor panicked")
+		log.Error("document job panicked",
+			zap.String("job_id", job.ID.String()),
+			zap.String("document_id", job.DocumentID.String()),
+			zap.Any("panic", recovered),
+			zap.ByteString("stack", debug.Stack()),
+		)
+		// The worker context may already be cancelled; the terminal write still
+		// has to happen so the job does not stay 'running' until next startup.
+		failCtx := context.WithoutCancel(ctx)
+		if err := w.documents.FailJobWithCode(failCtx, job.ID, message, processor.ErrorCodeInternal); err != nil {
+			log.Error("finalize panicked document job failed",
+				zap.String("job_id", job.ID.String()),
+				zap.String("document_id", job.DocumentID.String()),
+				zap.Error(err),
+			)
+		}
+	}()
+	jobErr = w.process(ctx, job)
+}
+
+func (w *Worker) process(ctx context.Context, job *model.DocumentJob) error {
+	log := observability.Log(ctx, w.logger)
+	log.Info("processing document job",
 		zap.String("job_id", job.ID.String()),
 		zap.String("document_id", job.DocumentID.String()),
 	)
@@ -161,11 +247,11 @@ func (w *Worker) process(ctx context.Context, job *model.DocumentJob) {
 		// document. RetryJob and FailJob are guarded on status='running' and
 		// would no-op anyway; returning here keeps the log honest.
 		if errors.Is(err, repository.ErrDocumentJobCancelled) {
-			w.logger.Info("document job cancelled",
+			log.Info("document job cancelled",
 				zap.String("job_id", job.ID.String()),
 				zap.String("document_id", job.DocumentID.String()),
 			)
-			return
+			return err
 		}
 
 		message := err.Error()
@@ -173,7 +259,7 @@ func (w *Worker) process(ctx context.Context, job *model.DocumentJob) {
 		if job.RetryCount < w.maxRetries && !permanent {
 			nextRetryCount := job.RetryCount + 1
 			retryAt := time.Now().Add(w.retryDelay)
-			w.logger.Warn("document job scheduled for retry",
+			log.Warn("document job scheduled for retry",
 				zap.String("job_id", job.ID.String()),
 				zap.String("document_id", job.DocumentID.String()),
 				zap.Int("retry_count", nextRetryCount),
@@ -182,15 +268,15 @@ func (w *Worker) process(ctx context.Context, job *model.DocumentJob) {
 				zap.Error(err),
 			)
 			if retryErr := w.documents.RetryJob(ctx, job.ID, nextRetryCount, retryAt, message); retryErr != nil {
-				w.logger.Error("schedule document job retry failed",
+				log.Error("schedule document job retry failed",
 					zap.String("job_id", job.ID.String()),
 					zap.Error(retryErr),
 				)
 			}
-			return
+			return err
 		}
 
-		w.logger.Error("document job failed",
+		log.Error("document job failed",
 			zap.String("job_id", job.ID.String()),
 			zap.String("document_id", job.DocumentID.String()),
 			zap.Int("retry_count", job.RetryCount),
@@ -203,25 +289,26 @@ func (w *Worker) process(ctx context.Context, job *model.DocumentJob) {
 		// server is about to try again.
 		errorCode := processor.ClassifyError(err)
 		if failErr := w.documents.FailJobWithCode(ctx, job.ID, message, errorCode); failErr != nil {
-			w.logger.Error("finalize failed document job failed",
+			log.Error("finalize failed document job failed",
 				zap.String("job_id", job.ID.String()),
 				zap.String("document_id", job.DocumentID.String()),
 				zap.Error(failErr),
 			)
 		}
-		return
+		return err
 	}
 
 	if err := w.documents.CompleteJob(ctx, job.ID); err != nil {
-		w.logger.Error("complete document job failed",
+		log.Error("complete document job failed",
 			zap.String("job_id", job.ID.String()),
 			zap.Error(err),
 		)
-		return
+		return err
 	}
 
-	w.logger.Info("document job completed",
+	log.Info("document job completed",
 		zap.String("job_id", job.ID.String()),
 		zap.String("document_id", job.DocumentID.String()),
 	)
+	return nil
 }

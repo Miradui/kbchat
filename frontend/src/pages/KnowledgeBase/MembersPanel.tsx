@@ -32,6 +32,12 @@ type MembersPanelProps = {
   onVisibilityChange: (visibility: 'private' | 'public') => void;
 };
 
+/**
+ * A write that took effect but left the list stale. Reported apart from the write
+ * failure so the user does not repeat a change that already happened.
+ */
+const MEMBER_REFRESH_FAILED = '成员列表刷新失败，请重试。';
+
 export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanelProps) {
   const toast = useToast();
   const mutation = useEntityMutation();
@@ -84,10 +90,23 @@ export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanel
     };
   }, [load]);
 
-  async function reload() {
-    const response = await getKnowledgeBasePermissions(knowledgeBase.id);
-    setPermissions(response);
-    onVisibilityChange(response.visibility);
+  /**
+   * Refresh the member list after a write, reporting whether it worked.
+   *
+   * The write and the refresh fail separately. Folding them together told the user
+   * "成员添加失败" for a write that had already succeeded, and the retry then failed
+   * as a duplicate; a failed refresh after a removal was invisible because it was
+   * written into a dialog that had already closed.
+   */
+  async function reload(): Promise<boolean> {
+    try {
+      const response = await getKnowledgeBasePermissions(knowledgeBase.id);
+      setPermissions(response);
+      onVisibilityChange(response.visibility);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async function handleUserSearch(event: FormEvent<HTMLFormElement>) {
@@ -134,9 +153,12 @@ export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanel
     void mutation.run(key, async () => {
       try {
         await action();
-        await reload();
       } catch (caught) {
         toast.error(getErrorMessage(caught, failure));
+        return;
+      }
+      if (!await reload()) {
+        toast.error(MEMBER_REFRESH_FAILED);
       }
     });
   }
@@ -315,11 +337,17 @@ export function MembersPanel({ knowledgeBase, onVisibilityChange }: MembersPanel
             void mutation.run(`remove-${target.id}`, async () => {
               try {
                 await deleteKnowledgeBaseMember(knowledgeBase.id, target.id);
-                setDeleteTarget(null);
-                toast.success('成员移除成功');
-                await reload();
               } catch (caught) {
                 setDeleteError(getErrorMessage(caught, '成员移除失败'));
+                return;
+              }
+              // Refresh before closing: the dialog owns the removal error, and a
+              // failed refresh must not be attributed to a removal that worked.
+              const refreshed = await reload();
+              setDeleteTarget(null);
+              toast.success('成员移除成功');
+              if (!refreshed) {
+                toast.error(MEMBER_REFRESH_FAILED);
               }
             });
           }}

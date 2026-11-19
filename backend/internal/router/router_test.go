@@ -71,7 +71,7 @@ func TestCORSAllowsConfiguredPreflightOrigin(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != origin {
 		t.Fatalf("expected allowed origin %q, got %q", origin, got)
 	}
-	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Authorization, Content-Type" {
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Authorization, Content-Type, traceparent, tracestate" {
 		t.Fatalf("unexpected allowed headers %q", got)
 	}
 }

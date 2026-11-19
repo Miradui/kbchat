@@ -264,9 +264,9 @@ func TestDiagnosticsNeverCallsModelProviders(t *testing.T) {
 
 func TestDiagnosticsReportsProviderHealthFromRecordedTraffic(t *testing.T) {
 	recorder := observability.NewRecorder()
-	recorder.RecordProviderResult(observability.ProviderChat, nil)
-	recorder.RecordProviderResult(observability.ProviderEmbedding, syscall.ECONNREFUSED)
-	recorder.ObserveDuration(observability.MetricRetrieval, 120*time.Millisecond)
+	recorder.RecordProviderResult(context.Background(), observability.ProviderChat, nil)
+	recorder.RecordProviderResult(context.Background(), observability.ProviderEmbedding, syscall.ECONNREFUSED)
+	recorder.ObserveDuration(context.Background(), observability.MetricRetrieval, 120*time.Millisecond)
 	recorder.RecordRerankFallback("provider_error")
 	recorder.RecordRateLimitTrigger(observability.RateLimitScopeLogin)
 	recorder.RecordRateLimitTrigger(observability.RateLimitScopeLogin)
@@ -489,7 +489,7 @@ func TestDiagnosticsResponseNeverSerializesSecrets(t *testing.T) {
 	cfg.MinIOSecretKey = minioKey
 
 	recorder := observability.NewRecorder()
-	recorder.RecordProviderResult(observability.ProviderChat, errors.New(providerRaw))
+	recorder.RecordProviderResult(context.Background(), observability.ProviderChat, errors.New(providerRaw))
 
 	svc := NewSystemService(cfg)
 	svc.SetDiagnosticsDeps(SystemDiagnosticsDeps{

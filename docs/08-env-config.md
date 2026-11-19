@@ -9,7 +9,7 @@
 | `APP_ENV` | `development` | 应用环境 |
 | `SERVER_PORT` | `8080` | Gin 服务端口 |
 | `CORS_ALLOWED_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173` | 允许跨域访问 API 的前端 Origin，多个值用逗号分隔 |
-| `RAG_ALLOW_AUTOMIGRATE` | 约定为 `false`，当前入口尚未分流 | 现行要求仅在明确启用的可丢弃开发库使用；当前server无条件调用AutoMigrate，须按 [CHK-003](15-backlog.md#尚未关闭的工程事项) 修正生产只读启动。GORM建表不等同于显式SQL迁移 |
+| `RAG_ALLOW_AUTOMIGRATE` | `false` | 仅非production且显式启用时允许可丢弃开发库创建缺表；默认及production走只读EnsureSchema。GORM建表不等同于显式SQL迁移 |
 | `DATABASE_URL` | 本地 PostgreSQL | 数据库连接；应用连接的会话时区固定为 UTC，连接参数中的 `timezone` / `TimeZone` 会统一为 UTC |
 | `REDIS_ADDR` | `localhost:6379` | Redis 地址 |
 | `REDIS_PASSWORD` | 空 | Redis 密码 |
@@ -147,9 +147,14 @@ OCR 默认关闭。安装 Poppler、Tesseract 5 及所需语言包后设置 `PDF
 
 ## OpenTelemetry
 
-当前dev的配置加载器和 `.env.example` 没有 `OTEL_*` 配置，诊断使用进程内Recorder，不生成Trace响应编号或导出OTLP。
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `OTEL_SERVICE_NAME` | `rag-backend` | Trace/Metrics的服务名 |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | 空 | 完整HTTP(S) OTLP/protobuf地址，例如 `http://127.0.0.1:4318/v1/traces`；空时保留本地Trace ID/日志关联，不导出 |
+| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | 空 | 独立Metrics端点，例如 `http://127.0.0.1:4318/v1/metrics`；空时不周期采集队列或导出 |
+| `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` | OTel SDK默认父采样语义 | 由SDK读取；Metrics不依赖Trace采样 |
 
-Trace/Metrics端点、采样、历史指标和观测profile参数保留在 [历史方案](38-observability.md#历史-otel-方案)，不属于当前默认值。用户要求继续实施后，先同步实际代码、模板、部署和验收，再将生效配置列入本页。
+端点不得带URL用户凭据。导出超时三秒、不重试，Metrics每15秒采集；Collector/Prometheus/Grafana/Jaeger配置与保留期见 [可观测性](38-observability.md)。
 
 ## 配置安全与约束
 

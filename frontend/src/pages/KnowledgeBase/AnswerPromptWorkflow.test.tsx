@@ -49,7 +49,7 @@ beforeEach(() => {
       if (method === 'PUT') {
         const body = JSON.parse(String(init?.body)) as Partial<KnowledgeBase>;
         writes.push(body);
-        if (failSave) return Response.json({ code: 'INTERNAL_ERROR', message: '夹具保存失败' }, { status: 503 });
+        if (failSave) return Response.json({ code: 'INTERNAL_ERROR', message: '夹具保存失败', traceId: '0123456789abcdef0123456789abcdef' }, { status: 503 });
         if (saveGate) await saveGate;
         knowledgeBase = { ...knowledgeBase, ...body };
       }
@@ -120,7 +120,7 @@ it('chooses and edits templates, preserves failed saves, then opens a saved sing
 
   failSave = true;
   await actor.click(form.getByRole('button', { name: '保存配置' }));
-  await screen.findByRole('alert');
+  expect(await screen.findByRole('alert')).toHaveTextContent('追踪编号：0123456789abcdef0123456789abcdef');
   expect(editor).toHaveValue(editedPrompt);
   expect(knowledgeBase.answerConfig.systemPromptAddition).toBe(initialPrompt);
   expect(form.getByRole('button', { name: '在本库试问' })).toBeDisabled();
@@ -146,7 +146,7 @@ it('chooses and edits templates, preserves failed saves, then opens a saved sing
   await act(async () => { await workflowRouter.navigate(-1); });
   expect(await screen.findByRole('textbox', { name: '知识库回答提示词' })).toHaveValue(editedPrompt);
   expect(unexpectedRequests).toEqual([]);
-  recordResult('edit-save-trial', { templateCount: templateIds.length, previewMatchedAppliedContent: true, cancelPreservedContent: true, failedSavePreservedContent: true, savingBlockedEdits: true, retainedOtherSettings: true, trialScope: 'manual-single', reloadedSavedPrompt: true });
+  recordResult('edit-save-trial', { templateCount: templateIds.length, previewMatchedAppliedContent: true, cancelPreservedContent: true, failedSavePreservedContent: true, failedSaveTraceIdVisible: true, savingBlockedEdits: true, retainedOtherSettings: true, trialScope: 'manual-single', reloadedSavedPrompt: true });
 }, 15000);
 
 it('fills an empty prompt directly and resets to the saved value without making an HTTP write', async () => {

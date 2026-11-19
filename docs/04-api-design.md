@@ -44,9 +44,9 @@ Redis 故障且 `RATE_LIMIT_FAILURE_MODE=closed` 时返回 `503 RATE_LIMIT_UNAVA
 
 ## 请求追踪
 
-当前dev使用zap请求/问答时延日志及进程内诊断，尚未实现 `X-Trace-ID`、错误 `traceId`、W3C请求头传播或 `chat_first_visible_text`。上传/聊天幂等编号保持各自语义；SSE的HTTP 200仍不代表生成成功，必须检查 `done`/`error` 与实际写入结果。
+响应通过 `X-Trace-ID` 提供追踪编号，JSON错误和SSE error事件同时带 `traceId`；缺少有效上下文时编号可为空。接收W3C `traceparent`/`tracestate`，不传播baggage。上传requestId、聊天clientRequestId和Trace ID各自独立；SSE的HTTP 200仍不代表生成成功，必须检查 `done`/`error` 与实际写入结果。
 
-上述Trace扩展、失败尝试指标与独立OTLP历史指标保留在 [历史OTel方案](38-observability.md#历史-otel-方案)，不属于当前响应或采集承诺。后续实施时同步HTTP/DTO、前端、配置、任务模型与验收；当前指标以本页系统诊断及实际Recorder为准。
+`chat_first_visible_text` 记录HTTP入口至首个非空正文成功写入并flush的耗时，不代表浏览器绘制时间。进程内Recorder保留即时诊断，独立OTLP指标提供历史窗口；SSE失败/取消及失败尝试的口径见 [可观测性](38-observability.md)。
 
 ## 权限与能力矩阵
 

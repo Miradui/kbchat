@@ -52,8 +52,8 @@ func TestCORSAlwaysVariesByOrigin(t *testing.T) {
 			} else if !tt.expectedAllow && got != "" {
 				t.Fatalf("expected no allowed origin, got %q", got)
 			}
-			if got := response.Header.Get("Access-Control-Expose-Headers"); tt.expectedAllow && got != "Retry-After" {
-				t.Fatalf("expected Retry-After to be exposed, got %q", got)
+			if got := response.Header.Get("Access-Control-Expose-Headers"); tt.expectedAllow && got != "Retry-After, X-Trace-ID" {
+				t.Fatalf("expected Retry-After and X-Trace-ID to be exposed, got %q", got)
 			} else if !tt.expectedAllow && got != "" {
 				t.Fatalf("expected no exposed headers, got %q", got)
 			}

@@ -13,16 +13,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  observability:
+    name: Observability configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate Collector
+        run: docker run --rm -v "$PWD/deploy:/config:ro" otel/opentelemetry-collector-contrib:0.165.0 validate --config=/config/otel-collector.yaml
+      - name: Validate Prometheus configuration
+        run: docker run --rm --entrypoint promtool -v "$PWD/deploy/prometheus:/etc/prometheus:ro" prom/prometheus:v3.16.0 check config /etc/prometheus/prometheus.yml
+      - name: Verify alert behavior
+        run: docker run --rm --entrypoint promtool -v "$PWD/deploy/prometheus:/etc/prometheus:ro" prom/prometheus:v3.16.0 test rules /etc/prometheus/alerts.test.yml
+
   backend:
     name: Backend
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: rag_ci
+          POSTGRES_USER: rag_ci
+          POSTGRES_PASSWORD: rag_ci_fixture
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rag_ci -d rag_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: backend
     env:
       CGO_ENABLED: '1'
       GOFLAGS: -mod=readonly
+      # Disposable job-local fixture only; never use a deployment database here.
+      RAG_TEST_POSTGRES_DSN: postgres://rag_ci:rag_ci_fixture@127.0.0.1:5432/rag_ci?sslmode=disable
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -31,6 +60,8 @@ jobs:
           cache-dependency-path: backend/go.sum
       - name: Vet
         run: go vet ./...
+      - name: Initialize PostgreSQL test extension
+        run: psql "$RAG_TEST_POSTGRES_DSN" -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS vector'
       - name: Test
         run: go test ./...
       - name: Build

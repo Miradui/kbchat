@@ -9,8 +9,8 @@ import (
 
 	"kbchat/backend/internal/config"
 	"kbchat/backend/internal/dto"
-	"kbchat/backend/internal/rerank"
 	"kbchat/backend/internal/repository"
+	"kbchat/backend/internal/rerank"
 )
 
 func withOffsets(result repository.SearchResult, metadata string) repository.SearchResult {

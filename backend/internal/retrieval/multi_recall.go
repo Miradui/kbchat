@@ -3,6 +3,7 @@ package retrieval
 import (
 	"context"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 	"kbchat/backend/internal/apperror"
 	"kbchat/backend/internal/dto"
@@ -14,12 +15,16 @@ import (
 )
 
 func (s *Service) recallOne(ctx context.Context, kbID uuid.UUID, queryVector []float32, options searchOptions, req dto.SearchRequest) (searchDebugInput, error) {
-	vectorCandidates, err := s.chunks.SearchByVector(ctx, kbID, queryVector, options.vectorTopN)
+	vectorCtx, vectorSpan := observability.Start(ctx, "rag.vector_recall", attribute.String("knowledge_base.id", kbID.String()))
+	vectorCandidates, err := s.chunks.SearchByVector(vectorCtx, kbID, queryVector, options.vectorTopN)
 	if err != nil {
+		observability.Finish(vectorSpan, err)
 		return searchDebugInput{}, apperror.Internal(err)
 	}
 	vectorCandidates = limitSearchResults(vectorCandidates, options.vectorTopN)
-	vectorCandidates, exactFallback, err := s.completeVectorRecall(ctx, kbID, queryVector, options.vectorTopN, vectorCandidates)
+	vectorCandidates, exactFallback, err := s.completeVectorRecall(vectorCtx, kbID, queryVector, options.vectorTopN, vectorCandidates)
+	vectorSpan.SetAttributes(attribute.Bool("rag.exact_fallback", exactFallback), attribute.Int("rag.candidate_count", len(vectorCandidates)))
+	observability.Finish(vectorSpan, err)
 	if err != nil {
 		return searchDebugInput{}, apperror.Internal(err)
 	}
@@ -33,15 +38,19 @@ func (s *Service) recallOne(ctx context.Context, kbID uuid.UUID, queryVector []f
 	var fused []fusedCandidate
 	if options.enableKeyword {
 		keywordStart := time.Now()
-		keywordCandidates, err = s.chunks.SearchByKeyword(ctx, kbID, req.Query, options.vectorTopN)
-		s.metrics.RecordProviderResult(observability.ProviderKeyword, err)
+		keywordCtx, keywordSpan := observability.Start(ctx, "rag.keyword_recall")
+		keywordCandidates, err = s.chunks.SearchByKeyword(keywordCtx, kbID, req.Query, options.vectorTopN)
+		keywordSpan.SetAttributes(attribute.Int("rag.candidate_count", len(keywordCandidates)))
+		observability.Finish(keywordSpan, err)
+		s.metrics.RecordProviderResult(ctx, observability.ProviderKeyword, err)
+		s.metrics.ObserveSince(ctx, observability.MetricKeyword, keywordStart)
 		if err != nil {
 			// Keyword recall is an addition to vector recall, not a prerequisite:
 			// a broken GIN index or a missing search_vector column must not take
 			// down retrieval that worked before hybrid search existed. The stage
 			// is reported as failed in debug output and the vector list is used
 			// alone, with vector-score thresholds as before.
-			if log := s.metrics.Logger(); log != nil {
+			if log := s.metrics.Logger(ctx); log != nil {
 				log.Warn("keyword recall failed; falling back to vector recall", zap.String("knowledgeBaseId", kbID.String()), zap.Error(err))
 			}
 			keywordCandidates = nil
@@ -52,7 +61,6 @@ func (s *Service) recallOne(ctx context.Context, kbID uuid.UUID, queryVector []f
 				fused[i].FusionScore = nil
 			}
 		} else {
-			s.metrics.ObserveSince(observability.MetricKeyword, keywordStart)
 			keywordCandidates = limitSearchResults(keywordCandidates, options.vectorTopN)
 			keywordStageStatus = "completed"
 			fusionStageStatus = "completed"

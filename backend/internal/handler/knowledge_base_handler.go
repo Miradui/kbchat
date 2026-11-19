@@ -29,7 +29,7 @@ func (h *KnowledgeBaseHandler) Create(c *gin.Context) {
 	}
 
 	var req dto.KnowledgeBaseRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
@@ -81,7 +81,7 @@ func (h *KnowledgeBaseHandler) UpdateWorkspacePreference(c *gin.Context) {
 		return
 	}
 	var req dto.KnowledgeBaseWorkspacePreferenceRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "request body is invalid"}))
 		return
 	}
@@ -99,7 +99,7 @@ func (h *KnowledgeBaseHandler) BatchFavorite(c *gin.Context) {
 		return
 	}
 	var req dto.KnowledgeBaseBatchFavoriteRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
@@ -117,7 +117,7 @@ func (h *KnowledgeBaseHandler) BatchMoveCategory(c *gin.Context) {
 		return
 	}
 	var req dto.KnowledgeBaseBatchMoveCategoryRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
@@ -135,7 +135,7 @@ func (h *KnowledgeBaseHandler) BatchTag(c *gin.Context) {
 		return
 	}
 	var req dto.KnowledgeBaseBatchTagRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
@@ -153,7 +153,7 @@ func (h *KnowledgeBaseHandler) BatchDelete(c *gin.Context) {
 		return
 	}
 	var req dto.KnowledgeBaseBatchRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
@@ -171,7 +171,7 @@ func (h *KnowledgeBaseHandler) BatchRestore(c *gin.Context) {
 		return
 	}
 	var req dto.KnowledgeBaseBatchRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
@@ -231,7 +231,7 @@ func (h *KnowledgeBaseHandler) Update(c *gin.Context) {
 	}
 
 	var req dto.KnowledgeBaseRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
@@ -299,7 +299,7 @@ func (h *KnowledgeBaseHandler) UpdatePermissions(c *gin.Context) {
 	}
 
 	var req dto.KnowledgeBasePermissionUpdateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
@@ -318,7 +318,7 @@ func (h *KnowledgeBaseHandler) AddMember(c *gin.Context) {
 		return
 	}
 	var req dto.KnowledgeBaseMemberRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "request body is invalid"}))
 		return
 	}
@@ -340,7 +340,7 @@ func (h *KnowledgeBaseHandler) UpdateMember(c *gin.Context) {
 		return
 	}
 	var req dto.KnowledgeBaseMemberRoleRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "request body is invalid"}))
 		return
 	}

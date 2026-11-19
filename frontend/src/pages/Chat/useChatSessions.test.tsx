@@ -1,5 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/client';
 import { listChatSessions, listKnowledgeBases } from '../../api/resources';
 import { tokenStore } from '../../store/tokenStore';
 import type { ChatSession, ChatSessionListResponse } from '../../types/api';
@@ -63,6 +64,21 @@ it('removes inaccessible history from every previously loaded filter', async () 
   act(() => all.result.current.removeSession(session.id));
   await waitFor(() => expect(filtered.result.current.sessions).toHaveLength(0));
   expect(all.result.current.sessions).toHaveLength(0);
+});
+
+it('keeps the loaded rows when a background refresh fails', async () => {
+  const view = renderHook(() => useChatSessions());
+  await waitFor(() => expect(view.result.current.sessions).toHaveLength(1));
+  vi.mocked(listChatSessions).mockRejectedValueOnce(new ApiError(503, { code: 'INTERNAL_ERROR', message: '服务暂时不可用', details: {} }));
+
+  await act(async () => { await view.result.current.reloadSessions(); });
+
+  // A refetch failure still sets isError while the previous data stays cached, so
+  // reporting it as a load failure replaced a usable list with an error panel on
+  // every network blip.
+  expect(view.result.current.sessions).toHaveLength(1);
+  expect(view.result.current.sessionsError).toBe('');
+  await waitFor(() => expect(view.result.current.sessionsRefetchError).toBe('会话列表加载失败'));
 });
 
 it('clears history and rail preferences on account change and ignores old responses', async () => {

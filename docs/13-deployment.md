@@ -2,7 +2,7 @@
 
 当前源码的迁移要求见 [数据库设计](03-database-design.md)，并与实际SQL和启动检查核对。本页面向Linux单机部署：Nginx提供静态前端并代理Go后端，后端连接PostgreSQL/pgvector、Redis、本地/MinIO存储及模型服务。文档worker保持单实例。
 
-当前 `deploy/docker-compose.yml` 只提供PostgreSQL/Redis，不含观测profile、业务前后端镜像、Nginx或TLS。OTel/看板部署保留为历史方案，不能按它启动本分支缺失的组件；当前环境是否已升级须现场核实，不能用旧PID或迁移记录判断。
+当前 `deploy/docker-compose.yml` 提供PostgreSQL/Redis及可选observability profile（Collector/Jaeger/Prometheus/Grafana），不含业务前后端镜像、Nginx或TLS。当前环境是否已升级须现场核实，不能用旧PID或迁移记录判断。
 
 | 任务 | 入口 |
 | --- | --- |
@@ -225,7 +225,7 @@ cd /opt/rag/app/backend
 
 该命令会按文件名顺序执行 `backend/migrations/*.sql`。
 
-现行要求是生产启动只做只读结构断言，缺失结构由显式SQL迁移补齐；AutoMigrate仅允许明确启用的可丢弃开发库。2026-11-19核查发现当前 `cmd/server` 仍无条件调用 `database.AutoMigrate`，会尝试创建缺表后验证，未按 `RAG_ALLOW_AUTOMIGRATE` / `APP_ENV` 分流。这是未满足的生产入口约定，见 [CHK-003](15-backlog.md#尚未关闭的工程事项)，须修正并验证后再作为生产发布依据；不能用当前启动行为替代SQL迁移。
+生产及默认启动调用只读 `database.EnsureSchema`，缺失结构由显式SQL迁移补齐；只有非production且 `RAG_ALLOW_AUTOMIGRATE=true` 才允许可丢弃开发库创建缺表。GORM建表不等同于SQL迁移，不能用该开关补生产迁移。
 
 ### 7.3 已有数据库
 
@@ -242,16 +242,18 @@ cd /opt/rag/app/backend
 | 040–043 | 上传凭据、表格设置、版本策略、PDF快照与OCR错误码；不自动重处理旧PDF |
 | 044–047 | 指定文档范围、OCR校对基线、私人评测与问题跟进 |
 | 048 | `general`意图约束；缺少时启动拒绝 |
-| 049 | 退役个人模板表与分支请求编号，保留历史会话、来源、收藏和模型费用 |
+| 049_document_job_traceparent | 保存文档任务父Trace上下文；缺列时启动拒绝 |
+| 049_retire_personal_chat_features | 退役个人模板表与分支请求编号，保留历史会话、来源、收藏和模型费用 |
 
-当前dev最高迁移为049。历史任务traceparent方案不在源码中，049目前用于功能退役。按目标库的实际记录选择缺失文件：只应用到047时先执行048；已应用048时仅执行049。备份并停止旧写入者后执行：
+当前dev有两份独立049迁移，沿用各分支已使用的完整文件名，runner不会按数字去重。按目标库记录分别补齐：只应用到047时先执行048；已执行退役049的本机库仍需追踪049，已执行追踪049的旧监控库仍需退役049。仅运行缺失项，备份并停止旧写入者后执行：
 
 ```bash
 ./bin/rag-migrate -migration 048_chat_message_general_intent.sql
+./bin/rag-migrate -migration 049_document_job_traceparent.sql
 ./bin/rag-migrate -migration 049_retire_personal_chat_features.sql
 ```
 
-049会删除个人提问模板正文，回退须恢复对应备份及原结构；它不删除历史分支消息、来源链接、收藏备注或标题费用记录。
+退役049会删除个人提问模板正文，回退须恢复对应备份及原结构；它不删除历史分支消息、来源链接、收藏备注或标题费用记录。
 
 先备份并停止旧写入者，再迁移并启动匹配的前后端。迁移不会自动重建向量或回填OCR/旧来源，确需重处理时单独执行。不要用AutoMigrate补迁移：它可能创建缺少CHECK/外键的表，使后续`CREATE TABLE IF NOT EXISTS`跳过真实结构。当前发布要求检查以迁移与实际启动入口为准。
 
@@ -265,7 +267,7 @@ cd /opt/rag/app/backend
 
 023 仅处理连接 `current_schema()` 下已知业务表的无时区时间列，按表合并 `ALTER COLUMN`，使用 `AT TIME ZONE 'UTC'` 保持现有时间含义；已是 `timestamptz` 的列跳过，可重复执行。这是类型升级，不自动修正历史时间偏差。迁移需要表锁，宜安排维护窗口；单文件事务失败会回滚，命令当前总超时为 30 秒，大库应提前评估耗时。
 
-核对记录数、时间值、默认值和索引后启动匹配的backend。时间字段校验发现旧时间列会报错并提示023，不会代替这次类型迁移；当前server仍会在校验前调用AutoMigrate创建缺表，生产入口须按[CHK-003](15-backlog.md#尚未关闭的工程事项)修正并验证。其他schema或环境须按自己的连接配置与迁移记录分别升级。
+核对记录数、时间值、默认值和索引后启动匹配的backend。时间字段校验发现旧时间列会报错并提示023，不会代替这次类型迁移；生产和默认启动仅做只读校验，不创建缺表。其他schema或环境须按自己的连接配置与迁移记录分别升级。
 
 尚未完成混合检索迁移024时，确认001–023已执行，在维护窗口内执行：
 
@@ -449,7 +451,7 @@ HTTP 200表示进程仍能响应；依赖异常时仍返回200，必须查看`st
 
 推荐顺序：
 
-1. 在独立构建目录完成同一候选的后端test/vet/build、前端npm ci/lint/typecheck:test/test/build，并确认适用CI在该目标提交结束且通过。当前CI不提供PostgreSQL，完整迁移与生产启动须在已授权隔离PostgreSQL单独验证，入口和证据边界见 [验证文档](14-verification.md#postgresql-与-minio)。
+1. 在独立构建目录完成同一候选的后端test/vet/build、前端npm ci/lint/typecheck:test/test/build，并确认适用CI在该目标提交结束且通过。当前CI提供一次性PostgreSQL/pgvector并验证完整迁移与启动断言；业务部署库仍须独立核对，入口和证据边界见 [验证文档](14-verification.md#postgresql-与-minio)。
 2. 安排单实例维护窗口，按下一节停止后端并完成数据库、对象文件、历史本地文件的一致性备份。
 3. 保持后端停止，发布匹配的前后端构建，并审查、执行本次新增 migration。
 4. 运行 doctor，启动 `rag-backend`，执行健康检查与完整业务冒烟，再恢复用户访问。
@@ -573,6 +575,4 @@ OCR 工具不随 Go 可执行文件或当前容器镜像内置；需要在自定
 
 ## 可观测性部署
 
-当前dev提供进程内Recorder诊断，Compose没有Collector/Jaeger/Prometheus/Grafana服务或观测profile。现有诊断与源码测试入口见 [可观测性](38-observability.md#当前实现与验证)。
-
-历史Trace/Metrics方案、配置、端口和保留期见 [历史OTel方案](38-observability.md#历史-otel-方案)。恢复这些实现与部署文件属于条件性工作，先按 [有效待办](15-backlog.md) 明确范围，再执行对应验收；本分支不执行缺失profile的启动命令。
+Compose的observability profile提供Collector/Jaeger/Prometheus/Grafana，端口仅绑定回环地址；默认启动数据库/Redis不会启动观测栈。启动命令、配置、查询和验证统一见 [可观测性](38-observability.md)。合并代码不等于已更新正在运行的后端或数据库，升级前须补齐任务traceparent迁移，随后部署匹配程序。

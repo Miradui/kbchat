@@ -13,6 +13,7 @@ import (
 
 	"kbchat/backend/internal/dto"
 	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/observability"
 )
 
 type ChatRepository struct {
@@ -30,6 +31,9 @@ var ErrChatMessageNotFound = errors.New("chat message not found")
 // ErrChatMessageChanged means another write changed the target or its tail
 // after the service loaded the conversation.
 var ErrChatMessageChanged = errors.New("chat message changed concurrently")
+
+// ErrChatSessionArchived means a content write reached an archived session.
+var ErrChatSessionArchived = errors.New("chat session is archived")
 
 func NewChatRepository(db *gorm.DB) *ChatRepository {
 	return &ChatRepository{db: db}
@@ -922,7 +926,7 @@ func (r *ChatRepository) FindMessagesByClientRequestID(ctx context.Context, sess
 }
 
 func (r *ChatRepository) CreateMessage(ctx context.Context, message *model.ChatMessage) error {
-	return r.db.WithContext(ctx).Create(message).Error
+	return r.CreateMessages(ctx, message)
 }
 
 func (r *ChatRepository) CreateMessages(ctx context.Context, messages ...*model.ChatMessage) error {
@@ -957,12 +961,12 @@ func (r *ChatRepository) createMessages(
 	sessionSnapshot *model.ChatSession,
 	title string,
 	messages ...*model.ChatMessage,
-) error {
+) (retErr error) {
+	ctx, span := observability.Start(ctx, "chat.persist")
+	defer func() { observability.Finish(span, retErr) }()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if len(messages) > 0 {
-			var session model.ChatSession
-			if err := tx.Select("id").Clauses(clause.Locking{Strength: "UPDATE"}).
-				Where("id = ?", messages[0].SessionID).First(&session).Error; err != nil {
+			if _, err := lockWritableChatSession(tx, messages[0].SessionID); err != nil {
 				return err
 			}
 			if checkSnapshot {
@@ -1002,6 +1006,22 @@ func (r *ChatRepository) createMessages(
 	})
 }
 
+// The row lock serializes content writes with archive/delete. Checking the state
+// here keeps a provider call that started earlier from modifying a read-only
+// transcript after archival has committed.
+func lockWritableChatSession(tx *gorm.DB, sessionID uuid.UUID) (*model.ChatSession, error) {
+	var session model.ChatSession
+	if err := tx.Select("id", "user_id", "archived_at").
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ?", sessionID).First(&session).Error; err != nil {
+		return nil, err
+	}
+	if session.ArchivedAt != nil {
+		return nil, ErrChatSessionArchived
+	}
+	return &session, nil
+}
+
 func assignStrictMessageTimes(tx *gorm.DB, sessionID uuid.UUID, messages []*model.ChatMessage) error {
 	var latest model.ChatMessage
 	err := tx.Select("created_at").Where("session_id = ?", sessionID).
@@ -1038,9 +1058,7 @@ func (r *ChatRepository) ReplaceMessageTail(
 	assistantMessage *model.ChatMessage,
 ) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var session model.ChatSession
-		if err := tx.Select("id").Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("id = ?", sessionID).First(&session).Error; err != nil {
+		if _, err := lockWritableChatSession(tx, sessionID); err != nil {
 			return err
 		}
 		var current []model.ChatMessage

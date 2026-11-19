@@ -724,19 +724,18 @@ export function useChatThread({
     }
   }, [handleAccessLost, messages, onSessionsChanged, sessionId, invalidateHistory, updateHistoryRevision]);
 
-  const checkRegeneration = useCallback(async () => {
-    if (
-      !sessionId
-      || !regeneration
-      || regeneration.kind !== 'unconfirmed'
-      || regeneration.checking
-      || regenerationCheckTokenRef.current
-    ) return;
-
-    const snapshot = regeneration;
+  /**
+   * Refetches the thread and reports whether the regeneration produced a new
+   * answer.
+   *
+   * `attempt` is how many checks have now run for this regeneration. It is what
+   * moves the panel into its decision state, so the manual check counts as the
+   * last attempt and always reaches it.
+   */
+  const runRegenerationCheck = useCallback(async (snapshot: RegenerationState, attempt: number) => {
+    if (!sessionId) return;
     const token = Symbol('check-regeneration');
     regenerationCheckTokenRef.current = token;
-    setRegeneration({ ...snapshot, checking: true });
     try {
       const response = await readCurrentHistory(sessionId);
       if (
@@ -749,30 +748,91 @@ export function useChatThread({
       if (produced) {
         pendingRegenerationStore.clear(sessionId, snapshot.messageId);
         setRegeneration(null);
-        onSessionsChanged();
+        // Via the ref: a callback that changed identity on every render would
+        // re-arm the automatic checks below each time they update their own state.
+        onSessionsChangedRef.current();
         return;
       }
+      const exhausted = attempt >= AUTO_CHECK_DELAYS_MS.length;
       pendingRegenerationStore.set({
         sessionId,
         messageId: snapshot.messageId,
         baselineMessageIds: snapshot.baselineMessageIds,
-        checked: true,
+        checked: exhausted,
         createdAt: new Date().toISOString(),
       });
-      setRegeneration({
-        ...snapshot,
-        message: '检查后仍未发现新的回答。',
-        autoChecksDone: AUTO_CHECK_DELAYS_MS.length,
-        checking: false,
-      });
+      setRegeneration((current) => (
+        current && current.kind === 'unconfirmed' && current.messageId === snapshot.messageId
+          ? {
+            ...current,
+            message: exhausted ? '检查后仍未发现新的回答。' : current.message,
+            autoChecksDone: Math.max(current.autoChecksDone, attempt),
+            checking: false,
+          }
+          : current
+      ));
     } catch {
-      if (mountedRef.current && regenerationCheckTokenRef.current === token) {
-        setRegeneration({ ...snapshot, message: '暂时无法检查，请稍后再试。', checking: false });
-      }
+      setRegeneration((current) => (
+        current && current.kind === 'unconfirmed' && current.messageId === snapshot.messageId
+          ? {
+            ...current,
+            message: attempt >= AUTO_CHECK_DELAYS_MS.length ? '暂时无法检查，请稍后再试。' : current.message,
+            checking: false,
+          }
+          : current
+      ));
     } finally {
       if (regenerationCheckTokenRef.current === token) regenerationCheckTokenRef.current = null;
     }
-  }, [onSessionsChanged, regeneration, sessionId, readCurrentHistory, replaceHistory]);
+  }, [readCurrentHistory, replaceHistory, sessionId]);
+
+  const checkRegeneration = useCallback(async () => {
+    if (
+      !sessionId
+      || !regeneration
+      || regeneration.kind !== 'unconfirmed'
+      || regeneration.checking
+      || regenerationCheckTokenRef.current
+    ) return;
+
+    const snapshot = regeneration;
+    setRegeneration({ ...snapshot, checking: true });
+    await runRegenerationCheck(snapshot, AUTO_CHECK_DELAYS_MS.length);
+  }, [regeneration, runRegenerationCheck, sessionId]);
+
+  const regenerationRef = useRef<RegenerationState | null>(regeneration);
+  regenerationRef.current = regeneration;
+  const pendingRegenerationId = regeneration?.kind === 'unconfirmed' ? regeneration.messageId : '';
+
+  /**
+   * Reconciles an unconfirmed regeneration on the same 2s/5s schedule as an
+   * unconfirmed send.
+   *
+   * Regeneration only set `{kind:'unconfirmed', autoChecksDone:0}` and scheduled
+   * nothing, and the decision state is keyed on `autoChecksDone`, so the panel sat
+   * on "正在确认重新生成结果…" until the user retried or reloaded. The timer set is
+   * keyed on the pending message id alone: the checks themselves update the state,
+   * and re-arming on every update would restart the schedule forever.
+   */
+  useEffect(() => {
+    if (!pendingRegenerationId) return undefined;
+    const timers = AUTO_CHECK_DELAYS_MS.map((delay, index) => window.setTimeout(() => {
+      const snapshot = regenerationRef.current;
+      if (
+        !snapshot
+        || snapshot.kind !== 'unconfirmed'
+        || snapshot.messageId !== pendingRegenerationId
+        || snapshot.checking
+        // A manual check counts as the last attempt and can conclude before these
+        // timers fire; without this the schedule would refetch again for nothing.
+        || snapshot.autoChecksDone >= AUTO_CHECK_DELAYS_MS.length
+        || regenerationCheckTokenRef.current
+      ) return;
+      setRegeneration({ ...snapshot, checking: true });
+      void runRegenerationCheck(snapshot, index + 1);
+    }, delay));
+    return () => { timers.forEach((timer) => window.clearTimeout(timer)); };
+  }, [pendingRegenerationId, runRegenerationCheck]);
 
   const updateMessageFeedback = useCallback((messageId: string, feedback: ChatMessageFeedback) => {
     setMessages((current) => current.map((message) => (

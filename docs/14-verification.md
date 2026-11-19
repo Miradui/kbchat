@@ -43,7 +43,7 @@
 
 验收身份包含 HEAD 及相关未提交/未跟踪输入的内容快照或 SHA-256，详见 [Git 约定](00-ai-development-guide.md#git-与内容身份)。后续改变代码、配置、语料、规则或产物须补验受影响部分；旧结果不能直接转为当前通过。
 
-当前 [CI](../.github/workflows/ci.yml) 执行后端 vet/test/build，以及前端 npm ci、lint、测试类型检查、test、build（含 11 路由分包）。它没有 PostgreSQL service/测试 DSN，也未配置 Collector/Prometheus 检查；默认的环境开关测试会跳过，不能据 CI 宣称真实服务通过。
+当前 [CI](../.github/workflows/ci.yml) 执行后端 vet/test/build，以及前端 npm ci、lint、测试类型检查、test、build（含 11 路由分包）。它提供一次性PostgreSQL/pgvector测试库，并校验Collector、Prometheus配置与告警规则；模型/MinIO/OCR及真实观测部署仍不在CI范围。
 
 当任务涉及提交、合并或发布且该 CI 是必需门禁时，必须确认最终目标提交的适用 CI **实际结束且通过**。运行中、取消、跳过、未启动均不能当通过；本地与 CI 不替代缺失的必需检查。未查询远端时如实写未查询，不推断分支保护。纯本地文档交付不要求为获得 CI 回执而自行提交或推送。
 
@@ -89,7 +89,7 @@
 | `RAG_TEST_POSTGRES_DSN` | repository 的 pgvector、关键词、权限/锁/并发、完整迁移，以及 database 的时间迁移 | 未设置 DSN 时跳过；使用专用测试库与随机 schema/事务，完整迁移可能创建库级 vector 扩展；不启动业务 worker |
 | `RAG_TEST_MINIO_*` | 私有 bucket 的上传、读取、字节一致性、物化及删除 | 三项连接变量齐备即运行；必须另显式指定本次授权的 `RAG_TEST_MINIO_BUCKET`，不清空业务 bucket |
 
-入口及变量见 [PostgreSQL 并发测试](../backend/internal/repository/postgres_concurrency_integration_test.go)、[完整迁移测试](../backend/internal/repository/knowledge_workflow_postgres_integration_test.go)、[时间迁移测试](../backend/internal/database/timestamp_migration_integration_test.go)、[MinIO 测试](../backend/internal/storage/minio_integration_test.go)。当前 CI 未配置 PostgreSQL；这些测试需显式提供已授权的专用测试 DSN，不能替换为部署数据库。完整迁移入口为 `TestPostgresKnowledgeWorkflowMigrationsAndDocumentScope`；现有 schema 单元测试使用 SQLite，不能据此宣称 PostgreSQL 生产启动约束已实测。
+入口及变量见 [PostgreSQL 并发测试](../backend/internal/repository/postgres_concurrency_integration_test.go)、[完整迁移测试](../backend/internal/repository/knowledge_workflow_postgres_integration_test.go)、[时间迁移测试](../backend/internal/database/timestamp_migration_integration_test.go)、[MinIO 测试](../backend/internal/storage/minio_integration_test.go)。当前CI显式提供一次性PostgreSQL测试DSN；本地运行也须使用已授权的专用测试库，不能替换为部署数据库。完整迁移入口为 `TestPostgresKnowledgeWorkflowMigrationsAndDocumentScope`；现有 schema 单元测试使用 SQLite，不能据此宣称 PostgreSQL 生产启动约束已实测。
 
 MinIO 测试若省略 `RAG_TEST_MINIO_BUCKET` 会回落到 `rag-documents`，不是强制隔离保护；`EnsureReady` 可能创建 bucket。操作者须显式指定已授权测试 bucket，并核对对象上传与删除范围，不因 UUID 对象路径自动取得业务 bucket 授权。
 
@@ -111,7 +111,7 @@ repository 的测试 schema 使用 `rag_it_<UTC 时间戳>_<随机>`，连接带
 
 - OCR 真实入口需显式 `RAG_TEST_PDF_OCR=1`，在授权的测试 PDF 上运行受信任的 Poppler/Tesseract；验证工具、语言、取消与资源上限，不能用合成校对快照证明真实识别准确率。配置见 [环境配置](08-env-config.md#文档工作流pdf-ocr-配置)。
 - 本地集成浏览器使用 **1920×1080**，运行真实生产路由；明确哪些 HTTP 服务是替身。触屏、读屏器与其他浏览器的历史覆盖有限，不能据桌面检查宣称全部通过。
-- 当前 dev 的可观测性检查使用 Recorder/系统诊断现有测试，入口见 [当前实现](38-observability.md#当前实现与验证)。旧 OTel/Collector/Prometheus 只保留历史合同摘要，恢复对应实现与配置后重新核实命令，缺少载体时不执行或声称通过；真实模型、业务库和 MinIO 不因观测任务自动获得测试授权。
+- 当前dev包含Recorder、OTel工作流与指标测试及Collector/Prometheus配置/规则，入口见 [当前实现](38-observability.md#当前实现与验证)。真实OTLP转发开关为 `RAG_TEST_OTLP_ENDPOINT` / `RAG_TEST_OTLP_METRICS_ENDPOINT`，仅使用明确授权的专用Collector；真实模型、业务库和MinIO不因观测任务自动获得测试授权。
 
 ## 候选版本发布清单
 
@@ -125,7 +125,7 @@ repository 的测试 schema 使用 `rag_it_<UTC 时间戳>_<随机>`，连接带
 
 ## 已有证据索引
 
-以下保留从历次记录提炼的历史事实与本地证据入口，本轮没有重跑这些测试，也未调查其他分支的执行版本。路径用代码表示：被忽略、仅存在于旧分支或已缺失的产物都不是当前仓库必备文件；旧 OTel 结果不证明当前 dev 已具备该实现。
+以下按当时版本与环境保存验证结果；历史记录不替代当前版本检查。路径用代码表示，避免把被忽略且可能不存在的产物当成仓库必备文件。
 
 | 时间与范围 | 证据及结论 | 适用限制 |
 | --- | --- | --- |
@@ -147,6 +147,7 @@ repository 的测试 schema 使用 `rag_it_<UTC 时间戳>_<随机>`，连接带
 | 2026-11-05，知识库提示词交互 | `frontend/src/test/fixtures/answer-prompt/runs/latest/`、`output/answer-prompt-followup-20261105/` | 生产页面与 HTTP 夹具；16 文件/191 项，不代表模型效果验证 |
 | 2026-11-10，Trace 与日志关联 | `backend/internal/router/testdata/observability/runs/latest/`、`output/observability-20261110/` | 真实 Jaeger，业务数据库/模型/存储为夹具 |
 | 2026-11-11，Metrics 与告警 | `output/observability-phase2-20261110/live/`、同一 router 稳定结果；27 包/1534 pass 事件、6包race、18查询、10组告警通过 | 真实 Collector/Prometheus/Grafana/Jaeger；历史样本重启保留，业务库/真实模型/MinIO/容器运行未联调 |
+| 2026-11-19，提交前本地回归 | `output/git-push-20261119/verification-summary.json`；后端 `go test -count=1 ./...` 27个有测试包通过，vet/build通过；前端110文件/922项中921项通过，lint、测试类型检查、构建及11路由分包检查通过 | `viewport-units.test.ts` 发现 `library.css` 的既有 `40vh`，1项失败；测试与样式均与原HEAD一致。构建改用工作区临时目录后通过；真实服务测试开关关闭，未运行真实服务、迁移或部署验收 |
 
 ## 记录格式
 
@@ -290,3 +291,15 @@ repository 的测试 schema 使用 `rag_it_<UTC 时间戳>_<随机>`，连接带
 - C01/C02/C04/C05：通过本次部署范围，依据上述真实回执；C03的行为Red/Break为N/A，本次未修应用行为或修改共享关键规则，采用既有迁移/启动断言及空库保护；C06：本机未提交工作区及产物已固定哈希，远端CI未查询。未运行业务入库/问答、浏览器、MinIO、OCR、恢复演练及生产发布验收；CHK-003仍开放，本次为本机开发环境。LESSONS无新增事项。
 
 详细回执与命令入口仅维护在`output/local-env/`；未提交、推送或修改用户既有应用代码。
+
+### MERGE-OBS-001：合并远端监控与本地功能收敛（2026-11-19）
+
+状态：合并候选本地验收通过，尚未推送。基线为本地提交 `3e9daf0497ba0f8622719fc7e707faa6e412ab72`，合并远端 `origin/dev` 的 `ebe0144720c7a67e3205f3a5154a5b0fa79404ad`；合并前备份分支与 bundle 位于工作区外的 `kbchat-premerge-20261119-3e9daf0/`。`.DS_Store` 临时文件未纳入提交。
+
+- 合并保留本地已确认的功能退役、首问摘要标题和 UI 改动，并接入远端的 OTel Trace/Metrics、请求追踪编号、任务 `traceparent`、安全响应上限、启动只读 schema 检查、worker/聊天并发保护和观测部署配置。两个 `049` 文件按完整文件名分别保留：`049_document_job_traceparent.sql` 与 `049_retire_personal_chat_features.sql`。
+- 后端：Go 1.27.4，继承的 `RAG_TEST_*` 开关为空；受影响包定向测试通过。全量 `go test -json ./...` 通过 1584 个 pass 事件、0 fail、5 skip；`go vet ./...`、`go build ./...` 通过。`go test -race` 覆盖 observability、service、repository、router、job、cmd/server 通过。一次性 PostgreSQL 16/pgvector 测试库执行完整迁移、EnsureSchema、049 traceparent 重复执行和约束拒绝检查通过。
+- 前端：Node 22.23.5；`npm ci --no-audit --no-fund`、lint、测试 TypeScript、`npm test -- --maxWorkers 2`（110 文件/943 项）和生产构建/11 路由分包通过。
+- 观测配置：Compose config、Collector validate、Prometheus config 和 10 组告警规则检查通过。真实 Collector/Jaeger/Grafana 查询、业务模型/MinIO/OCR 质量、目标业务库升级和发布联调未运行。
+- 远端：查询到 `origin/dev` 最新历史 run `44523440691` 对 `ebe0144` 结论为 failure；它不能代表本次合并候选。推送后需查询新提交对应 CI 结束状态，不能沿用历史失败或本地通过结论。
+
+本次冲突解决后的代码、配置、SQL、文档和CI内容身份保存于 `output/merge-observability-20261119/candidate-manifest.json`，命令及退出码保存于同目录 `backend-results.json`、`frontend-results.json`、`observability-results.json` 及各检查日志。派生报告不参与自身哈希，相关输入不排除；该目录被Git忽略，克隆后不保证存在。C01/C02/C04通过当前合并范围；C03复用现有标题事务/归档/退役/遥测断言及迁移缺列破坏场景，不新增关键规则或独立功能；C05限于一次性PostgreSQL和观测配置/规则，真实业务部署与浏览器未验收；C06在推送后继续核对新提交CI。代码独立复核未发现可行动回归，文档复核发现的入口/保留期/证据引用已补齐。

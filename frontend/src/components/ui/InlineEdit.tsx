@@ -12,7 +12,11 @@ type InlineEditProps = {
   busy?: boolean;
   /** Rendered when not editing. Defaults to the value. */
   emptyText?: string;
-  onSubmit: (next: string) => void;
+  /**
+   * Saves the new value. Return `false`, or reject, to keep the field open with
+   * what the user typed; anything else closes it.
+   */
+  onSubmit: (next: string) => unknown;
 };
 
 /**
@@ -66,11 +70,24 @@ export function InlineEdit({
     setEditing(false);
   }
 
-  function commit(event: FormEvent) {
+  async function commit(event: FormEvent) {
     event.preventDefault();
     const next = draft.trim();
+    if (!next || next === value) {
+      stopEditing();
+      return;
+    }
+    // Wait for the caller before leaving edit mode. A rejected save (duplicate
+    // name, network, 5xx) used to close the field and discard the typed value, so
+    // the user had to open it again and retype.
+    let accepted: unknown;
+    try {
+      accepted = await onSubmit(next);
+    } catch {
+      return;
+    }
+    if (accepted === false) return;
     stopEditing();
-    if (next && next !== value) onSubmit(next);
   }
 
   if (!editing) {

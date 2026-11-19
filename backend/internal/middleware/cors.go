@@ -38,8 +38,8 @@ func CORS(allowedOrigins []string) gin.HandlerFunc {
 
 		c.Header("Access-Control-Allow-Origin", origin)
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type")
-		c.Header("Access-Control-Expose-Headers", "Retry-After")
+		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, traceparent, tracestate")
+		c.Header("Access-Control-Expose-Headers", "Retry-After, X-Trace-ID")
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return

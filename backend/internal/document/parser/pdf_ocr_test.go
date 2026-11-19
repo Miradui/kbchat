@@ -65,6 +65,13 @@ func TestOCRPreservesNativeTextPhysicalPagesAndBlankPages(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(restored.Segments, doc.Segments) {
 		t.Fatalf("snapshot failed %v: %#v", err, restored)
 	}
+	// The decoded summary has to agree with the one the OCR run produced, or the
+	// detail endpoint rejects it as self-contradictory (an OCR page listed as a
+	// page without text) and drops the whole OCR block. A correction baseline is
+	// decoded on every re-process, so a corrected document hit that every time.
+	if !reflect.DeepEqual(restored.PDFTextSummary, s) {
+		t.Fatalf("snapshot summary drifted:\n got %#v\nwant %#v", restored.PDFTextSummary, s)
+	}
 }
 
 func TestOCRFailureNeverLooksCompleteAndReportsProgress(t *testing.T) {

@@ -37,7 +37,7 @@ func (h *KnowledgeBaseCategoryHandler) Create(c *gin.Context) {
 		return
 	}
 	var req dto.KnowledgeBaseCategoryRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
@@ -59,7 +59,7 @@ func (h *KnowledgeBaseCategoryHandler) Update(c *gin.Context) {
 		return
 	}
 	var req dto.KnowledgeBaseCategoryRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
@@ -77,7 +77,7 @@ func (h *KnowledgeBaseCategoryHandler) Reorder(c *gin.Context) {
 		return
 	}
 	var req dto.KnowledgeBaseCategoryReorderRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}

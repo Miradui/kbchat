@@ -425,7 +425,7 @@ failed
 
 ## 错误追踪编号
 
-当前dev的API错误类型、HTTP/上传/SSE客户端未实现 `traceId`，诊断只使用现有进程内指标，不包含 `chat_first_visible_text`。追踪编号展示与请求至首段正文耗时保留在 [历史OTel方案](38-observability.md#历史-otel-方案)，后续实施须同步前后端合同和用例；现有可读错误、模型首token口径与恢复行为保持。
+API错误类型及HTTP/上传/SSE客户端保留有效 `traceId`，5xx服务端错误在原有可读提示后显示可选择复制的“追踪编号”；非法编号不展示。诊断分别展示模型首token与请求至首段正文 `chat_first_visible_text`，后者是服务端成功写入/flush耗时，不是浏览器绘制。指标窗口与失败/取消口径见 [可观测性](38-observability.md)。
 
 ## 样式约束
 

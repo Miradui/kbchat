@@ -6,7 +6,13 @@ import { renderWithRouter } from '../../test/render';
 import type { KnowledgeBase } from '../../types/api';
 import { MembersPanel } from './MembersPanel';
 
-const resources = vi.hoisted(() => ({ getKnowledgeBasePermissions: vi.fn(), searchUsers: vi.fn() }));
+const resources = vi.hoisted(() => ({
+  addKnowledgeBaseMember: vi.fn(),
+  deleteKnowledgeBaseMember: vi.fn(),
+  getKnowledgeBasePermissions: vi.fn(),
+  searchUsers: vi.fn(),
+  updateKnowledgeBaseMember: vi.fn(),
+}));
 vi.mock('../../api/resources', () => resources);
 vi.mock('../../components/UserAvatar', () => ({ UserAvatar: () => <span /> }));
 
@@ -64,5 +70,46 @@ describe('MembersPanel search', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('找到 1 位用户');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '设为只读成员' })).toBeDisabled();
+  });
+});
+
+describe('MembersPanel write and refresh failures', () => {
+  const member = { id: 'member1', username: 'editor', displayName: '编辑者' };
+
+  it('reports a failed refresh as a stale list, not as a failed add', async () => {
+    const user = userEvent.setup();
+    resources.getKnowledgeBasePermissions
+      .mockResolvedValueOnce({ owner, visibility: 'private', managers: [], members: [] })
+      .mockRejectedValueOnce(new Error('offline'));
+    resources.searchUsers.mockResolvedValue({ items: [member] });
+    resources.addKnowledgeBaseMember.mockResolvedValue(undefined);
+    renderWithRouter(<MembersPanel knowledgeBase={knowledgeBase} onVisibilityChange={vi.fn()} />);
+
+    await user.type(await screen.findByRole('searchbox', { name: '搜索用户' }), 'editor');
+    await user.click(screen.getByRole('button', { name: '搜索' }));
+    await user.click(await screen.findByRole('button', { name: '设为只读成员' }));
+
+    // The add itself succeeded; claiming it failed would invite a retry that then
+    // fails as a duplicate.
+    expect(await screen.findByText('成员列表刷新失败，请重试。')).toBeInTheDocument();
+    expect(screen.queryByText('成员添加失败')).not.toBeInTheDocument();
+  });
+
+  it('closes the removal dialog after a successful removal even when the refresh fails', async () => {
+    const user = userEvent.setup();
+    resources.getKnowledgeBasePermissions
+      .mockResolvedValueOnce({ owner, visibility: 'private', managers: [], members: [{ ...member, role: 'editor' }] })
+      .mockRejectedValueOnce(new Error('offline'));
+    resources.deleteKnowledgeBaseMember.mockResolvedValue(undefined);
+    renderWithRouter(<MembersPanel knowledgeBase={knowledgeBase} onVisibilityChange={vi.fn()} />);
+
+    await user.click(await screen.findByRole('button', { name: '移除' }));
+    await user.click(await screen.findByRole('button', { name: '移除成员' }));
+
+    expect(await screen.findByText('成员移除成功')).toBeInTheDocument();
+    expect(await screen.findByText('成员列表刷新失败，请重试。')).toBeInTheDocument();
+    // The removal error belongs to the dialog; a refresh failure must not land in it
+    // after it closed.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });

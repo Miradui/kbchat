@@ -46,7 +46,7 @@ func TestParseDOCXMissingDocumentPartIsCorrupt(t *testing.T) {
 	}
 }
 
-func writeDOCXFixture(t *testing.T, parts map[string]string) string {
+func writeDOCXFixture(t testing.TB, parts map[string]string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "fixture.docx")
 	file, err := os.Create(path)

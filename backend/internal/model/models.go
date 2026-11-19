@@ -7,6 +7,7 @@ import (
 	"github.com/pgvector/pgvector-go"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
+	"kbchat/backend/internal/observability"
 )
 
 type User struct {
@@ -186,6 +187,7 @@ func (d *Document) BeforeCreate(_ *gorm.DB) error {
 }
 
 type DocumentJob struct {
+	Traceparent  string     `gorm:"size:55;not null;default:''" json:"-"`
 	ID           uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
 	DocumentID   uuid.UUID  `gorm:"type:uuid;not null;index" json:"documentId"`
 	Document     Document   `gorm:"foreignKey:DocumentID" json:"-"`
@@ -297,7 +299,8 @@ func (c *DocumentChunk) BeforeCreate(_ *gorm.DB) error {
 	return nil
 }
 
-func (j *DocumentJob) BeforeCreate(_ *gorm.DB) error {
+func (j *DocumentJob) BeforeCreate(tx *gorm.DB) error {
+	j.Traceparent = observability.TraceParent(tx.Statement.Context)
 	if j.ID == uuid.Nil {
 		j.ID = uuid.New()
 	}

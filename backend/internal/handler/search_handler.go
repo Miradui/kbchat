@@ -30,7 +30,7 @@ func (h *SearchHandler) Search(c *gin.Context) {
 	}
 
 	var req dto.SearchRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "request body is invalid"}))
 		return
 	}
@@ -50,7 +50,7 @@ func (h *SearchHandler) SearchMany(c *gin.Context) {
 		return
 	}
 	var req dto.MultiSearchRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "request body is invalid"}))
 		return
 	}

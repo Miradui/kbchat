@@ -46,7 +46,7 @@ func (h *AdminUserHandler) Create(c *gin.Context) {
 		return
 	}
 	var req dto.AdminUserCreateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
@@ -64,7 +64,7 @@ func (h *AdminUserHandler) Update(c *gin.Context) {
 		return
 	}
 	var req dto.AdminUserUpdateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}
@@ -95,7 +95,7 @@ func (h *AdminUserHandler) UpdateRole(c *gin.Context) {
 		return
 	}
 	var req dto.AdminUserRoleRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		RespondError(c, apperror.Validation(map[string]any{"body": "请求参数不合法"}))
 		return
 	}

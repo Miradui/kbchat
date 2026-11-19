@@ -3,13 +3,15 @@ package embedding
 import (
 	"context"
 	"fmt"
-	"net/http"
+	"go.opentelemetry.io/otel/attribute"
+	"kbchat/backend/internal/observability"
 	"strings"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 
 	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/provider/httpclient"
 )
 
 type OpenAICompatibleProvider struct {
@@ -22,7 +24,7 @@ type OpenAICompatibleProvider struct {
 func NewOpenAICompatibleProvider(cfg config.Config) *OpenAICompatibleProvider {
 	clientConfig := openai.DefaultConfig(cfg.EmbeddingAPIKey)
 	clientConfig.BaseURL = strings.TrimRight(cfg.EmbeddingBaseURL, "/")
-	clientConfig.HTTPClient = &http.Client{Timeout: 60 * time.Second}
+	clientConfig.HTTPClient = httpclient.NewJSONClient(60 * time.Second)
 	return &OpenAICompatibleProvider{
 		apiKey:    cfg.EmbeddingAPIKey,
 		model:     cfg.EmbeddingModel,
@@ -31,7 +33,9 @@ func NewOpenAICompatibleProvider(cfg config.Config) *OpenAICompatibleProvider {
 	}
 }
 
-func (p *OpenAICompatibleProvider) EmbedTexts(ctx context.Context, texts []string) ([][]float32, error) {
+func (p *OpenAICompatibleProvider) EmbedTexts(ctx context.Context, texts []string) (vectors [][]float32, retErr error) {
+	ctx, span := observability.Start(ctx, "model.embedding", attribute.String("gen_ai.request.model", p.model), attribute.Int("embedding.input_count", len(texts)))
+	defer func() { observability.Finish(span, retErr) }()
 	if len(texts) == 0 {
 		return [][]float32{}, nil
 	}

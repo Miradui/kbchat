@@ -143,7 +143,7 @@ describe('DiagnosticsPage', () => {
 
     const latency = screen.getByLabelText('调用耗时');
     expect(within(latency).getByText('检索总耗时')).toBeInTheDocument();
-    expect(within(latency).getByText('首 token 延迟')).toBeInTheDocument();
+    expect(within(latency).getByText('模型首 token 延迟')).toBeInTheDocument();
     expect(within(latency).getByText('420 ms')).toBeInTheDocument();
     // The volatility of these numbers is stated, not implied.
     expect(within(latency).getByText(/服务重启后归零/)).toBeInTheDocument();

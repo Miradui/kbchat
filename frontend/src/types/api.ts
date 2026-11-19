@@ -1,4 +1,5 @@
 export type APIError = {
+  traceId?: string;
   code: string;
   message: string;
   details?: Record<string, unknown>;

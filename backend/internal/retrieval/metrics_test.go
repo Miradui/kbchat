@@ -88,10 +88,9 @@ func TestSearchRecordsRerankFallbackAndClassifiesTheProviderFailure(t *testing.T
 	if rerankStats.FailureCount != 1 || rerankStats.LastFailureReason != observability.ReasonUnreachable {
 		t.Fatalf("unexpected rerank provider stats: %#v", rerankStats)
 	}
-	// The rerank call failed, so it has no meaningful duration; retrieval as a
-	// whole still completed and must be timed.
-	if _, ok := snapshot.Durations[observability.MetricRerank]; ok {
-		t.Fatalf("a failed rerank must not contribute a duration sample")
+	// Failed attempts also consume latency and must remain visible during an outage.
+	if snapshot.Durations[observability.MetricRerank].Count != 1 {
+		t.Fatalf("expected the failed rerank attempt to be timed")
 	}
 	if snapshot.Durations[observability.MetricRetrieval].Count != 1 {
 		t.Fatalf("expected retrieval to be timed through the fallback path, got %#v", snapshot.Durations[observability.MetricRetrieval])
@@ -121,11 +120,11 @@ func TestSearchRecordsEmbeddingFailureAndSkipsLaterMetrics(t *testing.T) {
 	if embedding.FailureCount != 1 || embedding.LastFailureReason != observability.ReasonUnavailable {
 		t.Fatalf("unexpected embedding provider stats: %#v", embedding)
 	}
-	if _, ok := snapshot.Durations[observability.MetricEmbedding]; ok {
-		t.Fatalf("a failed embedding call must not contribute a duration sample")
+	if snapshot.Durations[observability.MetricEmbedding].Count != 1 {
+		t.Fatalf("expected the failed embedding attempt to be timed")
 	}
-	if _, ok := snapshot.Durations[observability.MetricRetrieval]; ok {
-		t.Fatalf("retrieval that never completed must not be timed")
+	if snapshot.Durations[observability.MetricRetrieval].Count != 1 {
+		t.Fatalf("expected the failed retrieval attempt to be timed")
 	}
 }
 

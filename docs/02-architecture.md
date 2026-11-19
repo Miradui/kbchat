@@ -36,7 +36,7 @@ Gin Backend
 | `backend/internal/retrieval` | 向量召回、关键词召回、RRF 融合、Rerank、阈值过滤和检索管线 |
 | `backend/internal/storage` | 本地 / MinIO 文件保存、读取、物化和删除 |
 | `backend/internal/job` | 后台任务领取、执行与重试 |
-| `backend/internal/logger`、`backend/internal/observability` | zap 日志、有界进程内 Recorder 指标和可公开的失败分类 |
+| `backend/internal/logger`、`backend/internal/observability` | zap 日志、OTel Trace/Metrics、有界进程内 Recorder 和可公开的失败分类 |
 | `backend/internal/apperror` | 统一业务错误 |
 | `backend/migrations` | PostgreSQL 结构与数据迁移 |
 
@@ -53,7 +53,7 @@ Gin Backend
 | `frontend/src/utils`、`frontend/src/styles` | 通用工具和样式 |
 | `frontend/src/test` | 测试环境和渲染辅助；行为测试与对应实现放在一起 |
 
-页面与深链接约定见 `10-frontend-spec.md`，不把页面实现集中到 `App.tsx`。`deploy/docker-compose.yml` 提供本地 PostgreSQL/pgvector 与 Redis，生产部署见 `13-deployment.md`。
+页面与深链接约定见 `10-frontend-spec.md`，不把页面实现集中到 `App.tsx`。`deploy/docker-compose.yml` 提供本地 PostgreSQL/pgvector、Redis 与可选 observability profile，生产部署见 `13-deployment.md`。
 
 ### 前端数据与聊天状态边界
 
@@ -133,4 +133,4 @@ Chat 和 Embedding 使用 `github.com/sashabaranov/go-openai` 调用兼容 API�
 
 当前dev将同一个Recorder注入检索、聊天和管理员诊断；保存受控计数、每项最多512个耗时样本及近期Provider失败，服务重启归零。请求/问答时延经zap记录，诊断队列数据经repository读取，业务数据库访问仍保持现有分层。
 
-本分支没有OTel导出器、Trace响应字段、任务traceparent或观测Compose profile。Collector/Jaeger/Prometheus/Grafana及独立历史Metrics保留为 [历史方案](38-observability.md#历史-otel-方案)，不作为当前可执行依赖；需要继续实施时先明确用户范围，再同步代码、配置、迁移和验收。
+OTel Trace覆盖HTTP、检索、模型、数据库/Redis与文档处理，zap按Trace关联；任务traceparent持久化以跨重试/重启恢复父上下文。独立Metrics经Collector进入Prometheus/Grafana，未设置导出端点时保留本地关联与Recorder诊断，不执行周期队列采集。部署、脱敏、指标口径和验证见 [可观测性](38-observability.md)。

@@ -105,6 +105,83 @@ func TestPostgresSystemAdminBootstrapSerializesFirstAdmin(t *testing.T) {
 	}
 }
 
+// Two administrators disabling each other used to lock different rows, both
+// count the other as still active, and both commit -- leaving zero enabled
+// administrators and every operator endpoint returning 403. The advisory lock
+// serializes the decision, so the second transaction must wait and then refuse.
+func TestPostgresConcurrentAdminDemotionsKeepOneActiveAdministrator(t *testing.T) {
+	db1, db2 := newPostgresConcurrencyTestDBs(t)
+	if err := db1.AutoMigrate(&model.User{}); err != nil {
+		t.Fatal(err)
+	}
+	first := model.User{Username: "race-admin-1", PasswordHash: "fixture", Role: model.SystemRoleAdmin, Status: "active"}
+	second := model.User{Username: "race-admin-2", PasswordHash: "fixture", Role: model.SystemRoleAdmin, Status: "active"}
+	for _, user := range []*model.User{&first, &second} {
+		if err := db1.Create(user).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	counted := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	var paused atomic.Bool
+	const callback = "test:pause-last-admin-count"
+	if err := db1.Callback().Query().After("gorm:query").Register(callback, func(tx *gorm.DB) {
+		if _, ok := tx.Statement.Dest.(*int64); ok && tx.Statement.Table == "users" && paused.CompareAndSwap(false, true) {
+			close(counted)
+			<-release
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db1.Callback().Query().Remove(callback) })
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := NewUserRepository(db1).UpdateAdminProfile(ctx, first.ID, "first", "disabled")
+		firstDone <- err
+	}()
+	select {
+	case <-counted:
+	case <-ctx.Done():
+		t.Fatal("first demotion did not reach the last-admin count")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := NewUserRepository(db2).UpdateAdminProfile(ctx, second.ID, "second", "disabled")
+		secondDone <- err
+	}()
+	select {
+	case err := <-secondDone:
+		t.Fatalf("competing demotion did not wait for the first transaction: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	unblock()
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first demotion: %v", err)
+	}
+	if err := <-secondDone; !errors.Is(err, ErrAdminLastAdmin) {
+		t.Fatalf("expected the second demotion to be refused, got %v", err)
+	}
+
+	var activeAdmins int64
+	if err := db1.Model(&model.User{}).
+		Where("role = ? AND (status = ? OR status = '' OR status IS NULL)", model.SystemRoleAdmin, "active").
+		Count(&activeAdmins).Error; err != nil {
+		t.Fatal(err)
+	}
+	if activeAdmins < 1 {
+		t.Fatalf("expected at least one active administrator to remain, got %d", activeAdmins)
+	}
+}
+
 func TestPostgresLastActiveAdministratorIsProtected(t *testing.T) {
 	db, _ := newPostgresConcurrencyTestDBs(t)
 	if err := db.AutoMigrate(&model.User{}); err != nil {

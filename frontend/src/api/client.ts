@@ -5,6 +5,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api/v1';
 
 export class ApiError extends Error {
   code: string;
+  traceId: string | null;
   details: Record<string, unknown>;
   retryAfterSeconds: number | null;
   status: number;
@@ -16,6 +17,7 @@ export class ApiError extends Error {
       ? formatRateLimitMessage(retryAfterSeconds)
       : error.message);
     this.name = 'ApiError';
+    this.traceId = /^[a-f0-9]{32}$/.test(error.traceId ?? '') ? error.traceId! : null;
     this.status = status;
     this.code = error.code;
     this.details = error.details ?? {};
@@ -268,7 +270,7 @@ async function request(path: string, options: RequestOptions = {}): Promise<Resp
 
   if (!response.ok) {
     const error = await readError(response);
-    throw new ApiError(response.status, error, response.headers.get('Retry-After'));
+    throw new ApiError(response.status, { ...error, traceId: error.traceId ?? response.headers.get('X-Trace-ID') ?? undefined }, response.headers.get('Retry-After'));
   }
 
   return response;

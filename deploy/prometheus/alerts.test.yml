@@ -1,0 +1,155 @@
+rule_files:
+- alerts.yml
+evaluation_interval: 15s
+tests:
+- name: SSE 200 failure fires after hold then recovers
+  interval: 1m
+  input_series:
+  - series: rag_http_requests_total{service_name="rag-backend",route="/api/v1/chat/sessions/:id/messages/stream",status_class="2xx",outcome="completed"}
+    values: 0+90x25
+  - series: rag_http_requests_total{service_name="rag-backend",route="/api/v1/chat/sessions/:id/messages/stream",status_class="2xx",outcome="failed"}
+    values: 0+10x10 100+0x15
+  promql_expr_test:
+  - expr: ALERTS{alertname="RAGHighRequestFailureRate",alertstate="firing"}
+    eval_time: 4m
+    exp_samples: []
+  - expr: ALERTS{alertname="RAGHighRequestFailureRate",alertstate="firing"}
+    eval_time: 8m
+    exp_samples:
+    - labels: ALERTS{alertname="RAGHighRequestFailureRate",alertstate="firing",service_name="rag-backend",severity="critical"}
+      value: 1
+  - expr: ALERTS{alertname="RAGHighRequestFailureRate",alertstate="firing"}
+    eval_time: 20m
+    exp_samples: []
+- name: low traffic and user cancellations do not trigger request alerts
+  interval: 1m
+  input_series:
+  - series: rag_http_requests_total{service_name="rag-backend",route="/api/v1/chat/sessions/:id/messages/stream",status_class="2xx",outcome="completed"}
+    values: 0+1x25
+  - series: rag_http_requests_total{service_name="rag-backend",route="/api/v1/chat/sessions/:id/messages/stream",status_class="2xx",outcome="failed"}
+    values: 0+1x25
+  - series: rag_http_requests_total{service_name="rag-backend",route="/api/v1/chat/sessions/:id/messages/stream",status_class="2xx",outcome="cancelled"}
+    values: 0+100x25
+  - series: rag_http_requests_total{service_name="rag-backend",route="unmatched",status_class="4xx",outcome="failed"}
+    values: 0+100x25
+  promql_expr_test:
+  - expr: ALERTS{alertname="RAGHighRequestFailureRate",alertstate="firing"}
+    eval_time: 12m
+    exp_samples: []
+- name: provider failure rate recovers
+  interval: 1m
+  input_series:
+  - series: rag_provider_calls_total{service_name="rag-backend",provider="embedding",outcome="success"}
+    values: 0+8x25
+  - series: rag_provider_calls_total{service_name="rag-backend",provider="embedding",outcome="failure"}
+    values: 0+2x10 20+0x15
+  promql_expr_test:
+  - expr: ALERTS{alertname="RAGProviderFailureRate",alertstate="firing"}
+    eval_time: 8m
+    exp_samples:
+    - labels: ALERTS{alertname="RAGProviderFailureRate",alertstate="firing",provider="embedding",service_name="rag-backend",severity="warning"}
+      value: 1
+  - expr: ALERTS{alertname="RAGProviderFailureRate",alertstate="firing"}
+    eval_time: 20m
+    exp_samples: []
+- name: P95 uses histogram buckets across time
+  interval: 1m
+  input_series:
+  - series: rag_stage_duration_seconds_bucket{service_name="rag-backend",stage="chat_first_visible_text",le="10"}
+    values: 0+40x25
+  - series: rag_stage_duration_seconds_bucket{service_name="rag-backend",stage="chat_first_visible_text",le="20"}
+    values: 0+50x25
+  - series: rag_stage_duration_seconds_bucket{service_name="rag-backend",stage="chat_first_visible_text",le="+Inf"}
+    values: 0+50x25
+  - series: rag_stage_duration_seconds_count{service_name="rag-backend",stage="chat_first_visible_text"}
+    values: 0+50x25
+  promql_expr_test:
+  - expr: ALERTS{alertname="RAGSlowFirstVisibleText",alertstate="firing"}
+    eval_time: 12m
+    exp_samples:
+    - labels: ALERTS{alertname="RAGSlowFirstVisibleText",alertstate="firing",service_name="rag-backend",severity="warning"}
+      value: 1
+- name: pending queue ages and drains
+  interval: 1m
+  input_series:
+  - series: rag_document_oldest_job_age_seconds{service_name="rag-backend",state="pending"}
+    values: 600+0x10 0+0x10
+  promql_expr_test:
+  - expr: ALERTS{alertname="RAGDocumentQueueWaiting",alertstate="firing"}
+    eval_time: 8m
+    exp_samples:
+    - labels: ALERTS{alertname="RAGDocumentQueueWaiting",alertstate="firing",service_name="rag-backend",severity="warning"}
+      value: 1
+  - expr: ALERTS{alertname="RAGDocumentQueueWaiting",alertstate="firing"}
+    eval_time: 12m
+    exp_samples: []
+- name: cleanup ages and drains
+  interval: 1m
+  input_series:
+  - series: rag_cleanup_oldest_pending_age_seconds{service_name="rag-backend"}
+    values: 1800+0x10 0+0x10
+  promql_expr_test:
+  - expr: ALERTS{alertname="RAGCleanupQueueWaiting",alertstate="firing"}
+    eval_time: 8m
+    exp_samples:
+    - labels: ALERTS{alertname="RAGCleanupQueueWaiting",alertstate="firing",service_name="rag-backend",severity="warning"}
+      value: 1
+  - expr: ALERTS{alertname="RAGCleanupQueueWaiting",alertstate="firing"}
+    eval_time: 12m
+    exp_samples: []
+- name: queue read failure is not an empty queue
+  interval: 1m
+  input_series:
+  - series: rag_queue_collection_success{service_name="rag-backend",queue="documents"}
+    values: 0+0x4 1+0x10
+  promql_expr_test:
+  - expr: ALERTS{alertname="RAGQueueCollectionFailed",alertstate="firing"}
+    eval_time: 3m
+    exp_samples:
+    - labels: ALERTS{alertname="RAGQueueCollectionFailed",alertstate="firing",queue="documents",service_name="rag-backend",severity="warning"}
+      value: 1
+  - expr: ALERTS{alertname="RAGQueueCollectionFailed",alertstate="firing"}
+    eval_time: 6m
+    exp_samples: []
+- name: collector down and recovery
+  interval: 1m
+  input_series:
+  - series: up{job="otel-collector",instance="collector:8889"}
+    values: 0+0x3 1+0x10
+  promql_expr_test:
+  - expr: ALERTS{alertname="RAGCollectorUnavailable",alertstate="firing"}
+    eval_time: 2m
+    exp_samples:
+    - labels: ALERTS{alertname="RAGCollectorUnavailable",alertstate="firing",instance="collector:8889",job="otel-collector",severity="critical"}
+      value: 1
+  - expr: ALERTS{alertname="RAGCollectorUnavailable",alertstate="firing"}
+    eval_time: 5m
+    exp_samples: []
+- name: no app data even with no registered service
+  interval: 1m
+  input_series:
+  - series: rag_telemetry_heartbeat_unixtime{service_name="rag-backend"}
+    values: _ _ _ 180+60x10
+  promql_expr_test:
+  - expr: ALERTS{alertname="RAGTelemetryMissing",alertstate="firing"}
+    eval_time: 2m
+    exp_samples:
+    - labels: ALERTS{alertname="RAGTelemetryMissing",alertstate="firing",severity="critical"}
+      value: 1
+  - expr: ALERTS{alertname="RAGTelemetryMissing",alertstate="firing"}
+    eval_time: 4m
+    exp_samples: []
+- name: stale app data while collector remains up
+  interval: 1m
+  input_series:
+  - series: rag_telemetry_heartbeat_unixtime{service_name="rag-backend"}
+    values: 0+0x10 660+60x10
+  promql_expr_test:
+  - expr: ALERTS{alertname="RAGTelemetryMissing",alertstate="firing"}
+    eval_time: 8m
+    exp_samples:
+    - labels: ALERTS{alertname="RAGTelemetryMissing",alertstate="firing",service_name="rag-backend",severity="critical"}
+      value: 1
+  - expr: ALERTS{alertname="RAGTelemetryMissing",alertstate="firing"}
+    eval_time: 12m
+    exp_samples: []

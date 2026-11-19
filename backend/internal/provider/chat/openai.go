@@ -6,16 +6,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/otel/attribute"
 	"io"
+	"kbchat/backend/internal/observability"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	chatcore "kbchat/backend/internal/chat"
 	"kbchat/backend/internal/config"
+	"kbchat/backend/internal/provider/httpclient"
 )
 
 type OpenAICompatibleProvider struct {
@@ -28,16 +32,15 @@ type OpenAICompatibleProvider struct {
 
 func NewOpenAICompatibleProvider(cfg config.Config) *OpenAICompatibleProvider {
 	baseURL := strings.TrimRight(cfg.ChatBaseURL, "/")
-	httpClient := &http.Client{Timeout: 90 * time.Second}
 	return &OpenAICompatibleProvider{
 		baseURL: baseURL,
 		apiKey:  cfg.ChatAPIKey,
 		model:   cfg.ChatModel,
-		client:  newClient(cfg.ChatAPIKey, baseURL, httpClient),
-		streamClient: &http.Client{Transport: &http.Transport{
+		client:  newClient(cfg.ChatAPIKey, baseURL, httpclient.NewJSONClient(90*time.Second)),
+		streamClient: &http.Client{Transport: otelhttp.NewTransport(&http.Transport{
 			Proxy:                 http.ProxyFromEnvironment,
 			ResponseHeaderTimeout: 60 * time.Second,
-		}},
+		})},
 	}
 }
 
@@ -70,7 +73,9 @@ func (p *OpenAICompatibleProvider) ChatWithUsage(ctx context.Context, messages [
 	return p.ChatWithOptions(ctx, messages, chatcore.Options{})
 }
 
-func (p *OpenAICompatibleProvider) ChatWithOptions(ctx context.Context, messages []chatcore.Message, options chatcore.Options) (string, chatcore.Usage, error) {
+func (p *OpenAICompatibleProvider) ChatWithOptions(ctx context.Context, messages []chatcore.Message, options chatcore.Options) (result string, spent chatcore.Usage, retErr error) {
+	ctx, span := observability.Start(ctx, "model.chat", attribute.String("gen_ai.request.model", p.model))
+	defer func() { observability.Finish(span, retErr) }()
 	if p.apiKey == "" {
 		return "", chatcore.Usage{}, fmt.Errorf("CHAT_API_KEY is required")
 	}
@@ -79,6 +84,7 @@ func (p *OpenAICompatibleProvider) ChatWithOptions(ctx context.Context, messages
 	if options.Model != "" {
 		model = options.Model
 	}
+	span.SetAttributes(attribute.String("gen_ai.request.model", model))
 	temperature := float32(0.2)
 	if options.Temperature != nil {
 		temperature = float32(*options.Temperature)
@@ -97,7 +103,24 @@ func (p *OpenAICompatibleProvider) ChatWithOptions(ctx context.Context, messages
 	// Usage names the model that was requested, not the one the response echoes:
 	// vendors often answer with a canonical alias, and MODEL_PRICING and the
 	// CHAT_ALLOWED_MODELS whitelist are keyed by the configured name.
-	return response.Choices[0].Message.Content, chatcore.Usage{PromptTokens: response.Usage.PromptTokens, CompletionTokens: response.Usage.CompletionTokens, TotalTokens: response.Usage.TotalTokens, Model: model}, nil
+	usage := chatcore.Usage{
+		PromptTokens:     response.Usage.PromptTokens,
+		CompletionTokens: response.Usage.CompletionTokens,
+		TotalTokens:      response.Usage.TotalTokens,
+		Model:            model,
+	}
+	usage.Reported = usageReported(usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
+	return response.Choices[0].Message.Content, usage, nil
+}
+
+// usageReported reports whether an upstream actually accounted for tokens.
+//
+// The OpenAI-compatible SDK exposes usage as a value in the blocking response
+// and as a pointer in the stream, so presence alone cannot be trusted: a
+// gateway can send an empty usage object, or none at all, and still answer 200.
+// A call that really ran accounts for at least one token.
+func usageReported(promptTokens, completionTokens, totalTokens int) bool {
+	return promptTokens > 0 || completionTokens > 0 || totalTokens > 0
 }
 
 func (p *OpenAICompatibleProvider) ChatStream(
@@ -122,7 +145,10 @@ func (p *OpenAICompatibleProvider) ChatStreamWithOptions(
 	messages []chatcore.Message,
 	onDelta func(string) error,
 	options chatcore.Options,
-) (string, chatcore.Usage, error) {
+) (result string, spent chatcore.Usage, retErr error) {
+	ctx, span := observability.Start(ctx, "model.chat_stream", attribute.String("gen_ai.request.model", p.model))
+	span.SetAttributes(attribute.Bool("gen_ai.response.streaming", false))
+	defer func() { observability.Finish(span, retErr) }()
 	if p.apiKey == "" {
 		return "", chatcore.Usage{}, fmt.Errorf("CHAT_API_KEY is required")
 	}
@@ -131,6 +157,7 @@ func (p *OpenAICompatibleProvider) ChatStreamWithOptions(
 	if options.Model != "" {
 		model = options.Model
 	}
+	span.SetAttributes(attribute.String("gen_ai.request.model", model))
 	temperature := float32(0.2)
 	if options.Temperature != nil {
 		temperature = float32(*options.Temperature)
@@ -168,6 +195,7 @@ func (p *OpenAICompatibleProvider) ChatStreamWithOptions(
 		return answer, usage, err
 	}
 
+	span.SetAttributes(attribute.Bool("gen_ai.response.streaming", true))
 	var answer strings.Builder
 	usage := chatcore.Usage{Model: model}
 	for {
@@ -203,6 +231,7 @@ func (p *OpenAICompatibleProvider) ChatStreamWithOptions(
 	if answer.Len() == 0 {
 		return "", chatcore.Usage{}, fmt.Errorf("chat response has no choices")
 	}
+	usage.Reported = usageReported(usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
 	return answer.String(), usage, nil
 }
 
@@ -252,6 +281,10 @@ func (p *OpenAICompatibleProvider) blockingFallback(
 	return answer, nil
 }
 
+// emitBlockingJSON decodes a non-streamed body that arrived on the streaming
+// endpoint. Model is deliberately left empty: the caller overwrites it with the
+// requested model, because vendors echo a canonical alias that MODEL_PRICING and
+// CHAT_ALLOWED_MODELS do not know.
 func emitBlockingJSON(body []byte, onDelta func(string) error) (string, chatcore.Usage, error) {
 	var response openai.ChatCompletionResponse
 	if err := json.Unmarshal(body, &response); err != nil {
@@ -266,7 +299,13 @@ func emitBlockingJSON(body []byte, onDelta func(string) error) (string, chatcore
 			return "", chatcore.Usage{}, err
 		}
 	}
-	return answer, chatcore.Usage{PromptTokens: response.Usage.PromptTokens, CompletionTokens: response.Usage.CompletionTokens, TotalTokens: response.Usage.TotalTokens, Model: response.Model}, nil
+	usage := chatcore.Usage{
+		PromptTokens:     response.Usage.PromptTokens,
+		CompletionTokens: response.Usage.CompletionTokens,
+		TotalTokens:      response.Usage.TotalTokens,
+	}
+	usage.Reported = usageReported(usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
+	return answer, usage, nil
 }
 
 type trackingDoer struct {
@@ -292,15 +331,15 @@ type trackingBody struct {
 func (b *trackingBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
 	if n > 0 {
-		b.tracker.observe(p[:n])
+		if trackErr := b.tracker.observe(p[:n]); trackErr != nil {
+			return 0, trackErr
+		}
 	}
 	if err != nil {
 		b.tracker.finish()
 	}
 	return n, err
 }
-
-const maxCapturedJSONBytes = 4 * 1024 * 1024
 
 type streamResponseTracker struct {
 	mu          sync.Mutex
@@ -316,26 +355,35 @@ func (t *streamResponseTracker) setContentType(contentType string) {
 	t.mu.Unlock()
 }
 
-func (t *streamResponseTracker) observe(chunk []byte) {
+func (t *streamResponseTracker) observe(chunk []byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if strings.Contains(t.contentType, "application/json") && t.body.Len() < maxCapturedJSONBytes {
-		remaining := maxCapturedJSONBytes - t.body.Len()
-		if len(chunk) > remaining {
-			chunk = chunk[:remaining]
+	if strings.Contains(t.contentType, "application/json") {
+		if len(chunk) > httpclient.MaxJSONResponseBytes-t.body.Len() {
+			return fmt.Errorf("chat JSON response exceeds %d bytes", httpclient.MaxJSONResponseBytes)
 		}
 		_, _ = t.body.Write(chunk)
+		return nil
 	}
-	t.lineBuffer = append(t.lineBuffer, chunk...)
-	for {
-		lineEnd := bytes.IndexByte(t.lineBuffer, '\n')
+	for len(chunk) > 0 {
+		lineEnd := bytes.IndexByte(chunk, '\n')
+		length := len(chunk)
+		if lineEnd >= 0 {
+			length = lineEnd
+		}
+		if length > httpclient.MaxJSONResponseBytes-len(t.lineBuffer) {
+			return fmt.Errorf("chat stream frame exceeds %d bytes", httpclient.MaxJSONResponseBytes)
+		}
+		t.lineBuffer = append(t.lineBuffer, chunk[:length]...)
 		if lineEnd < 0 {
 			break
 		}
-		t.observeLine(t.lineBuffer[:lineEnd])
-		t.lineBuffer = t.lineBuffer[lineEnd+1:]
+		t.observeLine(t.lineBuffer)
+		t.lineBuffer = t.lineBuffer[:0]
+		chunk = chunk[lineEnd+1:]
 	}
+	return nil
 }
 
 func (t *streamResponseTracker) finish() {

@@ -7,8 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/otel/attribute"
 	"image"
 	_ "image/png"
+	"kbchat/backend/internal/observability"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,7 +77,9 @@ func (l *Local) Ready(ctx context.Context) error {
 	return nil
 }
 
-func (l *Local) Recognize(ctx context.Context, path string, page int) (string, error) {
+func (l *Local) Recognize(ctx context.Context, path string, page int) (text string, retErr error) {
+	ctx, span := observability.Start(ctx, "document.ocr_page", attribute.Int("document.page", page))
+	defer func() { observability.Finish(span, retErr) }()
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}

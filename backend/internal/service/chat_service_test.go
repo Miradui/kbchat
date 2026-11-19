@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -287,6 +288,62 @@ func TestSendMessageReturnsRerankFallbackMetadata(t *testing.T) {
 	}
 }
 
+// Regenerate built its assistant row by hand and dropped rerank_fallback: the
+// response reported a fallback while the stored message, and every later read of
+// it, said null. Both paths now build the row through newAssistantMessage.
+func TestRegeneratePersistsRerankFallback(t *testing.T) {
+	ctx := context.Background()
+	db := newChatServiceTestDB(t)
+	user := createChatServiceUser(t, db)
+	kb := createChatServiceKnowledgeBase(t, db, user.ID)
+	session := createChatServiceSession(t, db, user.ID, kb.ID)
+	// Explicit timestamps: ordering by created_at is otherwise a tie between two
+	// rows inserted in the same millisecond, and the tie-break is a random uuid.
+	base := time.Now().UTC().Add(-2 * time.Minute)
+	userMessage := model.ChatMessage{SessionID: session.ID, Role: "user", Content: "question", CreatedAt: base}
+	assistantMessage := model.ChatMessage{SessionID: session.ID, Role: "assistant", Content: "old answer", CreatedAt: base.Add(time.Minute)}
+	for _, message := range []*model.ChatMessage{&userMessage, &assistantMessage} {
+		if err := db.Create(message).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	retrieval := &fakeChatRetrieval{response: &dto.SearchResponse{
+		Items: []dto.SearchResultResponse{
+			{ChunkID: uuid.NewString(), DocumentID: uuid.NewString(), Filename: "manual.md", Content: "supporting fact", VectorScore: 0.9},
+		},
+		RerankFallback: &dto.RerankFallbackResponse{Used: true, Reason: "rerank failed: provider unavailable"},
+	}}
+	provider := &fakeChatProvider{responses: []string{
+		`{"intent":"knowledge_base","standaloneQuery":"question","reason":"needs docs"}`,
+		"new answer",
+	}}
+	service := NewChatService(config.Config{VectorTopN: 30, RerankTopK: 5, RerankEnabled: true, ChatHistoryLimit: 10}, repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), retrieval, provider)
+
+	res, err := service.RegenerateMessage(ctx, user.ID, session.ID, assistantMessage.ID)
+	if err != nil {
+		t.Fatalf("regenerate: %v", err)
+	}
+	if res.RerankFallback == nil || !res.RerankFallback.Used {
+		t.Fatalf("expected rerank fallback in the response, got %#v", res.RerankFallback)
+	}
+
+	var stored model.ChatMessage
+	if err := db.First(&stored, "id = ?", res.Message.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.RerankFallback) == 0 {
+		t.Fatal("regenerated message dropped rerank_fallback")
+	}
+	var fallback dto.RerankFallbackResponse
+	if err := json.Unmarshal(stored.RerankFallback, &fallback); err != nil {
+		t.Fatal(err)
+	}
+	if !fallback.Used || fallback.Reason == "" {
+		t.Fatalf("stored fallback lost its content: %#v", fallback)
+	}
+}
+
 func TestSendMessageRejectsClientRequestIDReuseWithDifferentContent(t *testing.T) {
 	ctx := context.Background()
 	db := newChatServiceTestDB(t)
@@ -569,6 +626,46 @@ func TestEditMessageAndRegenerateRejectsArchivedSession(t *testing.T) {
 	service := NewChatService(config.Config{}, repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), &fakeChatRetrieval{}, &fakeChatProvider{})
 	if _, err := service.EditMessageAndRegenerate(ctx, user.ID, session.ID, message.ID, dto.EditChatMessageRequest{Content: "edited", ClientRequestID: uuid.NewString()}); err == nil {
 		t.Fatal("expected archived session edit to be rejected")
+	}
+}
+
+// Every path that appends or replaces messages must reject an archived session,
+// not just EditMessageAndRegenerate. Send and regenerate used to slip through,
+// which also let the automatic scope turn a scope-registration race into a fake
+// retrieval_failed answer inside the archived conversation.
+func TestWritableChatPathsRejectArchivedSession(t *testing.T) {
+	ctx := context.Background()
+	db := newChatServiceTestDB(t)
+	user := createChatServiceUser(t, db)
+	kb := createChatServiceKnowledgeBase(t, db, user.ID)
+	session := createChatServiceSession(t, db, user.ID, kb.ID)
+	if err := db.Model(&model.ChatSession{}).Where("id = ?", session.ID).Update("archived_at", time.Now().UTC()).Error; err != nil {
+		t.Fatalf("archive session: %v", err)
+	}
+	message := model.ChatMessage{SessionID: session.ID, Role: "assistant", Content: "answer"}
+	if err := db.Create(&message).Error; err != nil {
+		t.Fatalf("create message: %v", err)
+	}
+	provider := &fakeChatProvider{}
+	service := NewChatService(config.Config{}, repository.NewChatRepository(db), repository.NewKnowledgeBaseRepository(db), &fakeChatRetrieval{}, provider)
+
+	if _, err := service.SendMessage(ctx, user.ID, session.ID, dto.SendChatMessageRequest{Content: "question", ClientRequestID: uuid.NewString()}); err == nil {
+		t.Fatal("expected archived session send to be rejected")
+	} else {
+		assertAdminError(t, err, 409, "CHAT_SESSION_ARCHIVED")
+	}
+	if err := service.SendMessageStream(ctx, user.ID, session.ID, dto.SendChatMessageRequest{Content: "question", ClientRequestID: uuid.NewString()}, &recordedStream{}); err == nil {
+		t.Fatal("expected archived session stream to be rejected")
+	} else {
+		assertAdminError(t, err, 409, "CHAT_SESSION_ARCHIVED")
+	}
+	if _, err := service.RegenerateMessage(ctx, user.ID, session.ID, message.ID); err == nil {
+		t.Fatal("expected archived session regeneration to be rejected")
+	} else {
+		assertAdminError(t, err, 409, "CHAT_SESSION_ARCHIVED")
+	}
+	if len(provider.calls) != 0 {
+		t.Fatalf("an archived session must not reach the model, got %d calls", len(provider.calls))
 	}
 }
 

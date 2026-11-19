@@ -63,11 +63,18 @@ export function useSessionActions({
       sessionBusyRef.current = false;
     };
   }, [sessionId]);
+  /**
+   * Runs one session mutation, reporting whether it succeeded.
+   *
+   * The boolean is what lets a caller keep the user's input on screen: a rename
+   * that failed used to close its field and discard what was typed, because the
+   * error only landed in `sessionActionError`.
+   */
   async function runSessionAction(
     action: (isCurrent: () => boolean) => Promise<void>,
     failure: string,
-  ) {
-    if (sessionBusyRef.current || thread?.hasPendingWrite()) return;
+  ): Promise<boolean> {
+    if (sessionBusyRef.current || thread?.hasPendingWrite()) return false;
     const operation = Symbol('session-action');
     const operationSessionId = sessionId;
     sessionActionOperationRef.current = operation;
@@ -79,6 +86,7 @@ export function useSessionActions({
       activeSessionIdRef.current === operationSessionId;
     try {
       await action(isCurrent);
+      return true;
     } catch (caught) {
       if (
         sessionActionOperationRef.current === operation &&
@@ -86,6 +94,7 @@ export function useSessionActions({
       ) {
         setSessionActionError(getErrorMessage(caught, failure));
       }
+      return false;
     } finally {
       if (sessionActionOperationRef.current === operation) {
         sessionActionOperationRef.current = null;
@@ -120,7 +129,7 @@ export function useSessionActions({
   }
 
   function renameSession(target: ChatSession, title: string) {
-    void runSessionAction(async (isCurrent) => {
+    return runSessionAction(async (isCurrent) => {
       const updated = await updateChatSessionTitle(target.id, title);
       // The shared row may still be visible after selecting another session.
       // mergeSession rejects results from a previous authentication revision.

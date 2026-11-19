@@ -5,15 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/pgvector/pgvector-go"
 
+	"go.opentelemetry.io/otel/attribute"
 	"kbchat/backend/internal/document/lexer"
 	"kbchat/backend/internal/document/parser"
 	"kbchat/backend/internal/document/splitter"
 	"kbchat/backend/internal/document/tableconfig"
 	"kbchat/backend/internal/embedding"
 	"kbchat/backend/internal/model"
+	"kbchat/backend/internal/observability"
 	"kbchat/backend/internal/repository"
 	"kbchat/backend/internal/storage"
 )
@@ -42,6 +45,7 @@ const (
 )
 
 type Processor struct {
+	metrics            *observability.Recorder
 	documents          *repository.DocumentRepository
 	chunks             *repository.ChunkRepository
 	parser             parser.Parser
@@ -51,6 +55,8 @@ type Processor struct {
 	embeddingModel     string
 	embeddingDimension int
 }
+
+func (p *Processor) SetRecorder(recorder *observability.Recorder) { p.metrics = recorder }
 
 // SetEmbeddingIdentity is configured before the worker starts, never per job.
 func (p *Processor) SetEmbeddingIdentity(model string, dimension int) {
@@ -114,7 +120,9 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 	localPath := document.StoragePath
 	cleanup := func() {}
 	if p.storage != nil {
-		localPath, cleanup, err = p.storage.Materialize(ctx, document.StoragePath)
+		storageCtx, storageSpan := observability.Start(ctx, "document.storage_read")
+		localPath, cleanup, err = p.storage.Materialize(storageCtx, document.StoragePath)
+		observability.Finish(storageSpan, err)
 		if err != nil {
 			// The object could not be fetched, so nothing was parsed: this is a
 			// storage problem, not a problem with the document's content.
@@ -126,7 +134,9 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 	if err != nil {
 		return err
 	}
-	parsedDocument, parseErr := p.parseDocument(ctx, document, job, localPath, settings)
+	parseCtx, parseSpan := observability.Start(ctx, "document.parse", attribute.String("document.file_type", document.FileType))
+	parsedDocument, parseErr := p.parseDocument(parseCtx, document, job, localPath, settings)
+	observability.Finish(parseSpan, parseErr)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -146,7 +156,10 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 	if err := p.documents.UpdateStatus(ctx, document.ID, job.ID, "chunking", chunkingProgress, ""); err != nil {
 		return err
 	}
+	_, chunkSpan := observability.Start(ctx, "document.chunk")
 	parts := p.splitter.SplitDocument(parsedDocument)
+	chunkSpan.SetAttributes(attribute.Int("document.chunk_count", len(parts)))
+	chunkSpan.End()
 	if len(parts) == 0 {
 		return ErrEmptyContent
 	}
@@ -177,7 +190,10 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 			texts = append(texts, part.Content)
 		}
 
+		embeddingStartedAt := time.Now()
 		embeddings, err := p.embedder.EmbedTexts(ctx, texts)
+		p.metrics.RecordProviderResult(ctx, observability.ProviderEmbedding, err)
+		p.metrics.ObserveSince(ctx, observability.MetricEmbedding, embeddingStartedAt)
 		if err != nil {
 			// Marked here rather than sniffed later: this is the only place that
 			// knows the failure came from the embedding provider, and the provider
@@ -235,7 +251,10 @@ func (p *Processor) Process(ctx context.Context, job *model.DocumentJob) error {
 	if err != nil {
 		return err
 	}
-	if err := p.chunks.PublishByDocument(ctx, document.ID, job.ID, rows, publication); err != nil {
+	publishCtx, publishSpan := observability.Start(ctx, "document.publish", attribute.Int("document.chunk_count", len(rows)))
+	publishErr := p.chunks.PublishByDocument(publishCtx, document.ID, job.ID, rows, publication)
+	observability.Finish(publishSpan, publishErr)
+	if err := publishErr; err != nil {
 		return err
 	}
 	return nil
