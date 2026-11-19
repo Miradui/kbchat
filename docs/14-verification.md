@@ -294,7 +294,7 @@ repository 的测试 schema 使用 `rag_it_<UTC 时间戳>_<随机>`，连接带
 
 ### MERGE-OBS-001：合并远端监控与本地功能收敛（2026-11-19）
 
-状态：合并候选本地验收通过，尚未推送。基线为本地提交 `3e9daf0497ba0f8622719fc7e707faa6e412ab72`，合并远端 `origin/dev` 的 `ebe0144720c7a67e3205f3a5154a5b0fa79404ad`；合并前备份分支与 bundle 位于工作区外的 `kbchat-premerge-20261119-3e9daf0/`。`.DS_Store` 临时文件未纳入提交。
+状态：本地合并验收通过；合并提交 `7271cda` 已推送到 `origin/dev`，远端CI以对应提交的Actions实际回执为准。基线为本地提交 `3e9daf0497ba0f8622719fc7e707faa6e412ab72`，合并远端 `origin/dev` 的 `ebe0144720c7a67e3205f3a5154a5b0fa79404ad`；合并前备份分支与 bundle 位于工作区外的 `kbchat-premerge-20261119-3e9daf0/`。`.DS_Store` 临时文件未纳入提交。
 
 - 合并保留本地已确认的功能退役、首问摘要标题和 UI 改动，并接入远端的 OTel Trace/Metrics、请求追踪编号、任务 `traceparent`、安全响应上限、启动只读 schema 检查、worker/聊天并发保护和观测部署配置。两个 `049` 文件按完整文件名分别保留：`049_document_job_traceparent.sql` 与 `049_retire_personal_chat_features.sql`。
 - 后端：Go 1.27.4，继承的 `RAG_TEST_*` 开关为空；受影响包定向测试通过。全量 `go test -json ./...` 通过 1584 个 pass 事件、0 fail、5 skip；`go vet ./...`、`go build ./...` 通过。`go test -race` 覆盖 observability、service、repository、router、job、cmd/server 通过。一次性 PostgreSQL 16/pgvector 测试库执行完整迁移、EnsureSchema、049 traceparent 重复执行和约束拒绝检查通过。
