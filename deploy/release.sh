@@ -12,6 +12,16 @@ compose=(docker compose --env-file "$KBCHAT_ENV_FILE" -f "$release_dir/compose.p
 if [[ "${KBCHAT_OBSERVABILITY:-false}" == true ]]; then
   compose+=(-f "$release_dir/compose.observability.yml" --profile observability)
 fi
+select_checksum() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    checksum=(sha256sum)
+  elif command -v shasum >/dev/null 2>&1; then
+    checksum=(shasum -a 256)
+  else
+    echo "Install sha256sum (coreutils) or shasum before backup/restore." >&2
+    exit 1
+  fi
+}
 require_stopped() {
   local containers state container
   containers=$("${compose[@]}" ps -a -q backend)
@@ -58,6 +68,7 @@ case "${1:-status}" in
   doctor) "${compose[@]}" run --rm --no-deps backend /app/bin/rag-doctor ;;
   backup)
     [[ $# == 2 && ! -e "$2" ]] || { echo "Usage: $0 backup NEW_DIRECTORY" >&2; exit 2; }
+    select_checksum
     require_stopped
     provider=$("${compose[@]}" run --rm --no-deps backend sh -c 'printf "%s" "${STORAGE_PROVIDER:-local}"')
     [[ "$provider" == local ]] || { echo "For MinIO, use the coordinated database/object backup procedure in docs/13-deployment.md." >&2; exit 1; }
@@ -69,13 +80,14 @@ case "${1:-status}" in
     cp "$KBCHAT_ENV_FILE" "$2/environment.env"
     cp "$release_dir/compose.production.yml" "$2/compose.production.yml"
     "${compose[@]}" images --format json > "$2/images.json"
-    (cd "$2" && shasum -a 256 database.dump uploads.tar.gz environment.env compose.production.yml > SHA256SUMS)
+    (cd "$2" && "${checksum[@]}" database.dump uploads.tar.gz environment.env compose.production.yml > SHA256SUMS)
     echo "Backup complete; backend remains stopped. Store the environment backup securely."
     ;;
   restore)
     [[ $# == 2 && -f "$2/SHA256SUMS" ]] || { echo "Usage: $0 restore BACKUP_DIRECTORY (empty isolated target only)" >&2; exit 2; }
+    select_checksum
     require_stopped
-    (cd "$2" && shasum -a 256 -c SHA256SUMS)
+    (cd "$2" && "${checksum[@]}" -c SHA256SUMS)
     "${compose[@]}" up -d --wait postgres redis
     empty_database
     "${compose[@]}" run --rm --no-deps backend sh -c 'test -z "$(find /app/uploads -mindepth 1 -print -quit)"'

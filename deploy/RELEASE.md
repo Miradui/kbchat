@@ -1,6 +1,6 @@
 # Docker / Compose 发布
 
-此部署运行一个后端（包含worker）、Nginx生产前端、PostgreSQL/pgvector和Redis。默认仅将前端绑定到 `127.0.0.1:8088`；数据库/Redis及后端没有宿主端口。支持Linux amd64和arm64按目标机器构建。使用Docker Compose 2.24.4+、Bash、OpenSSL；构建需访问Docker Hub、Go模块和npm注册表。
+此部署运行一个后端（包含worker）、Nginx生产前端、PostgreSQL/pgvector和Redis。默认仅将前端绑定到 `127.0.0.1:8088`；数据库/Redis及后端没有宿主端口。支持Linux amd64和arm64按目标机器构建。使用Docker Compose 2.24.4+、Bash、OpenSSL，以及sha256sum（Linux coreutils）或shasum（macOS）；构建需访问Docker Hub、Go模块和npm注册表。
 
 ## 首次安装
 
