@@ -25,3 +25,8 @@ frontend/node_modules/
 /deploy/.env.production.*
 !/deploy/.env.production.example
 .DS_Store
+
+# Benchmark runtime credentials and Python bytecode
+/benchmarks/models.env
+__pycache__/
+*.pyc

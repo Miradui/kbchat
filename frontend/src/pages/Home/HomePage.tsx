@@ -1,11 +1,12 @@
 import { AlertTriangle, ArrowRight, BookOpen, FileText, Library, Loader, MessageSquareText, Sparkles, Upload, UserRound } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 import { EmptyState } from '../../components/feedback/EmptyState';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { Button } from '../../components/ui/Button';
+import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { AppShell } from '../../layouts/AppShell';
 import type {
   ActivityItemResponse,
@@ -15,6 +16,7 @@ import { formatCount, formatRelativeTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
 import { documentDisplayStatusLabel } from '../Documents/documentDisplay';
 import { documentFailureCopy } from '../Documents/documentFailure';
+import { homeQuestionState } from '../Chat/homeQuestionNavigation';
 import { activityToItem } from './activityDisplay';
 import { createHomeLoaders } from './homeData';
 import type { HomeDocuments, HomeFailures, HomeSources } from './homeData';
@@ -31,12 +33,17 @@ import type { HomeDocuments, HomeFailures, HomeSources } from './homeData';
  */
 export function HomePage({ sources }: { sources?: HomeSources }) {
   const navigate = useNavigate();
+  const { user } = useCurrentUser();
   const loaders = useMemo(() => createHomeLoaders(sources), [sources]);
   const stats = useRegion(loaders.stats, null as KnowledgeBaseStatsResponse | null, '统计加载失败');
   const documents = useRegion(loaders.documents, { items: [], processingTotal: 0 } as HomeDocuments, '文档加载失败');
   const failedDocuments = useRegion(loaders.failedDocuments, { items: [], total: 0 } as HomeFailures, '失败文档加载失败');
   const activities = useRegion(loaders.activities, [] as ActivityItemResponse[], '动态加载失败');
   const [question, setQuestion] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const submittedRef = useRef(false);
+  const composingRef = useRef(false);
+  const questionId = useId();
 
   const actionableFailures = failedDocuments.data.items.filter((item) => item.jobStatus !== 'cancelled' && item.errorCode !== 'cancelled');
 
@@ -50,8 +57,13 @@ export function HomePage({ sources }: { sources?: HomeSources }) {
 
   function ask(event: FormEvent) {
     event.preventDefault();
+    if (composingRef.current || submittedRef.current) return;
     const trimmed = question.trim();
-    navigate(trimmed ? `/chat?q=${encodeURIComponent(trimmed)}` : '/chat');
+    submittedRef.current = true;
+    setSubmitting(true);
+    if (!trimmed) navigate('/chat');
+    else if (user) navigate('/chat', { state: homeQuestionState(trimmed, user.id) });
+    else navigate(`/chat?q=${encodeURIComponent(trimmed)}`);
   }
 
   const activityLoading = activities.loading;
@@ -67,18 +79,27 @@ export function HomePage({ sources }: { sources?: HomeSources }) {
           <form className="home-ask" onSubmit={ask}>
             <div className="home-ask__input-row">
               <Sparkles aria-hidden="true" />
+              <label className="sr-only" htmlFor={questionId}>向知识库提问</label>
               <input
-                aria-label="向知识库提问"
                 className="home-ask__input"
                 enterKeyHint="send"
+                id={questionId}
                 onChange={(event) => setQuestion(event.target.value)}
+                onCompositionStart={() => { composingRef.current = true; }}
+                onCompositionEnd={() => { composingRef.current = false; }}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter') return;
+                  event.preventDefault();
+                  if (composingRef.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+                  event.currentTarget.form?.requestSubmit();
+                }}
                 placeholder="例如：新员工入职需要准备哪些材料？"
                 value={question}
               />
             </div>
             <div className="home-ask__foot">
               <span><BookOpen aria-hidden="true" />从知识库中寻找答案</span>
-              <Button trailingIcon={<ArrowRight aria-hidden="true" />} type="submit">提问</Button>
+              <Button disabled={submitting} trailingIcon={<ArrowRight aria-hidden="true" />} type="submit">提问</Button>
             </div>
           </form>
         </section>

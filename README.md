@@ -181,6 +181,15 @@ npm run build
 
 前端构建产物位于 `frontend/dist`。[GitHub Actions](.github/workflows/ci.yml) 会执行前后端的静态检查、测试和构建，无需生产模型密钥。真实模型效果和完整部署环境仍需单独验证，开发约定见 [AGENTS.md](AGENTS.md)。
 
+## 性能与回答质量基准
+
+固定语料、独立环境、逐请求测量、审核和基线比较见 [基准工具](benchmarks/README.md)。默认冒烟使用本地模型替身，真实模型测试通过独立配置显式启用：
+
+```bash
+python3 -m unittest discover -s benchmarks/tests -v
+python3 -m benchmarks smoke --run output/benchmarks/smoke-001
+```
+
 ## 部署与升级
 
 生产部署建议通过 Nginx 提供前端静态文件并代理后端 API，当前后台任务按单个后端实例运行。数据库和上传文件需配置持久化与备份，使用 MinIO 时 bucket 应保持私有。

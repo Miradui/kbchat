@@ -15,6 +15,7 @@ import { formatRelativeTime, relativeDayBucket } from '../../utils/format';
 import { useModalFocus } from '../../components/ui/useModalFocus';
 import { queryClient } from '../../store/queryClient';
 import { tokenStore } from '../../store/tokenStore';
+import { chatSessionUrl } from './chatSessionUrl';
 
 const BUCKET_ORDER = ['今天', '昨天', '最近 7 天', '更早'];
 
@@ -201,6 +202,7 @@ export function ChatSessionRail({
                     actionsDisabled={actionsDisabled}
                     items={getSessionActions(session)}
                     key={session.id}
+                    knowledgeBaseId={knowledgeBaseId}
                     onNavigate={onNavigate}
                     session={session}
                   />
@@ -223,8 +225,9 @@ export function ChatSessionRail({
   );
 }
 
-function SessionItem({ session, active, disabled, actionsDisabled, items, onNavigate }: {
+function SessionItem({ session, knowledgeBaseId, active, disabled, actionsDisabled, items, onNavigate }: {
   session: ChatSession;
+  knowledgeBaseId: string;
   active: boolean;
   disabled: boolean;
   actionsDisabled: boolean;
@@ -244,7 +247,7 @@ function SessionItem({ session, active, disabled, actionsDisabled, items, onNavi
           if (disabled) { event.preventDefault(); return; }
           onNavigate();
         }}
-        to={`/chat/${session.id}`}
+        to={chatSessionUrl(session.id, knowledgeBaseId)}
       >
         <span className="ui-truncate">{title}</span>
         {session.lastMessagePreview && <span className="chat-rail__preview ui-truncate">{session.lastMessagePreview}</span>}

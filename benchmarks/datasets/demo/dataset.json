@@ -1,0 +1,47 @@
+{
+  "id": "kbchat-demo-48-v2",
+  "description": "Six fictional documents and 48 source-grounded cases, including boundary and missing-information cases; never operational instructions.",
+  "groups": {
+    "employee": "员工手册",
+    "product": "产品与客服",
+    "ops": "技术运维"
+  },
+  "documents": [
+    {
+      "key": "employee_onboarding",
+      "group": "employee",
+      "file": "corpus/【演示】员工手册/入职与日常办公指南.md",
+      "title": "入职与日常办公指南"
+    },
+    {
+      "key": "employee_expenses",
+      "group": "employee",
+      "file": "corpus/【演示】员工手册/差旅与费用报销标准.md",
+      "title": "差旅与费用报销标准"
+    },
+    {
+      "key": "product_plans",
+      "group": "product",
+      "file": "corpus/【演示】产品与客服/星舟协作产品与套餐说明.md",
+      "title": "星舟协作产品与套餐说明"
+    },
+    {
+      "key": "product_faq",
+      "group": "product",
+      "file": "corpus/【演示】产品与客服/星舟协作售后与常见问题.md",
+      "title": "星舟协作售后与常见问题"
+    },
+    {
+      "key": "ops_release",
+      "group": "ops",
+      "file": "corpus/【演示】技术运维/服务发布与备份操作规范.md",
+      "title": "服务发布与备份操作规范"
+    },
+    {
+      "key": "ops_incident",
+      "group": "ops",
+      "file": "corpus/【演示】技术运维/故障分级与监控排查手册.md",
+      "title": "故障分级与监控排查手册"
+    }
+  ]
+}

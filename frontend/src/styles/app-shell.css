@@ -267,9 +267,15 @@ kbd.topbar__kbd,
 .palette__input-row {
   align-items: center;
   border-bottom: 1px solid var(--line);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
   display: flex;
   gap: var(--s-3);
   padding: 0 var(--s-4);
+}
+/* Keep the complete focus outline inside the palette's clipping boundary. */
+.palette__input-row:has(.palette__input:focus-visible) {
+  outline: 2px solid var(--line-focus);
+  outline-offset: calc(-1 * var(--s-1));
 }
 .palette__input-row > svg { color: var(--text-faint); height: 16px; width: 16px; }
 .palette__input {
@@ -281,6 +287,7 @@ kbd.topbar__kbd,
   min-width: 0;
   padding: var(--s-4) 0;
 }
+.palette__input:focus-visible { outline: none; }
 .palette__input::placeholder { color: var(--text-faint); }
 
 .palette__results { overflow-y: auto; padding: var(--s-2); }

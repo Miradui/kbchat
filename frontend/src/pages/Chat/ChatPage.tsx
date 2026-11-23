@@ -1,7 +1,7 @@
 import { ArrowUpRight, BookOpen, Check, FileText, Files, Globe, Library, MessageSquareText, PanelLeft, Search, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import {
   setChatMessageFeedback,
@@ -21,6 +21,7 @@ import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { AppShell } from '../../layouts/AppShell';
 import type { ChatFeedbackDetails, ChatFeedbackRating, ChatMessage, Citation, KnowledgeBase } from '../../types/api';
 import { knowledgeBaseOptionsKey, queryClient } from '../../store/queryClient';
+import { tokenStore } from '../../store/tokenStore';
 import { formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
 import { ChatComposer } from './ChatComposer';
@@ -46,6 +47,8 @@ import { useChatAnswerVersions } from './useChatAnswerVersions';
 import { ChatStreamView, StreamAnnouncement } from './ChatStreamView';
 import { ChatDocumentPicker } from './ChatDocumentPicker';
 import { documentChatUrl } from './documentChatScope';
+import { chatSessionUrl } from './chatSessionUrl';
+import { consumeHomeQuestion, readHomeQuestion } from './homeQuestionNavigation';
 
 /**
  * `/chat` is the draft state and `/chat/:sessionId` is a thread.
@@ -56,7 +59,12 @@ import { documentChatUrl } from './documentChatScope';
  */
 export function ChatPage() {
   const { sessionId } = useParams();
+  const location = useLocation();
   const navigate = useNavigate();
+  const homeQuestion = useMemo(() => readHomeQuestion(location.state), [location.state]);
+  const [pendingHomeQuestion, setPendingHomeQuestion] = useState(() => !sessionId && homeQuestion?.question ? homeQuestion : null);
+  const claimedHomeQuestionRef = useRef('');
+  const sentHomeQuestionRef = useRef('');
   const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const isNarrow = useMediaQuery('(max-width: 1080px)');
@@ -91,7 +99,14 @@ export function ChatPage() {
   const draftDocumentIds = useMemo(() => documentParam ? documentParam.split(',') : [], [documentParam]);
   const draftKnowledgeBaseIds = useMemo(() => manyParam ? [...new Set(manyParam.split(',').filter(Boolean))].slice(0, 5) : urlKnowledgeBaseId ? [urlKnowledgeBaseId] : [], [manyParam, urlKnowledgeBaseId]);
   const { user } = useCurrentUser();
-  const { draft, setDraft, moveToSession, acknowledge } = useChatDraft(user?.id, chatDraftScope(sessionId, draftKnowledgeBaseIds, draftDocumentIds));
+  // An explicit home submission must not overwrite or send an older draft.
+  const draftScope = !sessionId && homeQuestion?.userId === user?.id && homeQuestion
+    ? `home:${homeQuestion.id}` : chatDraftScope(sessionId, draftKnowledgeBaseIds, draftDocumentIds);
+  const draftNavigationState = useMemo(() => !sessionId && homeQuestion?.userId === user?.id && homeQuestion
+    ? consumeHomeQuestion(location.state, homeQuestion) : undefined, [homeQuestion, location.state, sessionId, user?.id]);
+  const { draft, setDraft, moveToSession, acknowledge } = useChatDraft(user?.id, draftScope);
+  const preparingHomeQuestion = !sessionId && homeQuestion?.id === pendingHomeQuestion?.id && user?.id === pendingHomeQuestion?.userId
+    ? pendingHomeQuestion : null;
   const targetMessageId = searchParams.get('messageId') ?? '';
   const [railPreferences, setRailPreferences] = useSessionRailPreferences();
   const [railScope, setRailScope] = useState<ChatSessionScope>(railPreferences.scope);
@@ -126,7 +141,7 @@ export function ChatPage() {
     onSessionCreated: (session) => {
       moveToSession(session.id);
       mergeSession(session);
-      navigate(`/chat/${session.id}`, { replace: true });
+      navigate(chatSessionUrl(session.id, urlKnowledgeBaseId), { replace: true });
     },
     onSessionsChanged: () => void reloadSessions(),
     onQuestionSaved: acknowledge,
@@ -200,7 +215,7 @@ export function ChatPage() {
   const messagesReady = Boolean(sessionId && !thread.loading && !thread.loadError && thread.session?.id === sessionId);
   const threadInteractionPending = thread.sending || Boolean(thread.regeneratingId) || Boolean(thread.editingId)
     || Boolean(thread.unconfirmedSend?.checking) || Boolean(thread.stoppedStream?.checking) || Boolean(thread.regeneration?.checking);
-  const interactionLocked = thread.loading || sessionBusy || threadInteractionPending;
+  const interactionLocked = thread.loading || sessionBusy || threadInteractionPending || Boolean(preparingHomeQuestion);
   const historyLocked = interactionLocked || Boolean(thread.unconfirmedSend) || thread.regeneration?.kind === 'unconfirmed';
   const messageSearch = useChatMessageSearch({
     sessionId, messages: thread.messages, targetMessageId, onLocate: locateMessage,
@@ -248,28 +263,6 @@ export function ChatPage() {
     if (sourceTriggerRef.current?.isConnected) sourceTriggerRef.current.focus({ preventScroll: true });
   }
 
-  // The rail is scoped to the conversation you are in, and that scope is now a
-  // server-side filter, so the URL has to carry it. Opening a session from
-  // another knowledge base re-points the filter instead of silently disagreeing
-  // with the list. See docs/04-api-design.md (GET /chat/sessions).
-  useEffect(() => {
-    if (currentSession?.scopeMode === 'auto') {
-      if (urlKnowledgeBaseId || manyParam) setSearchParams((current) => {
-        const next = new URLSearchParams(current);
-        next.delete('knowledgeBaseId'); next.delete('knowledgeBaseIds');
-        return next;
-      }, { replace: true });
-      return;
-    }
-    const sessionKnowledgeBaseId = currentSession?.knowledgeBaseId;
-    if (!sessionKnowledgeBaseId || sessionKnowledgeBaseId === urlKnowledgeBaseId || currentSession?.knowledgeBaseIds?.includes(urlKnowledgeBaseId)) return;
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current);
-      next.set('knowledgeBaseId', sessionKnowledgeBaseId);
-      return next;
-    }, { replace: true });
-  }, [currentSession?.knowledgeBaseId, currentSession?.knowledgeBaseIds, currentSession?.scopeMode, manyParam, setSearchParams, urlKnowledgeBaseId]);
-
   const currentSessionId = currentSession?.id;
   const currentArchivedAt = currentSession?.archivedAt;
   useEffect(() => {
@@ -293,7 +286,7 @@ export function ChatPage() {
     return () => { operations.clear(); };
   }, [sessionId]);
 
-  // The home page hands a question over via `?q=`; consume it into the composer.
+  // Ordinary query links only prefill the composer; they never authorize sending.
   useEffect(() => {
     const seeded = searchParams.get('q');
     if (!seeded || !user) return;
@@ -304,6 +297,24 @@ export function ChatPage() {
       return next;
     }, { replace: true });
   }, [searchParams, setSearchParams, setDraft, user]);
+
+  useEffect(() => {
+    if (!homeQuestion || !user || sessionId) return;
+    if (homeQuestion.userId !== user.id) {
+      navigate({ pathname: location.pathname, search: location.search, hash: location.hash }, {
+        replace: true, state: consumeHomeQuestion(location.state, null),
+      });
+      return;
+    }
+    if (!homeQuestion.question || claimedHomeQuestionRef.current === homeQuestion.id) return;
+    claimedHomeQuestionRef.current = homeQuestion.id;
+    setDraft(homeQuestion.question);
+    // Keep only draft recovery metadata in this history entry. Refresh/Back can
+    // restore the question, but cannot repeat the explicit submission.
+    navigate({ pathname: location.pathname, search: location.search, hash: location.hash }, {
+      replace: true, state: consumeHomeQuestion(location.state, homeQuestion),
+    });
+  }, [homeQuestion, location, navigate, sessionId, setDraft, user]);
 
   useLayoutEffect(() => { initialScrollRef.current = undefined; prependAnchorRef.current = null; }, [sessionId]);
   useLayoutEffect(() => {
@@ -379,7 +390,27 @@ export function ChatPage() {
     && !thread.unconfirmedSend
     && (!thread.stoppedStream || thread.stoppedStream.resumable);
 
-  const composerHint = knowledgeBases.length === 0 ? '还没有知识库。先创建一个知识库并导入文档。' : !activeKnowledgeBase && !automaticScope
+  const { send, sending } = thread;
+  useEffect(() => {
+    if (!preparingHomeQuestion?.question || homeQuestion?.question || sessionStore.knowledgeBasesLoading) return;
+    const { id, question } = preparingHomeQuestion;
+    const revision = tokenStore.getRevision();
+    let active = true;
+    // Do not dispatch a write from a StrictMode effect that is about to replay.
+    queueMicrotask(() => {
+      if (!active || sentHomeQuestionRef.current === id || tokenStore.getRevision() !== revision) return;
+      sentHomeQuestionRef.current = id;
+      setPendingHomeQuestion(null);
+      if (canSend && !sending && !sessionStore.knowledgeBasesError) {
+        void send(question, { expectedAuthRevision: revision });
+      }
+    });
+    return () => { active = false; };
+  }, [canSend, homeQuestion?.question, preparingHomeQuestion, send, sending, sessionStore.knowledgeBasesError, sessionStore.knowledgeBasesLoading]);
+
+  const composerHint = preparingHomeQuestion ? '正在加载可提问的知识库…'
+    : knowledgeBases.length === 0 && sessionStore.knowledgeBasesError ? '知识库暂不可用，请重试加载。'
+    : knowledgeBases.length === 0 ? '还没有知识库。先创建一个知识库并导入文档。' : !activeKnowledgeBase && !automaticScope
     ? knowledgeBases.length === 0
       ? '还没有知识库。先创建一个知识库并导入文档。'
       : '先选择 1–5 个知识库。'
@@ -390,9 +421,9 @@ export function ChatPage() {
   const selectKnowledgeBase = useCallback((knowledgeBaseId: string) => {
     // From a thread, switching knowledge base starts a new draft rather than
     // silently jumping into some other session.
-    if (knowledgeBaseId) navigate(`/chat?knowledgeBaseId=${encodeURIComponent(knowledgeBaseId)}`);
-    else navigate('/chat');
-  }, [navigate]);
+    if (knowledgeBaseId) navigate(`/chat?knowledgeBaseId=${encodeURIComponent(knowledgeBaseId)}`, { state: draftNavigationState });
+    else navigate('/chat', { state: draftNavigationState });
+  }, [draftNavigationState, navigate]);
 
   async function handleMessageFeedback(messageId: string, rating: ChatFeedbackRating, details?: ChatFeedbackDetails): Promise<boolean> {
     if (feedbackOperationsRef.current.has(messageId)) return false;
@@ -462,12 +493,12 @@ export function ChatPage() {
   ) : undefined;
 
   const showLauncher = !sessionId && !thread.loading && thread.messages.length === 0
-    && !thread.pendingQuestion && !thread.failedSend && !thread.unconfirmedSend && !thread.stoppedStream;
+    && !preparingHomeQuestion && !thread.pendingQuestion && !thread.failedSend && !thread.unconfirmedSend && !thread.stoppedStream;
 
   function startNewChat() {
     if (sessionBusyRef.current || thread.hasPendingWrite()) return;
     setRailOpen(false);
-    selectKnowledgeBase('');
+    navigate('/chat');
   }
 
   const sessionRail = (
@@ -481,7 +512,7 @@ export function ChatPage() {
       getSessionActions={(target) => getSessionActions(target, true)}
       error={sessionStore.sessionsError}
       refetchError={sessionStore.sessionsRefetchError}
-      knowledgeBaseId={automaticScope ? '' : activeKnowledgeBaseId}
+      knowledgeBaseId={urlKnowledgeBaseId}
       knowledgeBases={knowledgeBases}
       knowledgeBasesError={sessionStore.knowledgeBasesError}
       loading={sessionStore.sessionsLoading}
@@ -519,12 +550,12 @@ export function ChatPage() {
       tools={<>
         {!sessionId ? <Button aria-label="自动检索全部可访问知识库" aria-pressed={automaticScope && !draftDocumentIds.length}
           className="chat-composer__scope-button" disabled={interactionLocked} leadingIcon={<Globe aria-hidden="true" />}
-          onClick={() => { if (!interactionLocked) setSearchParams({}); }} variant="ghost">自动跨库</Button>
+          onClick={() => { if (!interactionLocked) setSearchParams({}, { state: draftNavigationState }); }} variant="ghost">自动跨库</Button>
           : <span className="chat-composer__scope-label"><Globe aria-hidden="true" />{currentSession?.documents?.length ? currentSession.documents.length + ' 份文档' : automaticScope ? '自动跨库' : multiBase ? activeKnowledgeBaseIds.length + ' 个知识库' : activeKnowledgeBase?.name || '当前范围'}</span>}
         {!sessionId && <Button className="chat-composer__scope-button" disabled={interactionLocked} leadingIcon={<FileText aria-hidden="true" />}
           onClick={() => setDocumentPickerOpen(true)} variant="ghost">指定文档提问</Button>}
       </>}
-      disabled={!user || !canSend || thread.sending || sessionBusy}
+      disabled={!user || !canSend || thread.sending || sessionBusy || Boolean(preparingHomeQuestion)}
       error={thread.rateLimitError}
       retryNotice={thread.rateLimitNotice}
       hint={composerHint}
@@ -540,7 +571,7 @@ export function ChatPage() {
         // A draft thread needs the knowledge base pinned in the URL before
         // the session is created.
         if (!sessionId && !urlKnowledgeBaseId && activeKnowledgeBaseId && !draftDocumentIds.length) {
-          setSearchParams({ knowledgeBaseId: activeKnowledgeBaseId }, { replace: true });
+          setSearchParams({ knowledgeBaseId: activeKnowledgeBaseId }, { replace: true, state: draftNavigationState });
         }
         void thread.send(question);
       }}
@@ -608,7 +639,7 @@ export function ChatPage() {
               </Link>
             )}
             {sessionId && <IconButton disabled={historyLocked} aria-expanded={messageSearch.open} label="查找会话消息" ref={messageSearch.triggerRef} onClick={messageSearch.openSearch}><Search aria-hidden="true" /></IconButton>}
-            {loadedSession?.branchFromSessionId && <Link className="ui-button ui-button--ghost" to={`/chat/${loadedSession.branchFromSessionId}${loadedSession.branchFromMessageId ? `?messageId=${encodeURIComponent(loadedSession.branchFromMessageId)}` : ''}`}>查看来源会话</Link>}
+            {loadedSession?.branchFromSessionId && <Link className="ui-button ui-button--ghost" to={chatSessionUrl(loadedSession.branchFromSessionId, urlKnowledgeBaseId, loadedSession.branchFromMessageId)}>查看来源会话</Link>}
           </header>}
           {!sessionId && draftDocumentIds.length > 0 && <p className="ui-inline-notice">仅检索所选 {draftDocumentIds.length} 份文档的版本；切换知识库将重选范围。</p>}
           {currentSession?.documents?.length ? <details className="ui-inline-notice"><summary>仅检索指定的 {currentSession.documents.length} 份文档</summary><ul>{currentSession.documents.map((document) => <li key={document.id}><Link to={`/documents?documentId=${encodeURIComponent(document.id)}`}>{document.filename}</Link></li>)}</ul></details> : null}
@@ -661,7 +692,7 @@ export function ChatPage() {
             </div>}
             {thread.loading ? (
               <LoadingSkeleton announce columns={1} compact rows={5} />
-            ) : thread.messages.length === 0 && !thread.pendingQuestion && !thread.failedSend && !thread.unconfirmedSend && !thread.stoppedStream ? (
+            ) : thread.messages.length === 0 && !preparingHomeQuestion && !thread.pendingQuestion && !thread.failedSend && !thread.unconfirmedSend && !thread.stoppedStream ? (
               sessionId ? null : (
                 <ChatEmptyState
                   documentCount={draftDocumentIds.length}
@@ -669,11 +700,13 @@ export function ChatPage() {
                   onSuggest={(text) => { if (!interactionLocked) setDraft((current) => current ? current + "\n\n" + text : text); }}
                   knowledgeBases={knowledgeBases}
                   loading={sessionStore.knowledgeBasesLoading}
+                  error={sessionStore.knowledgeBasesError}
+                  onRetry={() => void reloadKnowledgeBases()}
                   onSelect={(id) => {
                     if (interactionLocked) return;
                     const ids = draftKnowledgeBaseIds.includes(id) ? draftKnowledgeBaseIds.filter((value) => value !== id) : [...draftKnowledgeBaseIds, id];
                     if (ids.length > 5) { toast.error('每个会话最多选择 5 个知识库。'); return; }
-                    setSearchParams(ids.length ? { knowledgeBaseId: ids[0], ...(ids.length > 1 ? { knowledgeBaseIds: ids.join(',') } : {}) } : {});
+                    setSearchParams(ids.length ? { knowledgeBaseId: ids[0], ...(ids.length > 1 ? { knowledgeBaseIds: ids.join(',') } : {}) } : {}, { state: draftNavigationState });
                   }}
                   selectedIds={draftKnowledgeBaseIds}
                   disabled={interactionLocked}
@@ -729,6 +762,19 @@ export function ChatPage() {
                     regenerating={thread.regeneratingId === message.id}
                   />
                 ))}
+
+                {preparingHomeQuestion && <>
+                  <article className="chat-msg chat-msg--user is-pending">
+                    <div className="chat-msg__body"><p className="chat-msg__content">{preparingHomeQuestion.question}</p></div>
+                  </article>
+                  <article className="chat-msg chat-msg--assistant is-pending">
+                    <div className="chat-msg__body">
+                      <ChatAssistantLabel />
+                      <p className="chat-msg__content">正在准备对话…</p>
+                      <LoadingSkeleton columns={1} compact rows={2} />
+                    </div>
+                  </article>
+                </>}
 
                 <ChatStreamView streamText={thread.streamText} question={thread.pendingQuestion} citations={thread.streamingCitations}
                   focusedIndex={focusedCitation?.messageId === 'streaming' ? focusedCitation.index : null}
@@ -867,14 +913,14 @@ export function ChatPage() {
         )}
       </div>
 
-      {documentPickerOpen && <ChatDocumentPicker knowledgeBases={knowledgeBases} onClose={() => setDocumentPickerOpen(false)} onSelect={(documents) => { setDocumentPickerOpen(false); navigate(documentChatUrl(documents)); }} />}
+      {documentPickerOpen && <ChatDocumentPicker knowledgeBases={knowledgeBases} onClose={() => setDocumentPickerOpen(false)} onSelect={(documents) => { setDocumentPickerOpen(false); navigate(documentChatUrl(documents), { state: draftNavigationState }); }} />}
       {bookmarkTarget && <ChatBookmarkDialog key={bookmarkTarget.id} target={{ messageId: bookmarkTarget.id, sessionId: bookmarkTarget.sessionId, bookmark: bookmarkTarget.bookmark }}
         onClose={() => setBookmarkTarget(null)} onUpdated={thread.updateMessageBookmark} onInaccessible={thread.handleAccessLost} />}
       {bookmarksOpen && <ChatBookmarksDialog onClose={() => setBookmarksOpen(false)} onUpdated={thread.updateMessageBookmark} onInaccessible={thread.handleAccessLost} onSelect={(item) => {
         if (sessionBusyRef.current || thread.hasPendingWrite()) return;
         messageSearch.clear(); setBookmarksOpen(false); setRailOpen(false);
         if (item.sessionId === sessionId && thread.messages.some((message) => message.id === item.messageId)) void loadMessageContext(item.messageId);
-        navigate(`/chat/${item.sessionId}?messageId=${encodeURIComponent(item.messageId)}`);
+        navigate(chatSessionUrl(item.sessionId, urlKnowledgeBaseId, item.messageId));
       }} />}
       {searchDialogOpen && <ChatSearchDialog onClose={() => setSearchDialogOpen(false)} onSelect={(item) => {
         if (sessionBusyRef.current || thread.hasPendingWrite()) return;
@@ -884,7 +930,7 @@ export function ChatPage() {
         if (item.sessionId === sessionId && thread.messages.some((message) => message.id === item.messageId)) {
           void loadMessageContext(item.messageId);
         }
-        navigate(`/chat/${item.sessionId}?messageId=${encodeURIComponent(item.messageId)}`);
+        navigate(chatSessionUrl(item.sessionId, urlKnowledgeBaseId, item.messageId));
       }} />}
 
       <ChatSessionActionDialogs actions={sessionActions} />
@@ -915,11 +961,13 @@ export function ChatPage() {
  * Draft-state body. Absorbs what used to be a separate `/chat` landing page.
  */
 function ChatEmptyState({
-  documentCount = 0, knowledgeBases, loading, selectedIds, disabled, onSelect, composer, onSuggest,
+  documentCount = 0, knowledgeBases, loading, error, onRetry, selectedIds, disabled, onSelect, composer, onSuggest,
 }: {
   documentCount?: number;
   knowledgeBases: Array<{ id: string; name: string; description: string }>;
   loading: boolean;
+  error: string;
+  onRetry: () => void;
   selectedIds: string[];
   disabled: boolean;
   onSelect: (id: string) => void;
@@ -938,7 +986,11 @@ function ChatEmptyState({
         <Button disabled={disabled} leadingIcon={<Search aria-hidden="true" />} onClick={() => onSuggest('请查找资料中的相关规定，说明适用条件并标注出处。')} variant="secondary">查找制度规定</Button>
       </div>
       <div className="chat-launcher__scope-heading"><span>继续探索你的知识库</span><Link to="/knowledge-bases">查看全部<ArrowUpRight aria-hidden="true" /></Link></div>
-      {loading ? <LoadingSkeleton announce columns={3} rows={1} /> : knowledgeBases.length === 0 ? <EmptyState
+      {loading ? <LoadingSkeleton announce columns={3} rows={1} /> : error && knowledgeBases.length === 0 ? <EmptyState
+        action={<Button onClick={onRetry} variant="secondary">重试知识库</Button>}
+        description={error}
+        title="知识库暂不可用"
+      /> : knowledgeBases.length === 0 ? <EmptyState
         action={<Link className="ui-button ui-button--primary" to="/knowledge-bases?intent=create"><span>新建知识库</span></Link>}
         description="AI 问答基于知识库中的文档作答。先创建一个知识库并导入文档。"
         title="还没有可提问的知识库"

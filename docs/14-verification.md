@@ -389,3 +389,68 @@ C01/C02/C04/C05通过上述部署范围；C03行为Red/Break不适用，本次�
 证据入口：baseline.json、guards-red.log/guards-green.log、batch-delete-red.log、guards-postgres.log、backend-final-checks.json、frontend-checks.json、compose-smoke.log、init/start日志、acceptance/evaluation-runs.json与manual-answer-review.json、stream-shutdown.json、backup/restore日志与restore-verification.json、access-acceptance.json、optional-monitoring.json、browser-*.jpg及最终verification.json。包含真实凭据的runtime.env和备份仅留在被忽略的本地目录且权限受限，不进入发布包。
 
 剩余边界：六题仅为有限合成样本，非总体模型质量保证；生产域名/TLS、外部网关真实客户端IP、用户语料、MinIO及启用OCR要在实际目标配置复验。镜像提供OCR工具但本轮默认关闭。SSE没有周期心跳、worker没有各自独立心跳、文本超大资料统一预算、迁移版本台账及多实例仍在待办，当前单实例发布不承诺这些能力。
+
+### BENCH-RAG-001：性能与回答质量基线（2026-11-21）
+
+状态：测量及结果核对完成，发现的质量/性能问题仍在有效待办。用户授权实际测试性能与质量；任务为Exploration / L3，固定应用代码dev@7736aff。本轮仅增加隔离测量材料和文档记录，未修改应用代码或默认配置。
+
+环境为Apple M5、10核、32 GiB主机，Go 1.27.4原生单后端，OrbStack独立PostgreSQL16/pgvector0.8.7和Redis；专用端口18880/15433/16380与上传目录。空库执行全部迁移并设1024维向量列，模型为DeepSeek Flash、本地Qwen3 Embedding 0.6B与本地Q8_0 Reranker。OTLP导出关闭；隔离环境聊天限流提高至10,000/min。原业务服务和数据库未迁移、重启或写入。
+
+- 质量：6篇合成Markdown真实入库，得到33个切片；36题参考事实在调用前固定，27道有依据、9道缺资料，全部流式完成。主代理逐题对照原文，两位子代理各独立核查18题，严格完整通过33/36（91.7%），部分3题；没有领域专家人工或盲评。E05漏掉审批条件，T02/T03为明示完整性/操作含义不足；9道缺资料题未编造所求值。34个answered、2个no_basis不能直接解释为正确率。
+- 检索：TopN30/TopK5、显式threshold=0的原问句排名对照，完整必要依据进入Top5分别为纯向量26/27、混合27/27、混合+精排27/27；默认0.3阈值则26/27。E05重写查询下审批片段精排分约0.0241，诊断设0时可取到，0.3时被过滤。诊断未改库配置或覆盖原结果。
+- 容量：1,000/10,000条确定性随机归一化向量，分别对应100/1,000份元数据文档；列表与向量检索、并发1/4/16、每组1,000次，共12,000次全部成功。10,000向量检索查询向量缓存100%命中，关闭关键词/精排；P95为30.3/146.1/589.7 ms，观察吞吐34.4/36.0/37.9 req/s。EXPLAIN ANALYZE显示默认计划顺序扫描10,000个chunks、连接1,000份documents并排序，约32 ms；没有使用HNSW，不称ANN索引基准。
+- 流式：固定10个有依据问题、独立会话及请求ID，两轮顺序1→2→4与4→2→1，每档40条，共120条全部knowledge_base/answered并收到done，无降级。合并首个非空delta P50为3.82/4.14/3.95 s、P95为9.41/7.77/5.14 s；完成P95为11.63/8.10/5.48 s。远端模型及分时环境有波动，不能推导并发加速或最大容量；会话创建不在计时内，HTTP连接不复用。
+
+测量入口、原始样本与详情位于 `output/benchmark-20261121/`：report.md、cases.json、environment.json、retrieval-samples.jsonl、quality-answers.jsonl、quality-review.json、component-*-summary.json、stream*-summary.json、vector-10000-explain.json、summary.json、verification.json及manifest.json。目录被Git忽略，克隆后不保证存在。private-env.json/compose.env含凭据，仅本地受限保留，不进入分享包。样本、脚本、二进制和版本均有哈希；初轮performance脚本归档为performance-initial.py。
+
+C01/C05覆盖上述固定数据、真实服务与目标；C02当前server/migrate/bootstrap-admin构建通过；C03计时/SSE分帧/中文/不完整事件及分位数3项检查通过，独立复算原始统计一致，初始累计hitRate差值不作本轮命中率、最终按hits/misses增量重算；没有应用规则改动，不做行为Red/Break。C04为实测链路与测量程序检查，未重跑全量应用测试。C06绑定7736aff及本轮输入/产物；未查询远端CI或发布。157次流式调用包含1预检、36质量、120性能；用量记录为157次意图、155次回答，总267,412 tokens，不推测费用。所有测试进程及专用容器已停止，测试卷和证据保留。
+
+限于短篇合成语料、同一主机、单个远端Chat模型与有限样本；未覆盖多轮质量、持续饱和负载、生产网络/代理、浏览器、真实业务语料、MinIO或OCR。后续优化需明确目标、保持基线和保留题集，并重新测量。
+
+### BENCH-SUITE-001：仓库内可复用基准工具（2026-11-21）
+
+状态：实现完成，本地验收通过；远端CI未运行。用户授权将BENCH-RAG-001测试纳入项目并完善；任务为Infrastructure / L3。保留上一轮三份文档的既有未提交记录，应用基线为dev@7736aff；没有修改业务实现、默认模型或真实业务库。
+
+交付入口为 [benchmarks/README.md](../benchmarks/README.md) 与 `python3 -m benchmarks`。独立Docker项目以run UUID标记容器/卷/网络，数据库/Redis无宿主端口，API仅回环；进程环境白名单、不读取根.env，只允许显式十项模型配置。空库迁移、向量维度与身份标记事务提交；启动/采样校验输入和镜像，清理校验标签、确定资源名和挂载卷。默认fixture模型，real模式允许原已授权模型；请求预算不等同Provider次数或金额。
+
+- 语料：6篇虚构Markdown、48道固定题，新增金额/时间/文件数/退款/回退边界；全部来源锚点通过校验。retrieval、quality、stream、load分别保存计划及样本，未知和已失败记录不自动重跑；reconcile按原请求ID只读恢复消息，时延保持未知。SSE有真正总deadline，畸形/错ID/error/EOF不算done成功。
+- 报告：计划/成功/失败/未知/未运行分母独立，检索每模式单独统计，缓存按计数增量重算。质量审核绑定答案哈希及审核者/方法，缺资料处理失败不能标pass；缺审核不通过基线门禁。比较匹配题序、语料、模型、维度、工作负载、脚本/环境，后端源码可变化。导出使用白名单并排除private凭据。
+- C02/C04：Python编译、命令help、链接及diff检查通过；28项标准库unittest通过。CI增加相同单元检查、无真实密钥的Compose smoke及报告artifact；本轮未推送或查询远端CI。
+- C03：独立审查指出的6个行为缺陷先由回归用例明确失败（5 fail/1 error，均为目标行为、无编译失败），修复后通过。另在隔离副本移除同名卷归属检查、未审核比较门禁、SSE总deadline，三项Break均因目标断言失败。初轮心跳timeout分类失败记录保留并已修正。
+- C05：最终fixture容器smoke从空库迁移、33切片入库、检索/问答/流式/容量共8组37样本全部成功并清理。real模式六题联调24次检索及6回答成功，审核5完整/1部分；重复命令30个样本哈希和预算不变，停止恢复、reconcile、审核导入及导出通过。CLI最终退出码调整后再跑完整fixture和两题真实回归，结果见证据回执；真实联调用于验证工具，不取代48题完整质量评估。
+- C06：源码与数据逐文件hash、镜像ID、各run manifest、样本和日志在 `output/bench-suite-20261121/` 及 `output/benchmarks/suite-*/`，最终内容身份见verification.json。初轮Redis镜像隐式匿名卷被加强后的保护拒绝；确认该次创建的精确容器/卷后清理，改为显式带标签redis_data卷，后续smoke通过。根.env和用户原服务未修改，专用服务在验收后停止；output忽略且含私密配置，分享只用export产物。
+
+本轮只把测试纳入工程，不调整精排阈值或优化向量查询。Open-loop/持续饱和压测、自动事实裁判、业务语料/多轮质量、MinIO/OCR仍不在本套件结果中；已知结果边界写入使用文档。LESSONS记录匿名卷实际事件，不新增未经验证的常驻规则。
+
+### BUG-PALETTE-001：命令面板焦点轮廓裁切（2026-11-22）
+
+状态：本地修复与受影响验收完成，未提交、推送或发布。任务为Bugfix / L2，基于dev@7736aff及既有未提交输入；保留原Chat、benchmarks及文档差异和暂存状态。本次应用代码仅修改`frontend/src/styles/app-shell.css`，并同步前端规范与交接。
+
+- C01：截图问题在浏览器复现。裸输入框继承全局2px轮廓及2px正偏移，向外扩4px；搜索行没有上下留白，顶部被面板`overflow: hidden`裁切，底部越过分隔线。改为搜索行使用主题焦点色和负偏移的`outline`，包含图标与输入框；输入不重复描边，结果按钮继续使用原有可见轮廓。
+- C02/C04：Node24.22.3下，`npm test -- src/components/CommandPalette.test.tsx src/styles/style-contracts.test.ts src/styles/viewport-units.test.ts src/layouts/AppShell.test.tsx --maxWorkers 2`的4文件/51项通过；`npm run lint`、`npm run typecheck:test`和`npm run build`通过，生产构建确认11个路由分包。测试子进程移除`RAG_TEST_*`，不修改持久配置。
+- C03：修复前实际源码的浏览器截图与几何断言明确检出顶部越界4px。最终同一检查脚本在隔离浏览器还原快照中的旧搜索行CSS，再次因相同目标断言失败（退出1）；最终样式通过（退出0）。该同语义回退同时核验焦点规则的测试有效性，没有以构建或夹具失败充数。
+- C05：Google Chrome157.0.8103.79、1920×1080、真实生产路由与合成HTTP夹具，浅色/深色岩板蓝、浅色灰绿及强制高对比模式共16项通过。覆盖完整内侧轮廓、至少3:1对比、方向键、Tab/Shift+Tab、加载中不变高、快捷键重开、Escape归焦和页面无横向溢出；主代理审读浅/深色截图。没有访问业务API、数据库或模型。
+- C06：修复前快照、最终输入/构建产物SHA-256、脚本、命令日志、截图及Red/Green回执在`output/search-focus-20261122/`，入口为`verification.json`。该目录被Git忽略，不是克隆后的必备资料；未查询远端CI，本地结果不代表发布验收。
+
+验收脚本首次拦截范围误包含Vite源码路径，已收窄至`/api/v1/`；这次夹具错误不计入Red。快捷键重开时首次立即读取出现暂态计算值，绘制后为正确轮廓；补齐两帧绘制等待后再做最终Red/Green，原始观察保留。未改变产品键盘逻辑，未覆盖其他浏览器、读屏器或触屏；本次不触发后端、模型、迁移与发布验收。LESSONS无新增事项。
+
+### FEAT-HOME-001：首页提问直接进入对话（2026-11-22）
+
+状态：本地实现与受影响验收完成，未提交、推送或发布。任务为Implementation / L3，风险来自跨路由的一次性自动提交、异步创建及账号归属。基线为dev@7736aff及已有未提交输入；保留原聊天筛选、搜索焦点、benchmarks和工程文档差异及暂存状态。
+
+- C01：从Claude桌面的kbchat会话恢复原请求与选定方案：首页点击提问或Enter直接发送并进入对话，普通`/chat?q=`仍仅预填，不能发送时保留问题。原会话在读代码时被429中断。本轮只修改首页交接、问答页编排及受影响线程生命周期，不修改API、RAG、后端、数据库或模型配置。
+- 实现：首页使用绑定账号的一次性导航意图与独立草稿，消费时从历史移除问题并保留恢复标识；刷新/Back只恢复，范围调整继续使用该草稿。加载时显示已提交问题与准备状态，失败提示读取错误与局部重试，不把失败当作没有知识库。自动发送在StrictMode重放后执行，原请求持有者继续完成流式、停止和对账；草稿转正式会话不清首段文本/引用。账号变化取消绑定的旧发送，保留新账号草稿；首页Enter包含组合状态、原生isComposing与229保护。
+- C02/C04：Node24.22.3下，`npm test -- src/pages/Home src/pages/Chat/ChatPage.test.tsx src/pages/Chat/useChatThread.test.tsx src/pages/Chat/useChatDraft.test.tsx src/pages/Chat/ChatComposer.test.tsx --maxWorkers 2`最终7文件/187项通过，包含新增17项跨页回归；`npm run lint`、`npm run typecheck:test`和`npm run build`通过，确认11个路由分包。运行前真实服务开关未启用，未访问业务服务。
+- C03：旧首页实现由“点击后应收到回答”的回归明确失败。独立核验另复现旧稿拼入回退问题、恢复后范围切换丢稿、账号取消误清新账号草稿、草稿转路由丢首段流文本；主代理补齐组合断言，修复前5项失败、12项通过，修复后17项全部通过。隔离副本删除消费后草稿恢复标识，目标刷新用例因输入丢失失败（退出1）；最终实现同一目标通过。首次Break因Vite拒绝外部worker模块导入而未执行用例，该次不算有效失败；仅在副本补齐文件读取范围后重新验证。
+- C05：Codex内置浏览器、1920×1080、生产SPA与独立Python HTTP/SSE夹具，10条页面检查记录覆盖点击/Enter直接提问、回答完成与刷新、普通q预填、慢加载准备、错误恢复及重试不自动发。请求回执确认点击和Enter各一次create/stream，刷新及普通q不增加写请求；错误及局部重试均无create/stream。最终构建再次首页提交仅一次create/stream并收到done，截图与几何核验确认一个main、无横向溢出。主代理审读最终截图，临时viewport已恢复；仅使用合成资料和账户，不是模型质量或真实业务验收。
+- C06：初始内容快照、最终相关输入/构建SHA-256、任务补丁、命令及退出码、Red/Break、独立核验材料、浏览器请求和截图位于`output/home-question-20261122/`，入口`verification.json`。该目录被Git忽略，克隆后不保证存在；未查询远端CI。本轮仅本地前端交付，后端、迁移、真实模型/存储和发布验收不适用。
+
+初轮测试的文本选择器同时命中问题正文与textarea、重试按钮名称及ByRole选项类型已按真实语义修正，失败日志保留；这些夹具/类型问题不算行为Red。浏览器一次中间刷新未取到动态路由模块，随后刷新恢复，另一次慢知识库的定位等待触及工具deadline；最终页面及请求回执核对通过，不将超时本身算成功。LESSONS记录账号取消误清新账号草稿的真实事件。
+
+### DOC-UX-001：用户体验评审文档整理（2026-11-23）
+
+任务：Documentation / L1。用户要求将本轮用户视角评审整理成文档；基线为dev@7736aff及原有未提交内容。交付 [用户体验评审与改进建议](18-user-experience-review.md)，同步导航、需求草案关联和交接；R01–R09的定义、原优先级、原建议顺序及未确认状态保留。
+
+材料来源为同日UX-REVIEW-20261123：本地管理员、1920×1080页面观察及前端代码核对，使用现有演示资料和历史问答；未新增上传、模型提问或配置保存。普通成员、移动端、101库运行及后端部署版本未验收，历史BENCH-RAG-001未重跑。文档整理本身不产生新的应用或模型通过结论。
+
+文档验收检查结构、相对链接及锚点、R01–R09映射、事实与建议的证据等级，以及原工作区内容保留；结果和最终内容SHA-256见`output/ux-review-20261123/documentation/verification.json`。原始评审快照保持不变；本地output目录被Git忽略，克隆后不保证存在。应用测试、构建、行为Red/Break和真实服务复验不适用于本次纯文档范围；未查询远端CI，未提交、推送或发布。LESSONS无新增事项。

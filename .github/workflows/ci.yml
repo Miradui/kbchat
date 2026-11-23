@@ -24,6 +24,19 @@ jobs:
         run: python3 deploy/test_release_guards.py
       - name: Build and smoke test isolated production stack
         run: ./deploy/smoke-compose.sh
+      - name: Verify benchmark failure and isolation contracts
+        run: python3 -m unittest discover -s benchmarks/tests -v
+      - name: Smoke test benchmark with local model fixture
+        run: python3 -m benchmarks smoke --run output/benchmarks/ci-smoke
+      - name: Upload benchmark smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-smoke-report
+          path: |
+            output/benchmarks/ci-smoke/report.md
+            output/benchmarks/ci-smoke/summary.json
+          if-no-files-found: ignore
 
   observability:
     name: Observability configuration

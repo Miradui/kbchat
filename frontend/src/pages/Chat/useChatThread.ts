@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
 import { ApiError, isRateLimitError } from '../../api/client';
 import { retryNotice } from '../../components/feedback/RetryCountdown';
@@ -19,6 +19,7 @@ import type {
   KnowledgeBaseRerankFallback,
 } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
+import { tokenStore } from '../../store/tokenStore';
 import { pendingChatRequestStore } from './pendingChatRequestStore';
 import type { PendingChatRequest } from './pendingChatRequestStore';
 import { pendingChatEditStore } from './pendingChatEditStore';
@@ -94,6 +95,7 @@ export function useChatThread({
   onQuestionSaved,
 }: UseChatThreadOptions) {
   const isDraft = !sessionId;
+  const authRevision = useSyncExternalStore(tokenStore.subscribe, tokenStore.getRevision);
   const [session, setSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
@@ -119,6 +121,7 @@ export function useChatThread({
   const mountedRef = useRef(true);
   const loadRequestRef = useRef(0);
   const sendTokenRef = useRef<symbol | null>(null);
+  const boundSendRevisionRef = useRef<number | undefined>(undefined);
   const regenerateTokenRef = useRef<symbol | null>(null);
   const editTokenRef = useRef<symbol | null>(null);
   const sendCheckTokenRef = useRef<symbol | null>(null);
@@ -162,6 +165,33 @@ export function useChatThread({
     reconcileSequenceRef.current += 1;
     sendCheckTokenRef.current = null;
   }, []);
+
+  const discardAccountSend = useCallback(() => {
+    // A replaced account is not an access-loss response. In particular, do not
+    // call the new account's draft-clearing callback for the old operation.
+    sendTokenRef.current = null;
+    sendAbortRef.current?.abort();
+    sendAbortRef.current = null;
+    draftSendSessionRef.current = null;
+    cancelRequestedRef.current = null;
+    clearAutoChecks();
+    setSending(false);
+    setPendingQuestion('');
+    setFailedSend(null);
+    setUnconfirmedSend(null);
+    setStoppedStream(null);
+    setRateLimitNotice(null);
+    setStreamingAnswer('');
+    setStreamingCitations([]);
+    streamingAnswerRef.current = '';
+    streamingCitationsRef.current = [];
+  }, [clearAutoChecks, setStreamingAnswer]);
+
+  useEffect(() => {
+    if (sendTokenRef.current && boundSendRevisionRef.current !== undefined && boundSendRevisionRef.current !== authRevision) {
+      discardAccountSend();
+    }
+  }, [authRevision, discardAccountSend]);
 
   const handleAccessLost = useCallback((caught: unknown, targetSessionId: string) => {
     if (!(caught instanceof ApiError) || (caught.status !== 403 && caught.status !== 404)) return false;
@@ -289,17 +319,16 @@ export function useChatThread({
     setRegeneration(null);
     setRegeneratingId(null);
     setEditingId(null);
-    setRerankFallback(null);
-    setStreamingAnswer('');
-    setStreamingCitations([]);
-    setStoppedStream(null);
-    setRateLimitNotice(null);
-    streamingAnswerRef.current = '';
-    streamingCitationsRef.current = [];
     regenerateTokenRef.current = null;
     regenerationCheckTokenRef.current = null;
 
     if (!continuingDraftSend) {
+      setRerankFallback(null);
+      setStreamingAnswer('');
+      setStreamingCitations([]);
+      setRateLimitNotice(null);
+      streamingAnswerRef.current = '';
+      streamingCitationsRef.current = [];
       sendAbortRef.current?.abort();
       sendAbortRef.current = null;
       sendTokenRef.current = null;
@@ -397,7 +426,7 @@ export function useChatThread({
     return clearAutoChecks;
   }, [clearAutoChecks, pendingSendRequest, scheduleAutoChecks]);
 
-  const send = useCallback(async (question: string, options: { resend?: boolean } = {}) => {
+  const send = useCallback(async (question: string, options: { resend?: boolean; expectedAuthRevision?: number } = {}) => {
     const retryOf = options.resend ? unconfirmedSend?.request ?? null : null;
     if (
       !question
@@ -409,10 +438,12 @@ export function useChatThread({
     if (unconfirmedSend && !options.resend) return;
     if (stoppedStream && !stoppedStream.resumable && !options.resend) return;
     if (isDraft && draftScopeMode !== 'auto' && !draftKnowledgeBaseId && !draftKnowledgeBaseIds?.length) return;
+    if (options.expectedAuthRevision !== undefined && options.expectedAuthRevision !== tokenStore.getRevision()) return;
 
     const token = Symbol('send-message');
     invalidateHistory();
     sendTokenRef.current = token;
+    boundSendRevisionRef.current = options.expectedAuthRevision;
     clearAutoChecks();
     setSending(true);
     setFailedSend(null);
@@ -439,6 +470,10 @@ export function useChatThread({
         const scope = draftScopeMode === 'auto' ? undefined : draftKnowledgeBaseIds?.length ? draftKnowledgeBaseIds : draftKnowledgeBaseId;
         const created = await (draftDocumentIds?.length ? createChatSession(scope, '', draftDocumentIds) : createChatSession(scope, ''));
         if (!mountedRef.current || sendTokenRef.current !== token) return;
+        if (options.expectedAuthRevision !== undefined && options.expectedAuthRevision !== tokenStore.getRevision()) {
+          discardAccountSend();
+          return;
+        }
         targetSessionId = created.id;
         activeSessionRef.current = created.id;
         draftSendSessionRef.current = created.id;
@@ -605,6 +640,7 @@ export function useChatThread({
     }
   }, [
     clearAutoChecks,
+    discardAccountSend,
     handleAccessLost,
     draftKnowledgeBaseId,
     draftKnowledgeBaseIds,

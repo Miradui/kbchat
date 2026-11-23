@@ -18,3 +18,19 @@
 - 处理：保留生成前的标题/时间戳快照，在消息事务的条件更新中命名；手动改名保留而回答仍可提交。补验默认/自定义标题、标题写入失败的消息回滚、检索失败重放及流式取消；移除时间戳保护的最小Break再次检出同一问题。
 - 出处：[任务验收](14-verification.md#feat-slim-001已确认功能收敛2026-11-19)、[事务写入](../backend/internal/repository/chat_repository.go)及[首问回归](../backend/internal/service/chat_session_title_test.go)；详细源码快照与失败/通过回执在`output/feature-simplification-20261119/`。
 - Seen **1×**：2026-11-19 / FEAT-SLIM-001。初始复核、Red和Break属于同日同一工作事件，不累计额外次数；未晋升正式规则。
+
+## LES-003：隔离容器也要检查镜像隐式数据卷
+
+- 事件：2026-11-21的BENCH-SUITE-001将资源归属检查扩展到挂载卷后，Redis镜像自动创建的匿名/data卷没有run标签，真实smoke因此拒绝继续初始化和自动清理。
+- 影响：测试停在独立环境准备阶段，保护没有放行未知卷；用户原服务未受影响。确认本次精确容器、创建时间及匿名卷后完成限定清理。
+- 处理：给Redis显式配置带run标签的redis_data卷，补充配置断言；后续完整smoke通过。资源检查同时覆盖标签查询、Compose将使用的确定名称与实际挂载，不能只检查能被项目标签查到的资源。
+- 出处：[任务验收](14-verification.md#bench-suite-001仓库内可复用基准工具2026-11-21)、[隔离运行定义](../benchmarks/runtime.py)及[保护测试](../benchmarks/tests/test_benchmark.py)；失败与限定清理回执在output/bench-suite-20261121和suite-smoke-002。
+- Seen **1×**：2026-11-21 / BENCH-SUITE-001。仅记录本次实测事件，未晋升常驻规则。
+
+## LES-004：账号取消不能冒充权限失败
+
+- 事件：2026-11-22的FEAT-HOME-001初版在旧账号首页会话创建返回时，用本地403阻止向新账号发送。线程的权限丢失处理调用了已经更新为新账号的回调，清空了新账号已有草稿。
+- 影响与证据：隔离夹具及主代理组合回归均复现：切换前后的新账号草稿可见，旧创建返回后为空；消息请求确实被阻止，但发生数据丢失。最初只断言“未发送”没有检出该后果。
+- 处理：首页自动提交绑定认证版本，由线程取消旧操作，不进入权限失败回调；保留新的账号草稿及旧请求的持久化对账状态。补验创建前/创建中切换、迟到返回不发送、不展示旧问题、不清新稿，以及首问正常完成。
+- 出处：[任务验收](14-verification.md#feat-home-001首页提问直接进入对话2026-11-22)、[线程取消](../frontend/src/pages/Chat/useChatThread.ts)与[跨页回归](../frontend/src/pages/Home/HomeQuestionFlow.test.tsx)；Red与最终结果位于output/home-question-20261122。
+- Seen **1×**：2026-11-22 / FEAT-HOME-001。仅记录本次真实失败与修复，未晋升常驻规则。

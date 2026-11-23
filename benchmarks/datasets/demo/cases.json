@@ -1,0 +1,1008 @@
+{
+  "datasetId": "kbchat-quality-48-v2",
+  "description": "Source-grounded synthetic questions; gold facts are not sent to the generation model.",
+  "cases": [
+    {
+      "id": "E01",
+      "group": "employee",
+      "category": "supported",
+      "question": "按青禾科技演示指南，新员工入职当天几点报到、带什么材料，设备和账号什么时候发放？",
+      "expectedFacts": [
+        "当天上午9:30前台报到",
+        "身份证原件和银行卡信息",
+        "第一个工作日发放设备和账号"
+      ],
+      "evidence": [
+        {
+          "doc": "employee_onboarding",
+          "anchors": [
+            "上午9:30",
+            "身份证原件",
+            "银行卡信息",
+            "第一个工作日"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E02",
+      "group": "employee",
+      "category": "conditions",
+      "question": "青禾科技正式员工每周最多远程办公几天，什么时候申请、谁批准，处理客户敏感资料有什么设备和网络要求？",
+      "expectedFacts": [
+        "正式员工每周最多2天",
+        "前一个工作日17:00前提交",
+        "直属负责人批准",
+        "使用公司设备和批准的网络连接"
+      ],
+      "evidence": [
+        {
+          "doc": "employee_onboarding",
+          "anchors": [
+            "正式员工",
+            "每周最多申请2天",
+            "前一个工作日17:00",
+            "直属负责人批准",
+            "公司设备和批准的网络连接"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E03",
+      "group": "employee",
+      "category": "conditions",
+      "question": "青禾科技计划休假和紧急病假分别怎么申请，最晚什么时候补手续？",
+      "expectedFacts": [
+        "计划休假至少提前2个工作日",
+        "直属负责人审批后人力资源备案",
+        "紧急病假先通知负责人",
+        "当天补交申请"
+      ],
+      "evidence": [
+        {
+          "doc": "employee_onboarding",
+          "anchors": [
+            "至少提前2个工作日",
+            "人力资源团队备案",
+            "紧急病假",
+            "当天补交申请"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E04",
+      "group": "employee",
+      "category": "supported",
+      "question": "按青禾科技指南，电脑无法开机时工单要写什么，能把账号密码放进工单吗？",
+      "expectedFacts": [
+        "提交IT工单",
+        "设备编号、出现时间、报错截图",
+        "不得包含密码"
+      ],
+      "evidence": [
+        {
+          "doc": "employee_onboarding",
+          "anchors": [
+            "IT工单",
+            "设备编号、出现时间和报错截图",
+            "不得包含密码"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E05",
+      "group": "employee",
+      "category": "conditions",
+      "question": "青禾演示制度里北京和其他城市的住宿上限各是多少，是否直接按上限发补贴，超标前要做什么？",
+      "expectedFacts": [
+        "北京属于一线城市、每晚450元以内",
+        "其他城市每晚350元以内",
+        "按实际支出报销",
+        "超标费用发生前取得部门负责人书面批准"
+      ],
+      "evidence": [
+        {
+          "doc": "employee_expenses",
+          "anchors": [
+            "一线城市住宿",
+            "450元"
+          ]
+        },
+        {
+          "doc": "employee_expenses",
+          "anchors": [
+            "其他城市住宿",
+            "350元"
+          ]
+        },
+        {
+          "doc": "employee_expenses",
+          "anchors": [
+            "北京、上海、广州和深圳",
+            "住宿按实际支出报销"
+          ]
+        },
+        {
+          "doc": "employee_expenses",
+          "anchors": [
+            "发生前取得部门负责人书面批准"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E06",
+      "group": "employee",
+      "category": "conditions",
+      "question": "青禾差旅报销从提交材料、审核到付款的时限分别是什么，材料补交和付款日遇非工作日怎么办？",
+      "expectedFacts": [
+        "出差结束后15个自然日内提交",
+        "收到完整材料后5个工作日审核",
+        "每月25日付款、非工作日顺延",
+        "补齐材料后重新计算审核时限"
+      ],
+      "evidence": [
+        {
+          "doc": "employee_expenses",
+          "anchors": [
+            "15个自然日"
+          ]
+        },
+        {
+          "doc": "employee_expenses",
+          "anchors": [
+            "5个工作日",
+            "每月25日",
+            "非工作日顺延",
+            "完整材料重新提交后计算"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E07",
+      "group": "employee",
+      "category": "cross_document",
+      "question": "按青禾资料，电脑无法开机和差旅发票缺失分别应找谁处理，各有什么禁止事项？",
+      "expectedFacts": [
+        "设备问题提交IT工单",
+        "工单不能包含密码",
+        "缺发票先联系财务确认补充方式",
+        "不得用无关票据替代"
+      ],
+      "evidence": [
+        {
+          "doc": "employee_onboarding",
+          "anchors": [
+            "IT工单",
+            "不得包含密码"
+          ]
+        },
+        {
+          "doc": "employee_expenses",
+          "anchors": [
+            "缺少发票时先联系财务",
+            "不得用无关票据替代"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E08",
+      "group": "employee",
+      "category": "cross_document",
+      "question": "青禾的计划休假申请和出差报销提交分别提前或限多少天，它们是不是都按工作日计算？",
+      "expectedFacts": [
+        "计划休假至少提前2个工作日",
+        "出差结束后15个自然日提交",
+        "工作日与自然日不能混用"
+      ],
+      "evidence": [
+        {
+          "doc": "employee_onboarding",
+          "anchors": [
+            "至少提前2个工作日"
+          ]
+        },
+        {
+          "doc": "employee_expenses",
+          "anchors": [
+            "15个自然日"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E09",
+      "group": "employee",
+      "category": "missing_information",
+      "question": "青禾科技所有正式员工统一有多少天年假？请从演示资料给出准确天数。",
+      "expectedRefusal": "资料不承诺具体年假天数，余额以个人账号为准；不得编造统一天数。",
+      "evidence": []
+    },
+    {
+      "id": "E10",
+      "group": "employee",
+      "category": "missing_information",
+      "question": "青禾科技报销开票的完整公司抬头和税号分别是什么？",
+      "expectedRefusal": "资料未提供完整开票抬头或税号；不能把演示公司名当作完整开票信息。",
+      "evidence": []
+    },
+    {
+      "id": "E11",
+      "group": "employee",
+      "category": "missing_information",
+      "question": "请给出青禾科技实际IT工单系统的完整网址和支持电话。",
+      "expectedRefusal": "资料没有工单网址和电话号码，不得编造链接或联系人。",
+      "evidence": []
+    },
+    {
+      "id": "E12",
+      "group": "employee",
+      "category": "misleading_assertion",
+      "question": "有人说青禾正式员工每周可远程3天且不用审批。请按知识库核对真实上限和申请要求。",
+      "expectedFacts": [
+        "纠正为最多2天",
+        "前一工作日17:00前申请",
+        "直属负责人批准"
+      ],
+      "evidence": [
+        {
+          "doc": "employee_onboarding",
+          "anchors": [
+            "每周最多申请2天",
+            "前一个工作日17:00",
+            "直属负责人批准"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P01",
+      "group": "product",
+      "category": "supported",
+      "question": "按星舟演示产品说明，专业版成员上限、存储和月费是多少，月费按团队还是成员收费？",
+      "expectedFacts": [
+        "100人",
+        "1TB",
+        "699元/团队每月",
+        "按团队而非每位成员收费"
+      ],
+      "evidence": [
+        {
+          "doc": "product_plans",
+          "anchors": [
+            "专业版",
+            "100人",
+            "1TB",
+            "699元"
+          ]
+        },
+        {
+          "doc": "product_plans",
+          "anchors": [
+            "月费按团队计算",
+            "不是每位成员的价格"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P02",
+      "group": "product",
+      "category": "conditions",
+      "question": "星舟资料导入的单文件上限、单次文件数、支持格式和密码PDF处理方式是什么？",
+      "expectedFacts": [
+        "50MB",
+        "一次最多100个文件",
+        "PDF、DOCX、TXT和Markdown",
+        "带密码PDF先解除保护"
+      ],
+      "evidence": [
+        {
+          "doc": "product_plans",
+          "anchors": [
+            "单个附件最大50MB",
+            "一次最多选择100个文件",
+            "PDF、DOCX、TXT和Markdown",
+            "带密码的PDF应先解除保护"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P03",
+      "group": "product",
+      "category": "conditions",
+      "question": "星舟首次购买付费套餐申请全额退款要同时满足哪些条件，续费订单适用吗？",
+      "expectedFacts": [
+        "首次购买付费套餐",
+        "付款后7个自然日内",
+        "尚未使用批量导出",
+        "续费不适用首次购买退款政策"
+      ],
+      "evidence": [
+        {
+          "doc": "product_faq",
+          "anchors": [
+            "首次购买付费套餐",
+            "7个自然日",
+            "尚未使用批量导出",
+            "续费订单不适用"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P04",
+      "group": "product",
+      "category": "supported",
+      "question": "星舟升级和降级各什么时候生效，升级差额如何计算？",
+      "expectedFacts": [
+        "升级立即生效",
+        "按剩余订阅天数算差额",
+        "降级在当前订阅周期结束后生效"
+      ],
+      "evidence": [
+        {
+          "doc": "product_faq",
+          "anchors": [
+            "升级套餐立即生效",
+            "剩余订阅天数",
+            "当前订阅周期结束后生效"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P05",
+      "group": "product",
+      "category": "conditions",
+      "question": "星舟团队完全无法登录，服务时间和首次回复目标是什么，是否保证2小时解决？",
+      "expectedFacts": [
+        "工作日9:00至18:00在线工单服务",
+        "紧急问题在服务时段2小时内首次回复",
+        "首次回复不等于解决"
+      ],
+      "evidence": [
+        {
+          "doc": "product_faq",
+          "anchors": [
+            "工作日9:00至18:00",
+            "服务时段2小时",
+            "首次回复不等同于问题已解决"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P06",
+      "group": "product",
+      "category": "cross_document",
+      "question": "假设星舟团队现有25名成员、110GB资料，准备降到团队版。需要先整理到什么上限，降级是否立即生效？",
+      "expectedFacts": [
+        "团队版上限20人和100GB",
+        "先把成员和存储整理到目标范围",
+        "当前订阅周期结束后生效"
+      ],
+      "evidence": [
+        {
+          "doc": "product_plans",
+          "anchors": [
+            "团队版",
+            "20人",
+            "100GB"
+          ]
+        },
+        {
+          "doc": "product_faq",
+          "anchors": [
+            "降级在当前订阅周期结束后生效",
+            "需要先完成整理"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P07",
+      "group": "product",
+      "category": "conditions",
+      "question": "星舟密码重置链接多久有效，无法使用绑定邮箱时怎么办，客服会索取密码吗？",
+      "expectedFacts": [
+        "30分钟",
+        "提供账号归属证明、人工核验",
+        "客服不会索取账号密码"
+      ],
+      "evidence": [
+        {
+          "doc": "product_faq",
+          "anchors": [
+            "重置链接30分钟内有效",
+            "客服不会索取账号密码",
+            "账号归属证明由人工核验"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P08",
+      "group": "product",
+      "category": "cross_document",
+      "question": "星舟哪个套餐提供批量导出？假设首次付款仅5天但已经使用批量导出，还能按首次购买政策全额退款吗？",
+      "expectedFacts": [
+        "专业版提供批量导出",
+        "已使用批量导出不满足全额退款条件"
+      ],
+      "evidence": [
+        {
+          "doc": "product_plans",
+          "anchors": [
+            "专业版额外提供项目模板和批量导出"
+          ]
+        },
+        {
+          "doc": "product_faq",
+          "anchors": [
+            "尚未使用批量导出功能",
+            "可以申请全额退款"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P09",
+      "group": "product",
+      "category": "missing_information",
+      "question": "星舟专业版官方年付优惠价是多少？请给出资料明确公布的价格。",
+      "expectedRefusal": "只提供月费，官方年付优惠价格未给出；不得将月费乘12冒充官方年付方案。",
+      "evidence": []
+    },
+    {
+      "id": "P10",
+      "group": "product",
+      "category": "missing_information",
+      "question": "星舟协作的官方登录网址是什么？请给出完整链接。",
+      "expectedRefusal": "资料仅提到浏览器访问，没有官方网址，不得编造域名。",
+      "evidence": []
+    },
+    {
+      "id": "P11",
+      "group": "product",
+      "category": "missing_information",
+      "question": "星舟全额退款审核通过后，具体几个工作日内到账？",
+      "expectedRefusal": "资料仅说明原付款渠道退款，未承诺到账时限；7个自然日是申请条件。",
+      "evidence": []
+    },
+    {
+      "id": "P12",
+      "group": "product",
+      "category": "misleading_assertion",
+      "question": "有人承诺星舟所有套餐都含电话客服且保证离线编辑。请按资料逐项核对。",
+      "expectedFacts": [
+        "所有套餐不包含电话客服",
+        "产品未承诺离线编辑，不能保证支持"
+      ],
+      "evidence": [
+        {
+          "doc": "product_plans",
+          "anchors": [
+            "所有套餐均不包含电话客服",
+            "产品未承诺离线编辑"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "T01",
+      "group": "ops",
+      "category": "conditions",
+      "question": "青禾演示服务的RPO和RTO分别是多少、各代表什么，是否承诺所有故障都能达到？",
+      "expectedFacts": [
+        "RPO15分钟是可容忍数据丢失窗口",
+        "RTO30分钟是恢复服务目标时长",
+        "不是所有故障都保证达到"
+      ],
+      "evidence": [
+        {
+          "doc": "ops_release",
+          "anchors": [
+            "RPO为15分钟",
+            "RTO为30分钟",
+            "数据丢失窗口",
+            "目标不代表所有故障"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "T02",
+      "group": "ops",
+      "category": "supported",
+      "question": "青禾演示服务数据库全量备份、事务日志归档和附件备份的时间或频率是什么，全量备份保留多久？",
+      "expectedFacts": [
+        "数据库每天02:00全量备份",
+        "日志每15分钟归档",
+        "附件每天02:30备份",
+        "两类全量备份均保留14天"
+      ],
+      "evidence": [
+        {
+          "doc": "ops_release",
+          "anchors": [
+            "每天02:00",
+            "事务日志每15分钟归档",
+            "原始附件每天02:30",
+            "保留14天"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "T03",
+      "group": "ops",
+      "category": "conditions",
+      "question": "按青禾演示发布规范，从进入维护到恢复访问的发布顺序是什么？可以启动多个新后端吗？",
+      "expectedFacts": [
+        "维护并停止写入",
+        "一致性备份",
+        "执行审核的缺失迁移",
+        "启动一个新后端实例",
+        "检查数据库、缓存、存储和关键业务接口后恢复访问"
+      ],
+      "evidence": [
+        {
+          "doc": "ops_release",
+          "anchors": [
+            "停止写入",
+            "一致性备份",
+            "已审核的缺失迁移",
+            "一个新后端实例",
+            "关键业务接口后恢复访问"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "T04",
+      "group": "ops",
+      "category": "conditions",
+      "question": "按青禾监控手册，采集器在线且流式请求HTTP200是否就说明业务正常和回答成功，还要检查什么？",
+      "expectedFacts": [
+        "采集器在线不等于业务正常",
+        "流式HTTP200不代表回答完成",
+        "确认最终完成或错误事件"
+      ],
+      "evidence": [
+        {
+          "doc": "ops_incident",
+          "anchors": [
+            "采集器在线不等于业务服务正常",
+            "HTTP 200",
+            "最终完成或错误事件"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "T05",
+      "group": "ops",
+      "category": "supported",
+      "question": "青禾演示服务P1、P2、P3的首次响应目标分别是什么，这些是否就是恢复时限？",
+      "expectedFacts": [
+        "P1为10分钟",
+        "P2为30分钟",
+        "P3为1个工作日",
+        "首次响应是确认处理时限，不是恢复时限"
+      ],
+      "evidence": [
+        {
+          "doc": "ops_incident",
+          "anchors": [
+            "P1",
+            "10分钟",
+            "P2",
+            "30分钟",
+            "P3",
+            "1个工作日"
+          ]
+        },
+        {
+          "doc": "ops_incident",
+          "anchors": [
+            "首次响应是开始确认与处理的时限",
+            "不是恢复时限"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "T06",
+      "group": "ops",
+      "category": "conditions",
+      "question": "按青禾故障手册，应先恢复关键业务还是先调查根因，P1恢复后多久复盘，复盘包含什么？",
+      "expectedFacts": [
+        "优先恢复关键业务，再调查根因",
+        "恢复后2个工作日内复盘",
+        "时间线、根因、应急处理、负责人、验证方式"
+      ],
+      "evidence": [
+        {
+          "doc": "ops_incident",
+          "anchors": [
+            "优先恢复关键业务",
+            "P1故障恢复后2个工作日",
+            "时间线、根因、应急处理、负责人及验证方式"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "T07",
+      "group": "ops",
+      "category": "cross_document",
+      "question": "青禾的P1首次响应10分钟和RTO30分钟是同一个期限吗，能否据此承诺所有P1都在30分钟内恢复？",
+      "expectedFacts": [
+        "10分钟是P1首次确认处理响应目标",
+        "30分钟是恢复服务目标时长",
+        "二者不同，目标不保证所有故障达到"
+      ],
+      "evidence": [
+        {
+          "doc": "ops_incident",
+          "anchors": [
+            "P1",
+            "10分钟"
+          ]
+        },
+        {
+          "doc": "ops_incident",
+          "anchors": [
+            "不是恢复时限"
+          ]
+        },
+        {
+          "doc": "ops_release",
+          "anchors": [
+            "RTO为30分钟",
+            "目标不代表所有故障"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "T08",
+      "group": "ops",
+      "category": "cross_document",
+      "question": "青禾恢复演练的频率和业务检查项是什么，监控没有业务样本时应该显示100%成功吗？",
+      "expectedFacts": [
+        "每月独立环境恢复演练",
+        "检查文件引用、账号登录和关键查询",
+        "没有样本标暂无数据，不显示100%成功"
+      ],
+      "evidence": [
+        {
+          "doc": "ops_release",
+          "anchors": [
+            "每月进行一次独立环境恢复演练",
+            "文件引用、账号登录和关键查询"
+          ]
+        },
+        {
+          "doc": "ops_incident",
+          "anchors": [
+            "没有样本应标记为暂无数据",
+            "不展示100%成功"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "T09",
+      "group": "ops",
+      "category": "missing_information",
+      "question": "青禾演示服务当前值班负责人的具体姓名和联系电话是什么？",
+      "expectedRefusal": "资料只写值班负责人，没有姓名和电话，不得编造。",
+      "evidence": []
+    },
+    {
+      "id": "T10",
+      "group": "ops",
+      "category": "missing_information",
+      "question": "请从青禾演示知识库给出实际生产数据库连接地址以及备份文件的完整目录。",
+      "expectedRefusal": "演示规范不提供实际生产数据库地址或备份路径，不能补造操作配置。",
+      "evidence": []
+    },
+    {
+      "id": "T11",
+      "group": "ops",
+      "category": "missing_information",
+      "question": "青禾演示服务失败率超过多少百分比、P95超过多少毫秒才触发告警？",
+      "expectedRefusal": "只列监控指标，没有具体告警阈值，不能猜测百分比或毫秒数。",
+      "evidence": []
+    },
+    {
+      "id": "T12",
+      "group": "ops",
+      "category": "misleading_assertion",
+      "question": "有人说青禾采集器在线且HTTP200时，即使没有业务样本也可以显示100%成功。请按监控资料纠正。",
+      "expectedFacts": [
+        "采集器在线不等于业务服务正常",
+        "没有样本标暂无数据，不显示100%成功",
+        "流式还需确认最终完成或错误事件"
+      ],
+      "evidence": [
+        {
+          "doc": "ops_incident",
+          "anchors": [
+            "采集器在线不等于业务服务正常",
+            "没有样本应标记为暂无数据",
+            "不展示100%成功",
+            "最终完成或错误事件"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E13",
+      "group": "employee",
+      "category": "boundary",
+      "question": "按青禾演示制度，上海住宿实际花了380元，能否直接领取450元？",
+      "expectedFacts": [
+        "上海属于一线城市",
+        "450元是每晚上限",
+        "住宿按实际支出报销，不直接按上限发补贴"
+      ],
+      "evidence": [
+        {
+          "doc": "employee_expenses",
+          "anchors": [
+            "一线城市住宿",
+            "450元"
+          ]
+        },
+        {
+          "doc": "employee_expenses",
+          "anchors": [
+            "北京、上海、广州和深圳",
+            "住宿按实际支出报销",
+            "不按上限直接发放补贴"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E14",
+      "group": "employee",
+      "category": "boundary",
+      "question": "青禾员工出差拟订超标酒店，发生费用后再取得口头同意，是否满足资料中的超标审批要求？",
+      "expectedFacts": [
+        "费用发生前取得批准",
+        "部门负责人",
+        "书面批准，事后口头同意不满足文中要求"
+      ],
+      "evidence": [
+        {
+          "doc": "employee_expenses",
+          "anchors": [
+            "发生前取得部门负责人书面批准"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E15",
+      "group": "employee",
+      "category": "boundary",
+      "question": "青禾报销材料不全被退回，补齐后审核时限是否继续从首次提交日算？",
+      "expectedFacts": [
+        "审核时限从完整材料重新提交后计算",
+        "收到完整材料后5个工作日审核"
+      ],
+      "evidence": [
+        {
+          "doc": "employee_expenses",
+          "anchors": [
+            "完整材料后5个工作日",
+            "完整材料重新提交后计算"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E16",
+      "group": "employee",
+      "category": "boundary",
+      "question": "青禾的会议室能一次预约3小时吗？会议结束后有哪些收尾要求？",
+      "expectedFacts": [
+        "一次最多2小时，3小时超限",
+        "清理白板",
+        "关闭投影设备"
+      ],
+      "evidence": [
+        {
+          "doc": "employee_onboarding",
+          "anchors": [
+            "会议室每次最多预约2小时",
+            "清理白板并关闭投影设备"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P13",
+      "group": "product",
+      "category": "boundary",
+      "question": "星舟重置密码邮件已发出35分钟，该链接还在资料规定的有效期内吗？",
+      "expectedFacts": [
+        "重置链接有效30分钟",
+        "35分钟已超过有效期"
+      ],
+      "evidence": [
+        {
+          "doc": "product_faq",
+          "anchors": [
+            "重置链接30分钟内有效"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P14",
+      "group": "product",
+      "category": "boundary",
+      "question": "星舟想一次导入101个文件，其中有51MB附件，分别违反什么限制？",
+      "expectedFacts": [
+        "每次最多100个文件",
+        "单附件最大50MB",
+        "101个及51MB都超过对应限制"
+      ],
+      "evidence": [
+        {
+          "doc": "product_plans",
+          "anchors": [
+            "单个附件最大50MB",
+            "一次最多选择100个文件"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P15",
+      "group": "product",
+      "category": "boundary",
+      "question": "星舟续费订单付款3天且未使用批量导出，是否自动符合首次购买全额退款政策？",
+      "expectedFacts": [
+        "续费不适用首次购买退款政策",
+        "即使3天内且未使用批量导出也不满足首购条件"
+      ],
+      "evidence": [
+        {
+          "doc": "product_faq",
+          "anchors": [
+            "首次购买付费套餐",
+            "续费订单不适用首次购买退款政策"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P16",
+      "group": "product",
+      "category": "supported",
+      "question": "星舟管理员移除成员会自动删除其项目资料吗，任务和文档正文分别导出为什么格式？",
+      "expectedFacts": [
+        "不会自动删除其已创建项目资料",
+        "项目任务CSV",
+        "文档正文Markdown"
+      ],
+      "evidence": [
+        {
+          "doc": "product_plans",
+          "anchors": [
+            "移除成员不会自动删除",
+            "项目任务导出为CSV",
+            "文档正文可以导出为Markdown"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "T13",
+      "group": "ops",
+      "category": "boundary",
+      "question": "按青禾故障规范，P2的30分钟是首次响应还是修复完成保证？",
+      "expectedFacts": [
+        "P2首次响应目标30分钟",
+        "开始确认与处理时限，不是恢复时限"
+      ],
+      "evidence": [
+        {
+          "doc": "ops_incident",
+          "anchors": [
+            "P2",
+            "30分钟"
+          ]
+        },
+        {
+          "doc": "ops_incident",
+          "anchors": [
+            "首次响应是开始确认与处理的时限",
+            "不是恢复时限"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "T14",
+      "group": "ops",
+      "category": "conditions",
+      "question": "青禾发布后核心流程失败，是否可以恢复访问并只换回旧程序、不管数据库变更？",
+      "expectedFacts": [
+        "保持维护状态",
+        "恢复匹配程序和数据",
+        "不能忽略不兼容数据库变更"
+      ],
+      "evidence": [
+        {
+          "doc": "ops_release",
+          "anchors": [
+            "核心流程失败时保持维护状态",
+            "恢复匹配的程序和数据",
+            "不可只替换旧程序而忽略不兼容的数据库变更"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "T15",
+      "group": "ops",
+      "category": "conditions",
+      "question": "青禾发布涉及结构变更时，备份和迁移有哪些发布前要求？",
+      "expectedFacts": [
+        "结构变更先验证备份可恢复",
+        "确认数据库迁移清单、回退条件和维护窗口",
+        "完成单元测试、集成测试、构建并记录版本产物"
+      ],
+      "evidence": [
+        {
+          "doc": "ops_release",
+          "anchors": [
+            "完成单元测试、集成测试和构建",
+            "提交编号与产物校验和",
+            "数据库迁移清单、回退条件和维护窗口",
+            "先验证备份可恢复"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "T16",
+      "group": "ops",
+      "category": "cross_document",
+      "question": "青禾事务日志每15分钟归档，是否就能承诺任意故障最多只丢15分钟数据？请结合恢复目标说明。",
+      "expectedFacts": [
+        "日志每15分钟归档",
+        "RPO目标15分钟",
+        "目标不代表所有故障保证达成"
+      ],
+      "evidence": [
+        {
+          "doc": "ops_release",
+          "anchors": [
+            "事务日志每15分钟归档"
+          ]
+        },
+        {
+          "doc": "ops_release",
+          "anchors": [
+            "目标RPO为15分钟",
+            "目标不代表所有故障下都能保证达成"
+          ]
+        }
+      ]
+    }
+  ]
+}

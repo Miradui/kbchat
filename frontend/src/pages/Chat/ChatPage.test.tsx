@@ -250,6 +250,47 @@ async function submitWithAutomaticChecksPaused() {
 }
 
 describe('ChatPage', () => {
+  it.each([
+    { name: 'all knowledge bases', filter: '', target: session, placeholder: '向「制度库」提问…' },
+    { name: 'a secondary knowledge base', filter: 'kb2', target: { ...session, knowledgeBaseIds: ['kb1', 'kb2'] }, placeholder: '向 2 个知识库提问…' },
+    { name: 'an automatic session', filter: 'kb1', target: { ...session, scopeMode: 'auto' as const, knowledgeBaseIds: ['kb1', 'kb2'] }, placeholder: '直接提问，自动检索相关知识库…' },
+  ])('preserves the history filter when opening $name', async ({ filter, target, placeholder }) => {
+    const items: ChatSession[] = [target, secondSession];
+    vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
+    vi.mocked(getChatSession).mockImplementation(async (id) => items.find((item) => item.id === id)!);
+    vi.mocked(listChatSessions).mockImplementation(async (params) => {
+      const matches = items.filter((item) => !params?.knowledgeBaseId || (item.knowledgeBaseIds ?? [item.knowledgeBaseId]).includes(params.knowledgeBaseId));
+      return { items: matches, total: matches.length, page: 1, pageSize: 50 };
+    });
+    const user = userEvent.setup();
+    const query = filter ? `?knowledgeBaseId=${filter}` : '';
+    renderWithRouter(<><Routes><Route path="/chat/:sessionId?" element={<ChatPage />} /></Routes><LocationProbe /></>, [`/chat${query}`]);
+    await findReadyComposer();
+    const rail = screen.getByRole('complementary', { name: '会话列表' });
+    const rows = within(rail).getAllByRole('link').length;
+    const listCalls = vi.mocked(listChatSessions).mock.calls.length;
+
+    await user.click(within(rail).getByRole('link', { name: /制度问答/ }));
+    await findSessionTitle(target.title);
+    await findReadyComposer();
+
+    expect(screen.getByLabelText('筛选历史会话的知识库')).toHaveValue(filter);
+    expect(screen.getByLabelText('当前位置').textContent).toBe(`/chat/s1${query}`);
+    expect(within(rail).getAllByRole('link')).toHaveLength(rows);
+    expect(listChatSessions).toHaveBeenCalledTimes(listCalls);
+    expect(screen.getByRole('textbox', { name: '输入问题' })).toHaveAttribute('placeholder', placeholder);
+    expect(createChatSession).not.toHaveBeenCalled();
+
+    if (!filter) {
+      await user.click(within(rail).getByRole('link', { name: /产品问答/ }));
+      await findSessionTitle(secondSession.title);
+      await findReadyComposer();
+      expect(screen.getByLabelText('筛选历史会话的知识库')).toHaveValue('');
+      expect(screen.getByRole('textbox', { name: '输入问题' })).toHaveAttribute('placeholder', '向「产品库」提问…');
+      expect(listChatSessions).toHaveBeenCalledTimes(listCalls);
+    }
+  });
+
   it('keeps desktop history in a separate column with one draft composer', async () => {
     renderWithRouter(<Routes><Route path="/chat" element={<ChatPage />} /></Routes>, ['/chat']);
     await screen.findByRole('heading', { name: '今天，想从资料中了解什么？' });
@@ -370,7 +411,7 @@ describe('ChatPage', () => {
     expect(screen.getByText('会话已不可访问，可能已删除或访问权限发生变化。')).toBeInTheDocument();
   });
 
-  it('opens an archived cross-session search hit directly around its message', async () => {
+  it.each(['', 'kb1'])('opens an archived cross-session search hit while preserving the history filter "%s"', async (filter) => {
     const archived = { ...secondSession, archivedAt: '2026-10-13T00:00:00Z' };
     vi.mocked(getChatSession).mockImplementation(async (id) => id === 's1' ? session : archived);
     vi.mocked(listKnowledgeBases).mockResolvedValue({ items: [knowledgeBase, secondKnowledgeBase] });
@@ -378,14 +419,15 @@ describe('ChatPage', () => {
     vi.mocked(searchChatMessages).mockResolvedValue({ items: [{ messageId: 'm2', sessionId: 's2', sessionTitle: '归档采购问答', archivedAt: archived.archivedAt,
       role: 'assistant', createdAt: '', excerpt: { before: '', match: '产品会话回答', after: '' } }], total: 1, page: 1, pageSize: 20 });
     const user = userEvent.setup();
-    renderWithRouter(<><Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes><LocationProbe /></>, ['/chat/s1']);
+    renderWithRouter(<><Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes><LocationProbe /></>, [`/chat/s1${filter ? `?knowledgeBaseId=${filter}` : ''}`]);
     await user.click(await screen.findByRole('button', { name: '搜索会话内容' }));
     await user.type(screen.getByRole('searchbox', { name: '搜索所有会话的关键词' }), '产品');
     await user.click(await screen.findByRole('button', { name: /归档采购问答/ }));
     const target = await screen.findByRole('article', { name: '已定位消息' });
     expect(target).toHaveAttribute('id', 'chat-message-m2');
     expect(listChatMessages).toHaveBeenCalledWith('s2', { limit: 50, around: 'm2' });
-    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/chat/s2?messageId=m2');
+    expect(screen.getByLabelText('当前位置').textContent).toBe(`/chat/s2?${filter ? `knowledgeBaseId=${filter}&` : ''}messageId=m2`);
+    expect(screen.getByLabelText('筛选历史会话的知识库')).toHaveValue(filter);
     expect(screen.getByRole('button', { name: '已归档' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByRole('dialog', { name: '搜索会话内容' })).not.toBeInTheDocument();
   });
@@ -1028,7 +1070,7 @@ describe('ChatPage', () => {
       <Routes>
         <Route path="/chat/:sessionId" element={<ChatPage />} />
       </Routes>,
-      ['/chat/s1'],
+      ['/chat/s1?knowledgeBaseId=kb1'],
     );
 
     expect(await screen.findByRole('link', { name: /制度问答/ })).toBeInTheDocument();
@@ -1203,7 +1245,7 @@ describe('ChatPage', () => {
       <Routes>
         <Route path="/chat/:sessionId" element={<ChatPage />} />
       </Routes>,
-      ['/chat/s1'],
+      ['/chat/s1?knowledgeBaseId=kb1'],
     );
 
     await findSessionTitle('制度问答');
@@ -1350,7 +1392,7 @@ describe('ChatPage', () => {
         </Routes>
         <LocationProbe />
       </>,
-      ['/chat/s1'],
+      ['/chat/s1?knowledgeBaseId=kb1'],
     );
 
     await findSessionTitle('制度问答');
@@ -2373,6 +2415,8 @@ describe('ChatPage', () => {
       content: '第一次提问',
       clientRequestId: expect.any(String),
     }), expect.any(Object), expect.any(AbortSignal));
+    expect(screen.getByLabelText('筛选历史会话的知识库')).toHaveValue('kb1');
+    expect(vi.mocked(listChatSessions).mock.calls.every(([params]) => params?.knowledgeBaseId === 'kb1')).toBe(true);
   });
 
   it('supports the static draft route used by the application router', async () => {
