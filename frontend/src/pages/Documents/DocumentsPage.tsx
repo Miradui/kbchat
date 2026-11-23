@@ -1,4 +1,4 @@
-import { Ban, FileText, FileType, MessageSquareText, PencilLine, RotateCw, Search, Trash2, Upload, X } from 'lucide-react';
+import { Ban, FileText, FileType, PencilLine, RotateCw, Search, Trash2, Upload, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
@@ -40,7 +40,8 @@ import { KnowledgeBaseLayout, KnowledgeBaseLoadFailure } from '../KnowledgeBase/
 import { useKnowledgeBase } from '../KnowledgeBase/useKnowledgeBase';
 import { DocumentDetailDrawer } from './DocumentDetailDrawer';
 import { DocumentImportDialog } from './DocumentImportDialog';
-import { useDocumentImports } from './DocumentImportContext';
+import { useDocumentImports, type ImportBatch } from './DocumentImportContext';
+import { ImportBatchChat } from './ImportBatchChat';
 import { DocumentProgress } from './DocumentProgress';
 import { DocumentRecycleBinDrawer } from './DocumentRecycleBinDrawer';
 import {
@@ -127,15 +128,8 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
   const [renameTarget, setRenameTarget] = useState<{ id: string; filename: string } | null>(null);
   const [renameError, setRenameError] = useState('');
   const [detailId, setDetailId] = useState<string | null>(null);
-  // Ids from the most recent import, watched until they stop processing. Held here
-  // rather than derived from the list because "just imported" is not a property of
-  // a document -- a document that was already completed when the page loaded must
-  // not trigger the guidance.
-  const [watchedImportIds, setWatchedImportIds] = useState<string[]>([]);
-  // Where "开始提问" should go. Read off the imported documents rather than the page
-  // scope, so the workspace-wide page also gets a working entry point; a batch split
-  // across knowledge bases has no single destination and shows the notice only.
-  const [guidanceKnowledgeBaseId, setGuidanceKnowledgeBaseId] = useState('');
+  const [watchedImportDocuments, setWatchedImportDocuments] = useState<DocumentItem[]>([]);
+  const [localBatchId, setLocalBatchId] = useState(0);
   const [guidanceDismissed, setGuidanceDismissed] = useState(false);
   const navigate = useNavigate();
   const mountedRef = useRef(true);
@@ -165,8 +159,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
     setDeleteError('');
     setRenameTarget(null);
     setRenameError('');
-    setWatchedImportIds([]);
-    setGuidanceKnowledgeBaseId('');
+    setWatchedImportDocuments([]);
     setGuidanceDismissed(false);
   }, [scopeKnowledgeBaseId]);
 
@@ -178,10 +171,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
     void refresh();
   }, [imports?.changeVersion, refresh]);
 
-  useEffect(() => {
-    const documents = imports?.lastBatch?.documents.filter((document) => !scopeKnowledgeBaseId || document.knowledgeBaseId === scopeKnowledgeBaseId) ?? [];
-    if (documents.length) watchImport(documents);
-  }, [imports?.lastBatch, scopeKnowledgeBaseId]);
+  useEffect(() => { setGuidanceDismissed(false); }, [imports?.lastBatch?.id]);
 
   // `?documentId=` (and optional `?chunkId=`) opens the detail drawer. Citations
   // and global search both rely on this contract.
@@ -204,10 +194,18 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
     setSelectedIds((current) => current.filter((docId) => items.some((item) => item.id === docId)));
   }, [items]);
 
-  const guidance = useMemo(
-    () => (guidanceDismissed ? null : importGuidance(watchedImportIds, items)),
-    [guidanceDismissed, items, watchedImportIds],
-  );
+  const sourceImportBatch: ImportBatch | null = imports ? imports.lastBatch : watchedImportDocuments.length ? {
+    id: localBatchId,
+    documents: watchedImportDocuments.map((document) => items.find((item) => item.id === document.id) ?? document),
+  } : null;
+  const importBatch: ImportBatch | null = sourceImportBatch ? { ...sourceImportBatch,
+    tasks: (sourceImportBatch.tasks ?? sourceImportBatch.documents.map((document) => ({ document, paused: false, error: '' }))).map((task) => {
+      const knowledgeBase = knowledgeBases.find((item) => item.id === task.document.knowledgeBaseId);
+      return knowledgeBase && !canUnlessUnknown(knowledgeBase, 'chat.use')
+        ? { ...task, paused: true, error: '当前无权在此知识库提问。' } : task;
+    }),
+  } : null;
+  const guidance = importBatch && !(importBatch.pendingItems?.length) && !importBatch.tasks?.some((task) => task.paused || task.error || task.document.jobStatus === 'cancelled') ? importGuidance(importBatch.documents.map((document) => document.id), importBatch.documents) : null;
 
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
   const fileTypes = useMemo(() => {
@@ -223,29 +221,14 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
   // Every import starts a fresh watch: carrying ids over would let a second batch
   // report the first one's totals alongside its own.
   function openImport() {
-    setWatchedImportIds([]);
-    setGuidanceKnowledgeBaseId('');
+    setWatchedImportDocuments([]);
     setGuidanceDismissed(false);
+    setLocalBatchId((value) => value + 1);
     setImportOpen(true);
   }
 
-  /**
-   * Start watching a finished upload batch so the guidance can fire when the
-   * documents stop processing. Called per batch, and again for each duplicate the
-   * user resolves afterwards, so ids accumulate instead of replacing.
-   */
   function watchImport(documents: DocumentItem[]) {
-    if (documents.length === 0) return;
-    setWatchedImportIds((current) => {
-      const known = new Set(current);
-      return [...current, ...documents.map((document) => document.id).filter((id) => !known.has(id))];
-    });
-    setGuidanceKnowledgeBaseId((current) => {
-      const targets = new Set(documents.map((document) => document.knowledgeBaseId));
-      if (current) targets.add(current);
-      // Mixed targets: there is no single knowledge base to ask against.
-      return targets.size === 1 ? [...targets][0] : '';
-    });
+    setWatchedImportDocuments((current) => [...new Map([...current, ...documents].map((document) => [document.id, document])).values()]);
     setGuidanceDismissed(false);
   }
 
@@ -482,31 +465,13 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
         )}
       </div>
 
-      {guidance && (
-        <div
-          aria-label="导入结果"
-          className={`doc-guidance${guidance.canAsk ? '' : ' doc-guidance--warn'}`}
-          // Polite: the user is watching the list, and an assertive interruption
-          // would cut across whatever they are reading in it.
-          role="status"
-        >
+      {importBatch && !guidanceDismissed && (importBatch.documents.length > 0 || (importBatch.pendingItems?.length ?? 0) > 0) && (
+        <div aria-label="导入结果" className="doc-guidance" role="status">
           <div className="doc-guidance__text">
-            <strong>{importGuidanceMessage(guidance)}</strong>
-            {guidance.canAsk && (
-              <span className="ui-muted">回答只会引用这个知识库里的内容。</span>
-            )}
+            {guidance && <strong>{importGuidanceMessage(guidance)}</strong>}
+            <ImportBatchChat batch={importBatch} key={importBatch.id} onNavigate={navigate} />
           </div>
-          {guidance.canAsk && guidanceKnowledgeBaseId && (
-            <Button
-              leadingIcon={<MessageSquareText aria-hidden="true" />}
-              onClick={() => navigate(`/chat?knowledgeBaseId=${encodeURIComponent(guidanceKnowledgeBaseId)}`)}
-            >
-              开始提问
-            </Button>
-          )}
-          <IconButton label="关闭提示" onClick={() => setGuidanceDismissed(true)}>
-            <X aria-hidden="true" />
-          </IconButton>
+          <IconButton label="关闭提示" onClick={() => setGuidanceDismissed(true)}><X aria-hidden="true" /></IconButton>
         </div>
       )}
 

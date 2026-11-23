@@ -34,6 +34,8 @@ function Page({ other = false }: { other?: boolean }) {
     <button onClick={() => imports.openImport({ knowledgeBases: [{ id: 'kb1', name: '制度库' }, { id: 'kb2', name: '产品库' }], initialKnowledgeBaseId: other ? 'kb2' : 'kb1' })}>导入文档</button>
     <Link to={other ? '/documents' : '/other'}>{other ? '返回文档' : '切换页面'}</Link>
     <output aria-label="文档变更次数">{imports.changeVersion}</output>
+    <output aria-label="批次待处理项">{imports.lastBatch?.pendingItems?.length ?? 0}</output>
+    <output aria-label="最近批次">{imports.lastBatch?.documents.map((document) => `${document.id}:${document.status}`).join(",") ?? "无"}</output>
   </>;
 }
 
@@ -223,16 +225,36 @@ describe('DocumentImportProvider', () => {
     await submitWithTimers();
     await act(async () => vi.advanceTimersByTimeAsync(1000));
     expect(screen.getByText('向量化中')).toBeInTheDocument();
+    expect(screen.getByLabelText('最近批次')).toHaveTextContent('doc1:embedding');
     expect(screen.getByRole('progressbar', { name: '处理进度' })).toHaveAttribute('aria-valuenow', '73');
     await act(async () => vi.advanceTimersByTimeAsync(2500));
-    expect(screen.getByRole('link', { name: '开始提问' })).toHaveAttribute('href', '/chat?knowledgeBaseId=kb1');
+    expect(screen.getByRole('link', { name: '问这份资料' })).toHaveAttribute('href', '/chat?knowledgeBaseId=kb1&documentIds=doc1');
     await act(async () => vi.advanceTimersByTimeAsync(10_000));
     expect(getDocument).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('link', { name: '在整个知识库提问' })).toHaveAttribute('href', '/chat?knowledgeBaseId=kb1');
     const closing = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(closing);
     expect(closing.defaultPrevented).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: '清除已结束记录' }));
     expect(screen.getByText('暂无上传任务，可从文档页开始导入。')).toBeInTheDocument();
+  });
+
+  it('keeps the latest batch independent from old tasks and clears its guidance with local history', async () => {
+    vi.mocked(uploadGlobalDocument).mockResolvedValueOnce({ ...documentItem, status: 'completed' })
+      .mockResolvedValueOnce({ ...documentItem, id: 'new-doc', status: 'completed' });
+    const user = userEvent.setup();
+    renderApp();
+    await selectFiles(user);
+    expect(screen.getByLabelText('最近批次')).toHaveTextContent('doc1:completed');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '导入文档' })).not.toBeInTheDocument());
+    expect(screen.getByLabelText('批次待处理项')).toHaveTextContent('0');
+    await selectFiles(user, [new File(['new'], 'new.md', { type: 'text/markdown' })]);
+    expect(screen.getByLabelText('最近批次')).toHaveTextContent('new-doc:completed');
+    expect(screen.getByLabelText('最近批次')).not.toHaveTextContent('doc1');
+    await user.click(screen.getByRole('button', { name: '上传任务' }));
+    await user.click(screen.getByRole('button', { name: '清除已结束记录' }));
+    await user.keyboard('{Escape}');
+    expect(screen.getByLabelText('最近批次')).toHaveTextContent('无');
   });
 
   it('limits concurrent processing queries and pauses inaccessible documents until retry', async () => {

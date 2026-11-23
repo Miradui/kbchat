@@ -553,3 +553,9 @@ a.chat-source__link:hover { color: var(--accent); }
 }
 .chat-doc-picker__row:hover { background: var(--surface-hover); border-color: var(--line-control); }
 .chat-doc-picker__row:has(:disabled) { cursor: not-allowed; opacity: 0.55; }
+
+.chat-draft-documents { display: block; overflow-wrap: anywhere; }
+.chat-draft-documents ul { margin-block: var(--s-2) 0; padding-inline-start: var(--s-5); }
+.chat-no-basis-actions { display: grid; gap: var(--s-2); margin-block: var(--s-3); }
+.chat-no-basis-actions p { margin: 0; }
+.chat-no-basis-actions__buttons { display: flex; flex-wrap: wrap; gap: var(--s-2); }

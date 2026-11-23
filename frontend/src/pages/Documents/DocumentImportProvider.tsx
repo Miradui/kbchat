@@ -11,11 +11,12 @@ import { tokenStore } from '../../store/tokenStore';
 import type { DocumentItem } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
 import { formatBytes } from '../../utils/format';
-import { DocumentImportContext, type ImportOptions, type ImportSnapshot, type ImportStatus } from './DocumentImportContext';
+import { DocumentImportContext, type ImportBatch, type ImportOptions, type ImportSnapshot, type ImportStatus } from './DocumentImportContext';
 import { DocumentImportDialog } from './DocumentImportDialog';
 import { DocumentProgress } from './DocumentProgress';
 import { documentDisplayStatusLabel, documentDisplayStatusTone } from './documentDisplay';
 import { documentFailureCopy } from './documentFailure';
+import { documentChatUrl } from '../Chat/documentChatScope';
 
 type ProcessingTask = {
   document: DocumentItem;
@@ -45,7 +46,7 @@ function DocumentImportSession({ children }: { children: ReactNode }) {
   const [snapshot, setSnapshot] = useState<ImportSnapshot | null>(null);
   const [tasks, setTasks] = useState<ProcessingTask[]>([]);
   const [changeVersion, setChangeVersion] = useState(0);
-  const [lastBatch, setLastBatch] = useState<{ documents: DocumentItem[] } | null>(null);
+  const [batch, setBatch] = useState<ImportBatch | null>(null);
   const tasksRef = useRef(tasks);
   const batchCounter = useRef(0);
   tasksRef.current = tasks;
@@ -56,21 +57,32 @@ function DocumentImportSession({ children }: { children: ReactNode }) {
     // Only explicit close/completion ends it; reopening preserves its target.
     if (!options) {
       setOptions({ ...next, batchId: ++batchCounter.current });
+      setBatch({ id: batchCounter.current, documents: [] });
       setSnapshot(null);
     }
     setTasksOpen(false);
     setVisible(true);
   }, [options]);
 
-  const closeImport = useCallback(() => {
+  const [closeRequested, setCloseRequested] = useState(false);
+  // Let the dialog publish its final transfer snapshot before disposing it.
+  const closeImport = useCallback(() => setCloseRequested(true), []);
+  const onSnapshot = useCallback((next: ImportSnapshot) => {
+    setSnapshot(next);
+    setBatch((current) => current ? { ...current, pendingItems: next.items.filter((item) => item.status !== 'succeeded') } : null);
+  }, []);
+  useEffect(() => {
+    if (!closeRequested) return;
     setVisible(false);
     setOptions(null);
     setSnapshot(null);
-  }, []);
+    setCloseRequested(false);
+  }, [closeRequested]);
 
   const onUploaded = useCallback((document: DocumentItem) => {
     const knowledgeBaseName = options?.knowledgeBases.find((kb) => kb.id === document.knowledgeBaseId)?.name
       || options?.fixedKnowledgeBaseName || '目标知识库';
+    setBatch((current) => ({ id: options?.batchId, documents: [...(current && current.id === options?.batchId ? current.documents.filter((item) => item.id !== document.id) : []), document] }));
     setTasks((current) => [
       ...current.filter((task) => task.document.id !== document.id),
       { document, knowledgeBaseName, error: '', paused: false, failures: 0, nextCheckAt: 0 },
@@ -78,9 +90,9 @@ function DocumentImportSession({ children }: { children: ReactNode }) {
   }, [options]);
 
   const onBatchComplete = useCallback((documents: DocumentItem[]) => {
-    setLastBatch({ documents });
+    setBatch((current) => ({ id: options?.batchId, documents: [...new Map([...(current && current.id === options?.batchId ? current.documents : []), ...documents].map((document) => [document.id, document])).values()] }));
     setChangeVersion((value) => value + 1);
-  }, []);
+  }, [options]);
 
   const hasPolling = tasks.some((task) => isProcessing(task.document) && !task.paused);
   useEffect(() => {
@@ -127,6 +139,14 @@ function DocumentImportSession({ children }: { children: ReactNode }) {
     };
   }, [hasPolling]);
 
+  const lastBatch = useMemo<ImportBatch | null>(() => {
+    if (!batch) return null;
+    const batchTasks = batch.documents.map((document) => tasks.find((task) => task.document.id === document.id))
+      .filter((task): task is ProcessingTask => Boolean(task));
+    return { ...batch, documents: batchTasks.map((task) => task.document), tasks: batchTasks,
+      pendingItems: options?.batchId === batch.id ? snapshot?.items.filter((item) => item.status !== 'succeeded') ?? [] : batch.pendingItems };
+  }, [batch, tasks, snapshot, options?.batchId]);
+
   const localItems = snapshot?.items.filter((item) => item.status !== 'succeeded') ?? [];
   const busyCount = localItems.filter((item) => item.status === 'pending' || item.status === 'uploading').length + tasks.filter((task) => isProcessing(task.document) && !task.paused).length;
   const attentionCount = localItems.filter((item) => ['failed', 'unconfirmed', 'duplicate', 'unavailable'].includes(item.status)).length + tasks.filter((task) => task.error || (task.document.status === 'failed' && task.document.jobStatus !== 'cancelled')).length;
@@ -146,7 +166,7 @@ function DocumentImportSession({ children }: { children: ReactNode }) {
         onClose={closeImport}
         onMinimize={() => setVisible(false)}
         onReplace={replaceDocument}
-        onStateChange={setSnapshot}
+        onStateChange={onSnapshot}
         onUpload={options.fixedKnowledgeBaseId ? uploadDocument : uploadGlobalDocument}
         onUploaded={onUploaded}
         open
@@ -175,7 +195,7 @@ function DocumentImportSession({ children }: { children: ReactNode }) {
             </section>
           )}
           {tasks.length > 0 && <section aria-label="文档处理任务" className="upload-tasks__group">
-            <header><h3>文档处理</h3><Button disabled={!tasks.some((task) => !isProcessing(task.document))} onClick={() => setTasks((current) => current.filter((task) => isProcessing(task.document)))} variant="ghost">清除已结束记录</Button></header>
+            <header><h3>文档处理</h3><Button disabled={!tasks.some((task) => !isProcessing(task.document))} onClick={() => { setTasks((current) => current.filter((task) => isProcessing(task.document))); setBatch(null); }} variant="ghost">清除已结束记录</Button></header>
             {tasks.map((task) => {
               const document = task.document;
               const failed = document.status === 'failed' && document.jobStatus !== 'cancelled';
@@ -188,7 +208,7 @@ function DocumentImportSession({ children }: { children: ReactNode }) {
                 <div className="upload-tasks__actions">
                   {task.error && <Button leadingIcon={<RotateCw aria-hidden="true" />} onClick={() => setTasks((current) => current.map((item) => item.document.id === document.id ? { ...item, paused: false, error: '', failures: 0, nextCheckAt: 0 } : item))} variant="ghost">重试状态查询</Button>}
                   <Link className="ui-button ui-button--link" onClick={() => setTasksOpen(false)} to={`/documents?documentId=${encodeURIComponent(document.id)}`}>{failed ? '查看失败原因' : '查看文档'}</Link>
-                  {document.status === 'completed' && <Link className="ui-button ui-button--link" onClick={() => setTasksOpen(false)} to={`/chat?knowledgeBaseId=${encodeURIComponent(document.knowledgeBaseId)}`}>开始提问 <ArrowRight aria-hidden="true" /></Link>}
+                  {document.status === 'completed' && document.jobStatus !== 'cancelled' && !task.paused && !task.error && <><Link className="ui-button ui-button--link" onClick={() => setTasksOpen(false)} to={documentChatUrl([document])}>问这份资料 <ArrowRight aria-hidden="true" /></Link><Link className="ui-button ui-button--link" onClick={() => setTasksOpen(false)} to={`/chat?knowledgeBaseId=${encodeURIComponent(document.knowledgeBaseId)}`}>在整个知识库提问</Link></>}
                 </div>
               </article>;
             })}

@@ -244,3 +244,10 @@
 .doc-import__batch-actions { display: flex; gap: var(--s-3); }
 .doc-import__path { overflow-wrap: anywhere; white-space: normal; }
 .doc-detail__chunk-search { flex: 0 1 220px; }
+
+.import-batch-chat { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); }
+.import-batch-chat > p { flex-basis: 100%; margin: 0; }
+.import-batch-chat__items { display: grid; gap: var(--s-3); padding: var(--s-3); border: 1px solid var(--line); max-height: 50dvh; overflow-y: auto; }
+.import-batch-chat__item { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: var(--s-1) var(--s-2); }
+.import-batch-chat__item > small { grid-column: 2; color: var(--text-muted); }
+.import-batch-chat__item > label { overflow-wrap: anywhere; }

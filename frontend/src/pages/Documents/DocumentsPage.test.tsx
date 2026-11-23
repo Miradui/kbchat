@@ -21,6 +21,7 @@ import {
 import { ApiError } from '../../api/client';
 import { renderWithRouter } from '../../test/render';
 import type { DocumentCountsResponse, DocumentItem, KnowledgeBase } from '../../types/api';
+import { DocumentImportContext } from './DocumentImportContext';
 import { DocumentsPage } from './DocumentsPage';
 
 const documentListMocks = vi.hoisted(() => ({
@@ -825,8 +826,20 @@ describe('DocumentsPage', () => {
 
     const banner = await screen.findByRole('status', { name: '导入结果' });
     expect(banner).toHaveTextContent('1 个文档已处理完成，可以开始提问了。');
-    await user.click(within(banner).getByRole('button', { name: '开始提问' }));
-    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/chat?knowledgeBaseId=kb1');
+    await user.click(within(banner).getByRole('button', { name: '问这份资料' }));
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/chat?knowledgeBaseId=kb1&documentIds=doc1');
+  });
+
+  it('offers the complete provider batch even when none of its documents are on this page', async () => {
+    documentListMocks.primary.mockResolvedValue({ items: [], total: 40, page: 2, pageSize: 20 });
+    const user = userEvent.setup();
+    const batchDocument = { ...uploadedDocument, id: 'outside-page', status: 'completed' as const };
+    renderWithRouter(<DocumentImportContext.Provider value={{ openImport: vi.fn(), openTasks: vi.fn(), hasTasks: true, busyCount: 0, attentionCount: 0, taskCount: 1, changeVersion: 1, lastBatch: { id: 7, documents: [batchDocument] } }}>
+      <Routes><Route path="/knowledge-bases/:id/documents" element={<DocumentsPage scoped />} /><Route path="/chat" element={<div>问答页</div>} /></Routes><LocationProbe />
+    </DocumentImportContext.Provider>, ['/knowledge-bases/kb1/documents?page=2']);
+    const banner = await screen.findByRole('status', { name: '导入结果' });
+    await user.click(within(banner).getByRole('button', { name: '问这份资料' }));
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/chat?knowledgeBaseId=kb1&documentIds=outside-page');
   });
 
   it('does not invite questions about documents that were already complete on load', async () => {

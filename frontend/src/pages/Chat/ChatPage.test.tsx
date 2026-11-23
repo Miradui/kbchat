@@ -20,6 +20,7 @@ import {
   listChatSessions,
   listKnowledgeBaseCategories,
   listKnowledgeBases,
+  listGlobalDocuments,
   regenerateChatMessage,
   setChatMessageFeedback,
   sendChatMessageStream as sendChatMessage,
@@ -50,6 +51,7 @@ vi.mock('../../api/resources', () => ({
   listChatSessions: vi.fn(),
   listKnowledgeBaseCategories: vi.fn(),
   listKnowledgeBases: vi.fn(),
+  listGlobalDocuments: vi.fn(),
   logout: vi.fn(),
   regenerateChatMessage: vi.fn(),
   setChatMessageFeedback: vi.fn(),
@@ -168,6 +170,7 @@ beforeEach(() => {
   });
   vi.mocked(getChatSession).mockReset().mockResolvedValue(session);
   vi.mocked(getDocument).mockReset().mockImplementation(async (id) => ({ id, knowledgeBaseId: 'kb1', filename: '新制度.pdf', fileType: 'pdf', fileSize: 1024, status: 'completed', errorMessage: null, createdAt: '', updatedAt: '' }));
+  vi.mocked(listGlobalDocuments).mockReset().mockResolvedValue({ items: [{ id: 'summary-doc', knowledgeBaseId: 'kb1', knowledgeBaseName: '制度库', filename: '报销制度.md', fileType: 'md', fileSize: 100, status: 'completed', errorMessage: null, createdAt: '', updatedAt: '' }], total: 1, page: 1, pageSize: 20 });
   vi.mocked(getDocumentPreview).mockReset().mockResolvedValue({ id: 'doc-new', filename: '新制度.pdf', kind: 'text', fileType: 'pdf', contentType: 'text/plain', content: '新制度依据的完整原文', downloadUrl: '' });
   vi.mocked(listChatMessages).mockReset().mockResolvedValue({ items: [] });
   vi.mocked(searchChatMessages).mockReset().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
@@ -320,14 +323,64 @@ describe('ChatPage', () => {
     expect(createChatSession).not.toHaveBeenCalled();
   });
 
-  it('adds a suggested question to the draft without sending or discarding existing text', async () => {
+  it('adds a guided policy question to the draft without sending or discarding existing text', async () => {
     const user = userEvent.setup();
     renderWithRouter(<Routes><Route path="/chat" element={<ChatPage />} /></Routes>, ['/chat']);
     const input = await screen.findByRole('textbox', { name: '输入问题' });
     await waitFor(() => expect(input).toBeEnabled());
     await user.type(input, '保留我的补充说明');
+    await user.click(screen.getByRole('button', { name: '查找制度规定' }));
+    await user.type(screen.getByRole('textbox', { name: '制度主题（必填）' }), '差旅报销');
+    await user.click(screen.getByRole('button', { name: '生成问题' }));
+    expect((input as HTMLTextAreaElement).value).toContain('保留我的补充说明\n\n');
+    expect((input as HTMLTextAreaElement).value).toContain('查询主题：差旅报销');
+    expect(createChatSession).not.toHaveBeenCalled();
+    expect(sendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it('selects a summary document, preserves the draft and verifies the named scope before sending', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<><LocationProbe /><Routes><Route path="/chat" element={<ChatPage />} /></Routes></>, ['/chat']);
+    const input = await findReadyComposer();
+    await user.type(input, '请保留时限');
     await user.click(screen.getByRole('button', { name: '总结一份资料' }));
-    expect(input).toHaveValue('保留我的补充说明\n\n请总结资料中的关键要点，并标注引用来源。');
+    await user.click(screen.getByRole('button', { name: '选择资料' }));
+    await user.click(await screen.findByRole('checkbox', { name: '选择 报销制度.md（制度库）' }));
+    await user.click(screen.getByRole('button', { name: '使用这些文档' }));
+    await user.click(screen.getByRole('button', { name: '生成问题' }));
+    await waitFor(() => expect(screen.getByRole('link', { name: '1. 新制度.pdf' })).toBeInTheDocument());
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent('documentIds=summary-doc');
+    expect((screen.getByRole('textbox', { name: '输入问题' }) as HTMLTextAreaElement).value).toContain('请保留时限\n\n请总结');
+    expect(createChatSession).not.toHaveBeenCalled();
+    expect(sendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps a failed document scope and the question instead of silently asking the whole knowledge base', async () => {
+    vi.mocked(getDocument).mockRejectedValue(new ApiError(404, { message: '文档不可访问', code: 'RESOURCE_NOT_FOUND' }));
+    renderWithRouter(<><LocationProbe /><Routes><Route path="/chat" element={<ChatPage />} /></Routes></>, ['/chat?knowledgeBaseId=kb1&documentIds=missing&q=不要丢失的问题']);
+    await screen.findByRole('button', { name: '重试文档范围' });
+    expect(screen.getByRole('textbox', { name: '输入问题' })).toHaveValue('不要丢失的问题');
+    expect(screen.getByRole('textbox', { name: '输入问题' })).toBeDisabled();
+    expect(screen.getByLabelText('当前位置')).toHaveTextContent('documentIds=missing');
+    expect(createChatSession).not.toHaveBeenCalled();
+  });
+
+  it('uses the original question for no-basis recovery while preserving a newer draft', async () => {
+    vi.mocked(listChatMessages).mockResolvedValue({ items: [
+      { id: 'q-no-basis', sessionId: 's1', role: 'user', content: '差旅保险有什么要求？', citations: [], createdAt: '' },
+      { id: 'a-no-basis', sessionId: 's1', role: 'assistant', content: '未找到依据', answerStatus: 'no_basis', citations: [], createdAt: '' },
+    ] });
+    const user = userEvent.setup();
+    renderWithRouter(<><LocationProbe /><Routes><Route path="/chat/:sessionId?" element={<ChatPage />} /></Routes></>, ['/chat/s1']);
+    const input = await findReadyComposer();
+    await user.type(input, '我已有的草稿');
+    await user.click(await screen.findByRole('button', { name: '补充问题背景' }));
+    expect(input).toHaveValue('我已有的草稿\n\n差旅保险有什么要求？');
+    await user.click(screen.getByRole('button', { name: '选择相关资料' }));
+    await user.click(await screen.findByRole('checkbox', { name: '选择 报销制度.md（制度库）' }));
+    await user.click(screen.getByRole('button', { name: '使用这些文档' }));
+    await waitFor(() => expect(screen.getByLabelText('当前位置')).toHaveTextContent('/chat?knowledgeBaseId=kb1&documentIds=summary-doc'));
+    expect(screen.getByRole('textbox', { name: '输入问题' })).toHaveValue('差旅保险有什么要求？');
     expect(createChatSession).not.toHaveBeenCalled();
     expect(sendChatMessage).not.toHaveBeenCalled();
   });

@@ -454,3 +454,31 @@ C01/C05覆盖上述固定数据、真实服务与目标；C02当前server/migrat
 材料来源为同日UX-REVIEW-20261123：本地管理员、1920×1080页面观察及前端代码核对，使用现有演示资料和历史问答；未新增上传、模型提问或配置保存。普通成员、移动端、101库运行及后端部署版本未验收，历史BENCH-RAG-001未重跑。文档整理本身不产生新的应用或模型通过结论。
 
 文档验收检查结构、相对链接及锚点、R01–R09映射、事实与建议的证据等级，以及原工作区内容保留；结果和最终内容SHA-256见`output/ux-review-20261123/documentation/verification.json`。原始评审快照保持不变；本地output目录被Git忽略，克隆后不保证存在。应用测试、构建、行为Red/Break和真实服务复验不适用于本次纯文档范围；未查询远端CI，未提交、推送或发布。LESSONS无新增事项。
+
+### UX-FLOW-001：体验评审第一批任务衔接（2026-11-23）
+
+状态：第一批前端实现、本地检查及独立审查完成；创建本地提交，未推送或发布，远端CI未触发。任务为Implementation / L3，风险来自跨路由草稿、异步文档状态、上传批次身份及个人跟进权限。基线为干净的`dev@e2391c6c038434b98468a966eda04756abef6e9c`。用户要求按18号体验评审开始修改，本批采用R03–R05任务引导、R02导入后指定资料提问与已有个人跟进的衔接。
+
+- C01：总结选择1份资料及输出形式，对比选择2份及比较事项，制度查询填写主题／适用对象；只生成可编辑问题，保留草稿，不自动发送。导入结果由批次及最新任务状态驱动，部分不可用或超过20份/5库须显式选择子集；整库入口另列。草稿发送前确认全部文档身份、原库与完成状态，失败不缩小或扩大范围。仅明确no_basis提供下一步，跟进保留原问题和确切回答链接；个人记录仍按同会话相同问题共用，自动／多库补资料明确选择有写入能力的目标。
+- C02/C04：`frontend`下，`NODE_OPTIONS=--no-experimental-webstorage npm test -- --maxWorkers 2`的118文件/1012项通过；审查修复后定向ChatPage、useDraftDocuments、DocumentsPage共156项通过。最终`npm run lint`、`npm run typecheck:test`、`npm run build`均通过，生产构建确认11个路由分包。运行环境Node26.13.1、Vite7.3.7、Vitest4.1.12、React19.2.7、TypeScript5.9.3；继承环境未启用RAG_TEST入口，Node实验Web Storage仅在测试子进程关闭，不改项目配置。
+- C03：旧Provider的“问这份资料”回归实际失败；隔离副本回退ChatPage后，失效文档范围用例按预期失败。独立审查发现受控的移动／未就绪／数量错误被脱敏器统一覆盖为通用文案，新增具体原因断言后，隔离撤回修复的3个目标用例失败，修复后通过。四项Break分别移除就绪保护、取消守卫、20份上限、自动范围目标库显式选择，均出现目标断言失败。新任务表单没有等价旧行为，Red不适用，其数量规则由Break覆盖。
+- C05：生产SPA、Google Chrome、1920×1080及隔离HTTP/SSE夹具六组流程通过：总结选择与草稿保留；对比实际create/stream仅携带两份ID；失权、处理中、移动范围拦截及重试；个人跟进确切回答、保存和跨库目标；导入部分失败、列表筛选后完整批次及显式子集；深色模式、Escape与页面边界。请求记录验证预填不写入、选择子集不含失败项；主代理审读总结、跟进、导入子集和深色截图。夹具响应不作为模型总结／对比质量通过。
+- C06：最终源码、相关配置和构建产物SHA-256、命令日志、Red/Break、浏览器请求与截图位于`output/ux-first-batch-20261123/`，统一入口`verification.json`，提交SHA写入该回执；目录被Git忽略，克隆后不保证存在。未操作根.env、真实业务服务、数据库、模型或部署。远端CI未查询/未触发，本地交付不代表发布验收。
+
+实际子任务与复核：
+
+| 任务／角色 | 修改与职责 | 结果和主代理接续 |
+| --- | --- | --- |
+| UX-START-DESIGN / architect | 只读定位Chat、导入与个人跟进合同 | 完成；明确复用既有API、问题级记录与自动主库语义，无文件修改 |
+| UX-TASK / frontend | ChatTaskDialog、ChatDocumentPicker及测试 | 10项定向测试和局部lint通过；主代理完成ChatPage接线、文档名核验及统一验收 |
+| UX-IMPORT / frontend | ImportContext、Provider、DocumentsPage、ImportBatchChat及测试 | 55项定向通过；超过10分钟预算后停止，主代理确认无遗留写进程，接手并修复最后类型收窄，统一测试／浏览器通过 |
+| UX-FOLLOWUP / frontend | ChatNoBasisActions、QualityIssueDialog、QualityPage及测试 | 38项定向和局部lint通过；主代理完成回调、配对与样式集成 |
+| UX-REVIEW-CHAT / reviewer | 只读聊天候选与草稿／选择器边界 | 143项定向通过，发现1项P3具体错误原因丢失；主代理修复 |
+| UX-REVIEW-IMPORT-FOLLOWUP / reviewer | 只读导入与个人跟进候选 | 71项定向通过，未发现可证实问题 |
+| UX-RECHECK-SCOPE / reviewer | 只读补审P3修复及错误脱敏 | 14项定向通过，确认仅受控本地文案直出，未知异常与取消保护保持，未发现问题 |
+
+记录保留实际失败：初轮测试环境localStorage错误、选择器名称和类型错误已修正，不计行为Red；新组件未存在时的import失败不计Red；隔离副本初次被Vite拒绝共享PDF worker导入，补齐副本读取范围后才取得有效Red。两次浏览器脚本使用错误搜索框名称，按页面实际“按文件名搜索”修正后完成最终六组流程。输入已冻结后执行两份独立审查；P3修复仅改变hook及测试并经新审查者补审。
+
+Modern Web Guidance使用`forms`与`accessibility`：表单校验遵循“move focus to the first invalid field”，模态复用现有焦点、inert和恢复机制（“Manage focus correctly to and from updated content”），不引入新UI依赖。LESSONS无新增事项。
+
+剩余边界：R01、R06–R09及评审第4节通用改进未进入本批；R08团队交接、按回答版本独立持久化均未新增。BENCH-RAG-001-Q回答完整性仍未关闭；真实模型／业务语料、真实服务上传、普通成员完整浏览器流程、读屏器、触屏与远端CI未覆盖。现有API/schema和RAG默认规则不变，本批后端构建／迁移／发布验收不适用。

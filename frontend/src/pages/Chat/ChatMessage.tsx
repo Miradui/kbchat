@@ -42,6 +42,7 @@ type MessageBubbleProps = {
   onVersionChange?: (id: string, index: number) => void;
   /** Recovery affordance rendered under this message, if it owns one. */
   recovery?: ReactNode;
+  nextActions?: ReactNode;
   editing?: boolean;
   editDraft?: string;
   editSaving?: boolean;
@@ -72,6 +73,7 @@ export const MessageBubble = memo(function MessageBubble({
   versionNavigation,
   versionIndex = 0, versionCount = 1, versionGroupId = '', versionsDisabled = false, onVersionChange,
   recovery,
+  nextActions,
   editing = false,
   editDraft = '',
   editSaving = false,
@@ -197,6 +199,8 @@ export const MessageBubble = memo(function MessageBubble({
             {notice.message}
           </p>
         )}
+
+        {isAssistant && nextActions}
 
         {isAssistant && (
           <div className="chat-msg__foot">

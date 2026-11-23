@@ -600,7 +600,7 @@ function KnowledgeGapItem({ item, canViewDiagnostics, notice, onSave, onFollowUp
         <span className="ui-muted">
           首次 {formatRelativeTime(item.firstSeenAt)}
         </span>
-        {presentation.action && (item.category !== 'retrieval_failed' || canViewDiagnostics) && (
+        {presentation.action && !(item.category === 'no_citations' && onFollowUp) && (item.category !== 'retrieval_failed' || canViewDiagnostics) && (
           <Link className="ui-button ui-button--link" to={presentation.action.to(item)}>
             {presentation.action.label} <ExternalLink aria-hidden="true" />
           </Link>

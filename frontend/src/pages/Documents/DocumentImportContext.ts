@@ -15,6 +15,13 @@ export type ImportOptions = {
   knowledgeBases: Array<{ id: string; name: string }>;
 };
 
+export type ImportBatch = {
+  id?: number;
+  documents: DocumentItem[];
+  tasks?: Array<{ document: DocumentItem; paused?: boolean; error?: string }>;
+  pendingItems?: ImportSnapshot['items'];
+};
+
 type DocumentImportContextValue = {
   openImport: (options: ImportOptions) => void;
   openTasks: () => void;
@@ -23,7 +30,7 @@ type DocumentImportContextValue = {
   attentionCount: number;
   taskCount: number;
   changeVersion: number;
-  lastBatch: { documents: DocumentItem[] } | null;
+  lastBatch: ImportBatch | null;
 };
 
 export const DocumentImportContext = createContext<DocumentImportContextValue | null>(null);

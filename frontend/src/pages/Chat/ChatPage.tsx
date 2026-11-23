@@ -22,6 +22,7 @@ import { AppShell } from '../../layouts/AppShell';
 import type { ChatFeedbackDetails, ChatFeedbackRating, ChatMessage, Citation, KnowledgeBase } from '../../types/api';
 import { knowledgeBaseOptionsKey, queryClient } from '../../store/queryClient';
 import { tokenStore } from '../../store/tokenStore';
+import { chatDraftStore } from '../../store/chatDraftStore';
 import { formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
 import { ChatComposer } from './ChatComposer';
@@ -49,6 +50,11 @@ import { ChatDocumentPicker } from './ChatDocumentPicker';
 import { documentChatUrl } from './documentChatScope';
 import { chatSessionUrl } from './chatSessionUrl';
 import { consumeHomeQuestion, readHomeQuestion } from './homeQuestionNavigation';
+import { ChatTaskDialog, type ChatTaskKind, type ChatTaskResult } from './ChatTaskDialog';
+import { ChatNoBasisActions } from './ChatNoBasisActions';
+import { useDraftDocuments } from './useDraftDocuments';
+import { answerQuestions } from './answerQuestions';
+import type { ChatDocument } from './documentChatScope';
 
 /**
  * `/chat` is the draft state and `/chat/:sessionId` is a thread.
@@ -75,6 +81,8 @@ export function ChatPage() {
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [bookmarkTarget, setBookmarkTarget] = useState<ChatMessage | null>(null);
   const [documentPickerOpen, setDocumentPickerOpen] = useState(false);
+  const [documentPickerQuestion, setDocumentPickerQuestion] = useState<string | null>(null);
+  const [taskKind, setTaskKind] = useState<ChatTaskKind | null>(null);
   useEffect(() => { setBookmarkTarget(null); }, [sessionId]);
   const railBackdropRef = useRef<HTMLButtonElement>(null);
   const {
@@ -99,6 +107,12 @@ export function ChatPage() {
   const draftDocumentIds = useMemo(() => documentParam ? documentParam.split(',') : [], [documentParam]);
   const draftKnowledgeBaseIds = useMemo(() => manyParam ? [...new Set(manyParam.split(',').filter(Boolean))].slice(0, 5) : urlKnowledgeBaseId ? [urlKnowledgeBaseId] : [], [manyParam, urlKnowledgeBaseId]);
   const { user } = useCurrentUser();
+  const draftDocuments = useDraftDocuments(draftDocumentIds, draftKnowledgeBaseIds, !sessionId && Boolean(user));
+  useEffect(() => {
+    setDocumentPickerOpen(false);
+    setDocumentPickerQuestion(null);
+    setTaskKind(null);
+  }, [sessionId, user?.id]);
   // An explicit home submission must not overwrite or send an older draft.
   const draftScope = !sessionId && homeQuestion?.userId === user?.id && homeQuestion
     ? `home:${homeQuestion.id}` : chatDraftScope(sessionId, draftKnowledgeBaseIds, draftDocumentIds);
@@ -223,6 +237,7 @@ export function ChatPage() {
     blocked: historyLocked, missingMessageId: thread.missingMessageId,
   });
   const answerVersions = useChatAnswerVersions(thread.messages, sessionId, messageSearch.locatedId);
+  const originalQuestions = useMemo(() => answerQuestions(thread.messages, sessionId), [thread.messages, sessionId]);
 
   function leaveMessageLocation() {
     messageSearch.clear();
@@ -381,6 +396,7 @@ export function ChatPage() {
     });
   }, [historyLocked, loadOlderMessages, sessionId]);
   const canSend = (automaticScope ? knowledgeBases.length > 0 : Boolean(activeKnowledgeBase) && activeKnowledgeBaseIds.every((id) => knowledgeBases.some((kb) => kb.id === id)))
+    && !draftDocuments.loading && !draftDocuments.error
     && !archived
     && !thread.loading
     && !hasNewerMessages
@@ -408,7 +424,9 @@ export function ChatPage() {
     return () => { active = false; };
   }, [canSend, homeQuestion?.question, preparingHomeQuestion, send, sending, sessionStore.knowledgeBasesError, sessionStore.knowledgeBasesLoading]);
 
-  const composerHint = preparingHomeQuestion ? '正在加载可提问的知识库…'
+  const composerHint = draftDocuments.loading ? '正在确认所选文档…'
+    : draftDocuments.error ? '所选资料暂不可用，请重试或重新选择；提问范围不会自动扩大。'
+    : preparingHomeQuestion ? '正在加载可提问的知识库…'
     : knowledgeBases.length === 0 && sessionStore.knowledgeBasesError ? '知识库暂不可用，请重试加载。'
     : knowledgeBases.length === 0 ? '还没有知识库。先创建一个知识库并导入文档。' : !activeKnowledgeBase && !automaticScope
     ? knowledgeBases.length === 0
@@ -501,6 +519,27 @@ export function ChatPage() {
     navigate('/chat');
   }
 
+  function openDocumentDraft(documents: ChatDocument[], question: string) {
+    if (!user || interactionLocked || thread.hasPendingWrite()) return;
+    const bases = [...new Set(documents.map((document) => document.knowledgeBaseId))];
+    const ids = documents.map((document) => document.id);
+    const targetScope = draftNavigationState ? draftScope : chatDraftScope(undefined, bases, ids);
+    const previous = chatDraftStore.get(user.id, targetScope);
+    // Keep an existing destination draft visible too; neither draft is sent here.
+    const text = targetScope === draftScope || !previous || previous === question
+      ? question : question ? `${previous}\n\n${question}` : previous;
+    chatDraftStore.set(user.id, targetScope, text);
+    navigate(documentChatUrl(documents), { state: draftNavigationState });
+  }
+
+  function applyTask(result: ChatTaskResult) {
+    if (interactionLocked) return;
+    const question = draft ? `${draft}\n\n${result.question}` : result.question;
+    if (result.documents) openDocumentDraft(result.documents, question);
+    else setDraft(question);
+    setTaskKind(null);
+  }
+
   const sessionRail = (
     <ChatSessionRail
       backdropRef={railBackdropRef}
@@ -553,7 +592,7 @@ export function ChatPage() {
           onClick={() => { if (!interactionLocked) setSearchParams({}, { state: draftNavigationState }); }} variant="ghost">自动跨库</Button>
           : <span className="chat-composer__scope-label"><Globe aria-hidden="true" />{currentSession?.documents?.length ? currentSession.documents.length + ' 份文档' : automaticScope ? '自动跨库' : multiBase ? activeKnowledgeBaseIds.length + ' 个知识库' : activeKnowledgeBase?.name || '当前范围'}</span>}
         {!sessionId && <Button className="chat-composer__scope-button" disabled={interactionLocked} leadingIcon={<FileText aria-hidden="true" />}
-          onClick={() => setDocumentPickerOpen(true)} variant="ghost">指定文档提问</Button>}
+          onClick={() => { setDocumentPickerQuestion(null); setDocumentPickerOpen(true); }} variant="ghost">指定文档提问</Button>}
       </>}
       disabled={!user || !canSend || thread.sending || sessionBusy || Boolean(preparingHomeQuestion)}
       error={thread.rateLimitError}
@@ -641,7 +680,12 @@ export function ChatPage() {
             {sessionId && <IconButton disabled={historyLocked} aria-expanded={messageSearch.open} label="查找会话消息" ref={messageSearch.triggerRef} onClick={messageSearch.openSearch}><Search aria-hidden="true" /></IconButton>}
             {loadedSession?.branchFromSessionId && <Link className="ui-button ui-button--ghost" to={chatSessionUrl(loadedSession.branchFromSessionId, urlKnowledgeBaseId, loadedSession.branchFromMessageId)}>查看来源会话</Link>}
           </header>}
-          {!sessionId && draftDocumentIds.length > 0 && <p className="ui-inline-notice">仅检索所选 {draftDocumentIds.length} 份文档的版本；切换知识库将重选范围。</p>}
+          {!sessionId && draftDocumentIds.length > 0 && <div className="ui-inline-notice chat-draft-documents">
+            <span>仅检索所选 {draftDocumentIds.length} 份文档的版本；切换知识库将重选范围。</span>
+            {draftDocuments.loading && <span>正在确认所选文档…</span>}
+            {draftDocuments.error && <p className="ui-inline-error" role="alert">{draftDocuments.error} <Button variant="link" onClick={draftDocuments.retry}>重试文档范围</Button></p>}
+            {draftDocuments.documents.length > 0 && <ul>{draftDocuments.documents.map((document, index) => <li key={document.id}><Link to={`/documents?documentId=${encodeURIComponent(document.id)}`}>{index + 1}. {document.filename}</Link></li>)}</ul>}
+          </div>}
           {currentSession?.documents?.length ? <details className="ui-inline-notice"><summary>仅检索指定的 {currentSession.documents.length} 份文档</summary><ul>{currentSession.documents.map((document) => <li key={document.id}><Link to={`/documents?documentId=${encodeURIComponent(document.id)}`}>{document.filename}</Link></li>)}</ul></details> : null}
 
           {messageSearch.open && <ChatMessageSearch {...messageSearch} loading={messageSearch.loading || loadingHistory} missingTarget={!loadingHistory && messageSearch.missingTarget} />}
@@ -697,7 +741,7 @@ export function ChatPage() {
                 <ChatEmptyState
                   documentCount={draftDocumentIds.length}
                   composer={composer}
-                  onSuggest={(text) => { if (!interactionLocked) setDraft((current) => current ? current + "\n\n" + text : text); }}
+                  onSuggest={(kind) => { if (!interactionLocked) setTaskKind(kind); }}
                   knowledgeBases={knowledgeBases}
                   loading={sessionStore.knowledgeBasesLoading}
                   error={sessionStore.knowledgeBasesError}
@@ -731,6 +775,15 @@ export function ChatPage() {
                     knowledgeBaseId={activeKnowledgeBaseId || undefined}
                     onOpenCitation={(citation, index) => openSource(citation, index, message.id)}
                     message={message}
+                    nextActions={loadedSession && originalQuestions.has(message.id) ? <ChatNoBasisActions
+                      key={message.id} session={loadedSession} message={message} question={originalQuestions.get(message.id)!}
+                      disabled={interactionLocked || archived || Boolean(thread.hasPendingWrite())}
+                      onChooseDocuments={(question) => { setDocumentPickerQuestion(question); setDocumentPickerOpen(true); }}
+                      onRefineQuestion={(question) => {
+                        setDraft((current) => current && current !== question ? `${current}\n\n${question}` : question);
+                        requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.chat-composer textarea')?.focus());
+                      }}
+                    /> : undefined}
                     editDraft={editingMessageId === message.id ? editingDraft : ''}
                     editing={editingMessageId === message.id}
                     editSaving={thread.editingId === message.id}
@@ -913,7 +966,8 @@ export function ChatPage() {
         )}
       </div>
 
-      {documentPickerOpen && <ChatDocumentPicker knowledgeBases={knowledgeBases} onClose={() => setDocumentPickerOpen(false)} onSelect={(documents) => { setDocumentPickerOpen(false); navigate(documentChatUrl(documents), { state: draftNavigationState }); }} />}
+      {taskKind && <ChatTaskDialog kind={taskKind} knowledgeBases={knowledgeBases} onClose={() => setTaskKind(null)} onApply={applyTask} />}
+      {documentPickerOpen && <ChatDocumentPicker knowledgeBases={knowledgeBases} onClose={() => setDocumentPickerOpen(false)} onSelect={(documents) => { setDocumentPickerOpen(false); openDocumentDraft(documents, documentPickerQuestion ?? draft); }} />}
       {bookmarkTarget && <ChatBookmarkDialog key={bookmarkTarget.id} target={{ messageId: bookmarkTarget.id, sessionId: bookmarkTarget.sessionId, bookmark: bookmarkTarget.bookmark }}
         onClose={() => setBookmarkTarget(null)} onUpdated={thread.updateMessageBookmark} onInaccessible={thread.handleAccessLost} />}
       {bookmarksOpen && <ChatBookmarksDialog onClose={() => setBookmarksOpen(false)} onUpdated={thread.updateMessageBookmark} onInaccessible={thread.handleAccessLost} onSelect={(item) => {
@@ -972,7 +1026,7 @@ function ChatEmptyState({
   disabled: boolean;
   onSelect: (id: string) => void;
   composer: ReactNode;
-  onSuggest: (text: string) => void;
+  onSuggest: (kind: ChatTaskKind) => void;
 }) {
   return (
     <div className="chat-launcher">
@@ -981,9 +1035,9 @@ function ChatEmptyState({
       <p>{documentCount ? '本会话只检索选定的 ' + documentCount + ' 份文档版本，回答会标注资料来源。' : selectedIds.length ? '本会话仅检索所选知识库，回答会标注资料来源。' : '把问题交给知汇，每一个答案都能找到出处。'}</p>
       {composer}
       <div aria-label="提问建议" className="chat-launcher__suggestions">
-        <Button disabled={disabled} leadingIcon={<FileText aria-hidden="true" />} onClick={() => onSuggest('请总结资料中的关键要点，并标注引用来源。')} variant="secondary">总结一份资料</Button>
-        <Button disabled={disabled} leadingIcon={<Files aria-hidden="true" />} onClick={() => onSuggest('请比较所选资料的主要差异，并列出相关依据。')} variant="secondary">对比文档差异</Button>
-        <Button disabled={disabled} leadingIcon={<Search aria-hidden="true" />} onClick={() => onSuggest('请查找资料中的相关规定，说明适用条件并标注出处。')} variant="secondary">查找制度规定</Button>
+        <Button disabled={disabled} leadingIcon={<FileText aria-hidden="true" />} onClick={() => onSuggest('summary')} variant="secondary">总结一份资料</Button>
+        <Button disabled={disabled} leadingIcon={<Files aria-hidden="true" />} onClick={() => onSuggest('comparison')} variant="secondary">对比文档差异</Button>
+        <Button disabled={disabled} leadingIcon={<Search aria-hidden="true" />} onClick={() => onSuggest('policy')} variant="secondary">查找制度规定</Button>
       </div>
       <div className="chat-launcher__scope-heading"><span>继续探索你的知识库</span><Link to="/knowledge-bases">查看全部<ArrowUpRight aria-hidden="true" /></Link></div>
       {loading ? <LoadingSkeleton announce columns={3} rows={1} /> : error && knowledgeBases.length === 0 ? <EmptyState

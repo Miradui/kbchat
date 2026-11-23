@@ -17,10 +17,20 @@ export function ChatDocumentPicker({
   knowledgeBases,
   onClose,
   onSelect,
+  title = '选择提问文档',
+  description = '最多选择 5 个知识库中的 20 份文档。仅检索所选版本，不自动扩展到其他资料。',
+  minSelection = 1,
+  maxSelection = 20,
+  initialSelection = [],
 }: {
   knowledgeBases?: KnowledgeBaseOption[];
   onClose: () => void;
   onSelect: (documents: ChatDocument[]) => void;
+  title?: string;
+  description?: string;
+  minSelection?: number;
+  maxSelection?: number;
+  initialSelection?: ChatDocument[];
 }) {
   const [query, setQuery] = useState('');
   const [knowledgeBaseId, setKnowledgeBaseId] = useState('');
@@ -28,7 +38,7 @@ export function ChatDocumentPicker({
   const [attempt, setAttempt] = useState(0);
   const [items, setItems] = useState<GlobalDocumentItem[]>([]);
   const [total, setTotal] = useState(0);
-  const [selected, setSelected] = useState<GlobalDocumentItem[]>([]);
+  const [selected, setSelected] = useState<ChatDocument[]>(() => Array.from(new Map(initialSelection.map((item) => [item.id, item])).values()));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -67,14 +77,18 @@ export function ChatDocumentPicker({
   }, [items, knowledgeBases]);
 
   const tooManyBases = new Set(selected.map((item) => item.knowledgeBaseId)).size > 5;
+  const selectionLimit = Math.min(20, Math.max(1, maxSelection));
+  const selectionMinimum = Math.min(selectionLimit, Math.max(1, minSelection));
+  const invalidSelection = selected.length < selectionMinimum || selected.length > selectionLimit || tooManyBases;
+  const baseName = (item: ChatDocument) => kbFilterOptions.find((kb) => kb.id === item.knowledgeBaseId)?.name || item.knowledgeBaseId;
 
   return (
     <Dialog
       className="chat-doc-picker"
-      description="最多选择 5 个知识库中的 20 份文档。仅检索所选版本，不自动扩展到其他资料。"
+      description={description}
       onClose={onClose}
       open
-      title="选择提问文档"
+      title={title}
     >
       <div className="ui-toolbar">
         <DebouncedSearchInput
@@ -104,12 +118,13 @@ export function ChatDocumentPicker({
         <div aria-label="已选文档" className="chat-doc-picker__chips">
           {selected.map((item) => (
             <span className="ui-tag chat-doc-picker__chip" key={item.id}>
-              <span>{item.filename}</span>
+              <span title={`${item.filename}（${baseName(item)}）`}>{item.filename}（{baseName(item)}）</span>
               <button
-                aria-label={`移除 ${item.filename}`}
+                aria-label={`移除 ${item.filename}（${baseName(item)}）`}
                 className="chat-doc-picker__chip-remove"
                 onClick={() => setSelected((current) => current.filter((value) => value.id !== item.id))}
                 type="button"
+                title={`移除 ${item.filename}`}
               >
                 <X aria-hidden="true" size={12} />
               </button>
@@ -130,16 +145,16 @@ export function ChatDocumentPicker({
           <div className="chat-doc-picker__list">
             {items.map((item) => {
               const checked = selected.some((value) => value.id === item.id);
-              const disabled = selected.length >= 20 && !checked;
+              const disabled = selected.length >= selectionLimit && !checked;
               return (
                 <label className="chat-doc-picker__row" key={item.id}>
                   <Checkbox
-                    aria-label={`选择 ${item.filename}`}
+                    aria-label={`选择 ${item.filename}（${baseName(item)}）`}
                     checked={checked}
                     disabled={disabled}
                     onChange={(event) => setSelected((current) => (
                       event.target.checked
-                        ? [...current, item]
+                        ? current.length >= selectionLimit || current.some((value) => value.id === item.id) ? current : [...current, item]
                         : current.filter((value) => value.id !== item.id)
                     ))}
                   />
@@ -157,9 +172,10 @@ export function ChatDocumentPicker({
       )}
 
       {tooManyBases && <p className="ui-inline-error" role="alert">每次最多选择 5 个知识库的文档。</p>}
+      {selected.length > selectionLimit && <p className="ui-inline-error" role="alert">最多选择 {selectionLimit} 份文档，请移除多余选择。</p>}
       <div className="ui-dialog__actions">
         <Button onClick={onClose} variant="secondary">取消</Button>
-        <Button disabled={!selected.length || tooManyBases} onClick={() => onSelect(selected)}>使用这些文档</Button>
+        <Button disabled={invalidSelection} onClick={() => { if (!invalidSelection) onSelect(selected); }}>使用这些文档</Button>
       </div>
     </Dialog>
   );
