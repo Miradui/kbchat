@@ -1,5 +1,5 @@
 import { Check, ChevronRight, ChevronsUpDown, LogOut, Menu, Monitor, Moon, Search, Settings, Sun, X } from 'lucide-react';
-import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import type { NavigateFunction } from 'react-router-dom';
@@ -7,7 +7,6 @@ import type { NavigateFunction } from 'react-router-dom';
 import { getCurrentUser, logout } from '../api/resources';
 import { BrandMark } from '../components/BrandMark';
 import { UserAvatar } from '../components/UserAvatar';
-import { CommandPalette } from '../components/CommandPalette';
 import { PrimaryNav } from '../components/navigation/PrimaryNav';
 import type { AppSection } from '../components/navigation/PrimaryNav';
 import { IconButton } from '../components/ui/IconButton';
@@ -18,9 +17,15 @@ import { currentUserStore } from '../store/currentUserStore';
 import { THEME_ACCENTS, themeStore } from '../store/themeStore';
 import type { ThemeAccent, ThemeChoice } from '../store/themeStore';
 import { tokenStore } from '../store/tokenStore';
-import { AccountSettingsDialog } from './AccountSettingsDialog';
 import { UploadTasksButton } from '../pages/Documents/UploadTasksButton';
 import { appShellContext } from './appShellContext';
+
+const LazyCommandPalette = lazy(() =>
+  import('../components/CommandPalette').then((m) => ({ default: m.CommandPalette })),
+);
+const LazyAccountSettingsDialog = lazy(() =>
+  import('./AccountSettingsDialog').then((m) => ({ default: m.AccountSettingsDialog })),
+);
 
 export type { AppSection } from '../components/navigation/PrimaryNav';
 
@@ -89,14 +94,18 @@ function getFocusable(container: HTMLElement): HTMLElement[] {
 }
 
 export function AppShell(props: AppShellProps) {
-  const register = useContext(appShellContext);
+  const shell = useContext(appShellContext);
   const location = useLocation();
   useLayoutEffect(() => {
-    if (!register) return;
+    if (!shell) return;
     const { children: _children, ...configuration } = props;
-    return register(location.key, configuration);
-  }, [register, location.key, props]);
-  return register ? props.children : <AppShellFrame {...props} />;
+    shell.sync(location.key, configuration);
+  }, [shell, location.key, props]);
+  useLayoutEffect(() => {
+    if (!shell) return;
+    return () => shell.unregister(location.key);
+  }, [shell, location.key]);
+  return shell ? props.children : <AppShellFrame {...props} />;
 }
 
 export function AppShellFrame({
@@ -399,18 +408,24 @@ export function AppShellFrame({
         <main className={flush ? 'app__content app__content--flush' : 'app__content'} id="main-content" tabIndex={-1}>{children}</main>
       </div>
 
-      <CommandPalette isAdmin={currentUser?.role === 'admin'} open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      {paletteOpen && (
+        <Suspense fallback={null}>
+          <LazyCommandPalette isAdmin={currentUser?.role === 'admin'} open onClose={() => setPaletteOpen(false)} />
+        </Suspense>
+      )}
       {/* Mounted on demand: the dialog reads /auth/me and /system/capabilities,
           and the shell should not pay for those until it is actually opened. */}
       {accountOpen && (
-        <AccountSettingsDialog
-          onClose={() => setAccountOpen(false)}
-          onProfileSaved={(user) => {
-            setUserName(user.displayName.trim() || user.username);
-            setUserAvatarUrl(user.avatarUrl?.trim() ?? '');
-          }}
-          open
-        />
+        <Suspense fallback={null}>
+          <LazyAccountSettingsDialog
+            onClose={() => setAccountOpen(false)}
+            onProfileSaved={(user) => {
+              setUserName(user.displayName.trim() || user.username);
+              setUserAvatarUrl(user.avatarUrl?.trim() ?? '');
+            }}
+            open
+          />
+        </Suspense>
       )}
     </div>
   );

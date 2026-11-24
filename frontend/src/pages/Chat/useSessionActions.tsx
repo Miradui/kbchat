@@ -11,6 +11,7 @@ import {
 } from '../../api/resources';
 import { useToast } from '../../components/feedback/ToastProvider';
 import type { OverflowMenuItem } from '../../components/ui/OverflowMenu';
+import { useEventCallback } from '../../hooks/useEventCallback';
 import type { ChatSession } from '../../types/api';
 import { downloadBlob } from '../../utils/download';
 import { getErrorMessage } from '../../utils/errors';
@@ -141,7 +142,7 @@ export function useSessionActions({
     }, '会话标题更新失败');
   }
 
-  function getSessionActions(target: ChatSession, includeRename = false): OverflowMenuItem[] {
+  const getSessionActions = useEventCallback((target: ChatSession, includeRename = false): OverflowMenuItem[] => {
     return [
       ...(includeRename
         ? [
@@ -200,7 +201,7 @@ export function useSessionActions({
         },
       },
     ];
-  }
+  });
 
   function confirmArchiveSession() {
     if (!confirmArchive) return;

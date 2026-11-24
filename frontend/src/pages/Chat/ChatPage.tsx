@@ -1,13 +1,11 @@
-import { ArrowUpRight, BookOpen, Check, FileText, Files, Globe, Library, MessageSquareText, PanelLeft, Search, Sparkles } from 'lucide-react';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import { FileText, Globe, Library, PanelLeft, Search, Sparkles } from 'lucide-react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { SetStateAction } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import {
   setChatMessageFeedback,
 } from '../../api/resources';
-import { EmptyState } from '../../components/feedback/EmptyState';
-import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { RerankFallbackNotice } from '../../components/feedback/RerankFallbackNotice';
 import { useToast } from '../../components/feedback/ToastProvider';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
@@ -25,36 +23,36 @@ import { tokenStore } from '../../store/tokenStore';
 import { chatDraftStore } from '../../store/chatDraftStore';
 import { formatDateTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
-import { ChatComposer } from './ChatComposer';
+import { ChatScopedComposer } from './ChatScopedComposer';
+import { ChatEmptyState } from './ChatEmptyState';
+import { ChatModals } from './ChatModals';
+import { RegenerationNotice, UnconfirmedSendNotice } from './ChatRecoveryNotices';
 import { useEventCallback } from '../../hooks/useEventCallback';
-import { ChatFeedbackDialog } from './ChatFeedbackDialog';
 import { ChatMessageSearch, useChatMessageSearch } from './ChatMessageSearch';
-import { ChatSearchDialog } from './ChatSearchDialog';
-import { ChatBookmarkDialog, ChatBookmarksDialog } from './ChatBookmarks';
 import { ChatMarkdown } from './ChatMarkdown';
 import { ChatAssistantLabel, CitationCard, MessageBubble } from './ChatMessage';
 import { ChatSessionRail } from './ChatSessionRail';
-import { ChatSessionActionDialogs } from './ChatSessionActionDialogs';
-import { ChatSourcePreview } from './ChatSourcePreview';
 import { canUnlessUnknown } from '../../utils/access';
 import type { ChatSessionScope } from './ChatSessionRail';
 import { useChatSessions } from './useChatSessions';
 import { useChatThread } from './useChatThread';
 import { useChatInteractionState } from './useChatInteractionState';
-import { chatDraftScope, useChatDraft } from './useChatDraft';
+import { chatDraftScope } from './useChatDraft';
 import { useSessionActions } from './useSessionActions';
 import { useSessionRailPreferences } from './useSessionRailPreferences';
 import { useChatAnswerVersions } from './useChatAnswerVersions';
 import { ChatStreamView, StreamAnnouncement } from './ChatStreamView';
-import { ChatDocumentPicker } from './ChatDocumentPicker';
 import { documentChatUrl } from './documentChatScope';
 import { chatSessionUrl } from './chatSessionUrl';
 import { consumeHomeQuestion, readHomeQuestion } from './homeQuestionNavigation';
-import { ChatTaskDialog, type ChatTaskKind, type ChatTaskResult } from './ChatTaskDialog';
-import { ChatNoBasisActions } from './ChatNoBasisActions';
+import type { ChatTaskKind, ChatTaskResult } from './ChatTaskDialog';
 import { useDraftDocuments } from './useDraftDocuments';
 import { answerQuestions } from './answerQuestions';
 import type { ChatDocument } from './documentChatScope';
+
+const LazyChatSourcePreview = lazy(() =>
+  import('./ChatSourcePreview').then((m) => ({ default: m.ChatSourcePreview })),
+);
 
 /**
  * `/chat` is the draft state and `/chat/:sessionId` is a thread.
@@ -118,7 +116,21 @@ export function ChatPage() {
     ? `home:${homeQuestion.id}` : chatDraftScope(sessionId, draftKnowledgeBaseIds, draftDocumentIds);
   const draftNavigationState = useMemo(() => !sessionId && homeQuestion?.userId === user?.id && homeQuestion
     ? consumeHomeQuestion(location.state, homeQuestion) : undefined, [homeQuestion, location.state, sessionId, user?.id]);
-  const { draft, setDraft, moveToSession, acknowledge } = useChatDraft(user?.id, draftScope);
+  const readDraft = useCallback(
+    () => (user?.id ? chatDraftStore.get(user.id, draftScope) : ''),
+    [draftScope, user?.id],
+  );
+  const setDraft = useCallback((value: SetStateAction<string>) => {
+    if (!user?.id) return;
+    const next = typeof value === 'function' ? value(chatDraftStore.get(user.id, draftScope)) : value;
+    chatDraftStore.set(user.id, draftScope, next);
+  }, [draftScope, user?.id]);
+  const moveToSession = useCallback((targetSessionId: string) => {
+    if (user?.id) chatDraftStore.move(user.id, draftScope, `session:${targetSessionId}`);
+  }, [draftScope, user?.id]);
+  const acknowledge = useCallback((targetSessionId: string, question: string) => {
+    if (user?.id) chatDraftStore.acknowledge(user.id, `session:${targetSessionId}`, question);
+  }, [user?.id]);
   const preparingHomeQuestion = !sessionId && homeQuestion?.id === pendingHomeQuestion?.id && user?.id === pendingHomeQuestion?.userId
     ? pendingHomeQuestion : null;
   const targetMessageId = searchParams.get('messageId') ?? '';
@@ -505,19 +517,53 @@ export function ChatPage() {
     runEdit(messageId, content);
   });
   const focusCitation = useEventCallback((messageId: string, index: number | null) => setFocusedCitation({ messageId, index }));
+  const handleChooseDocumentsForQuestion = useEventCallback((question: string) => {
+    setDocumentPickerQuestion(question);
+    setDocumentPickerOpen(true);
+  });
+  const handleRefineQuestion = useEventCallback((question: string) => {
+    setDraft((current) => current && current !== question ? `${current}\n\n${question}` : question);
+    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.chat-composer textarea')?.focus());
+  });
+  const checkRegenerationNow = useEventCallback(() => {
+    if (!sessionBusyRef.current) void thread.checkRegeneration();
+  });
 
-  const topbarActions = currentSession ? (
-    <OverflowMenu disabled={interactionLocked || sessionExporting} label="会话操作" items={getSessionActions(currentSession)} />
-  ) : undefined;
+  const topbarActions = useMemo(() => (
+    currentSession
+      ? <OverflowMenu disabled={interactionLocked || sessionExporting} label="会话操作" items={getSessionActions(currentSession)} />
+      : undefined
+  ), [currentSession, getSessionActions, interactionLocked, sessionExporting]);
+
+  const openSessionRail = useEventCallback(() => {
+    if (isNarrow) setRailOpen(true);
+    else {
+      if (railSuppressedForPreview) setSourcePreview(null);
+      setRailPreferences({ ...railPreferences, collapsed: false });
+    }
+  });
+
+  const topbarLeading = useMemo(() => (
+    (!historyVisible || isNarrow) ? (
+      <IconButton
+        aria-expanded={historyVisible}
+        label="打开会话列表"
+        onClick={openSessionRail}
+        ref={railToggleRef}
+      >
+        <PanelLeft aria-hidden="true" />
+      </IconButton>
+    ) : undefined
+  ), [historyVisible, isNarrow, openSessionRail]);
 
   const showLauncher = !sessionId && !thread.loading && thread.messages.length === 0
     && !preparingHomeQuestion && !thread.pendingQuestion && !thread.failedSend && !thread.unconfirmedSend && !thread.stoppedStream;
 
-  function startNewChat() {
+  const startNewChat = useEventCallback(() => {
     if (sessionBusyRef.current || thread.hasPendingWrite()) return;
     setRailOpen(false);
     navigate('/chat');
-  }
+  });
 
   function openDocumentDraft(documents: ChatDocument[], question: string) {
     if (!user || interactionLocked || thread.hasPendingWrite()) return;
@@ -534,7 +580,8 @@ export function ChatPage() {
 
   function applyTask(result: ChatTaskResult) {
     if (interactionLocked) return;
-    const question = draft ? `${draft}\n\n${result.question}` : result.question;
+    const current = readDraft();
+    const question = current ? `${current}\n\n${result.question}` : result.question;
     if (result.documents) openDocumentDraft(result.documents, question);
     else setDraft(question);
     setTaskKind(null);
@@ -584,8 +631,18 @@ export function ChatPage() {
     />
   );
 
+  const submitQuestion = useEventCallback((question: string) => {
+    if (sessionBusyRef.current) return;
+    // A draft thread needs the knowledge base pinned in the URL before
+    // the session is created.
+    if (!sessionId && !urlKnowledgeBaseId && activeKnowledgeBaseId && !draftDocumentIds.length) {
+      setSearchParams({ knowledgeBaseId: activeKnowledgeBaseId }, { replace: true, state: draftNavigationState });
+    }
+    void thread.send(question);
+  });
+
   const composer = (
-    <ChatComposer
+    <ChatScopedComposer
       tools={<>
         {!sessionId ? <Button aria-label="自动检索全部可访问知识库" aria-pressed={automaticScope && !draftDocumentIds.length}
           className="chat-composer__scope-button" disabled={interactionLocked} leadingIcon={<Globe aria-hidden="true" />}
@@ -595,28 +652,16 @@ export function ChatPage() {
           onClick={() => { setDocumentPickerQuestion(null); setDocumentPickerOpen(true); }} variant="ghost">指定文档提问</Button>}
       </>}
       disabled={!user || !canSend || thread.sending || sessionBusy || Boolean(preparingHomeQuestion)}
+      draftScope={draftScope}
       error={thread.rateLimitError}
       retryNotice={thread.rateLimitNotice}
       hint={composerHint}
       onCancel={thread.cancelSend}
-      onChange={(value) => {
-        setDraft(value);
-        thread.dismissRateLimitError();
-      }}
-      onSubmit={() => {
-        if (sessionBusyRef.current) return;
-        const question = draft.trim();
-        if (!question) return;
-        // A draft thread needs the knowledge base pinned in the URL before
-        // the session is created.
-        if (!sessionId && !urlKnowledgeBaseId && activeKnowledgeBaseId && !draftDocumentIds.length) {
-          setSearchParams({ knowledgeBaseId: activeKnowledgeBaseId }, { replace: true, state: draftNavigationState });
-        }
-        void thread.send(question);
-      }}
+      onDismissRateLimitError={thread.dismissRateLimitError}
+      onSubmitQuestion={submitQuestion}
       placeholder={(currentSession?.documents?.length || draftDocumentIds.length) ? '针对所选文档提问…' : automaticScope ? '直接提问，自动检索相关知识库…' : multiBase ? `向 ${activeKnowledgeBaseIds.length} 个知识库提问…` : activeKnowledgeBase ? `向「${activeKnowledgeBase.name}」提问…` : '选择知识库后开始提问…'}
       sending={thread.sending}
-      value={draft}
+      userId={user?.id}
     />
   );
 
@@ -629,14 +674,7 @@ export function ChatPage() {
       ]}
       flush
       topbarActions={topbarActions}
-      topbarLeading={(!historyVisible || isNarrow) && <IconButton label="打开会话列表" aria-expanded={historyVisible} ref={railToggleRef}
-        onClick={() => {
-          if (isNarrow) setRailOpen(true);
-          else {
-            if (railSuppressedForPreview) setSourcePreview(null);
-            setRailPreferences({ ...railPreferences, collapsed: false });
-          }
-        }}><PanelLeft aria-hidden="true" /></IconButton>}
+      topbarLeading={topbarLeading}
       onNewChat={startNewChat}
       newChatDisabled={interactionLocked}
     >
@@ -773,17 +811,13 @@ export function ChatPage() {
                     key={id}
                     located={messageSearch.locatedId === message.id}
                     knowledgeBaseId={activeKnowledgeBaseId || undefined}
-                    onOpenCitation={(citation, index) => openSource(citation, index, message.id)}
+                    onOpenCitation={openSource}
                     message={message}
-                    nextActions={loadedSession && originalQuestions.has(message.id) ? <ChatNoBasisActions
-                      key={message.id} session={loadedSession} message={message} question={originalQuestions.get(message.id)!}
-                      disabled={interactionLocked || archived || Boolean(thread.hasPendingWrite())}
-                      onChooseDocuments={(question) => { setDocumentPickerQuestion(question); setDocumentPickerOpen(true); }}
-                      onRefineQuestion={(question) => {
-                        setDraft((current) => current && current !== question ? `${current}\n\n${question}` : question);
-                        requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.chat-composer textarea')?.focus());
-                      }}
-                    /> : undefined}
+                    noBasisSession={loadedSession}
+                    noBasisQuestion={originalQuestions.get(message.id)}
+                    noBasisDisabled={interactionLocked || archived || Boolean(thread.hasPendingWrite())}
+                    onChooseDocuments={handleChooseDocumentsForQuestion}
+                    onRefineQuestion={handleRefineQuestion}
                     editDraft={editingMessageId === message.id ? editingDraft : ''}
                     editing={editingMessageId === message.id}
                     editSaving={thread.editingId === message.id}
@@ -803,11 +837,9 @@ export function ChatPage() {
                           <RegenerationNotice
                             allowWrite={!archived}
                             blocked={sessionBusy}
-                            onCheck={() => {
-                              if (!sessionBusyRef.current) void thread.checkRegeneration();
-                            }}
+                            onCheck={checkRegenerationNow}
                             onRegenerate={regenerateAnswer}
-                            thread={thread}
+                            regeneration={thread.regeneration}
                           />
                         )
                         : undefined
@@ -953,219 +985,63 @@ export function ChatPage() {
           {!showLauncher && composer}
         </section>
         {visibleSource && (
-          <ChatSourcePreview
-            canDownload={canUnlessUnknown(knowledgeBases.find((kb) => kb.id === (visibleSource.citation.knowledgeBaseId ?? activeKnowledgeBaseId)), 'document.download')}
-            citation={visibleSource.citation}
-            question={visibleSource.question}
-            relatedDocumentIds={visibleSource.relatedDocumentIds}
-            index={visibleSource.index}
-            key={`${sourceScope}:${visibleSource.citation.documentId}`}
-            knowledgeBaseId={visibleSource.citation.knowledgeBaseId ?? activeKnowledgeBaseId}
-            onClose={closeSource}
-          />
+          <Suspense fallback={null}>
+            <LazyChatSourcePreview
+              canDownload={canUnlessUnknown(knowledgeBases.find((kb) => kb.id === (visibleSource.citation.knowledgeBaseId ?? activeKnowledgeBaseId)), 'document.download')}
+              citation={visibleSource.citation}
+              question={visibleSource.question}
+              relatedDocumentIds={visibleSource.relatedDocumentIds}
+              index={visibleSource.index}
+              key={`${sourceScope}:${visibleSource.citation.documentId}`}
+              knowledgeBaseId={visibleSource.citation.knowledgeBaseId ?? activeKnowledgeBaseId}
+              onClose={closeSource}
+            />
+          </Suspense>
         )}
       </div>
 
-      {taskKind && <ChatTaskDialog kind={taskKind} knowledgeBases={knowledgeBases} onClose={() => setTaskKind(null)} onApply={applyTask} />}
-      {documentPickerOpen && <ChatDocumentPicker knowledgeBases={knowledgeBases} onClose={() => setDocumentPickerOpen(false)} onSelect={(documents) => { setDocumentPickerOpen(false); openDocumentDraft(documents, documentPickerQuestion ?? draft); }} />}
-      {bookmarkTarget && <ChatBookmarkDialog key={bookmarkTarget.id} target={{ messageId: bookmarkTarget.id, sessionId: bookmarkTarget.sessionId, bookmark: bookmarkTarget.bookmark }}
-        onClose={() => setBookmarkTarget(null)} onUpdated={thread.updateMessageBookmark} onInaccessible={thread.handleAccessLost} />}
-      {bookmarksOpen && <ChatBookmarksDialog onClose={() => setBookmarksOpen(false)} onUpdated={thread.updateMessageBookmark} onInaccessible={thread.handleAccessLost} onSelect={(item) => {
-        if (sessionBusyRef.current || thread.hasPendingWrite()) return;
-        messageSearch.clear(); setBookmarksOpen(false); setRailOpen(false);
-        if (item.sessionId === sessionId && thread.messages.some((message) => message.id === item.messageId)) void loadMessageContext(item.messageId);
-        navigate(chatSessionUrl(item.sessionId, urlKnowledgeBaseId, item.messageId));
-      }} />}
-      {searchDialogOpen && <ChatSearchDialog onClose={() => setSearchDialogOpen(false)} onSelect={(item) => {
-        if (sessionBusyRef.current || thread.hasPendingWrite()) return;
-        messageSearch.clear();
-        setSearchDialogOpen(false);
-        setRailOpen(false);
-        if (item.sessionId === sessionId && thread.messages.some((message) => message.id === item.messageId)) {
-          void loadMessageContext(item.messageId);
-        }
-        navigate(chatSessionUrl(item.sessionId, urlKnowledgeBaseId, item.messageId));
-      }} />}
-
-      <ChatSessionActionDialogs actions={sessionActions} />
-
-      {editConfirm && (
-        <ConfirmDialog
-          busy={Boolean(thread.editingId)}
-          confirmLabel="删除并重新生成"
-          description="将删除这条提问之后的全部消息，并基于新的提问重新生成回答。此操作不可撤销。"
-          onCancel={() => setEditConfirm(null)}
-          onConfirm={() => {
-            const pending = editConfirm;
-            setEditConfirm(null);
-            runEdit(pending.messageId, pending.content);
-          }}
-          title="编辑这条提问会删除后续消息"
-        />
-      )}
-
-      {feedbackTarget && <ChatFeedbackDialog key={feedbackTarget.id} initial={feedbackTarget.feedback}
-        onClose={() => setFeedbackTarget(null)} onSubmit={(details) => handleMessageFeedback(feedbackTarget.id, 'negative', details)} />}
+      <ChatModals
+        bookmarksOpen={bookmarksOpen}
+        bookmarkTarget={bookmarkTarget}
+        documentPickerOpen={documentPickerOpen}
+        editBusy={Boolean(thread.editingId)}
+        editConfirm={editConfirm}
+        feedbackTarget={feedbackTarget}
+        knowledgeBases={knowledgeBases}
+        onApplyTask={applyTask}
+        onCancelEditConfirm={() => setEditConfirm(null)}
+        onCloseBookmarkTarget={() => setBookmarkTarget(null)}
+        onCloseBookmarks={() => setBookmarksOpen(false)}
+        onCloseDocumentPicker={() => setDocumentPickerOpen(false)}
+        onCloseFeedback={() => setFeedbackTarget(null)}
+        onCloseSearchDialog={() => setSearchDialogOpen(false)}
+        onCloseTask={() => setTaskKind(null)}
+        onConfirmEdit={(pending) => {
+          setEditConfirm(null);
+          runEdit(pending.messageId, pending.content);
+        }}
+        onInaccessible={thread.handleAccessLost}
+        onNavigateToHit={(item, closeDialog) => {
+          if (sessionBusyRef.current || thread.hasPendingWrite()) return;
+          messageSearch.clear();
+          closeDialog();
+          setRailOpen(false);
+          if (item.sessionId === sessionId && thread.messages.some((message) => message.id === item.messageId)) {
+            void loadMessageContext(item.messageId);
+          }
+          navigate(chatSessionUrl(item.sessionId, urlKnowledgeBaseId, item.messageId));
+        }}
+        onSelectDocuments={(documents) => {
+          setDocumentPickerOpen(false);
+          openDocumentDraft(documents, documentPickerQuestion ?? readDraft());
+        }}
+        onSubmitFeedback={(messageId, details) => handleMessageFeedback(messageId, 'negative', details)}
+        onUpdateMessageBookmark={thread.updateMessageBookmark}
+        searchDialogOpen={searchDialogOpen}
+        sessionActions={sessionActions}
+        taskKind={taskKind}
+      />
 
     </AppShell>
-  );
-}
-
-/**
- * Draft-state body. Absorbs what used to be a separate `/chat` landing page.
- */
-function ChatEmptyState({
-  documentCount = 0, knowledgeBases, loading, error, onRetry, selectedIds, disabled, onSelect, composer, onSuggest,
-}: {
-  documentCount?: number;
-  knowledgeBases: Array<{ id: string; name: string; description: string }>;
-  loading: boolean;
-  error: string;
-  onRetry: () => void;
-  selectedIds: string[];
-  disabled: boolean;
-  onSelect: (id: string) => void;
-  composer: ReactNode;
-  onSuggest: (kind: ChatTaskKind) => void;
-}) {
-  return (
-    <div className="chat-launcher">
-      <span className="chat-launcher__mark"><Sparkles aria-hidden="true" />你的知识，随时可用</span>
-      <h1>{documentCount ? '针对指定文档提问' : selectedIds.length ? '在指定知识库中提问' : '今天，想从资料中了解什么？'}</h1>
-      <p>{documentCount ? '本会话只检索选定的 ' + documentCount + ' 份文档版本，回答会标注资料来源。' : selectedIds.length ? '本会话仅检索所选知识库，回答会标注资料来源。' : '把问题交给知汇，每一个答案都能找到出处。'}</p>
-      {composer}
-      <div aria-label="提问建议" className="chat-launcher__suggestions">
-        <Button disabled={disabled} leadingIcon={<FileText aria-hidden="true" />} onClick={() => onSuggest('summary')} variant="secondary">总结一份资料</Button>
-        <Button disabled={disabled} leadingIcon={<Files aria-hidden="true" />} onClick={() => onSuggest('comparison')} variant="secondary">对比文档差异</Button>
-        <Button disabled={disabled} leadingIcon={<Search aria-hidden="true" />} onClick={() => onSuggest('policy')} variant="secondary">查找制度规定</Button>
-      </div>
-      <div className="chat-launcher__scope-heading"><span>继续探索你的知识库</span><Link to="/knowledge-bases">查看全部<ArrowUpRight aria-hidden="true" /></Link></div>
-      {loading ? <LoadingSkeleton announce columns={3} rows={1} /> : error && knowledgeBases.length === 0 ? <EmptyState
-        action={<Button onClick={onRetry} variant="secondary">重试知识库</Button>}
-        description={error}
-        title="知识库暂不可用"
-      /> : knowledgeBases.length === 0 ? <EmptyState
-        action={<Link className="ui-button ui-button--primary" to="/knowledge-bases?intent=create"><span>新建知识库</span></Link>}
-        description="AI 问答基于知识库中的文档作答。先创建一个知识库并导入文档。"
-        title="还没有可提问的知识库"
-      /> : <>
-        <div aria-label="可提问的知识库" className="chat-launcher__list">
-          {knowledgeBases.map((knowledgeBase) => (
-            <button
-              aria-pressed={selectedIds.includes(knowledgeBase.id)}
-              className={selectedIds.includes(knowledgeBase.id) ? 'chat-launcher__item is-selected' : 'chat-launcher__item'}
-              disabled={disabled || (selectedIds.length >= 5 && !selectedIds.includes(knowledgeBase.id))}
-              key={knowledgeBase.id}
-              onClick={() => onSelect(knowledgeBase.id)}
-              type="button"
-            >
-              <span className="chat-launcher__book"><BookOpen aria-hidden="true" /></span>
-              <span className="ui-cell-stack"><strong>{knowledgeBase.name}</strong><small>{knowledgeBase.description || '点击限定提问范围'}</small></span>
-              {selectedIds.includes(knowledgeBase.id) && <Check aria-hidden="true" className="chat-launcher__selected" />}
-            </button>
-          ))}
-        </div>
-        <p className="chat-launcher__hint">{selectedIds.length > 0 && !documentCount ? '已指定 ' + selectedIds.length + ' 个知识库，本会话仅在所选范围内检索。' : '点击卡片限定提问范围，最多选择 5 个知识库。'}</p>
-      </>}
-    </div>
-  );
-}
-
-/**
- * Shown while a send whose outcome is unknown reconciles itself. The user is
- * only asked to decide after the automatic checks are exhausted.
- */
-function UnconfirmedSendNotice({
-  question,
-  blocked,
-  checking,
-  needsDecision,
-  onCheck,
-  onResend,
-}: {
-  question: string;
-  blocked: boolean;
-  checking: boolean;
-  needsDecision: boolean;
-  onCheck: () => void;
-  onResend: () => void;
-}) {
-  if (!needsDecision) {
-    return (
-      <div className="chat-recovery" role="status">
-        <strong>正在确认这条消息…</strong>
-        <p>网络结果暂时未知，正在自动核对。这条问题不会被重复发送。</p>
-        <p className="chat-recovery__question" aria-label="正在核对的问题">“{question}”</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="chat-recovery chat-recovery--decision" role="alert">
-      <strong>没有找到这条消息</strong>
-      <p>自动核对后仍未看到这条问题。确认后才会再次发送，原请求编号会保持不变。</p>
-      <p className="chat-recovery__question" aria-label="待确认的问题">“{question}”</p>
-      <div className="chat-recovery__actions">
-        <Button disabled={checking || blocked} loading={checking} loadingLabel="检查中" variant="secondary" onClick={onCheck}>
-          再检查一次
-        </Button>
-        <Button disabled={checking || blocked} variant="ghost" onClick={onResend}>确认重新发送</Button>
-      </div>
-    </div>
-  );
-}
-
-function RegenerationNotice({
-  allowWrite,
-  blocked,
-  onCheck,
-  onRegenerate,
-  thread,
-}: {
-  allowWrite: boolean;
-  blocked: boolean;
-  onCheck: () => void;
-  onRegenerate: (messageId: string) => void;
-  thread: ReturnType<typeof useChatThread>;
-}) {
-  const state = thread.regeneration;
-  if (!state) return null;
-
-  if (state.kind === 'failed') {
-    return (
-      <div className="chat-recovery chat-recovery--failed" role="alert">
-        <strong>重新生成失败</strong>
-        <p>{state.message}</p>
-        {allowWrite && (
-          <div className="chat-recovery__actions">
-            <Button disabled={blocked} variant="secondary" onClick={() => onRegenerate(state.messageId)}>重试</Button>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  const needsDecision = state.autoChecksDone > 0;
-  return (
-    <div className={needsDecision ? 'chat-recovery chat-recovery--decision' : 'chat-recovery'} role={needsDecision ? 'alert' : 'status'}>
-      <strong>{needsDecision ? '没有找到新的回答' : '正在确认重新生成结果…'}</strong>
-      <p>{state.message}</p>
-      <div className="chat-recovery__actions">
-        <Button
-          disabled={state.checking || blocked}
-          loading={state.checking}
-          loadingLabel="检查中"
-          variant="secondary"
-          onClick={onCheck}
-        >
-          再检查一次
-        </Button>
-        {needsDecision && allowWrite && (
-          <Button disabled={state.checking || blocked} variant="ghost" onClick={() => onRegenerate(state.messageId)}>
-            确认重新生成
-          </Button>
-        )}
-      </div>
-    </div>
   );
 }

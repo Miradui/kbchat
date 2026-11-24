@@ -5,9 +5,11 @@ import { Link } from 'react-router-dom';
 
 import { Button } from '../../components/ui/Button';
 import { IconButton } from '../../components/ui/IconButton';
+import { useEventCallback } from '../../hooks/useEventCallback';
 import type {
   ChatFeedbackRating,
   ChatMessage as ChatMessageType,
+  ChatSession,
   Citation,
 } from '../../types/api';
 import { formatNullableScore, formatScore } from '../../utils/format';
@@ -15,6 +17,7 @@ import { copyText } from '../../utils/clipboard';
 import { tableSourceLabel } from '../../utils/tableSource';
 import { answerStatusNotice } from './answerStatus';
 import { ChatMarkdown } from './ChatMarkdown';
+import { ChatNoBasisActions } from './ChatNoBasisActions';
 import { ChatAnswerVersionNavigation } from './ChatAnswerVersionNavigation';
 
 const PREVIEW_LENGTH = 220;
@@ -26,7 +29,7 @@ type MessageBubbleProps = {
   /** Index of the citation to scroll to and highlight, if any. */
   focusedCitationIndex: number | null;
   onFocusCitation: (messageId: string, index: number | null) => void;
-  onOpenCitation?: (citation: Citation, index: number) => void;
+  onOpenCitation?: (citation: Citation, index: number, messageId?: string) => void;
   canRegenerate: boolean;
   canEdit?: boolean;
   regenerating: boolean;
@@ -43,6 +46,11 @@ type MessageBubbleProps = {
   /** Recovery affordance rendered under this message, if it owns one. */
   recovery?: ReactNode;
   nextActions?: ReactNode;
+  noBasisSession?: ChatSession | null;
+  noBasisQuestion?: string;
+  noBasisDisabled?: boolean;
+  onChooseDocuments?: (question: string) => void;
+  onRefineQuestion?: (question: string) => void;
   editing?: boolean;
   editDraft?: string;
   editSaving?: boolean;
@@ -74,6 +82,11 @@ export const MessageBubble = memo(function MessageBubble({
   versionIndex = 0, versionCount = 1, versionGroupId = '', versionsDisabled = false, onVersionChange,
   recovery,
   nextActions,
+  noBasisSession,
+  noBasisQuestion,
+  noBasisDisabled = false,
+  onChooseDocuments,
+  onRefineQuestion,
   editing = false,
   editDraft = '',
   editSaving = false,
@@ -120,6 +133,11 @@ export const MessageBubble = memo(function MessageBubble({
     if (focusedCitationIndex !== null) setSourcesOpen(true);
   }, [focusedCitationIndex, message.id]);
 
+  const handleSelectCitation = useEventCallback((index: number) => {
+    onFocusCitation(message.id, index);
+    onOpenCitation?.(message.citations[index], index + 1, message.id);
+  });
+
   return (
     <article aria-label={located ? '已定位消息' : undefined} className={`chat-msg chat-msg--${message.role}${located ? ' is-located' : ''}`} id={`chat-message-${message.id}`} tabIndex={-1}>
       <div className="chat-msg__body">
@@ -147,10 +165,7 @@ export const MessageBubble = memo(function MessageBubble({
             citations={message.citations}
             content={message.content}
             focusedIndex={focusedCitationIndex}
-            onSelect={(index) => {
-              onFocusCitation(message.id, index);
-              onOpenCitation?.(message.citations[index], index + 1);
-            }}
+            onSelect={handleSelectCitation}
           />
         ) : <p className="chat-msg__content">{message.content}</p>}
 
@@ -200,7 +215,16 @@ export const MessageBubble = memo(function MessageBubble({
           </p>
         )}
 
-        {isAssistant && nextActions}
+        {isAssistant && (nextActions ?? (noBasisSession && noBasisQuestion && onChooseDocuments && onRefineQuestion ? (
+          <ChatNoBasisActions
+            disabled={noBasisDisabled}
+            message={message}
+            onChooseDocuments={onChooseDocuments}
+            onRefineQuestion={onRefineQuestion}
+            question={noBasisQuestion}
+            session={noBasisSession}
+          />
+        ) : null))}
 
         {isAssistant && (
           <div className="chat-msg__foot">
@@ -281,7 +305,7 @@ export const MessageBubble = memo(function MessageBubble({
                 index={index + 1}
                 key={`${citation.documentId}-${citation.chunkId}-${index}`}
                 knowledgeBaseId={knowledgeBaseId}
-                onOpen={onOpenCitation ? () => onOpenCitation(citation, index + 1) : undefined}
+                onOpen={onOpenCitation ? () => onOpenCitation(citation, index + 1, message.id) : undefined}
               />
             ))}
           </div>

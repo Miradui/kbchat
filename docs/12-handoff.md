@@ -1,8 +1,10 @@
 # 当前交接
 
-更新：2026-11-23。此页只保留继续工作需要的状态；详细合同见 [文档导航](README.md)，验证记录见 [验证与发布验收](14-verification.md)，未关闭工作见 [有效待办](15-backlog.md)。
+更新：2026-11-24。此页只保留继续工作需要的状态；详细合同见 [文档导航](README.md)，验证记录见 [验证与发布验收](14-verification.md)，未关闭工作见 [有效待办](15-backlog.md)。
 
 ## 当前代码与工作区
+
+- 前端性能优化与结构拆分（第 1–9 项）已在 `dev` 完成本地实现：隔离 `ChatPage` 草稿输入与 `AppShell`/`WorkspaceLayout` 外壳同步渲染，流式期间推迟 `CodeBlock` 语法高亮并记忆化引用上下文；按需懒加载 11 个非首屏重弹窗（`index-*.js` 434,612 B 降至 384,215 B，`ChatPage-*.js` 110,796 B 降至 96,610 B，`QualityIssueDialog-*.js` 91,994 B 降至 11,030 B）并补全 12 个路由分片校验（含 `UsersPage`）；扩展首页、知识库与文档查询至 React Query 并支持 >100 知识库分页加载与就地筛选；`frontend/nginx.conf` 启用 gzip（`/api/` 关闭）及 `/pdfjs/` 30 天缓存；按域拆分 `types/api`、`api/resources`、`ChatPage`、`useChatThread`、`DocumentImportDialog` 与 `DocumentsPage` 并保留既有导出合同。全前端 `lint`（0 警告）、`typecheck:test`、119 份测试文件 1,019 项单测及生产构建（`Verified 12 route-level JavaScript chunks.`）通过；Nginx 容器实测、真实浏览器、真实后端与远端 CI 未运行；仅本地提交，未推送或部署。见 [PERF-FE-001](14-verification.md#perf-fe-001前端性能优化与大文件拆分2026-11-24)。
 
 - 体验评审第一批已完成本地实现：R03–R05 提供资料／任务选择与可编辑问题；R02 导入后准确指定本次资料、部分失败显式选子集；明确无依据的回答连接个人跟进并保留确切回答入口。文档范围发送前核验，自动／多库补资料需明确目标。全前端1012项通过，审查修复后156项受影响复测、类型/lint/构建及1920×1080六组浏览器流程通过。仅本地提交，未推送或部署；HTTP/SSE为隔离夹具，模型质量未复验。职责、版本和检查证据见 [UX-FLOW-001](14-verification.md#ux-flow-001体验评审第一批任务衔接2026-11-23)。其余体验建议与BENCH-RAG-001-Q继续保留。
 

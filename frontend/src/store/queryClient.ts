@@ -2,6 +2,13 @@ import { QueryClient } from '@tanstack/react-query';
 import { tokenStore } from './tokenStore';
 
 export const knowledgeBaseOptionsKey = ['knowledge-base-options'] as const;
+export const knowledgeBaseListKey = ['knowledge-base-list'] as const;
+export const knowledgeBaseDetailKey = ['knowledge-base-detail'] as const;
+export const homeSummaryKey = ['home-summary'] as const;
+export const homeActivitiesKey = ['home-activities'] as const;
+export const documentListKey = ['document-list'] as const;
+export const documentCountsKey = ['document-counts'] as const;
+
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -31,7 +38,28 @@ export async function invalidateKnowledgeBaseOptionsAfter<T>(request: Promise<T>
   const revision = tokenStore.getRevision();
   const result = await request;
   if (revision === tokenStore.getRevision()) {
-    await queryClient.invalidateQueries({ queryKey: knowledgeBaseOptionsKey });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: knowledgeBaseOptionsKey }),
+      queryClient.invalidateQueries({ queryKey: knowledgeBaseListKey, refetchType: 'none' }),
+      queryClient.invalidateQueries({ queryKey: knowledgeBaseDetailKey, refetchType: 'none' }),
+      queryClient.invalidateQueries({ queryKey: homeSummaryKey }),
+      queryClient.invalidateQueries({ queryKey: homeActivitiesKey }),
+    ]);
+  }
+  return result;
+}
+
+export async function invalidateDocumentQueriesAfter<T>(request: Promise<T>): Promise<T> {
+  const revision = tokenStore.getRevision();
+  const result = await request;
+  if (revision === tokenStore.getRevision()) {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: documentListKey, refetchType: 'none' }),
+      queryClient.invalidateQueries({ queryKey: documentCountsKey, refetchType: 'none' }),
+      queryClient.invalidateQueries({ queryKey: knowledgeBaseDetailKey, refetchType: 'none' }),
+      queryClient.invalidateQueries({ queryKey: homeSummaryKey }),
+      queryClient.invalidateQueries({ queryKey: homeActivitiesKey }),
+    ]);
   }
   return result;
 }

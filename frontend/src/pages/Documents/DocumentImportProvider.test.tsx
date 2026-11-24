@@ -58,12 +58,13 @@ afterEach(() => { vi.useRealTimers(); });
 
 async function selectFiles(user: ReturnType<typeof userEvent.setup>, files: File[] = [file]) {
   await user.click(screen.getByRole('button', { name: '导入文档' }));
-  await user.upload(screen.getByLabelText('选择文档文件'), files);
+  await user.upload(await screen.findByLabelText('选择文档文件'), files);
   await user.click(screen.getByRole('button', { name: '开始导入' }));
 }
 
 async function submitWithTimers(files: File[] = [file]) {
   fireEvent.click(screen.getByRole('button', { name: '导入文档' }));
+  await act(async () => { await vi.dynamicImportSettled(); });
   fireEvent.change(screen.getByLabelText('选择文档文件'), { target: { files } });
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: '开始导入' })); });
   fireEvent.click(screen.getByRole('button', { name: '上传任务' }));
@@ -74,7 +75,7 @@ describe('DocumentImportProvider', () => {
     const user = userEvent.setup();
     renderApp();
     await user.click(screen.getByRole('button', { name: '导入文档' }));
-    await user.click(screen.getByRole('button', { name: '粘贴文本' }));
+    await user.click(await screen.findByRole('button', { name: '粘贴文本' }));
     await user.type(screen.getByRole('textbox', { name: '文档标题' }), '尚未入队的标题');
     await user.type(screen.getByRole('textbox', { name: '正文' }), '尚未入队的正文');
     await user.click(screen.getByRole('button', { name: '收起窗口' }));

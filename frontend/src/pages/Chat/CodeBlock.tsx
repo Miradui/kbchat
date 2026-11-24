@@ -1,5 +1,5 @@
 import { Check, Copy } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createLowlight } from 'lowlight';
 import type { RootContent } from 'hast';
 import bash from 'highlight.js/lib/languages/bash';
@@ -16,6 +16,8 @@ import yaml from 'highlight.js/lib/languages/yaml';
 import { IconButton } from '../../components/ui/IconButton';
 import { copyText } from '../../utils/clipboard';
 
+export const StreamingContext = createContext(false);
+
 const highlighter = createLowlight({ bash, css, go, javascript, json, python, sql, typescript, xml, yaml });
 
 function tokensToReact(nodes: RootContent[]): ReactNode[] {
@@ -24,18 +26,20 @@ function tokensToReact(nodes: RootContent[]): ReactNode[] {
     : null);
 }
 
-export function CodeBlock({ code, language }: { code: string; language: string }) {
+export function CodeBlock({ code, language, streaming: streamingProp }: { code: string; language: string; streaming?: boolean }) {
+  const contextStreaming = useContext(StreamingContext);
+  const streaming = streamingProp ?? contextStreaming;
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
   const timeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const highlighted = useMemo(() => {
-    if (!language || !highlighter.registered(language) || code.length > 50_000) return code;
+    if (streaming || !language || !highlighter.registered(language) || code.length > 50_000) return code;
     try {
       return tokensToReact(highlighter.highlight(language, code).children);
     } catch {
       return code;
     }
-  }, [code, language]);
+  }, [code, language, streaming]);
 
   useEffect(() => {
     setCopied(false);

@@ -1,10 +1,10 @@
-import { createContext, memo, useContext } from 'react';
+import { createContext, memo, useContext, useMemo } from 'react';
 import Markdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Element, ElementContent } from 'hast';
 
 import type { Citation } from '../../types/api';
-import { CodeBlock } from './CodeBlock';
+import { CodeBlock, StreamingContext } from './CodeBlock';
 import { remarkCitations } from './remarkCitations';
 import { RenderBoundary } from '../../components/feedback/RenderBoundary';
 
@@ -69,12 +69,18 @@ export function ChatMarkdown({
   onSelect,
   streaming = false,
 }: Partial<CitationContextValue> & { content: string; streaming?: boolean }) {
+  const citationContextValue = useMemo(
+    () => ({ citations, focusedIndex, onSelect }),
+    [citations, focusedIndex, onSelect],
+  );
   return (
     <div aria-busy={streaming || undefined} className="chat-msg__content chat-markdown">
       <RenderBoundary local resetKey={content}>
-        <CitationContext.Provider value={{ citations, focusedIndex, onSelect }}>
-          <MarkdownContent content={content} citationCount={onSelect ? citations.length : 0} />
-        </CitationContext.Provider>
+        <StreamingContext.Provider value={streaming}>
+          <CitationContext.Provider value={citationContextValue}>
+            <MarkdownContent content={content} citationCount={onSelect ? citations.length : 0} />
+          </CitationContext.Provider>
+        </StreamingContext.Provider>
       </RenderBoundary>
       {streaming && <span aria-hidden="true" className="chat-msg__caret" />}
     </div>

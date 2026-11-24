@@ -1,5 +1,5 @@
 import { ArrowRight, RotateCw } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 import { ApiError } from '../../api/client';
@@ -12,11 +12,14 @@ import type { DocumentItem } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
 import { formatBytes } from '../../utils/format';
 import { DocumentImportContext, type ImportBatch, type ImportOptions, type ImportSnapshot, type ImportStatus } from './DocumentImportContext';
-import { DocumentImportDialog } from './DocumentImportDialog';
 import { DocumentProgress } from './DocumentProgress';
 import { documentDisplayStatusLabel, documentDisplayStatusTone } from './documentDisplay';
 import { documentFailureCopy } from './documentFailure';
 import { documentChatUrl } from '../Chat/documentChatScope';
+
+const LazyDocumentImportDialog = lazy(() =>
+  import('./DocumentImportDialog').then((m) => ({ default: m.DocumentImportDialog })),
+);
 
 type ProcessingTask = {
   document: DocumentItem;
@@ -158,7 +161,7 @@ function DocumentImportSession({ children }: { children: ReactNode }) {
   return (
     <DocumentImportContext.Provider value={value}>
       {children}
-      {options && <DocumentImportDialog
+      {options && <Suspense fallback={null}><LazyDocumentImportDialog
         {...options}
         key={options.batchId}
         minimized={!visible}
@@ -170,7 +173,7 @@ function DocumentImportSession({ children }: { children: ReactNode }) {
         onUpload={options.fixedKnowledgeBaseId ? uploadDocument : uploadGlobalDocument}
         onUploaded={onUploaded}
         open
-      />}
+      /></Suspense>}
       <Drawer onClose={() => setTasksOpen(false)} open={tasksOpen} title="上传任务" wide>
         <div className="upload-tasks">
           <div className="upload-tasks__summary">

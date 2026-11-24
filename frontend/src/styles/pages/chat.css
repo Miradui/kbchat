@@ -391,6 +391,7 @@ a.chat-source__link:hover { color: var(--accent); }
 .chat-launcher__scope-heading a { align-items: center; display: inline-flex; gap: var(--s-1); }
 .chat-launcher__scope-heading a:hover { color: var(--accent); }
 .chat-launcher__scope-heading svg { height: var(--icon-sm); width: var(--icon-sm); }
+.chat-launcher__filter { margin-bottom: var(--s-2); width: 100%; }
 .chat-launcher__list { display: grid; gap: var(--s-3); grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }
 .chat-launcher__list > :only-child { grid-column: 1 / -1; }
 .chat-launcher > .chat-launcher__hint { font-size: var(--t-micro); margin-top: var(--s-1); }

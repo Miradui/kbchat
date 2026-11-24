@@ -1,13 +1,16 @@
 import { AlertTriangle, ArrowRight, BookOpen, FileText, Library, Loader, MessageSquareText, Sparkles, Upload, UserRound } from 'lucide-react';
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 
 import { EmptyState } from '../../components/feedback/EmptyState';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { Button } from '../../components/ui/Button';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { AppShell } from '../../layouts/AppShell';
+import { homeActivitiesKey, homeSummaryKey, queryClient } from '../../store/queryClient';
+import { tokenStore } from '../../store/tokenStore';
 import type {
   ActivityItemResponse,
   KnowledgeBaseStatsResponse,
@@ -21,7 +24,21 @@ import { activityToItem } from './activityDisplay';
 import { createHomeLoaders } from './homeData';
 import type { HomeDocuments, HomeFailures, HomeSources } from './homeData';
 
+const sourceIds = new WeakMap<HomeSources, number>();
+let sourceSequence = 0;
+function getSourceId(sources?: HomeSources): number {
+  if (!sources) return 0;
+  let id = sourceIds.get(sources);
+  if (!id) {
+    id = ++sourceSequence;
+    sourceIds.set(sources, id);
+  }
+  return id;
+}
 
+const EMPTY_DOCUMENTS: HomeDocuments = { items: [], processingTotal: 0 };
+const EMPTY_FAILURES: HomeFailures = { items: [], total: 0 };
+const EMPTY_ACTIVITIES: ActivityItemResponse[] = [];
 
 /**
  * A workbench, not a dashboard.
@@ -34,11 +51,79 @@ import type { HomeDocuments, HomeFailures, HomeSources } from './homeData';
 export function HomePage({ sources }: { sources?: HomeSources }) {
   const navigate = useNavigate();
   const { user } = useCurrentUser();
+  const revision = useSyncExternalStore(tokenStore.subscribe, tokenStore.getRevision);
+  const sourceId = getSourceId(sources);
   const loaders = useMemo(() => createHomeLoaders(sources), [sources]);
-  const stats = useRegion(loaders.stats, null as KnowledgeBaseStatsResponse | null, '统计加载失败');
-  const documents = useRegion(loaders.documents, { items: [], processingTotal: 0 } as HomeDocuments, '文档加载失败');
-  const failedDocuments = useRegion(loaders.failedDocuments, { items: [], total: 0 } as HomeFailures, '失败文档加载失败');
-  const activities = useRegion(loaders.activities, [] as ActivityItemResponse[], '动态加载失败');
+
+  const statsQuery = useQuery({
+    queryKey: [...homeSummaryKey, 'stats', revision, sourceId],
+    retry: false,
+    queryFn: async () => {
+      const data = await loaders.stats();
+      if (tokenStore.getRevision() !== revision) throw new Error('账户已切换');
+      return data;
+    },
+  }, queryClient);
+  const documentsQuery = useQuery({
+    queryKey: [...homeSummaryKey, 'documents', revision, sourceId],
+    retry: false,
+    queryFn: async () => {
+      const data = await loaders.documents();
+      if (tokenStore.getRevision() !== revision) throw new Error('账户已切换');
+      return data;
+    },
+  }, queryClient);
+  const failedDocumentsQuery = useQuery({
+    queryKey: [...homeSummaryKey, 'failedDocuments', revision, sourceId],
+    retry: false,
+    queryFn: async () => {
+      const data = await loaders.failedDocuments();
+      if (tokenStore.getRevision() !== revision) throw new Error('账户已切换');
+      return data;
+    },
+  }, queryClient);
+  const activitiesQuery = useQuery({
+    queryKey: [...homeActivitiesKey, revision, sourceId],
+    retry: false,
+    queryFn: async () => {
+      const data = await loaders.activities();
+      if (tokenStore.getRevision() !== revision) throw new Error('账户已切换');
+      return data;
+    },
+  }, queryClient);
+
+  const stats: { data: KnowledgeBaseStatsResponse | null; loading: boolean; error: string; reload: () => void } = {
+    data: statsQuery.data ?? null,
+    loading: statsQuery.isPending || (statsQuery.isFetching && !statsQuery.data),
+    error: !statsQuery.isFetching && statsQuery.isError && !statsQuery.data
+      ? getErrorMessage(statsQuery.error, '统计加载失败')
+      : '',
+    reload: () => void statsQuery.refetch(),
+  };
+  const documents: { data: HomeDocuments; loading: boolean; error: string; reload: () => void } = {
+    data: documentsQuery.data ?? EMPTY_DOCUMENTS,
+    loading: documentsQuery.isPending || (documentsQuery.isFetching && !documentsQuery.data),
+    error: !documentsQuery.isFetching && documentsQuery.isError && !documentsQuery.data
+      ? getErrorMessage(documentsQuery.error, '文档加载失败')
+      : '',
+    reload: () => void documentsQuery.refetch(),
+  };
+  const failedDocuments: { data: HomeFailures; loading: boolean; error: string; reload: () => void } = {
+    data: failedDocumentsQuery.data ?? EMPTY_FAILURES,
+    loading: failedDocumentsQuery.isPending || (failedDocumentsQuery.isFetching && !failedDocumentsQuery.data),
+    error: !failedDocumentsQuery.isFetching && failedDocumentsQuery.isError && !failedDocumentsQuery.data
+      ? getErrorMessage(failedDocumentsQuery.error, '失败文档加载失败')
+      : '',
+    reload: () => void failedDocumentsQuery.refetch(),
+  };
+  const activities = {
+    data: activitiesQuery.data ?? EMPTY_ACTIVITIES,
+    loading: activitiesQuery.isPending || (activitiesQuery.isFetching && !activitiesQuery.data),
+    error: !activitiesQuery.isFetching && activitiesQuery.isError && !activitiesQuery.data
+      ? getErrorMessage(activitiesQuery.error, '动态加载失败')
+      : '',
+    reload: () => void activitiesQuery.refetch(),
+  };
   const [question, setQuestion] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const submittedRef = useRef(false);
@@ -240,47 +325,4 @@ function Stat({ value, label, loading }: { value?: number; label: string; loadin
       <span>{label}</span>
     </span>
   );
-}
-
-type RegionState<T> = { data: T; loading: boolean; error: string };
-
-/**
- * Each region loads and retries independently, so one failing endpoint never
- * blanks the sections that succeeded.
- */
-function useRegion<T>(loader: () => Promise<T>, initialData: T, failure: string) {
-  const [state, setState] = useState<RegionState<T>>({ data: initialData, loading: true, error: '' });
-  const activeRef = useRef(true);
-  const requestRef = useRef(0);
-
-  useEffect(() => {
-    activeRef.current = true;
-    return () => {
-      activeRef.current = false;
-      requestRef.current += 1;
-    };
-  }, []);
-
-  const reload = useCallback(() => {
-    const request = ++requestRef.current;
-    setState((current) => ({ ...current, loading: true, error: '' }));
-
-    void loader()
-      .then((data) => {
-        if (activeRef.current && request === requestRef.current) {
-          setState({ data, loading: false, error: '' });
-        }
-      })
-      .catch((caught: unknown) => {
-        if (activeRef.current && request === requestRef.current) {
-          setState((current) => ({ ...current, loading: false, error: getErrorMessage(caught, failure) }));
-        }
-      });
-  }, [failure, loader]);
-
-  useEffect(() => {
-    reload();
-  }, [reload]);
-
-  return { ...state, reload };
 }

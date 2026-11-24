@@ -1,8 +1,13 @@
-import { useState } from 'react';
+import { lazy, memo, Suspense, useState } from 'react';
 import { Button } from '../../components/ui/Button';
 import type { ChatMessage, ChatSession } from '../../types/api';
-import { EvaluationCaseDialog } from '../Quality/EvaluationCaseDialog';
-import { QualityIssueDialog } from '../Quality/QualityIssueDialog';
+
+const LazyQualityIssueDialog = lazy(() =>
+  import('../Quality/QualityIssueDialog').then((m) => ({ default: m.QualityIssueDialog })),
+);
+const LazyEvaluationCaseDialog = lazy(() =>
+  import('../Quality/EvaluationCaseDialog').then((m) => ({ default: m.EvaluationCaseDialog })),
+);
 
 type Props = {
   session: ChatSession;
@@ -13,10 +18,10 @@ type Props = {
   onRefineQuestion: (question: string) => void;
 };
 
-export function ChatNoBasisActions(props: Props) {
+export const ChatNoBasisActions = memo(function ChatNoBasisActions(props: Props) {
   if (props.message.role !== 'assistant' || props.message.answerStatus !== 'no_basis' || !props.question.trim()) return null;
   return <NoBasisActions key={`${props.session.id}:${props.message.id}:${props.question}`} {...props} />;
-}
+});
 
 function NoBasisActions({ session, message, question, disabled, onChooseDocuments, onRefineQuestion }: Props) {
   const [dialog, setDialog] = useState<'followup' | 'case' | null>(null);
@@ -27,7 +32,7 @@ function NoBasisActions({ session, message, question, disabled, onChooseDocument
       <Button variant="ghost" disabled={disabled} onClick={() => onRefineQuestion(question)}>补充问题背景</Button>
       <Button variant="ghost" disabled={disabled} onClick={() => setDialog('followup')}>跟进这个问题</Button>
     </div>
-    {dialog === 'followup' && <QualityIssueDialog target={{ sessionId: session.id, knowledgeBaseId: session.knowledgeBaseId, question, messageId: message.id, session }} onClose={() => setDialog(null)} onCreateCase={() => setDialog('case')} />}
-    {dialog === 'case' && <EvaluationCaseDialog knowledgeBaseId={session.knowledgeBaseId} initial={{ question, sourceSessionId: session.id }} onClose={() => setDialog('followup')} onSaved={() => setDialog('followup')} />}
+    {dialog === 'followup' && <Suspense fallback={null}><LazyQualityIssueDialog target={{ sessionId: session.id, knowledgeBaseId: session.knowledgeBaseId, question, messageId: message.id, session }} onClose={() => setDialog(null)} onCreateCase={() => setDialog('case')} /></Suspense>}
+    {dialog === 'case' && <Suspense fallback={null}><LazyEvaluationCaseDialog knowledgeBaseId={session.knowledgeBaseId} initial={{ question, sourceSessionId: session.id }} onClose={() => setDialog('followup')} onSaved={() => setDialog('followup')} /></Suspense>}
   </div>;
 }

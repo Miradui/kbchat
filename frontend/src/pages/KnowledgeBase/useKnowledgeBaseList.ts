@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useSyncExternalStore } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 
 import { listKnowledgeBases, updateWorkspacePreference } from '../../api/resources';
 import { useLocalPreference } from '../../hooks/useLocalPreference';
+import { knowledgeBaseListKey, queryClient } from '../../store/queryClient';
+import { tokenStore } from '../../store/tokenStore';
 import type {
   KnowledgeBase,
+  KnowledgeBaseListResponse,
   KnowledgeBaseScope,
   KnowledgeBaseSort,
   WorkspaceViewMode,
@@ -18,6 +22,7 @@ export const VISIBILITIES: WorkspaceVisibility[] = ['all', 'private', 'public'];
 
 const DEFAULT_PAGE_SIZE = 20;
 const PAGE_SIZES = [10, 20, 50] as const;
+const emptyItems: KnowledgeBase[] = [];
 
 function readEnum<T extends string>(raw: string | null, allowed: readonly T[], fallback: T): T {
   return raw !== null && (allowed as readonly string[]).includes(raw) ? (raw as T) : fallback;
@@ -51,14 +56,9 @@ export type KnowledgeBaseFilters = {
  */
 export function useKnowledgeBaseList() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [items, setItems] = useState<KnowledgeBase[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const revision = useSyncExternalStore(tokenStore.subscribe, tokenStore.getRevision);
   const [viewMode, setViewMode] = useLocalPreference<WorkspaceViewMode>('kb.viewMode', 'table');
   const [expandedCategoryIds, setExpandedCategoryIds] = useLocalPreference<string[]>('kb.expandedCategories', []);
-  const requestRef = useRef(0);
-  const mountedRef = useRef(true);
 
   const filters = useMemo<KnowledgeBaseFilters>(() => ({
     q: searchParams.get('q') ?? '',
@@ -71,18 +71,14 @@ export function useKnowledgeBaseList() {
     pageSize: readPageSize(searchParams.get('pageSize')),
   }), [searchParams]);
 
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      requestRef.current += 1;
-    };
-  }, []);
-
-  const load = useCallback(async () => {
-    const request = ++requestRef.current;
-    setLoading(true);
-    try {
+  const queryKey = useMemo(() => [...knowledgeBaseListKey, revision, filters] as const, [revision, filters]);
+  const query = useQuery<KnowledgeBaseListResponse>({
+    queryKey,
+    retry: false,
+    placeholderData: (previous, previousQuery) => (
+      previousQuery?.queryKey[1] === revision ? previous : undefined
+    ),
+    queryFn: async () => {
       const response = await listKnowledgeBases({
         q: filters.q || undefined,
         categoryId: filters.categoryId || undefined,
@@ -93,23 +89,19 @@ export function useKnowledgeBaseList() {
         page: filters.page,
         pageSize: filters.pageSize,
       });
-      if (mountedRef.current && requestRef.current === request) {
-        setItems(response.items);
-        setTotal(response.total ?? response.items.length);
-        setError('');
-      }
-    } catch (caught) {
-      if (mountedRef.current && requestRef.current === request) {
-        setError(getErrorMessage(caught, '知识库加载失败'));
-      }
-    } finally {
-      if (mountedRef.current && requestRef.current === request) setLoading(false);
-    }
-  }, [filters]);
+      if (tokenStore.getRevision() !== revision) throw new Error('账户已切换');
+      return response;
+    },
+  }, queryClient);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const items = query.data?.items ?? emptyItems;
+  const total = query.data ? (query.data.total ?? query.data.items.length) : 0;
+  const loading = query.isPending || query.isFetching;
+  const error = query.isError ? getErrorMessage(query.error, '知识库加载失败') : '';
+  const { refetch } = query;
+  const reload = useCallback(async () => {
+    await refetch();
+  }, [refetch]);
 
   /**
    * Cross-device sync only. Never awaited, never blocks a control, and a failure
@@ -182,7 +174,7 @@ export function useKnowledgeBaseList() {
     activeFilterCount,
     viewMode,
     expandedCategoryIds,
-    reload: load,
+    reload,
     setFilter,
     changeViewMode,
     toggleCategoryExpanded,

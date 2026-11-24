@@ -2,4 +2,8 @@ import { createContext } from 'react';
 import type { AppShellProps } from './AppShell';
 
 export type PageShellConfiguration = Omit<AppShellProps, 'children'>;
-export const appShellContext = createContext<((key: string, configuration: PageShellConfiguration) => () => void) | null>(null);
+export type AppShellRegistration = {
+  sync: (key: string, configuration: PageShellConfiguration) => void;
+  unregister: (key: string) => void;
+};
+export const appShellContext = createContext<AppShellRegistration | null>(null);

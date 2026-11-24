@@ -19,6 +19,7 @@ const expectedRouteChunks = [
   // silently stopped covering it.
   'QualityPage',
   'DiagnosticsPage',
+  'UsersPage',
 ];
 
 export function verifyRouteChunks(javascriptChunks) {

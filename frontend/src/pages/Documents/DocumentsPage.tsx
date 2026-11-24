@@ -1,6 +1,6 @@
-import { Ban, FileText, FileType, PencilLine, RotateCw, Search, Trash2, Upload, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Ban, FileText, FileType, PencilLine, RotateCw, Trash2, Upload, X } from 'lucide-react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import {
   batchDeleteDocuments,
@@ -21,41 +21,41 @@ import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
-import { Checkbox, Field, Input, Select } from '../../components/ui/Field';
+import { Checkbox, Field, Input } from '../../components/ui/Field';
 import { PageHeading } from '../../components/ui/PageHeading';
-import { DebouncedSearchInput } from '../../components/ui/DebouncedSearchInput';
 import { useKnowledgeBaseOptions } from '../../hooks/useKnowledgeBaseOptions';
 import { IconButton } from '../../components/ui/IconButton';
-import { MetricStrip } from '../../components/ui/MetricStrip';
 import { OverflowMenu } from '../../components/ui/OverflowMenu';
 import { Pagination } from '../../components/ui/Pagination';
 import { useEntityMutation } from '../../hooks/useEntityMutation';
 import { useSystemCapabilities } from '../../hooks/useSystemCapabilities';
 import { AppShell } from '../../layouts/AppShell';
-import type { Capability, DocumentItem, DocumentSort, DocumentStatus, KnowledgeBase } from '../../types/api';
+import type { Capability, DocumentItem, KnowledgeBase } from '../../types/api';
 import { canUnlessUnknown, hasCapability } from '../../utils/access';
 import { formatBytes, formatRelativeTime } from '../../utils/format';
 import { getErrorMessage } from '../../utils/errors';
 import { KnowledgeBaseLayout, KnowledgeBaseLoadFailure } from '../KnowledgeBase/KnowledgeBaseLayout';
 import { useKnowledgeBase } from '../KnowledgeBase/useKnowledgeBase';
 import { DocumentDetailDrawer } from './DocumentDetailDrawer';
-import { DocumentImportDialog } from './DocumentImportDialog';
 import { useDocumentImports, type ImportBatch } from './DocumentImportContext';
 import { ImportBatchChat } from './ImportBatchChat';
 import { DocumentProgress } from './DocumentProgress';
 import { DocumentRecycleBinDrawer } from './DocumentRecycleBinDrawer';
+
+const LazyDocumentImportDialog = lazy(() =>
+  import('./DocumentImportDialog').then((m) => ({ default: m.DocumentImportDialog })),
+);
 import {
-  documentStatuses,
   documentDisplayStatusLabel,
   documentDisplayStatusTone,
-  documentStatusLabel,
   documentStatusTone,
   isTerminalDocumentStatus,
 } from './documentDisplay';
+import { DocumentsBatchBar } from './DocumentsBatchBar';
+import { DocumentsFilterBar } from './DocumentsFilterBar';
 import { documentFailureCopy, documentStalenessHint } from './documentFailure';
 import { importGuidance, importGuidanceMessage } from './importGuidance';
 import { useDocumentList } from './useDocumentList';
-import { documentChatUrl } from '../Chat/documentChatScope';
 
 type DocumentsPageProps = {
   /** Renders inside the knowledge-base shell and pins the knowledge-base filter. */
@@ -108,7 +108,6 @@ function ScopedDocuments({ children }: { children: React.ReactNode }) {
 }
 
 function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string }) {
-  const location = useLocation();
   const toast = useToast();
   const imports = useDocumentImports();
   const observedImportVersion = useRef(imports?.changeVersion ?? 0);
@@ -343,127 +342,20 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
       ) : (
         <h2 className="sr-only">文档资料</h2>
       )}
-      <div className="doc-toolbar">
-        {knowledgeBaseOptions.error && <p className="ui-inline-error" role="alert">{knowledgeBaseOptions.error}<Button variant="link" onClick={() => void knowledgeBaseOptions.reload()}>重试知识库列表</Button></p>}
-        <div className="ui-toolbar">
-          <DebouncedSearchInput
-            aria-label="按文件名搜索"
-            icon={<Search aria-hidden="true" />}
-            onCommit={(q) => setFilter({ q })}
-            placeholder="搜索文件名"
-            value={filters.q}
-            resetKey={location.key}
-          />
-
-          {!scopeKnowledgeBaseId && (
-            <Select
-              aria-label="知识库筛选"
-              onChange={(event) => setFilter({ knowledgeBaseId: event.target.value })}
-              value={filters.knowledgeBaseId}
-            >
-              <option value="">全部知识库</option>
-              {knowledgeBases.map((item) => (
-                <option key={item.id} value={item.id}>{item.name}</option>
-              ))}
-            </Select>
-          )}
-
-          <Select
-            aria-label="类型筛选"
-            onChange={(event) => setFilter({ fileType: event.target.value })}
-            value={filters.fileType}
-          >
-            <option value="">全部类型</option>
-            {fileTypes.map((type) => <option key={type} value={type}>{type}</option>)}
-          </Select>
-
-          <Select
-            aria-label="排序"
-            onChange={(event) => setFilter({ sort: event.target.value as DocumentSort })}
-            value={filters.sort}
-          >
-            <option value="updatedAt_desc">最新更新</option>
-            <option value="createdAt_desc">最新创建</option>
-            <option value="filename_asc">文件名升序</option>
-          </Select>
-
-          <span className="ui-toolbar__spacer" />
-
-          {scopeKnowledgeBaseId && importButton}
-
-          <OverflowMenu
-            label="更多文档操作"
-            items={[
-              { label: '刷新列表', icon: <RotateCw aria-hidden="true" />, onSelect: () => void refresh() },
-              { label: '文档回收站', icon: <Trash2 aria-hidden="true" />, onSelect: () => setRecycleOpen(true) },
-            ]}
-          />
-
-        </div>
-
-        {/* Status counts double as filters, so a failure count is one click from the list. */}
-        <MetricStrip
-          label="文档处理概况"
-          metrics={[
-            {
-              key: 'all',
-              label: '个文档',
-              value: counts.total,
-              active: filters.status === '',
-              onToggle: () => setFilter({ status: '' }),
-            },
-            {
-              key: 'completed',
-              label: '可用于问答',
-              value: counts.completed,
-              active: filters.status === 'completed',
-              onToggle: () => setFilter({ status: filters.status === 'completed' ? '' : 'completed' }),
-            },
-            {
-              key: 'processing',
-              label: '处理中',
-              tone: 'warn',
-              value: counts.processing,
-              active: filters.status !== '' && filters.status !== 'completed' && filters.status !== 'failed',
-              onToggle: () => setFilter({ status: filters.status === 'processing' ? '' : 'processing' }),
-            },
-            {
-              key: 'failed',
-              label: '失败',
-              tone: 'danger',
-              value: counts.failed,
-              active: filters.status === 'failed',
-              onToggle: () => setFilter({ status: filters.status === 'failed' ? '' : 'failed' }),
-            },
-          ]}
-          trailing={activeFilterCount > 0 ? (
-            <Button
-              variant="link"
-              onClick={() => setFilter({ q: '', status: '', fileType: '', knowledgeBaseId: scopeKnowledgeBaseId ? filters.knowledgeBaseId : '' })}
-            >
-              清除筛选
-            </Button>
-          ) : undefined}
-        />
-
-        {filters.status !== '' && filters.status !== 'completed' && filters.status !== 'failed' && (
-          <div className="ui-inline-notice">
-            <span>正在按“{filters.status === 'processing' ? '全部处理中' : documentStatusLabel(filters.status)}”筛选。</span>
-            <Select
-              aria-label="处理阶段"
-              onChange={(event) => setFilter({ status: event.target.value as DocumentStatus | 'processing' })}
-              value={filters.status}
-            >
-              <option value="processing">全部处理中</option>
-              {documentStatuses
-                .filter((status) => !isTerminalDocumentStatus(status))
-                .map((status) => (
-                  <option key={status} value={status}>{documentStatusLabel(status)}</option>
-                ))}
-            </Select>
-          </div>
-        )}
-      </div>
+      <DocumentsFilterBar
+        activeFilterCount={activeFilterCount}
+        counts={counts}
+        fileTypes={fileTypes}
+        filters={filters}
+        importButton={importButton}
+        knowledgeBaseError={knowledgeBaseOptions.error}
+        knowledgeBases={knowledgeBases}
+        onOpenRecycle={() => setRecycleOpen(true)}
+        onRefresh={() => void refresh()}
+        onReloadKnowledgeBases={() => void knowledgeBaseOptions.reload()}
+        scopeKnowledgeBaseId={scopeKnowledgeBaseId}
+        setFilter={setFilter}
+      />
 
       {importBatch && !guidanceDismissed && (importBatch.documents.length > 0 || (importBatch.pendingItems?.length ?? 0) > 0) && (
         <div aria-label="导入结果" className="doc-guidance" role="status">
@@ -475,36 +367,23 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
         </div>
       )}
 
-      {selectedIds.length > 0 && (
-        <div className="ui-bulkbar">
-          <span className="ui-bulkbar__count">已选择 {selectedIds.length} 个文档</span>
-          <Button variant="secondary" disabled={selectedIds.length > 20 || items.filter((item) => selectedIds.includes(item.id) && item.status === 'completed').length !== selectedIds.length || new Set(items.filter((item) => selectedIds.includes(item.id)).map((item) => item.knowledgeBaseId)).size > 5}
-            onClick={() => navigate(documentChatUrl(items.filter((item) => selectedIds.includes(item.id))))}>针对所选文档提问</Button>
-          <Button
-            disabled={mutation.isPending(mutationKey('bulk'))}
-            variant="secondary"
-            onClick={() => void run(
-              'bulk',
-              async () => { await batchReprocessDocuments(selectedIds); },
-              '已开始批量重新处理',
-              '批量重处理失败',
-              () => setSelectedIds([]),
-            )}
-          >
-            重新处理
-          </Button>
-          <span className="ui-toolbar__spacer" />
-          <Button
-            variant="danger"
-            onClick={() => {
-              setDeleteError('');
-              setDeleteIds(selectedIds);
-            }}
-          >
-            删除
-          </Button>
-        </div>
-      )}
+      <DocumentsBatchBar
+        items={items}
+        onDelete={() => {
+          setDeleteError('');
+          setDeleteIds(selectedIds);
+        }}
+        onNavigate={navigate}
+        onReprocess={() => void run(
+          'bulk',
+          async () => { await batchReprocessDocuments(selectedIds); },
+          '已开始批量重新处理',
+          '批量重处理失败',
+          () => setSelectedIds([]),
+        )}
+        reprocessing={mutation.isPending(mutationKey('bulk'))}
+        selectedIds={selectedIds}
+      />
 
       <div className={loading && items.length > 0 ? 'doc-results is-refreshing' : 'doc-results'}>
         {loading && items.length === 0 ? (
@@ -759,7 +638,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
         <DocumentRecycleBinDrawer onChanged={() => void refresh()} onClose={() => setRecycleOpen(false)} />
       )}
 
-      {!imports && <DocumentImportDialog
+      {!imports && importOpen && <Suspense fallback={null}><LazyDocumentImportDialog
         fixedKnowledgeBaseId={scopeKnowledgeBaseId}
         fixedKnowledgeBaseName={uploadTargets[0]?.name}
         knowledgeBases={uploadTargets}
@@ -772,7 +651,7 @@ function DocumentsBody({ scopeKnowledgeBaseId }: { scopeKnowledgeBaseId?: string
         onReplace={replaceDocument}
         onUpload={scopeKnowledgeBaseId ? uploadDocument : uploadGlobalDocument}
         open={importOpen}
-      />}
+      /></Suspense>}
     </div>
   );
 }

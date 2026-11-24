@@ -12,6 +12,7 @@ import {
   sendChatMessageStream,
 } from '../../api/resources';
 import type {
+  ChatBookmark,
   ChatMessage,
   ChatMessageFeedback,
   ChatSession,
@@ -26,35 +27,21 @@ import { pendingChatEditStore } from './pendingChatEditStore';
 import { pendingRegenerationStore } from './pendingRegenerationStore';
 import { createStreamText } from './streamText';
 import { HISTORY_PAGE_SIZE, useChatHistory } from './useChatHistory';
+import {
+  AUTO_CHECK_DELAYS_MS,
+  applyEditedMessageResponse,
+  applyMessageBookmark,
+  applyMessageFeedback,
+  findNewAssistantMessage,
+  isDefinitiveSendFailure,
+  type RegenerationState,
+  type StoppedStream,
+  type UnconfirmedSend,
+} from './chatThreadHelpers';
 
-/** Delays for the automatic reconciliation attempts after an unconfirmed write. */
-const AUTO_CHECK_DELAYS_MS = [2000, 5000];
-
-export type UnconfirmedSend = {
-  request: PendingChatRequest;
-  /** Automatic checks already performed. The user is only asked once this is exhausted. */
-  autoChecksDone: number;
-  checking: boolean;
-};
-
-export type StoppedStream = {
-  question: string;
-  answer: string;
-  citations: Citation[];
-  checking: boolean;
-  resumable: boolean;
-};
+export type { RegenerationState, StoppedStream, UnconfirmedSend };
 
 type ReconcileResult = 'accepted' | 'absent' | 'unknown';
-
-export type RegenerationState = {
-  messageId: string;
-  kind: 'failed' | 'unconfirmed';
-  message: string;
-  baselineMessageIds: string[];
-  autoChecksDone: number;
-  checking: boolean;
-};
 
 type RateLimitNotice = RetryNotice & {
   question: string | null;
@@ -871,13 +858,11 @@ export function useChatThread({
   }, [pendingRegenerationId, runRegenerationCheck]);
 
   const updateMessageFeedback = useCallback((messageId: string, feedback: ChatMessageFeedback) => {
-    setMessages((current) => current.map((message) => (
-      message.id === messageId ? { ...message, feedback } : message
-    )));
+    setMessages((current) => applyMessageFeedback(current, messageId, feedback));
   }, []);
 
-  const updateMessageBookmark = useCallback((messageId: string, bookmark: import('../../types/api').ChatBookmark | null) => {
-    setMessages((current) => current.map((message) => message.id === messageId ? { ...message, bookmark } : message));
+  const updateMessageBookmark = useCallback((messageId: string, bookmark: ChatBookmark | null) => {
+    setMessages((current) => applyMessageBookmark(current, messageId, bookmark));
   }, []);
 
   const editMessage = useCallback(async (messageId: string, content: string) => {
@@ -912,11 +897,7 @@ export function useChatThread({
       });
       pendingChatEditStore.clear(targetSessionId, clientRequestId);
       if (!mountedRef.current || (activeSessionRef.current ?? '') !== targetSessionId || editTokenRef.current !== token) return;
-      setMessages((current) => {
-        const index = current.findIndex((message) => message.id === messageId);
-        if (index < 0) return [response.userMessage, response.assistantMessage];
-        return [...current.slice(0, index), response.userMessage, response.assistantMessage];
-      });
+      setMessages((current) => applyEditedMessageResponse(current, messageId, response.userMessage, response.assistantMessage));
       updateHistoryRevision(targetSessionId, response.assistantMessage.id);
       setLoadError('');
       setRerankFallback(response.rerankFallback?.used ? response.rerankFallback : null);
@@ -1021,23 +1002,4 @@ export function useChatThread({
     dismissFailedSend: () => setFailedSend(null),
     dismissRateLimitError: () => setRateLimitNotice(null),
   };
-}
-
-function findNewAssistantMessage(messages: ChatMessage[], baselineIds: string[]): ChatMessage | undefined {
-  const known = new Set(baselineIds);
-  // Loading older pages after a reload must not count old answers outside the
-  // saved page as a successful regeneration. New versions append to the tail.
-  let lastKnown = -1;
-  messages.forEach((message, index) => { if (known.has(message.id)) lastKnown = index; });
-  return lastKnown < 0 ? undefined : messages.slice(lastKnown + 1).reverse().find((message) => message.role === 'assistant');
-}
-
-/**
- * Only an unambiguous server-side rejection allows a plain retry. Network faults
- * and unclassified 5xx must go through reconciliation instead.
- */
-function isDefinitiveSendFailure(error: ApiError): boolean {
-  return (error.status >= 400 && error.status < 500)
-    || error.code === 'CHAT_COMPLETION_FAILED'
-    || error.code === 'RERANK_FAILED';
 }

@@ -1,13 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 
 import { getDocumentCounts, listGlobalDocuments } from '../../api/resources';
-import type { DocumentSort, DocumentStatusFilter, GlobalDocumentItem } from '../../types/api';
+import { documentCountsKey, documentListKey, queryClient } from '../../store/queryClient';
+import { tokenStore } from '../../store/tokenStore';
+import type { DocumentSort, DocumentStatusFilter, GlobalDocumentItem, GlobalDocumentListResponse } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
 import { documentStatuses, isTerminalDocumentStatus } from './documentDisplay';
 
 const DEFAULT_PAGE_SIZE = 20;
 const POLL_MS = 3000;
+const emptyItems: GlobalDocumentItem[] = [];
+const emptyCounts: DocumentCounts = {
+  total: null, completed: null, processing: null, failed: null,
+};
 
 export type DocumentFilters = {
   q: string;
@@ -47,18 +54,7 @@ function readPositive(raw: string | null, fallback: number): number {
  */
 export function useDocumentList(scopeKnowledgeBaseId?: string) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [items, setItems] = useState<GlobalDocumentItem[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [counts, setCounts] = useState<DocumentCounts>({
-    total: null, completed: null, processing: null, failed: null,
-  });
-  const requestRef = useRef(0);
-  const countRequestRef = useRef(0);
-  const mountedRef = useRef(true);
-  const listAbortRef = useRef<AbortController | null>(null);
-  const countAbortRef = useRef<AbortController | null>(null);
+  const revision = useSyncExternalStore(tokenStore.subscribe, tokenStore.getRevision);
 
   const filters = useMemo<DocumentFilters>(() => ({
     q: searchParams.get('q') ?? '',
@@ -72,24 +68,24 @@ export function useDocumentList(scopeKnowledgeBaseId?: string) {
     pageSize: readPositive(searchParams.get('pageSize'), DEFAULT_PAGE_SIZE),
   }), [scopeKnowledgeBaseId, searchParams]);
 
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      requestRef.current += 1;
-      countRequestRef.current += 1;
-      listAbortRef.current?.abort();
-      countAbortRef.current?.abort();
-    };
-  }, []);
+  const listQueryKey = useMemo(() => [...documentListKey, revision, filters] as const, [revision, filters]);
+  const countFilterKey = useMemo(() => ({
+    q: filters.q,
+    knowledgeBaseId: filters.knowledgeBaseId,
+    fileType: filters.fileType,
+  }), [filters.fileType, filters.knowledgeBaseId, filters.q]);
+  const countsQueryKey = useMemo(() => [...documentCountsKey, revision, countFilterKey] as const, [revision, countFilterKey]);
 
-  const load = useCallback(async (options: { quiet?: boolean } = {}) => {
-    const request = ++requestRef.current;
-    listAbortRef.current?.abort();
-    const controller = new AbortController();
-    listAbortRef.current = controller;
-    if (!options.quiet) setLoading(true);
-    try {
+  const listQuery = useQuery<GlobalDocumentListResponse>({
+    queryKey: listQueryKey,
+    retry: false,
+    placeholderData: (previous, previousQuery) => (
+      previousQuery?.queryKey[1] === revision
+      && (previousQuery.queryKey[2] as DocumentFilters | undefined)?.knowledgeBaseId === filters.knowledgeBaseId
+        ? previous
+        : undefined
+    ),
+    queryFn: async ({ signal }) => {
       const response = await listGlobalDocuments({
         q: filters.q || undefined,
         knowledgeBaseId: filters.knowledgeBaseId || undefined,
@@ -98,66 +94,50 @@ export function useDocumentList(scopeKnowledgeBaseId?: string) {
         sort: filters.sort,
         page: filters.page,
         pageSize: filters.pageSize,
-      }, controller.signal);
-      if (mountedRef.current && requestRef.current === request) {
-        setItems(response.items);
-        setTotal(response.total);
-        setError('');
-      }
-    } catch (caught) {
-      // A background poll must not wipe out an error the user is still reading,
-      // nor replace the list with an error banner.
-      if (mountedRef.current && requestRef.current === request && !options.quiet) {
-        setError(getErrorMessage(caught, '文档列表加载失败'));
-      }
-    } finally {
-      if (mountedRef.current && requestRef.current === request && !options.quiet) setLoading(false);
-    }
-  }, [filters]);
+      }, signal);
+      if (tokenStore.getRevision() !== revision) throw new Error('账户已切换');
+      return response;
+    },
+  }, queryClient);
 
-  // All buckets share one server query; list pagination and status do not filter them.
-  const loadCounts = useCallback(async () => {
-    const request = ++countRequestRef.current;
-    countAbortRef.current?.abort();
-    const controller = new AbortController();
-    countAbortRef.current = controller;
-    const base = {
-      q: filters.q || undefined,
-      knowledgeBaseId: filters.knowledgeBaseId || undefined,
-      fileType: filters.fileType || undefined,
-    };
-    try {
-      const response = await getDocumentCounts(base, controller.signal);
-      if (!mountedRef.current || countRequestRef.current !== request) return;
-      setCounts(response);
-    } catch {
-      if (mountedRef.current && countRequestRef.current === request) {
-        setCounts({ total: null, completed: null, processing: null, failed: null });
-      }
-    }
-  }, [filters.fileType, filters.knowledgeBaseId, filters.q]);
+  const countsQuery = useQuery({
+    queryKey: countsQueryKey,
+    retry: false,
+    queryFn: async ({ signal }) => {
+      const response = await getDocumentCounts({
+        q: filters.q || undefined,
+        knowledgeBaseId: filters.knowledgeBaseId || undefined,
+        fileType: filters.fileType || undefined,
+      }, signal);
+      if (tokenStore.getRevision() !== revision) throw new Error('账户已切换');
+      return response;
+    },
+  }, queryClient);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  useEffect(() => {
-    void loadCounts();
-  }, [loadCounts]);
+  const items = listQuery.data?.items ?? emptyItems;
+  const total = listQuery.data?.total ?? 0;
+  const counts = countsQuery.isError || !countsQuery.data ? emptyCounts : countsQuery.data;
+  const loading = listQuery.isPending || (listQuery.isFetching && listQuery.isPlaceholderData);
+  const error = !listQuery.isFetching && listQuery.isError && !listQuery.data
+    ? getErrorMessage(listQuery.error, '文档列表加载失败')
+    : '';
 
   const hasProcessing = useMemo(
     () => items.some((item) => !isTerminalDocumentStatus(item.status)),
     [items],
   );
 
+  const { refetch: refetchList } = listQuery;
+  const { refetch: refetchCounts } = countsQuery;
+
   useEffect(() => {
     if (!hasProcessing) return;
     const timer = window.setInterval(() => {
-      void load({ quiet: true });
-      void loadCounts();
+      void refetchList();
+      void refetchCounts();
     }, POLL_MS);
     return () => window.clearInterval(timer);
-  }, [hasProcessing, load, loadCounts]);
+  }, [hasProcessing, refetchCounts, refetchList]);
 
   const setFilter = useCallback((patch: Partial<DocumentFilters>) => {
     setSearchParams((current) => {
@@ -189,6 +169,14 @@ export function useDocumentList(scopeKnowledgeBaseId?: string) {
     filters.fileType,
   ].filter(Boolean).length;
 
+  const reload = useCallback(async () => {
+    await refetchList();
+  }, [refetchList]);
+
+  const refresh = useCallback(async () => {
+    await Promise.all([refetchList(), refetchCounts()]);
+  }, [refetchCounts, refetchList]);
+
   return {
     items,
     total,
@@ -197,11 +185,8 @@ export function useDocumentList(scopeKnowledgeBaseId?: string) {
     error,
     filters,
     activeFilterCount,
-    reload: () => load(),
-    refresh: async () => {
-      await load();
-      await loadCounts();
-    },
+    reload,
+    refresh,
     setFilter,
   };
 }

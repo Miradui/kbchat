@@ -6,8 +6,16 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { getCurrentUser } from '../api/resources';
 import { currentUserStore } from '../store/currentUserStore';
 import { renderWithRouter } from '../test/render';
-import { AppShell } from './AppShell';
+import { AppShell, AppShellFrame } from './AppShell';
 import { WorkspaceLayout } from './WorkspaceLayout';
+
+vi.mock('./AppShell', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./AppShell')>();
+  const AppShellFrameSpy = vi.fn((props: Parameters<typeof actual.AppShellFrame>[0]) => (
+    <actual.AppShellFrame {...props} />
+  ));
+  return { ...actual, AppShellFrame: AppShellFrameSpy };
+});
 
 vi.mock('../api/resources', () => ({
   getCurrentUser: vi.fn(), logout: vi.fn(), searchSuggest: vi.fn().mockResolvedValue({ items: [] }),
@@ -61,4 +69,44 @@ it('updates page controls in the persistent frame and clears them when leaving',
   expect(screen.getByText('文档内容')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '打开会话列表' })).not.toBeInTheDocument();
   expect(screen.getByRole('link', { name: '新建对话' })).toHaveAttribute('href', '/chat');
+});
+
+it('does not re-render the shell frame when page state updates without changing shell configuration', async () => {
+  function TrackedPage() {
+    const [text, setText] = useState('');
+    const [locked, setLocked] = useState(false);
+    return (
+      <AppShell
+        active="chat"
+        breadcrumbs={[{ label: 'AI 问答', to: '/chat' }, { label: '新对话' }]}
+        newChatDisabled={locked}
+        onNewChat={() => setText((current) => `${current}!`)}
+      >
+        <input aria-label="草稿输入" onChange={(event) => setText(event.target.value)} value={text} />
+        <button onClick={() => setLocked(true)} type="button">锁定新建</button>
+        <output aria-label="草稿值">{text}</output>
+      </AppShell>
+    );
+  }
+  const user = userEvent.setup();
+  const frameSpy = vi.mocked(AppShellFrame);
+  frameSpy.mockClear();
+
+  renderWithRouter(<Routes><Route element={<WorkspaceLayout />}>
+    <Route path="/chat" element={<TrackedPage />} />
+  </Route></Routes>, ['/chat']);
+  await screen.findByRole('button', { name: '管理员' });
+
+  const settledShellRenders = frameSpy.mock.calls.length;
+  await user.type(screen.getByLabelText('草稿输入'), 'hello');
+  expect(screen.getByLabelText('草稿值')).toHaveTextContent('hello');
+  expect(frameSpy).toHaveBeenCalledTimes(settledShellRenders);
+
+  await user.click(screen.getByRole('button', { name: '新建对话' }));
+  expect(screen.getByLabelText('草稿值')).toHaveTextContent('hello!');
+  expect(frameSpy).toHaveBeenCalledTimes(settledShellRenders);
+
+  await user.click(screen.getByRole('button', { name: '锁定新建' }));
+  expect(screen.getByRole('button', { name: '新建对话' })).toBeDisabled();
+  expect(frameSpy).toHaveBeenCalledTimes(settledShellRenders + 1);
 });

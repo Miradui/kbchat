@@ -12,61 +12,27 @@ import { Field, Input, Select, Textarea } from '../../components/ui/Field';
 import { IconButton } from '../../components/ui/IconButton';
 import { SegmentedControl } from '../../components/ui/SegmentedControl';
 import { useSystemCapabilities } from '../../hooks/useSystemCapabilities';
-import type { DocumentDuplicateDetails, DocumentItem, SystemCapabilities, TextDocumentInput } from '../../types/api';
+import type { DocumentItem, SystemCapabilities, TextDocumentInput } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
-import { formatRelativeTime } from '../../utils/format';
 import { formatDocumentBytes } from './documentDisplay';
 import type { ImportSnapshot, ImportStatus } from './DocumentImportContext';
+import {
+  acceptAttribute,
+  clampProgress,
+  documentUploadErrorMessage,
+  duplicateDetails,
+  extensionSummary,
+  fileKey,
+  importStatusLabel,
+  MIME_BY_EXTENSION,
+  updateImportItem,
+  validateDocumentFile,
+  type ImportItem,
+} from './documentImportUtils';
+import { DuplicateChoice } from './DuplicateChoice';
 import { MAX_IMPORT_BYTES, MAX_IMPORT_FILES, prepareImportFiles, preparePlainImportFiles, type PreparedImportFile } from './importFiles';
 import { isUnconfirmedUpload, recoverUpload } from './recoverUpload';
 import { TableImportSettingsDialog } from './TableImportSettingsDialog';
-
-/**
- * The accept attribute is a file-picker hint only; validateDocumentFile enforces
- * the real allow list, which comes from GET /system/capabilities.
- */
-const MIME_BY_EXTENSION: Record<string, string> = {
-  txt: 'text/plain',
-  md: 'text/markdown',
-  pdf: 'application/pdf',
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  csv: 'text/csv',
-};
-
-function acceptAttribute(extensions: string[]): string {
-  const hints = extensions.flatMap((extension) => {
-    const mime = MIME_BY_EXTENSION[extension];
-    return mime ? [`.${extension}`, mime] : [`.${extension}`];
-  });
-  return hints.join(',');
-}
-
-function extensionSummary(extensions: string[]): string {
-  return extensions.map((extension) => extension.toUpperCase()).join('、');
-}
-
-/**
- * `duplicate` is not a failure: the request was well formed and the server is
- * asking the user to choose. It is kept out of the failed count for that reason —
- * telling someone "部分文档导入失败" when they simply have a decision to make would
- * misdescribe what happened.
- */
-type ImportItem = {
-	tableImport?: UploadDocumentOptions['tableImport'];
-	requestId: string;
-	allowDuplicate?: boolean;
-	replaceId?: string;
-  sourcePath?: string;
-  text?: TextDocumentInput;
-  error: string;
-  file: File;
-  key: string;
-  progress: number;
-  status: ImportStatus;
-  /** Present only while status is `duplicate`: what the new file collides with. */
-  duplicate?: DocumentDuplicateDetails;
-};
 
 type KnowledgeBaseOption = {
   id: string;
@@ -760,141 +726,4 @@ export function DocumentImportDialog({
       )}
     </>
   );
-}
-
-function validateDocumentFile(file: File, upload: SystemCapabilities['upload']): string {
-  const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
-  if (!upload.allowedExtensions.includes(extension)) {
-    return `仅支持 ${extensionSummary(upload.allowedExtensions)}。`;
-  }
-  if (file.size === 0) {
-    return '文件不能为空。';
-  }
-  if (file.size > upload.maxFileBytes) {
-    return `单个文件不得超过 ${formatDocumentBytes(upload.maxFileBytes)}。`;
-  }
-  return '';
-}
-
-function fileKey(file: File): string {
-  return `${file.name}:${file.size}:${file.lastModified}`;
-}
-
-function updateImportItem(
-  items: ImportItem[],
-  key: string,
-  update: Partial<ImportItem>,
-): ImportItem[] {
-  return items.map((item) => item.key === key ? { ...item, ...update } : item);
-}
-
-function clampProgress(progress: number): number {
-  return Math.max(0, Math.min(100, Math.round(progress)));
-}
-
-function importStatusLabel(status: ImportStatus): string {
-  switch (status) {
-    case 'uploading': return '上传中';
-    case 'succeeded': return '已上传';
-    case 'failed': return '上传失败';
-    case 'unconfirmed': return '结果待确认';
-    case 'unavailable': return '文档已不可用';
-    case 'duplicate': return '内容重复';
-    default: return '待上传';
-  }
-}
-
-/**
- * The 409 payload the duplicate check returns, or null for any other error. Read
- * defensively: this comes off the wire, and a partially shaped payload must fall
- * through to the generic failure path rather than render a dialog with blanks in it.
- */
-function duplicateDetails(error: unknown): DocumentDuplicateDetails | null {
-  if (!(error instanceof ApiError) || error.code !== 'DOCUMENT_DUPLICATE_CONTENT') {
-    return null;
-  }
-  const details = error.details as Partial<DocumentDuplicateDetails> | undefined;
-  if (!details || typeof details.existingDocumentId !== 'string' || !details.existingDocumentId) {
-    return null;
-  }
-  return {
-    existingDocumentId: details.existingDocumentId,
-    // The filename is what the user recognises the existing copy by, so a missing
-    // one gets a placeholder rather than being left blank.
-    existingFilename: typeof details.existingFilename === 'string' && details.existingFilename
-      ? details.existingFilename
-      : '已有文档',
-    existingStatus: details.existingStatus ?? 'completed',
-    existingUploadedAt: typeof details.existingUploadedAt === 'string' ? details.existingUploadedAt : '',
-  };
-}
-
-type DuplicateChoiceProps = {
-  busy: boolean;
-  canReplace: boolean;
-  details: DocumentDuplicateDetails;
-  filename: string;
-  onChoose: (choice: 'keep' | 'replace') => void;
-};
-
-/**
- * Inline rather than a modal: a batch can raise several conflicts, and a modal per
- * file would make the user answer them one at a time in an order they did not pick.
- *
- * Both options are spelled out in terms of the outcome. "替换" archives the old
- * document with a version trail rather than deleting it, which is worth saying --
- * otherwise the choice reads as destructive and people default to keeping two copies
- * they do not want.
- */
-function DuplicateChoice({ busy, canReplace, details, filename, onChoose }: DuplicateChoiceProps) {
-  return (
-    <div className="doc-import__duplicate">
-      <p className="doc-import__duplicate-text">
-        与已有文档
-        <strong>{details.existingFilename}</strong>
-        内容相同
-        {details.existingUploadedAt ? `（${formatRelativeTime(details.existingUploadedAt)}上传）` : ''}
-        。
-      </p>
-      <div className="doc-import__duplicate-actions">
-        {canReplace && (
-          <Button
-            disabled={busy}
-            onClick={() => onChoose('replace')}
-            variant="primary"
-          >
-            替换原文档
-          </Button>
-        )}
-        <Button disabled={busy} onClick={() => onChoose('keep')} variant="ghost">
-          保留两份
-        </Button>
-      </div>
-      <p className="doc-import__duplicate-note ui-muted">
-        替换后原文档会保留为历史版本，仍可在回答的引用中追溯；
-        <span aria-label={`${filename} 保留两份说明`}>保留两份会让同样的内容被检索到两次。</span>
-      </p>
-    </div>
-  );
-}
-
-function documentUploadErrorMessage(error: unknown): string {
-  if (error instanceof ApiError) {
-    if (error.code === 'DOCUMENT_TYPE_UNSUPPORTED') {
-      const reason = error.details.reason;
-      if (reason === 'legacy_doc') return '不支持旧版 .doc，请另存为 .docx';
-      if (reason === 'legacy_or_encrypted') return '文件是旧版 .doc 或已加密，请另存为未加密的 .docx';
-      return '格式不受支持';
-    }
-    if (error.code === 'VALIDATION_ERROR') {
-      const fileError = error.details.file;
-      if (fileError === 'file size exceeds limit') {
-        return '文件超过大小限制';
-      }
-      if (typeof fileError === 'string' && fileError) {
-        return fileError === 'file is required' ? '文件不能为空' : '文件校验失败';
-      }
-    }
-  }
-  return getErrorMessage(error, '上传失败');
 }

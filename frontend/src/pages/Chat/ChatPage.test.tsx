@@ -330,7 +330,7 @@ describe('ChatPage', () => {
     await waitFor(() => expect(input).toBeEnabled());
     await user.type(input, '保留我的补充说明');
     await user.click(screen.getByRole('button', { name: '查找制度规定' }));
-    await user.type(screen.getByRole('textbox', { name: '制度主题（必填）' }), '差旅报销');
+    await user.type(await screen.findByRole('textbox', { name: '制度主题（必填）' }), '差旅报销');
     await user.click(screen.getByRole('button', { name: '生成问题' }));
     expect((input as HTMLTextAreaElement).value).toContain('保留我的补充说明\n\n');
     expect((input as HTMLTextAreaElement).value).toContain('查询主题：差旅报销');
@@ -474,7 +474,7 @@ describe('ChatPage', () => {
     const user = userEvent.setup();
     renderWithRouter(<><Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes><LocationProbe /></>, [`/chat/s1${filter ? `?knowledgeBaseId=${filter}` : ''}`]);
     await user.click(await screen.findByRole('button', { name: '搜索会话内容' }));
-    await user.type(screen.getByRole('searchbox', { name: '搜索所有会话的关键词' }), '产品');
+    await user.type(await screen.findByRole('searchbox', { name: '搜索所有会话的关键词' }), '产品');
     await user.click(await screen.findByRole('button', { name: /归档采购问答/ }));
     const target = await screen.findByRole('article', { name: '已定位消息' });
     expect(target).toHaveAttribute('id', 'chat-message-m2');
@@ -1508,7 +1508,7 @@ describe('ChatPage', () => {
 
     await user.click(within(oldAnswer!).getByRole('button', { name: '标记回答有帮助' }));
     await user.click(within(newAnswer!).getByRole('button', { name: '标记回答没有帮助' }));
-    await user.selectOptions(screen.getByRole('combobox', { name: '差评原因' }), 'missing_evidence');
+    await user.selectOptions(await screen.findByRole('combobox', { name: '差评原因' }), 'missing_evidence');
     await user.click(screen.getByRole('button', { name: '保存反馈' }));
 
     expect(setChatMessageFeedback).toHaveBeenCalledTimes(2);
@@ -3078,4 +3078,65 @@ it('finishes a rejected multi-base draft without leaving a stuck send', async ()
   expect(sendChatMessage).not.toHaveBeenCalled();
   expect(screen.queryByRole('button',{name:'停止生成'})).not.toBeInTheDocument();
   expect(screen.getByRole('button',{name:'发送'})).toBeDisabled();
+});
+
+it('filters and sends from the 101st knowledge base while still rejecting revoked bases', async () => {
+  const firstPage = Array.from({ length: 100 }, (_, index) => ({
+    ...knowledgeBase,
+    id: `kb-${index + 1}`,
+    name: `基础库 ${index + 1}`,
+    description: `描述 ${index + 1}`,
+  }));
+  const targetKb = {
+    ...knowledgeBase,
+    id: 'kb-101',
+    name: '特殊研发规范库',
+    description: '第 101 个可访问知识库',
+  };
+  vi.mocked(listKnowledgeBases).mockImplementation(async (params) => (
+    params?.page === 2
+      ? { items: [targetKb], total: 101, page: 2, pageSize: 100 }
+      : { items: firstPage, total: 101, page: 1, pageSize: 100 }
+  ));
+  const createdSession = { ...session, id: 's-101', knowledgeBaseId: 'kb-101' };
+  vi.mocked(createChatSession).mockResolvedValue(createdSession);
+  vi.mocked(getChatSession).mockResolvedValue(createdSession);
+  vi.mocked(sendChatMessage).mockImplementation(async () => {
+    vi.mocked(listChatMessages).mockResolvedValue({
+      items: [
+        { ...replyFields.userMessage, sessionId: 's-101', content: '第101个库的问题' },
+        { ...replyFields.assistantMessage, sessionId: 's-101', content: '来自第 101 个库的回答' },
+      ],
+    });
+    return {
+      ...replyFields,
+      assistantMessage: { ...replyFields.assistantMessage, sessionId: 's-101', content: '来自第 101 个库的回答' },
+      answer: '来自第 101 个库的回答',
+      citations: [],
+      rerankFallback: null,
+    };
+  });
+
+  const user = userEvent.setup();
+  const firstView = renderWithRouter(
+    <><Routes><Route path="/chat/:sessionId?" element={<ChatPage />} /></Routes><LocationProbe /></>,
+    ['/chat'],
+  );
+
+  const filterInput = await screen.findByRole('searchbox', { name: '筛选知识库' });
+  await user.type(filterInput, '特殊研发');
+  await user.click(screen.getByRole('button', { name: /特殊研发规范库/ }));
+  await user.type(screen.getByRole('textbox', { name: '输入问题' }), '第101个库的问题');
+  await user.click(screen.getByRole('button', { name: '发送' }));
+
+  await waitFor(() => expect(createChatSession).toHaveBeenCalledWith('kb-101', ''));
+  expect(await screen.findByText('来自第 101 个库的回答')).toBeInTheDocument();
+  firstView.unmount();
+
+  // Revoked / inaccessible base ID still cannot send.
+  renderWithRouter(
+    <Routes><Route path="/chat" element={<ChatPage />} /></Routes>,
+    ['/chat?knowledgeBaseId=kb-revoked'],
+  );
+  await waitFor(() => expect(screen.getByRole('textbox', { name: '输入问题' })).toBeDisabled());
 });

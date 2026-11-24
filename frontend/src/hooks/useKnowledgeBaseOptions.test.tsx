@@ -4,7 +4,7 @@ import { ApiError } from '../api/client';
 import { listKnowledgeBases } from '../api/resources';
 import { tokenStore } from '../store/tokenStore';
 import { invalidateKnowledgeBaseOptionsAfter, queryClient } from '../store/queryClient';
-import { useKnowledgeBaseOptions } from './useKnowledgeBaseOptions';
+import { useKnowledgeBaseOptions, loadKnowledgeBaseOptions } from './useKnowledgeBaseOptions';
 import type { KnowledgeBase, KnowledgeBaseListResponse } from '../types/api';
 
 vi.mock('../api/resources', () => ({ listKnowledgeBases: vi.fn() }));
@@ -120,3 +120,41 @@ it.each([new Error('离线'), new ApiError(503, { code: 'UNAVAILABLE', message: 
     expect(listKnowledgeBases).toHaveBeenCalledTimes(2);
   },
 );
+
+it('paginates past 100 knowledge bases and deduplicates by id', async () => {
+  const firstPage = Array.from({ length: 100 }, (_, index) => ({
+    ...kb,
+    id: `kb-${index + 1}`,
+    name: `资料 ${index + 1}`,
+  }));
+  const secondPage = [
+    firstPage[0],
+    { ...kb, id: 'kb-101', name: '第 101 个资料' },
+  ];
+  vi.mocked(listKnowledgeBases)
+    .mockResolvedValueOnce({ items: firstPage, total: 101, page: 1, pageSize: 100 })
+    .mockResolvedValueOnce({ items: secondPage, total: 101, page: 2, pageSize: 100 });
+
+  const view = renderHook(() => useKnowledgeBaseOptions());
+  await waitFor(() => expect(view.result.current.items).toHaveLength(101));
+  expect(view.result.current.items[100].id).toBe('kb-101');
+  expect(listKnowledgeBases).toHaveBeenCalledTimes(2);
+  expect(listKnowledgeBases).toHaveBeenNthCalledWith(1, { page: 1, pageSize: 100, sort: 'updatedAt_desc' }, expect.any(AbortSignal));
+  expect(listKnowledgeBases).toHaveBeenNthCalledWith(2, { page: 2, pageSize: 100, sort: 'updatedAt_desc' }, expect.any(AbortSignal));
+});
+
+it('stops paginating when aborted before the next page', async () => {
+  const controller = new AbortController();
+  const firstPage = Array.from({ length: 100 }, (_, index) => ({
+    ...kb,
+    id: `kb-${index + 1}`,
+    name: `资料 ${index + 1}`,
+  }));
+  vi.mocked(listKnowledgeBases).mockImplementationOnce(async () => {
+    controller.abort();
+    return { items: firstPage, total: 150, page: 1, pageSize: 100 };
+  });
+
+  await expect(loadKnowledgeBaseOptions(controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+  expect(listKnowledgeBases).toHaveBeenCalledTimes(1);
+});

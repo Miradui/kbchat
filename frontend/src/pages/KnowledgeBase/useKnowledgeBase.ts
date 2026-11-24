@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import type { SetStateAction } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 
 import { getKnowledgeBase, recordKnowledgeBaseView } from '../../api/resources';
+import { knowledgeBaseDetailKey, queryClient } from '../../store/queryClient';
+import { tokenStore } from '../../store/tokenStore';
 import type { KnowledgeBase } from '../../types/api';
 import { getErrorMessage } from '../../utils/errors';
 
@@ -11,42 +15,52 @@ import { getErrorMessage } from '../../utils/errors';
  */
 export function useKnowledgeBase() {
   const { id } = useParams();
-  const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeBase | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const activeIdRef = useRef(id);
-  const requestRef = useRef(0);
-  activeIdRef.current = id;
+  const revision = useSyncExternalStore(tokenStore.subscribe, tokenStore.getRevision);
+  const queryKey = useMemo(() => [...knowledgeBaseDetailKey, revision, id ?? ''] as const, [revision, id]);
+  const viewedRef = useRef<{ revision: number; id: string } | null>(null);
 
-  const load = useCallback(async () => {
-    if (!id) return;
-    const requestedId = id;
-    const request = ++requestRef.current;
-    setLoading(true);
-    try {
-      const response = await getKnowledgeBase(requestedId);
-      if (activeIdRef.current === requestedId && requestRef.current === request) {
-        setKnowledgeBase(response);
-        setError('');
-        // Views are recorded explicitly by the API contract, never implicitly on GET.
-        void recordKnowledgeBaseView(requestedId).catch(() => undefined);
-      }
-    } catch (caught) {
-      if (activeIdRef.current === requestedId && requestRef.current === request) {
-        setKnowledgeBase(null);
-        setError(getErrorMessage(caught, '知识库详情加载失败'));
-      }
-    } finally {
-      if (activeIdRef.current === requestedId && requestRef.current === request) setLoading(false);
-    }
-  }, [id]);
+  const query = useQuery({
+    queryKey,
+    enabled: Boolean(id),
+    retry: false,
+    queryFn: async () => {
+      if (!id) throw new Error('缺少知识库标识');
+      const response = await getKnowledgeBase(id);
+      if (tokenStore.getRevision() !== revision) throw new Error('账户已切换');
+      return response;
+    },
+  }, queryClient);
+
+  const knowledgeBase = query.data ?? null;
+  const loadedId = knowledgeBase?.id;
 
   useEffect(() => {
-    void load();
-    return () => {
-      requestRef.current += 1;
-    };
-  }, [load]);
+    if (!id || loadedId !== id) return;
+    if (viewedRef.current?.revision === revision && viewedRef.current?.id === id) return;
+    viewedRef.current = { revision, id };
+    // Views are recorded explicitly by the API contract, never implicitly on GET.
+    void recordKnowledgeBaseView(id).catch(() => undefined);
+  }, [id, loadedId, revision]);
 
-  return { id, knowledgeBase, setKnowledgeBase, loading, error, reload: load };
+  const setKnowledgeBase = useCallback((next: SetStateAction<KnowledgeBase | null>) => {
+    if (!id || tokenStore.getRevision() !== revision) return;
+    queryClient.setQueryData<KnowledgeBase | null>(queryKey, (current) => (
+      typeof next === 'function' ? next(current ?? null) : next
+    ));
+  }, [id, queryKey, revision]);
+
+  const { refetch } = query;
+  const reload = useCallback(async () => {
+    if (!id) return;
+    await refetch();
+  }, [id, refetch]);
+
+  return {
+    id,
+    knowledgeBase,
+    setKnowledgeBase,
+    loading: query.isPending || (query.isFetching && !knowledgeBase),
+    error: !query.isFetching && query.isError ? getErrorMessage(query.error, '知识库详情加载失败') : '',
+    reload,
+  };
 }

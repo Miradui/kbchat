@@ -482,3 +482,33 @@ C01/C05覆盖上述固定数据、真实服务与目标；C02当前server/migrat
 Modern Web Guidance使用`forms`与`accessibility`：表单校验遵循“move focus to the first invalid field”，模态复用现有焦点、inert和恢复机制（“Manage focus correctly to and from updated content”），不引入新UI依赖。LESSONS无新增事项。
 
 剩余边界：R01、R06–R09及评审第4节通用改进未进入本批；R08团队交接、按回答版本独立持久化均未新增。BENCH-RAG-001-Q回答完整性仍未关闭；真实模型／业务语料、真实服务上传、普通成员完整浏览器流程、读屏器、触屏与远端CI未覆盖。现有API/schema和RAG默认规则不变，本批后端构建／迁移／发布验收不适用。
+
+### PERF-FE-001：前端性能优化与大文件拆分（2026-11-24）
+
+变更范围与本地门禁结论：仅改动前端源码、样式、单测、`frontend/nginx.conf`、路由构建校验脚本及文档（`dev` 分支本地提交，未推送或部署，未改动后端业务代码、API/schema 或 RAG 默认合同）。完成 9 项优化：
+
+1. **聊天草稿与列表重绘隔离**（`ChatScopedComposer.tsx`、`ChatMessage.tsx`、`ChatNoBasisActions.tsx`、`ChatPage.tsx`）：输入草稿订阅下沉至组合器局部组件，`MessageBubble` 通过稳定引用与 `memo` 隔离，单测 `ChatPage.render.test.tsx` 证实键入期间已有气泡不重渲染且引用弹窗与无依据跟进保持可用。
+2. **外壳注册隔离**（`appShellContext.ts`、`WorkspaceLayout.tsx`、`AppShell.tsx`、`useSessionActions.tsx`）：外壳同步按结构相等跳过与卸载解绑分离，单测 `WorkspaceLayout.test.tsx` 证实页面输入不触发 `AppShellFrame` 同步重渲染。
+3. **Markdown 上下文与流式高亮推迟**（`CodeBlock.tsx`、`ChatMarkdown.tsx`）：记忆化 `CitationContext` 并通过 `StreamingContext` 在 `streaming={true}` 时跳过 `lowlight` 高亮，流式结束（`streaming={false}`）立即恢复同步高亮（`ChatMarkdown.test.tsx` 覆盖）。
+4. **Nginx 静态压缩与 PDF 缓存**（`frontend/nginx.conf`）：启用 `gzip`（level 5 / 1024 B）、在 `location /api/` 显式关闭 `gzip off;` 以防流式与下载缓冲，为 `/pdfjs/` 增加 30 天缓存头。
+5. **非首屏重弹窗懒加载**：拆分 `DocumentImportDialog`、`CommandPalette`、`AccountSettingsDialog`、`QualityIssueDialog`、`EvaluationCaseDialog`、`ChatSourcePreview`、`ChatTaskDialog`、`ChatDocumentPicker`、`ChatBookmarks`、`ChatSearchDialog`、`ChatFeedbackDialog`；`src/styles/index.css` 中 `./touch.css` 末位顺序保持不变（`ChatSearchDialog` 因同时被 `ChatBookmarks`/`ChatMessageSearch` 静态引入而与对应分片共打）。
+6. **路由分片构建校验扩展**（`frontend/scripts/verify-route-chunks.mjs`、`frontend/test/routeChunks.test.ts`）：校验清单从 11 个补全为 12 个路由分片（纳入 `UsersPage`）。
+7. **React Query 查询与缓存失效扩展**（`queryClient.ts`、`api/resources/*`、`HomePage.tsx`、`useKnowledgeBaseList.ts`、`useKnowledgeBase.ts`、`useDocumentList.ts`）：为首页统计/文档/失败文档/活动、知识库列表与详情、文档列表与计数接入 `useQuery` 与版本隔离失效；`useDocumentList` 维持单一 `3000ms` 轮询定时器与已有列表保留策略。
+8. **超过 100 个知识库分页与就地筛选**（`hooks/useKnowledgeBaseOptions.ts`、`ChatEmptyState.tsx`、`styles/pages/chat.css`）：`useKnowledgeBaseOptions` 分页拉取最多 20 页×100 条并按 `id` 去重及支持取消信号；`ChatEmptyState` 在知识库超过 12 个时提供按名称筛选框，保留失权库禁用态（`useKnowledgeBaseOptions.test.tsx`、`ChatPage.test.tsx` 覆盖 101 个知识库场景）。
+9. **按域拆分高行数文件**：`src/types/api.ts`（1,081 → 8 行，导出桶 + `src/types/api/*.ts`）、`src/api/resources.ts`（1,003 → 17 行，导出桶 + `src/api/resources/*.ts`）、`ChatPage.tsx`（1,047 行 + `ChatRecoveryNotices.tsx`/`ChatModals.tsx`/`ChatEmptyState.tsx`/`ChatScopedComposer.tsx`）、`useChatThread.ts`（1,005 行 + `chatThreadHelpers.ts`）、`DocumentImportDialog.tsx`（900 → 729 行 + `documentImportUtils.ts`/`DuplicateChoice.tsx`）、`DocumentsPage.tsx`（827 → 703 行 + `DocumentsFilterBar.tsx`/`DocumentsBatchBar.tsx`），全量外部导出符号保持不变。
+
+最终编辑后门禁检查（工作目录 `frontend/`，本机 Node `v26.13.1` 沿用 `UX-FLOW-001` 的 `NODE_OPTIONS="--no-experimental-webstorage"` 参数以禁用实验性全局 webstorage）：
+
+- `npm run lint`（`eslint src --max-warnings 0`）：退出码 `0`，0 警告 0 错误。
+- `npm run typecheck:test`（`tsc -p tsconfig.test.json`）：退出码 `0`。
+- `NODE_OPTIONS="--no-experimental-webstorage" node node_modules/vitest/vitest.mjs run --maxWorkers 2`：退出码 `0`，**119 个测试文件、1,019 项测试全部通过**（`Duration 43.29s`）。
+- `npm run build`（`tsc -b && vite build && npm run verify:route-chunks`）：退出码 `0`，变换 2,554 个模块，输出 `Verified 12 route-level JavaScript chunks.`。
+
+实测构建产物关键体积对比（`dist/assets`，修改前基线 vs 修改后）：
+
+- 入口脚本 `dist/index.html` 引用 `index-*.js`：`434,612 B` → `384,215 B`（`gzip 124.63 kB`，**-50,397 B / -11.6%**）。
+- `ChatPage-*.js`：`110,796 B` → `96,610 B`（`gzip 31.42 kB`，**-14,186 B / -12.8%**；另拆出 `ChatMarkdown-*.js` `76,791 B` 及各独立按需弹窗分片：`ChatSourcePreview-*.js` `8,757 B`、`ChatBookmarks-*.js` `6,301 B`、`ChatTaskDialog-*.js` `5,506 B`、`ChatDocumentPicker-*.js` `4,093 B`、`ChatFeedbackDialog-*.js` `2,005 B`）。
+- `QualityIssueDialog-*.js`：`91,994 B` → `11,030 B`（`gzip 4.28 kB`；`EvaluationCaseDialog-*.js` `3,219 B`、`CommandPalette-*.js` `5,275 B`、`AccountSettingsDialog-*.js` `9,984 B`、`DocumentImportDialog-*.js` `26,264 B`）。
+- `DocumentsPage-*.js`：`46,869 B` → `48,556 B`（`gzip 16.45 kB`）；`index-*.css`：`127,762 B` → `127,821 B`（`gzip 21.21 kB`）。
+
+未验证边界：前端 HTTP/SSE 均为 Vitest/jsdom 隔离夹具；真实 Docker/Nginx 容器内的实际响应压缩、`gzip off;` 流式传输与 `/pdfjs/` 缓存响应头未做实测；1920×1080 真实浏览器交互、真实后端/数据库/模型与远端 CI 均未运行。

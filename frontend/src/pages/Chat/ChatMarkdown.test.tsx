@@ -157,4 +157,15 @@ describe('ChatMarkdown', () => {
     expect(screen.getByText('危险').tagName).toBe('SPAN');
     expect(screen.getByRole('link', { name: '图片：图示' })).toHaveAttribute('rel', 'noopener noreferrer');
   });
+
+  it('defers syntax highlighting while streaming and applies it once streaming finishes', () => {
+    const snippet = '```javascript\nconst answer = 42;\n```';
+    const view = render(<ChatMarkdown content={snippet} streaming />);
+    const block = screen.getByRole('figure', { name: 'javascript 代码块' });
+    expect(block.querySelector('code')?.textContent).toBe('const answer = 42;');
+    expect(block.querySelector('.hljs-keyword')).toBeNull();
+
+    view.rerender(<ChatMarkdown content={snippet} streaming={false} />);
+    expect(block.querySelector('.hljs-keyword')).toHaveTextContent('const');
+  });
 });

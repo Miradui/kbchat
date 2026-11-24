@@ -7,12 +7,29 @@ import { tokenStore } from '../store/tokenStore';
 import { knowledgeBaseOptionsKey, queryClient } from '../store/queryClient';
 import { getErrorMessage } from '../utils/errors';
 
-const parameters = { page: 1, pageSize: 100, sort: 'updatedAt_desc' } as const;
+const PAGE_SIZE = 100;
+const MAX_OPTION_PAGES = 20;
+const parameters = { page: 1, pageSize: PAGE_SIZE, sort: 'updatedAt_desc' } as const;
 const empty: KnowledgeBase[] = [];
 const sourceIds = new WeakMap<() => Promise<KnowledgeBase[]>, number>();
 let sourceSequence = 0;
-export const loadKnowledgeBaseOptions = async (signal?: AbortSignal) =>
-  (await listKnowledgeBases(parameters, signal)).items;
+
+export const loadKnowledgeBaseOptions = async (signal?: AbortSignal): Promise<KnowledgeBase[]> => {
+  const byId = new Map<string, KnowledgeBase>();
+  for (let page = 1; page <= MAX_OPTION_PAGES; page += 1) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    const response = await listKnowledgeBases({ ...parameters, page }, signal);
+    for (const item of response.items) {
+      byId.set(item.id, item);
+    }
+    const hasMoreByTotal = response.total !== undefined && byId.size < response.total;
+    const hasMoreByPage = response.total === undefined && response.items.length === PAGE_SIZE;
+    if (response.items.length === 0 || response.items.length < PAGE_SIZE || (!hasMoreByTotal && !hasMoreByPage)) {
+      break;
+    }
+  }
+  return Array.from(byId.values());
+};
 
 export function useKnowledgeBaseOptions(load = loadKnowledgeBaseOptions) {
   const revision = useSyncExternalStore(tokenStore.subscribe, tokenStore.getRevision);
