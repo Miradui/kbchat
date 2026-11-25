@@ -4,6 +4,8 @@
 
 ## 当前代码与工作区
 
+- 当前 `c3cb328` 已完成完整48题真实模型评测：默认TopN30/TopK5/阈值0.3的文档Recall@5为100%，完整依据38/39（97.44%），严格回答完整44/48（91.67%），9道缺资料题未编造所求值；独立AI复核一致，非业务专家盲评。192次检索、120次流式问答和12,000次负载请求全部成功；首字P50为3.54–3.81秒，P95为5.21–5.75秒。已修复48题离线评分触发的Node stdin EAGAIN，50项工具测试通过。隔离测试容器已停止，卷与证据保留；未调参、改CI、推送或部署。严格题面口径、性能条件及独立验收见 [EVALS-RUN-002](14-verification.md#evals-run-002当前版本48题与性能实测2026-11-25)。
+
 - 手动 RAG evals 已接入现有 [benchmarks](../benchmarks/README.md#手动-rag-evals)：`python3 -m benchmarks evals --run <运行目录> [--baseline <基线目录>]` 离线重算检索依据、文档 Recall/MRR、正文引用覆盖和已审核语义指标，输出逐题/题型报告及描述性差值。按用户要求不设置 CI 门禁，不修改应用 RAG 行为；历史运行重评不等于当前模型质量验收。检查和交付状态见 [EVALS-001](14-verification.md#evals-001手动-rag-离线评测2026-11-25)。
 
 - 前端性能优化与结构拆分（第 1–9 项）已在 `dev` 完成本地实现：隔离 `ChatPage` 草稿输入与 `AppShell`/`WorkspaceLayout` 外壳同步渲染，流式期间推迟 `CodeBlock` 语法高亮并记忆化引用上下文；按需懒加载 11 个非首屏重弹窗（`index-*.js` 434,612 B 降至 384,215 B，`ChatPage-*.js` 110,796 B 降至 96,610 B，`QualityIssueDialog-*.js` 91,994 B 降至 11,030 B）并补全 12 个路由分片校验（含 `UsersPage`）；扩展首页、知识库与文档查询至 React Query 并支持 >100 知识库分页加载与就地筛选；`frontend/nginx.conf` 启用 gzip（`/api/` 关闭）及 `/pdfjs/` 30 天缓存；按域拆分 `types/api`、`api/resources`、`ChatPage`、`useChatThread`、`DocumentImportDialog` 与 `DocumentsPage` 并保留既有导出合同。全前端 `lint`（0 警告）、`typecheck:test`、119 份测试文件 1,019 项单测及生产构建（`Verified 12 route-level JavaScript chunks.`）通过；Nginx 容器实测、真实浏览器、真实后端与远端 CI 未运行；仅本地提交，未推送或部署。见 [PERF-FE-001](14-verification.md#perf-fe-001前端性能优化与大文件拆分2026-11-24)。
