@@ -1,6 +1,5 @@
 // Offline adapter: use precisely the application's Markdown parser and plugin.
 // Node 22.18+ strips the plugin's TypeScript types; no bundle or browser needed.
-import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { remarkCitations } from '../frontend/src/pages/Chat/remarkCitations.ts';
@@ -13,8 +12,12 @@ const { default: remarkParse } = await import(pathToFileURL(requireMarkdown.reso
 const { default: remarkRehype } = await import(pathToFileURL(requireMarkdown.resolve('remark-rehype')).href);
 const { default: remarkGfm } = await import(pathToFileURL(requireApp.resolve('remark-gfm')).href);
 
+// A subprocess pipe may be nonblocking (notably on macOS). Await chunks through
+// EOF instead of readFileSync(0), which can throw EAGAIN for full-sized runs.
+const input = [];
+for await (const chunk of process.stdin) input.push(chunk);
 const results = Object.create(null);
-for (const sample of JSON.parse(readFileSync(0, 'utf8'))) {
+for (const sample of JSON.parse(Buffer.concat(input).toString('utf8'))) {
   const processor = unified().use(remarkParse).use(remarkGfm)
     .use(remarkCitations, { citationCount: sample.citationCount }).use(remarkRehype);
   const tree = processor.runSync(processor.parse(sample.answer));

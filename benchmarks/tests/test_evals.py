@@ -315,6 +315,19 @@ class CitationAdapterFailureTests(unittest.TestCase):
 @unittest.skipUnless(shutil.which("node") and (REPO / "frontend/node_modules/react-markdown").exists(),
                      "Markdown integration needs Node 22.18+ and frontend npm ci; scorer unit tests remain Python-only")
 class CitationAdapterTests(unittest.TestCase):
+    def test_large_batch_streamed_through_subprocess_pipe(self):
+        # Exceed pipe capacity with realistic Unicode answers. All records,
+        # including the tail, must survive asynchronous stdin reads.
+        samples = [{"sampleId": str(index), "answer": ("中文依据🙂 " * 300) + "[source: 1, 2]",
+                    "citationCount": 2} for index in range(48)]
+        try:
+            result = parse_citations(samples)
+        except BenchError as error:
+            self.fail("A complete Unicode batch must be readable from the pipe: " + str(error))
+        self.assertEqual(len(result), 48)
+        self.assertTrue(all(result[str(i)] == {"numbers": [1, 2], "sourceIndexesValid": True}
+                            for i in range(48)))
+
     def test_markdown_citation_contract(self):
         samples = [
             ("group", "alpha beta [source: 1, 2]", [1, 2], True),

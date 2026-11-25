@@ -141,7 +141,7 @@ python3 -m benchmarks evals --run output/benchmarks/candidate --baseline output/
 
 每次报告记录评分器文件 SHA-256、实际读取输入的规范化 JSON SHA-256 和原运行提交。支持用当前评分器重评历史运行，不要求历史应用代码等于当前工作区；它仍只反映历史样本。需要保留原运行目录中的 `manifest.json`、冻结 `dataset.json`、`state.json` 文档映射、相关 cohort 计划/样本及可选 `review.json`；现有 export 包不含 state，不能直接用于重评。报告不含答案正文，原始样本继续留在运行目录。重复执行覆盖本次派生的 evals 文件，不改原始样本或原 benchmark 报告。
 
-验证评分器：`python3 -m unittest discover -s benchmarks/tests -p test_evals.py -v`。评分单元测试使用固定解析结果；两项 Markdown/CLI 集成测试实际使用产品解析器，缺 Node 或前端依赖时明确跳过。CI 配置和既有 smoke 保持原样，不运行模型 evals 或据质量分数拦截合并。
+验证评分器：`python3 -m unittest discover -s benchmarks/tests -p test_evals.py -v`。评分单元测试使用固定解析结果；三项 Markdown/CLI/大批量 Unicode 管道集成测试实际使用产品解析器，缺 Node 或前端依赖时明确跳过。CI 配置和既有 smoke 保持原样，不运行模型 evals 或据质量分数拦截合并。
 
 ## 基线比较与分享
 
