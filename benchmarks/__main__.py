@@ -5,6 +5,7 @@ import socket
 import sys
 from pathlib import Path
 
+from .evals import evaluate, write_evals
 from .report import compare, export, import_review, review_template, write_report
 from .runner import load, quality, reconcile, retrieval, seed, select_cases, stream
 from .runtime import Runtime, create
@@ -34,7 +35,7 @@ def counts(value):
 def parser():
     root = argparse.ArgumentParser(description="Isolated kbchat performance and quality benchmarks")
     commands = root.add_subparsers(dest="command", required=True)
-    for name in ("init", "up", "seed", "run", "report", "review", "reconcile", "down", "unlock", "smoke", "export"):
+    for name in ("init", "up", "seed", "run", "report", "review", "reconcile", "down", "unlock", "smoke", "export", "evals"):
         child = commands.add_parser(name)
         child.add_argument("--run", required=True, type=Path)
         if name in {"init", "smoke"}:
@@ -52,6 +53,8 @@ def parser():
             child.add_argument("--timeout", type=positive, default=120)
         if name == "review":
             child.add_argument("--import", dest="import_path", type=Path)
+        if name == "evals":
+            child.add_argument("--baseline", type=Path, help="Optional prior run for descriptive metric deltas; no quality gate")
         if name == "down":
             child.add_argument("--remove-volumes", action="store_true")
         if name == "export":
@@ -70,6 +73,21 @@ def measured_exit(summary, suite):
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    if args.command == "evals":
+        # Offline: do not construct Runtime, read credentials, or rewrite the
+        # original benchmark report. Lock each input while taking its snapshot.
+        baseline = None
+        if args.baseline:
+            prior = Run(args.baseline)
+            with exclusive(prior.root):
+                baseline = evaluate(prior)
+        run = Run(args.run)
+        with exclusive(run.root):
+            result = write_evals(run, baseline)
+        print(json.dumps({"run": str(run.root), "report": str(run.root / "evals.md"),
+                          "status": result["status"], "profile": result["profile"],
+                          "comparison": result.get("comparison")}, ensure_ascii=False, indent=2))
+        return 0
     if args.command == "compare":
         if not 0 <= args.max_regression <= 10:
             raise BenchError("max-regression must be between 0 and 10")

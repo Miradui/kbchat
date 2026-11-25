@@ -108,6 +108,41 @@ python3 -m benchmarks review --run output/benchmarks/baseline --import output/be
 
 标签按版本归档。未审核显示pending，不把answered计为正确。检索每模式分别列计划正例、成功正例、完整依据；后一步失败不删除前面成功结果。题集结果不能代替真实用户盲评或总体准确率。
 
+## 手动 RAG Evals
+
+`evals` 对已有运行的原始检索结果、答案和引用离线重算，输出 `evals.json` 与 `evals.md`。不启动 Docker、后端或模型，不读取模型密钥。纯检索评分只需 Python；包含成功 quality 样本时还需 **Node 22.18+** 和已安装的前端依赖（在 `frontend` 目录运行 `npm ci`），直接复用应用的 Markdown 解析器和引用插件，无需构建前端或新增依赖。它与上面的 `run --suite retrieval/quality` 配合使用；新运行仍按“真实模型运行”章节显式创建与执行。
+
+```bash
+python3 -m benchmarks evals --run output/benchmarks/baseline
+python3 -m benchmarks evals --run output/benchmarks/candidate --baseline output/benchmarks/baseline
+```
+
+这是手动分析工具，**不设置 CI 门禁、质量阈值或质量失败退出码**。报告成功生成时退出 0，包括低分、请求失败、未运行、待审核和不可比较；输入损坏、语料被改动或审核标签过期时退出 1。报告的 `complete` 仅表示计划样本都有可评分响应；未确认、未运行、请求失败或无效响应显示 `incomplete`，不等于质量通过/失败。
+
+| 指标 | 口径 |
+| --- | --- |
+| requestSuccessRate | 有可评分响应的请求数 / 计划请求数 |
+| completeEvidenceRate | 覆盖全部依据单元的正例数 / 计划正例数 |
+| evidenceUnitRecall | 覆盖的依据单元数 / 计划依据单元数；一个单元的全部锚点都须命中 |
+| documentRecall / documentMRR | 各正例的目标文档召回比例 / 首个目标文档排名倒数，再除以计划正例数 |
+| sourceIndexValidityRate | 正文所有 `[source: N]` 均为合法编号的回答数 / 计划问题数；无标注也满足此项，须结合下一项 |
+| inlineCitationRate | 正文带来源标注的正例数 / 计划正例数 |
+| citedEvidenceRate | 正文实际标注的片段覆盖全部依据的正例数 / 计划正例数 |
+| semanticPassRate | 只在 real 模式且全部计划回答均有有效审核时计算严格 pass 比例；否则为空 |
+| missingInformationHandledRate | 只在 real 模式且全部缺资料题均有有效审核时，计算明确正确处理缺资料的比例 |
+
+检索按各模式的 TopK 评分，vector/hybrid/reranked/standard 分开汇总，不混成一个分数。回答依据覆盖使用返回的全部 citations，正文引用覆盖只使用实际标注的片段；锚点按现有规则忽略空白和大小写，文档 ID 必须匹配。失败/未知/未运行/无效样本保留在计划分母并得 0 分；缺资料题的依据覆盖不适用，不据 `answerStatus` 或拒答关键词自动判断正确。报告还保留分组、题型、逐题问题、Rerank fallback 数和缺失元数据数量。
+
+引用解析与产品一致：支持大小写、空白、`[source: 1, 2]` 及组内去重；超20项、非法或越界的整组不计入正文引用。Markdown 行内/块代码、已有链接、图片和 HTML 中的字面标记不计分；按实际渲染树只检查已引用脚注，未引用的脚注定义不计分。评分身份包含适配器、产品引用插件和前端锁文件，避免规则更新后沿用旧评分身份。
+
+事实正确、完整性、引用支持与缺资料处理仍通过前述 `review` 流程核对；`answerHash` 绑定当前答案和 citations，旧标签拒绝重用。fixture 即使有人工标签也不生成模型语义率。参考事实不发送给回答模型，也不以关键词命中冒充事实正确。
+
+可选 `--baseline` 同时离线重评两个运行，核对语料、模型、测量脚本、题目计划、配置和评分器身份；只输出兼容指标的“候选减基线”差值，语义未审核的差值为空。两次运行的状态不完整或输入不兼容时保留原因，不输出可能误导的差值。允许应用源码和运行时文档 UUID 变化；对比不证明因果，也不比较性能或代替下节既有性能 `compare`。
+
+每次报告记录评分器文件 SHA-256、实际读取输入的规范化 JSON SHA-256 和原运行提交。支持用当前评分器重评历史运行，不要求历史应用代码等于当前工作区；它仍只反映历史样本。需要保留原运行目录中的 `manifest.json`、冻结 `dataset.json`、`state.json` 文档映射、相关 cohort 计划/样本及可选 `review.json`；现有 export 包不含 state，不能直接用于重评。报告不含答案正文，原始样本继续留在运行目录。重复执行覆盖本次派生的 evals 文件，不改原始样本或原 benchmark 报告。
+
+验证评分器：`python3 -m unittest discover -s benchmarks/tests -p test_evals.py -v`。评分单元测试使用固定解析结果；两项 Markdown/CLI 集成测试实际使用产品解析器，缺 Node 或前端依赖时明确跳过。CI 配置和既有 smoke 保持原样，不运行模型 evals 或据质量分数拦截合并。
+
 ## 基线比较与分享
 
 代码优化后新建run，保持模型、语料、资源、工作负载、缓存策略和测量脚本一致：

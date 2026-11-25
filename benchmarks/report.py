@@ -26,6 +26,14 @@ def review_template(run):
 def import_review(run, path):
     expected = review_template(run)
     submitted = read_json(path)
+    validate_review(run, submitted, expected)
+    target = run.root / "reviews" / (now().replace(":", "-") + ".json")
+    atomic_json(target, submitted)
+    atomic_json(run.root / "review.json", submitted)
+
+
+def validate_review(run, submitted, expected):
+    """Validate labels without writing them, also used by offline evals."""
     if submitted.get("runId") != expected["runId"] or not submitted.get("reviewer") or not submitted.get("method"):
         raise BenchError("Review must identify this run, reviewer, and review method")
     known = {label["sampleId"]: label for label in expected["labels"]}
@@ -48,9 +56,6 @@ def import_review(run, path):
                     raise BenchError("Missing-information case requires an explicit judgement")
                 if label["verdict"] == "pass" and not label["missingInformationHandled"]:
                     raise BenchError("A missing-information pass must not invent the requested value")
-    target = run.root / "reviews" / (now().replace(":", "-") + ".json")
-    atomic_json(target, submitted)
-    atomic_json(run.root / "review.json", submitted)
 
 
 def cohort_summary(directory, cases):
