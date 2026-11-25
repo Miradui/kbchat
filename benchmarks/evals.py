@@ -50,9 +50,10 @@ def parse_citations(samples):
     return json.loads(process.stdout)
 
 
-def score_sample(case, task, row, suite, state, top_k, citation_checks=None):
+def score_sample(case, task, row, suite, state, top_k, citation_checks=None, recorded_intent=None):
     result = {"sampleId": task["id"], "caseId": case["id"], "group": case["group"],
               "category": case["category"], "mode": task.get("mode"),
+              "split": case.get("split", "unspecified"), "topic": case.get("topic", "unspecified"),
               "positive": bool(case["evidence"]), "requiredUnits": len(case["evidence"]),
               "status": "notRun", "issues": [], "evidence": None}
     if row is None:
@@ -91,6 +92,11 @@ def score_sample(case, task, row, suite, state, top_k, citation_checks=None):
                       citedEvidence=evidence(case, cited, state, len(cited)),
                       answerHash=digest({"answer": row["answer"], "citations": items}),
                       reviewVerdict="pending", missingInformationHandled=None)
+        intent = row.get("done", {}).get("assistantMessage", {}).get("intent") or recorded_intent
+        result["intent"] = intent if intent in {"knowledge_base", "general", "conversation"} else "unknown"
+        result["expectedIntent"] = case.get("expectedIntent")
+        if result["expectedIntent"] and result["intent"] != result["expectedIntent"]:
+            result["issues"].append("intent_unknown" if result["intent"] == "unknown" else "unexpected_intent")
         if not valid:
             result["issues"].append("invalid_source_index")
         if result["positive"] and not tags:
@@ -123,6 +129,7 @@ def summarize_samples(rows, suite, profile):
               "rerankFallbacks": sum(row.get("rerankFallback") is True for row in ok),
               "fallbackUnknown": sum(row.get("rerankFallback") is None for row in ok)}
     if suite == "quality":
+        result["intents"] = dict(Counter(row.get("intent", "unknown") for row in ok))
         metrics.update({"sourceIndexValidityRate": ratio(sum(row["sourceIndexesValid"] for row in ok), len(rows)),
                         "inlineCitationRate": ratio(sum(row["hasInlineCitation"] for row in supported), len(positive)),
                         "citedEvidenceRate": ratio(sum(row["citedEvidence"]["completeEvidence"] for row in supported), len(positive))})
@@ -187,6 +194,12 @@ def evaluate(run):
             key = row["sampleId"]
             require(key in ids and key not in records, "Duplicate or unplanned sample")
             records[key] = row
+        intents = {}
+        metadata_path = path.parent / "message-metadata.json"
+        if suite == "quality" and metadata_path.exists():
+            metadata = read(metadata_path)
+            if metadata.get("status") == "available":
+                intents = {item["clientRequestId"]: item.get("intent") for item in metadata.get("messages", [])}
         citation_checks = parse_citations([
             {"sampleId": key, "answer": row["answer"], "citationCount": len(row["citations"])}
             for key, row in records.items() if row.get("state") == "finished" and row.get("ok") is True
@@ -205,7 +218,8 @@ def evaluate(run):
             seen.add(identity)
             row = records.get(task["id"])
             require(row is None or row.get("task") == task, "Sample task does not match plan")
-            scored.append(score_sample(case, task, row, suite, state, top_k, citation_checks.get(task["id"])))
+            scored.append(score_sample(case, task, row, suite, state, top_k, citation_checks.get(task["id"]),
+                                       intents.get((row or {}).get("clientRequestId"))))
         cohorts.append({"name": plan["name"], "suite": suite, "config": plan["config"],
                         "taskPlanHash": digest(tasks), "samples": scored})
     require(bool(cohorts), "No retrieval or quality cohort to evaluate")
@@ -229,7 +243,7 @@ def evaluate(run):
         cohort["summary"] = summarize_samples(rows, suite, manifest["profile"])
         cohort["breakdowns"] = {}
         # Never average different retrieval modes into a single quality score.
-        dimensions = ("mode",) if suite == "retrieval" else ("group", "category")
+        dimensions = ("mode",) if suite == "retrieval" else ("group", "category", "split", "topic")
         for dimension in dimensions:
             cohort["breakdowns"][dimension] = {
                 value: summarize_samples([r for r in rows if r[dimension] == value], suite, manifest["profile"])
@@ -237,6 +251,9 @@ def evaluate(run):
         if suite == "retrieval":
             cohort["summary"].pop("metrics")
             for mode, summary in cohort["breakdowns"]["mode"].items():
+                summary["bySplit"] = {split: summarize_samples(
+                    [r for r in rows if r["mode"] == mode and r["split"] == split], suite, manifest["profile"])
+                    for split in sorted({r["split"] for r in rows if r["mode"] == mode})}
                 summary["byCategory"] = {category: summarize_samples(
                     [r for r in rows if r["mode"] == mode and r["category"] == category], suite, manifest["profile"])
                     for category in sorted({r["category"] for r in rows if r["mode"] == mode})}

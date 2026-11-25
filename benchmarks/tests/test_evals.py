@@ -302,6 +302,25 @@ class EvalsTests(unittest.TestCase):
         for cohort in result["cohorts"]:
             self.assertTrue(all("answer" not in row for row in cohort["samples"]))
 
+    def test_expected_intent_is_checked_without_excluding_general_answers(self):
+        self.run.data["cases"][0].update(expectedIntent="knowledge_base", split="test", topic="routing")
+        atomic_json(self.root / "dataset.json", self.run.data)
+        self.run.manifest["datasetHash"] = digest(self.run.data)
+        atomic_json(self.root / "manifest.json", self.run.manifest)
+        journal = saved_cohort(self.run)
+        row = journal.get("one")
+        row["clientRequestId"] = "request-one"
+        atomic_json(journal.path("one"), row)
+        atomic_json(journal.root / "message-metadata.json", {"status": "available", "messages": [
+            {"clientRequestId": "request-one", "intent": "general"}]})
+        report = evaluate(self.run)
+        cohort = report["cohorts"][0]
+        self.assertEqual(cohort["summary"]["planned"], 3)
+        self.assertEqual(cohort["summary"]["intents"], {"general": 1, "unknown": 2})
+        self.assertIn("unexpected_intent", cohort["samples"][0]["issues"])
+        self.assertEqual(cohort["breakdowns"]["split"]["test"]["planned"], 1)
+        self.assertIn("cohorts/quality/message-metadata.json", report["inputHashes"])
+
 
 class CitationAdapterFailureTests(unittest.TestCase):
     def test_missing_parser_is_actionable_without_echoing_answer_or_stderr(self):

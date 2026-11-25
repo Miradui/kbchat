@@ -82,19 +82,29 @@ def dataset(path):
             raise BenchError("Duplicate document key or unknown group")
         documents[key] = {**doc, "content": source.read_text(encoding="utf-8")}
         hashes[doc["file"]] = file_hash(source)
+        if "source" in doc and doc["source"].get("cleanSha256") != hashes[doc["file"]]:
+            raise BenchError("Source manifest does not match cleaned document")
     seen = set()
+    families = {}
     if not 1 <= len(cases) <= 1000:
         raise BenchError("Dataset must contain 1–1000 cases")
     for case in cases:
         if case["id"] in seen or case["group"] not in spec["groups"] or not case["question"].strip():
             raise BenchError("Duplicate case, unknown group or empty question")
         seen.add(case["id"])
+        if "split" in case or "familyId" in case:
+            if case.get("split") not in {"dev", "test"} or not isinstance(case.get("familyId"), str) or not case["familyId"]:
+                raise BenchError("Split cases require dev/test and a nonempty familyId")
+            if families.setdefault(case["familyId"], case["split"]) != case["split"]:
+                raise BenchError("A question family cannot cross dev/test splits")
         for unit in case["evidence"]:
             doc = documents.get(unit["doc"])
             if not doc or doc["group"] != case["group"] or not unit["anchors"]:
                 raise BenchError("Evidence must refer to a same-group document and contain anchors")
             if not all(normalized(anchor) in normalized(doc["content"]) for anchor in unit["anchors"]):
                 raise BenchError("Evidence anchor absent from source for " + case["id"])
+    if families and any("split" not in case for case in cases):
+        raise BenchError("A split dataset must label every case")
     frozen = {"spec": spec, "cases": cases, "documents": documents, "hashes": hashes}
     return frozen
 

@@ -108,6 +108,32 @@ python3 -m benchmarks review --run output/benchmarks/baseline --import output/be
 
 标签按版本归档。未审核显示pending，不把answered计为正确。检索每模式分别列计划正例、成功正例、完整依据；后一步失败不删除前面成功结果。题集结果不能代替真实用户盲评或总体准确率。
 
+## 官方文档大语料与保留集
+
+[Kubernetes 中文文档集](datasets/kubernetes-zh-200/README.md)提供固定上游提交的200篇官方文档和200题。
+全部200篇在同一知识库内参与检索；150题dev与50题网络/存储主题保留test的正例依据文档不交叉。
+这是主题保留划分，不能把两组分数当成同分布实验。40题缺资料，29题需跨文档组合；许可、清洗、标注及预训练污染限制见数据集说明。
+
+```bash
+python3 -m benchmarks init --run output/benchmarks/kubernetes-dev --profile real --models-env output/benchmarks-models.env --dataset benchmarks/datasets/kubernetes-zh-200 --max-model-requests 2000
+python3 -m benchmarks up --run output/benchmarks/kubernetes-dev
+python3 -m benchmarks seed --run output/benchmarks/kubernetes-dev --timeout 3600
+python3 -m benchmarks run --run output/benchmarks/kubernetes-dev --suite retrieval --split dev
+python3 -m benchmarks run --run output/benchmarks/kubernetes-dev --suite quality --split dev
+python3 -m benchmarks down --run output/benchmarks/kubernetes-dev
+```
+
+候选参数冻结后，为test另建run，同样导入全部200篇，使用 `--split test`。`--split` 默认all；与 `--case-ids` 取交集，未知ID、未知split或空结果报错。
+同一问题家族不能跨split，部分缺少split标签的数据集拒绝导入；旧demo没有split元数据时保持原样，不能直接选择dev/test。
+每个run已有cohort计划不能替换为另一子集，不能用test结果调参后继续称其未使用的保留集。
+
+`seed --timeout` 是全部上传后的文档处理等待秒数，默认600；仅轮询未完成文档，超时保留上传对账状态。重新执行seed复用已上传资料。
+`index.json`记录实际文档、切片和估算token；不是Provider计费token。缺少gold依据时保留诊断但不标seeded，禁止随后直接运行。
+语料每篇最多1MiB，来源manifest里的cleanSha256必须匹配文件；出处与依赖嵌入冻结dataset身份，源文修改须另建数据版本和run。
+
+公共技术问题可能被模型路由为general而跳过检索。题面明确要求依据知识库快照；evals保留split/topic，并从done或持久消息元数据记录intent分布及unexpected_intent/intent_unknown。
+general/缺intent样本仍留在原计划分母，不因分类结果而删除低分样本；分类本身不被测试工具强制改写。
+
 ## 手动 RAG Evals
 
 `evals` 对已有运行的原始检索结果、答案和引用离线重算，输出 `evals.json` 与 `evals.md`。不启动 Docker、后端或模型，不读取模型密钥。纯检索评分只需 Python；包含成功 quality 样本时还需 **Node 22.18+** 和已安装的前端依赖（在 `frontend` 目录运行 `npm ci`），直接复用应用的 Markdown 解析器和引用插件，无需构建前端或新增依赖。它与上面的 `run --suite retrieval/quality` 配合使用；新运行仍按“真实模型运行”章节显式创建与执行。

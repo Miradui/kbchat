@@ -53,13 +53,19 @@ def message_metadata(runtime, journal):
         atomic_json(journal.root / "message-metadata.json", {"status": "unavailable", "messages": []})
 
 
-def select_cases(run, ids=None):
+def select_cases(run, ids=None, split="all"):
     cases = run.data["cases"]
     if ids:
         requested = set(ids.split(","))
         cases = [c for c in cases if c["id"] in requested]
         if {c["id"] for c in cases} != requested:
             raise BenchError("Unknown case ID")
+    if split not in {"all", "dev", "test"}:
+        raise BenchError("Unknown split")
+    if split != "all":
+        cases = [case for case in cases if case.get("split") == split]
+    if not cases:
+        raise BenchError("No cases match the selected IDs and split")
     return cases
 
 
@@ -79,7 +85,7 @@ def evidence(case, items, state, top_k=5):
             "documentMRR": 1 / first if first else 0}
 
 
-def seed(run):
+def seed(run, timeout=600):
     runtime = Runtime(run)
     client = runtime.client()
     state = run.state()
@@ -115,19 +121,22 @@ def seed(run):
             raise BenchError("Prior upload result is no longer available")
         state["documents"][key] = {"id": response["id"], "requestId": request_id, "group": document["group"]}
         run.save_state(state)
-    deadline = time.monotonic() + 600
-    while True:
-        pending = 0
-        for document in state["documents"].values():
+    deadline = time.monotonic() + timeout
+    waiting = list(state["documents"].values())
+    while waiting:
+        pending = []
+        for document in waiting:
+            if time.monotonic() >= deadline:
+                raise BenchError("Document processing deadline exceeded; state saved")
             response = client.api("GET", "/documents/" + document["id"])
             if response["status"] == "failed" and response.get("jobStatus") == "failed":
                 raise BenchError("Document processing failed: " + str(response.get("errorCode")))
-            pending += response["status"] != "completed"
-        if not pending:
-            break
-        if time.monotonic() >= deadline:
-            raise BenchError("Document processing deadline exceeded; state saved")
-        time.sleep(.5)
+            if response["status"] != "completed":
+                pending.append(document)
+        waiting = pending
+        if waiting:
+            emit("seed_wait", pending=len(waiting), documents=len(state["documents"]))
+            time.sleep(2)
     chunks = []
     for doc in state["documents"].values():
         page = 1
@@ -139,9 +148,11 @@ def seed(run):
             page += 1
     unavailable = [case["id"] for case in run.data["cases"]
                    if case["evidence"] and not evidence(case, chunks, state, len(chunks))["completeEvidence"]]
-    snapshot = {"chunks": chunks, "unavailableEvidenceCases": unavailable}
+    snapshot = {"chunks": chunks, "unavailableEvidenceCases": unavailable,
+                "statistics": {"documents": len(state["documents"]), "chunks": len(chunks),
+                               "estimatedChunkTokens": sum(c.get("tokenCount", 0) for c in chunks)}}
     atomic_json(run.root / "index.json", snapshot)
-    state["seeded"] = True
+    state["seeded"] = not unavailable
     state["indexHash"] = digest(chunks)
     run.save_state(state)
     emit("seeded", documents=len(state["documents"]), chunks=len(chunks), unavailableEvidenceCases=unavailable)

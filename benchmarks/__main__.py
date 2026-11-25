@@ -46,11 +46,14 @@ def parser():
         if name == "run":
             child.add_argument("--suite", choices=["retrieval", "quality", "stream", "load"], required=True)
             child.add_argument("--case-ids")
+            child.add_argument("--split", choices=["all", "dev", "test"], default="all")
             child.add_argument("--requests", type=positive, default=20)
             child.add_argument("--concurrency", type=counts, default=[1, 2, 4])
             child.add_argument("--rounds", type=positive, default=2)
             child.add_argument("--vectors", type=counts, default=[1000, 10000])
             child.add_argument("--timeout", type=positive, default=120)
+        if name == "seed":
+            child.add_argument("--timeout", type=positive, default=600, help="Document processing wait budget in seconds")
         if name == "review":
             child.add_argument("--import", dest="import_path", type=Path)
         if name == "evals":
@@ -121,11 +124,11 @@ def main(argv=None):
         if args.command == "up":
             runtime.up()
         elif args.command == "seed":
-            seed(run)
+            seed(run, args.timeout)
         elif args.command == "run":
             if max(args.concurrency) > 64 or args.rounds > 10 or args.timeout > 600 or len(args.concurrency) > 8 or len(args.vectors) > 5:
                 raise BenchError("Maximum concurrency64, rounds10, timeout600s, 8 concurrency values, 5 vector sizes")
-            cases = select_cases(run, args.case_ids)
+            cases = select_cases(run, args.case_ids, args.split)
             if args.suite == "retrieval":
                 retrieval(run, cases, args.timeout)
             elif args.suite == "quality":
